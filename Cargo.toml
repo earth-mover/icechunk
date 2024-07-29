@@ -1,0 +1,18 @@
+[package]
+name = "icechunk"
+version = "0.1.0"
+edition = "2021"
+description = "Icechunk client"
+readme = "README.md"
+publish = false
+
+[dependencies]
+arrow = "52.2.0"
+async-trait = "0.1.81"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
