@@ -98,7 +98,7 @@ impl Dataset {
             .fetch_structure(&self.structure_id)
             .await
             .ok()?;
-        todo!()
+        structure.get_node(path)
     }
 
     pub async fn get_user_attributes(&self, path: Path) -> Option<UserAttributes> {

@@ -26,29 +26,29 @@ impl InMemoryStorage {
 
 #[async_trait]
 impl Storage for InMemoryStorage {
-    async fn fetch_structure(&self, id: ObjectId) -> Result<Arc<StructureTable>, StorageError> {
+    async fn fetch_structure(&self, id: &ObjectId) -> Result<Arc<StructureTable>, StorageError> {
         self.struct_files
             .read()
             .or(Err(StorageError::Deadlock))?
-            .get(&id)
+            .get(id)
             .cloned()
             .ok_or(StorageError::NotFound)
     }
 
-    async fn fetch_attributes(&self, id: ObjectId) -> Result<Arc<AttributesTable>, StorageError> {
+    async fn fetch_attributes(&self, id: &ObjectId) -> Result<Arc<AttributesTable>, StorageError> {
         self.attr_files
             .read()
             .or(Err(StorageError::Deadlock))?
-            .get(&id)
+            .get(id)
             .cloned()
             .ok_or(StorageError::NotFound)
     }
 
-    async fn fetch_manifests(&self, id: ObjectId) -> Result<Arc<ManifestsTable>, StorageError> {
+    async fn fetch_manifests(&self, id: &ObjectId) -> Result<Arc<ManifestsTable>, StorageError> {
         self.man_files
             .read()
             .or(Err(StorageError::Deadlock))?
-            .get(&id)
+            .get(id)
             .cloned()
             .ok_or(StorageError::NotFound)
     }
