@@ -137,13 +137,25 @@ pub enum ChunkKeyEncoding {
     Default,
 }
 
-impl ChunkKeyEncoding {
-    pub fn from_char(c: Option<char>) -> Option<ChunkKeyEncoding> {
-        match c {
-            Some('/') => Some(ChunkKeyEncoding::Slash),
-            Some('.') => Some(ChunkKeyEncoding::Dot),
-            None => Some(ChunkKeyEncoding::Default),
-            _ => None,
+impl TryFrom<u8> for ChunkKeyEncoding {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            c if { c == '/' as u8 } => Ok(ChunkKeyEncoding::Slash),
+            c if { c == '.' as u8 } => Ok(ChunkKeyEncoding::Dot),
+            c if { c == 'x' as u8 } => Ok(ChunkKeyEncoding::Default),
+            _ => Err("Invalid chunk key encoding character"),
+        }
+    }
+}
+
+impl From<ChunkKeyEncoding> for u8 {
+    fn from(value: ChunkKeyEncoding) -> Self {
+        match value {
+            ChunkKeyEncoding::Slash => '/' as u8,
+            ChunkKeyEncoding::Dot => '.' as u8,
+            ChunkKeyEncoding::Default => 'x' as u8,
         }
     }
 }
@@ -213,7 +225,7 @@ struct ManifestRef {
     extents: ManifestExtents,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ZarrArrayMetadata {
     shape: ArrayShape,
     data_type: DataType,
@@ -221,8 +233,8 @@ pub struct ZarrArrayMetadata {
     chunk_key_encoding: ChunkKeyEncoding,
     fill_value: FillValue,
     codecs: Codecs,
-    storage_transformers: StorageTransformers,
-    dimension_names: Vec<DimensionName>,
+    storage_transformers: Option<StorageTransformers>,
+    dimension_names: Option<Vec<Option<DimensionName>>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -328,9 +340,4 @@ pub struct Dataset {
     updated_attributes: HashMap<Path, UserAttributes>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<(Path, ArrayIndices), ChunkPayload>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }
