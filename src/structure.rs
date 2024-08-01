@@ -373,6 +373,16 @@ mod tests {
                 Some("t".to_string()),
             ]),
         };
+        let zarr_meta2 = ZarrArrayMetadata {
+            storage_transformers: None,
+            dimension_names: Some(vec![None, None, Some("t".to_string())]),
+            ..zarr_meta1.clone()
+        };
+        let zarr_meta3 = ZarrArrayMetadata {
+            dimension_names: None,
+            ..zarr_meta2.clone()
+        };
+
         let nodes = vec![
             NodeStructure::Group(GroupStructure {
                 path: "/".into(),
@@ -391,12 +401,24 @@ mod tests {
                 id: 4,
             }),
             NodeStructure::Array(ArrayStructure {
-                path: "/b/myarray".into(),
+                path: "/b/array1".into(),
                 id: 5,
                 zarr_metadata: zarr_meta1.clone(),
             }),
+            NodeStructure::Array(ArrayStructure {
+                path: "/array2".into(),
+                id: 5,
+                zarr_metadata: zarr_meta2.clone(),
+            }),
+            NodeStructure::Array(ArrayStructure {
+                path: "/b/array3".into(),
+                id: 5,
+                zarr_metadata: zarr_meta3.clone(),
+            }),
         ];
         let st = mk_structure_table(nodes);
+        assert_eq!(st.get_node(&"/nonexistent".into()), None);
+
         let node = st.get_node(&"/b/c".into());
         assert_eq!(
             node,
@@ -413,14 +435,32 @@ mod tests {
                 id: 1,
             }))
         );
-        let node = st.get_node(&"/b/myarray".into());
+        let node = st.get_node(&"/b/array1".into());
         assert_eq!(
             node,
             Some(NodeStructure::Array(ArrayStructure {
-                path: "/b/myarray".into(),
+                path: "/b/array1".into(),
                 id: 5,
                 zarr_metadata: zarr_meta1,
             }),)
-        )
+        );
+        let node = st.get_node(&"/array2".into());
+        assert_eq!(
+            node,
+            Some(NodeStructure::Array(ArrayStructure {
+                path: "/array2".into(),
+                id: 5,
+                zarr_metadata: zarr_meta2,
+            }),)
+        );
+        let node = st.get_node(&"/b/array3".into());
+        assert_eq!(
+            node,
+            Some(NodeStructure::Array(ArrayStructure {
+                path: "/b/array3".into(),
+                id: 5,
+                zarr_metadata: zarr_meta3,
+            }),)
+        );
     }
 }
