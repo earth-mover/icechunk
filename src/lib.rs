@@ -35,12 +35,6 @@ use std::{
 };
 use structure::StructureTable;
 
-#[derive(Clone, Debug)]
-pub enum NodeType {
-    Group,
-    Array,
-}
-
 /// An ND index to an element in an array.
 pub type ArrayIndices = Vec<u64>;
 
@@ -194,30 +188,56 @@ pub type NodeId = u32;
 
 /// The id of a file in object store
 /// FIXME: should this be passed by ref everywhere?
-pub type ObjectId = [u8; 16]; // FIXME: this doesn't need to be this big
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct ObjectId([u8; 16]); // FIXME: this doesn't need to be this big
+
+impl ObjectId {
+    const SIZE: usize = 16;
+
+    pub fn random() -> ObjectId {
+        ObjectId(rand::random())
+    }
+}
+
+impl TryFrom<&[u8]> for ObjectId {
+    type Error = &'static str;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let buf = value.try_into();
+        buf.map(ObjectId)
+            .map_err(|_| "Invalid ObjectId buffer length")
+    }
+}
 
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
-type TableOffset = usize;
-type TableLength = usize;
+type TableOffset = u32;
+type TableLength = u32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableRegion(TableOffset, TableLength);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Flags(); // FIXME: implement
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct UserAttributesRef {
     object_id: ObjectId,
     location: TableOffset,
     flags: Flags,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum UserAttributesStructure {
     Inline(UserAttributes),
     Ref(UserAttributesRef),
 }
 
+#[derive(Debug, Clone, PartialEq)]
 struct ManifestExtents(Vec<ArrayIndices>);
 
+#[derive(Debug, Clone, PartialEq)]
 struct ManifestRef {
     object_id: ObjectId,
     location: TableRegion,
@@ -234,29 +254,28 @@ pub struct ZarrArrayMetadata {
     fill_value: FillValue,
     codecs: Codecs,
     storage_transformers: Option<StorageTransformers>,
+    // each dimension name can be null in Zarr
     dimension_names: Option<Vec<Option<DimensionName>>>,
 }
 
-#[derive(Debug, PartialEq)]
-pub struct ArrayStructure {
-    id: NodeId,
-    path: Path,
-    zarr_metadata: ZarrArrayMetadata,
-    //user_attributes: UserAttributesStructure,
-    //manifests: Vec<ManifestRef>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct GroupStructure {
-    id: NodeId,
-    path: Path,
-    //user_attributes: UserAttributesStructure,
+#[derive(Clone, Debug)]
+pub enum NodeType {
+    Group,
+    Array,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum NodeStructure {
-    Array(ArrayStructure),
-    Group(GroupStructure),
+pub enum NodeData {
+    Array(ZarrArrayMetadata), //(manifests: Vec<ManifestRef>)
+    Group,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct NodeStructure {
+    id: NodeId,
+    path: Path,
+    user_attributes: Option<UserAttributesStructure>,
+    node_data: NodeData,
 }
 
 pub struct VirtualChunkRef {

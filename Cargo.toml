@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 arrow = "52.2.0"
 async-trait = "0.1.81"
+rand = "0.8.5"
 
 [profile.release-with-debug]
 inherits = "release"

@@ -2,15 +2,16 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
-        Array, AsArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder,
-        UInt32Array, UInt8Array,
+        Array, AsArray, FixedSizeBinaryArray, ListArray, ListBuilder, RecordBatch, StringArray,
+        StringBuilder, UInt32Array, UInt8Array,
     },
     datatypes::{Field, Schema, UInt32Type, UInt64Type, UInt8Type},
 };
 
 use crate::{
-    ArrayStructure, ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue,
-    GroupStructure, NodeId, NodeStructure, NodeType, Path, StorageTransformers, ZarrArrayMetadata,
+    ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags, NodeData,
+    NodeId, NodeStructure, NodeType, ObjectId, Path, StorageTransformers, UserAttributes,
+    UserAttributesRef, UserAttributesStructure, ZarrArrayMetadata,
 };
 
 pub struct StructureTable {
@@ -123,21 +124,59 @@ impl StructureTable {
             .column_by_name("id")?
             .as_primitive_opt::<UInt32Type>()?
             .value(idx);
+        let user_attributes = self.build_user_attributes(idx);
         match node_type {
-            "group" => Some(NodeStructure::Group(GroupStructure {
+            "group" => Some(NodeStructure {
                 path: path.clone(),
                 id,
-            })),
-            "array" => {
-                let zarr_metadata = self.build_zarr_array_metadata(idx)?;
-                let array = ArrayStructure {
-                    path: path.clone(),
-                    id,
-                    zarr_metadata,
-                };
-                Some(NodeStructure::Array(array))
-            }
+                user_attributes,
+                node_data: NodeData::Group,
+            }),
+            "array" => Some(NodeStructure {
+                path: path.clone(),
+                id,
+                user_attributes,
+                node_data: NodeData::Array(self.build_zarr_array_metadata(idx)?),
+            }),
             _ => None,
+        }
+    }
+
+    fn build_user_attributes(&self, idx: usize) -> Option<UserAttributesStructure> {
+        let inline = self
+            .batch
+            .column_by_name("user_attributes")?
+            .as_string_opt::<i32>()?;
+        if inline.is_valid(idx) {
+            Some(UserAttributesStructure::Inline(
+                inline.value(idx).to_string(),
+            ))
+        } else {
+            self.build_user_attributes_ref(idx)
+        }
+    }
+    fn build_user_attributes_ref(&self, idx: usize) -> Option<UserAttributesStructure> {
+        let atts_ref = self
+            .batch
+            .column_by_name("user_attributes_ref")?
+            .as_fixed_size_binary_opt()?;
+        let atts_row = self
+            .batch
+            .column_by_name("user_attributes_row")?
+            .as_primitive_opt::<UInt32Type>()?;
+        if atts_ref.is_valid(idx) && atts_row.is_valid(idx) {
+            let object_id = atts_ref.value(idx);
+            let object_id = object_id.try_into().ok()?;
+            let location = atts_row.value(idx);
+            // FIXME: flags
+            let flags = Flags();
+            Some(UserAttributesStructure::Ref(UserAttributesRef {
+                object_id,
+                location,
+                flags,
+            }))
+        } else {
+            None
         }
     }
 }
@@ -243,6 +282,26 @@ where
     b.finish()
 }
 
+fn mk_user_attributes_array<T: IntoIterator<Item = Option<UserAttributes>>>(
+    coll: T,
+) -> StringArray {
+    let iter = coll.into_iter();
+    StringArray::from_iter(iter)
+}
+
+fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
+    coll: T,
+) -> FixedSizeBinaryArray {
+    let iter = coll.into_iter().map(|oid| oid.map(|oid| oid.0));
+    FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, ObjectId::SIZE as i32)
+        .expect("Bad ObjectId size")
+}
+
+fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(coll: T) -> UInt32Array {
+    let iter = coll.into_iter();
+    UInt32Array::from_iter(iter)
+}
+
 // For testing only
 pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> StructureTable {
     let mut ids = Vec::new();
@@ -255,12 +314,38 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
     let mut codecs = Vec::new();
     let mut storage_transformers = Vec::new();
     let mut dimension_names = Vec::new();
+    let mut user_attributes_vec = Vec::new();
+    let mut user_attributes_ref = Vec::new();
+    let mut user_attributes_row = Vec::new();
+    // FIXME: add user_attributes_flags
     for node in coll {
-        match node {
-            NodeStructure::Group(GroupStructure { id, path }) => {
+        ids.push(node.id);
+        paths.push(node.path.to_string_lossy().into_owned());
+        match node.user_attributes {
+            Some(UserAttributesStructure::Inline(atts)) => {
+                user_attributes_ref.push(None);
+                user_attributes_row.push(None);
+                user_attributes_vec.push(Some(atts));
+            }
+            Some(UserAttributesStructure::Ref(UserAttributesRef {
+                object_id,
+                location,
+                flags: _flags,
+            })) => {
+                user_attributes_vec.push(None);
+                user_attributes_ref.push(Some(object_id));
+                user_attributes_row.push(Some(location));
+            }
+            None => {
+                user_attributes_vec.push(None);
+                user_attributes_ref.push(None);
+                user_attributes_row.push(None);
+            }
+        }
+
+        match node.node_data {
+            NodeData::Group => {
                 types.push(NodeType::Group);
-                ids.push(id);
-                paths.push(path.to_string_lossy().into_owned());
                 shapes.push(None);
                 data_types.push(None);
                 chunk_shapes.push(None);
@@ -269,14 +354,8 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
                 storage_transformers.push(None);
                 dimension_names.push(None);
             }
-            NodeStructure::Array(ArrayStructure {
-                id,
-                path,
-                zarr_metadata,
-            }) => {
+            NodeData::Array(zarr_metadata) => {
                 types.push(NodeType::Array);
-                ids.push(id);
-                paths.push(path.to_string_lossy().into_owned());
                 shapes.push(Some(zarr_metadata.shape));
                 data_types.push(Some(zarr_metadata.data_type));
                 chunk_shapes.push(Some(zarr_metadata.chunk_shape));
@@ -287,6 +366,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             }
         }
     }
+
     let ids = mk_id_array(ids);
     let types = mk_type_array(types);
     let paths = mk_path_array(paths);
@@ -297,6 +377,10 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
     let codecs = mk_codecs_array(codecs);
     let storage_transformers = mk_storage_transformers_array(storage_transformers);
     let dimension_names = mk_dimension_names_array(dimension_names);
+    let user_attributes_vec = mk_user_attributes_array(user_attributes_vec);
+    let user_attributes_ref = mk_user_attributes_ref_array(user_attributes_ref);
+    let user_attributes_row = mk_user_attributes_row_array(user_attributes_row);
+
     let columns: Vec<Arc<dyn Array>> = vec![
         Arc::new(ids),
         Arc::new(types),
@@ -308,6 +392,9 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
         Arc::new(codecs),
         Arc::new(storage_transformers),
         Arc::new(dimension_names),
+        Arc::new(user_attributes_vec),
+        Arc::new(user_attributes_ref),
+        Arc::new(user_attributes_row),
     ];
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", arrow::datatypes::DataType::UInt32, false),
@@ -340,6 +427,17 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
         Field::new_list(
             "dimension_names",
             Field::new("item", arrow::datatypes::DataType::Utf8, true),
+            true,
+        ),
+        Field::new("user_attributes", arrow::datatypes::DataType::Utf8, true),
+        Field::new(
+            "user_attributes_ref",
+            arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+            true,
+        ),
+        Field::new(
+            "user_attributes_row",
+            arrow::datatypes::DataType::UInt32,
             true,
         ),
     ]));
@@ -383,38 +481,54 @@ mod tests {
             ..zarr_meta2.clone()
         };
 
+        let oid = ObjectId::random();
         let nodes = vec![
-            NodeStructure::Group(GroupStructure {
+            NodeStructure {
                 path: "/".into(),
                 id: 1,
-            }),
-            NodeStructure::Group(GroupStructure {
+                user_attributes: None,
+                node_data: NodeData::Group,
+            },
+            NodeStructure {
                 path: "/a".into(),
                 id: 2,
-            }),
-            NodeStructure::Group(GroupStructure {
+                user_attributes: None,
+                node_data: NodeData::Group,
+            },
+            NodeStructure {
                 path: "/b".into(),
                 id: 3,
-            }),
-            NodeStructure::Group(GroupStructure {
+                user_attributes: None,
+                node_data: NodeData::Group,
+            },
+            NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
-            }),
-            NodeStructure::Array(ArrayStructure {
+                user_attributes: Some(UserAttributesStructure::Inline("some inline".to_string())),
+                node_data: NodeData::Group,
+            },
+            NodeStructure {
                 path: "/b/array1".into(),
                 id: 5,
-                zarr_metadata: zarr_meta1.clone(),
-            }),
-            NodeStructure::Array(ArrayStructure {
+                user_attributes: Some(UserAttributesStructure::Ref(UserAttributesRef {
+                    object_id: oid.clone(),
+                    location: 42,
+                    flags: Flags(),
+                })),
+                node_data: NodeData::Array(zarr_meta1.clone()),
+            },
+            NodeStructure {
                 path: "/array2".into(),
-                id: 5,
-                zarr_metadata: zarr_meta2.clone(),
-            }),
-            NodeStructure::Array(ArrayStructure {
+                id: 6,
+                user_attributes: None,
+                node_data: NodeData::Array(zarr_meta2.clone()),
+            },
+            NodeStructure {
                 path: "/b/array3".into(),
-                id: 5,
-                zarr_metadata: zarr_meta3.clone(),
-            }),
+                id: 7,
+                user_attributes: None,
+                node_data: NodeData::Array(zarr_meta3.clone()),
+            },
         ];
         let st = mk_structure_table(nodes);
         assert_eq!(st.get_node(&"/nonexistent".into()), None);
@@ -422,45 +536,56 @@ mod tests {
         let node = st.get_node(&"/b/c".into());
         assert_eq!(
             node,
-            Some(NodeStructure::Group(GroupStructure {
+            Some(NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
-            }))
+                user_attributes: Some(UserAttributesStructure::Inline("some inline".to_string())),
+                node_data: NodeData::Group,
+            }),
         );
         let node = st.get_node(&"/".into());
         assert_eq!(
             node,
-            Some(NodeStructure::Group(GroupStructure {
+            Some(NodeStructure {
                 path: "/".into(),
                 id: 1,
-            }))
+                user_attributes: None,
+                node_data: NodeData::Group,
+            }),
         );
         let node = st.get_node(&"/b/array1".into());
         assert_eq!(
             node,
-            Some(NodeStructure::Array(ArrayStructure {
+            Some(NodeStructure {
                 path: "/b/array1".into(),
                 id: 5,
-                zarr_metadata: zarr_meta1,
-            }),)
+                user_attributes: Some(UserAttributesStructure::Ref(UserAttributesRef {
+                    object_id: oid,
+                    location: 42,
+                    flags: Flags(),
+                })),
+                node_data: NodeData::Array(zarr_meta1.clone()),
+            }),
         );
         let node = st.get_node(&"/array2".into());
         assert_eq!(
             node,
-            Some(NodeStructure::Array(ArrayStructure {
+            Some(NodeStructure {
                 path: "/array2".into(),
-                id: 5,
-                zarr_metadata: zarr_meta2,
-            }),)
+                id: 6,
+                user_attributes: None,
+                node_data: NodeData::Array(zarr_meta2.clone()),
+            }),
         );
         let node = st.get_node(&"/b/array3".into());
         assert_eq!(
             node,
-            Some(NodeStructure::Array(ArrayStructure {
+            Some(NodeStructure {
                 path: "/b/array3".into(),
-                id: 5,
-                zarr_metadata: zarr_meta3,
-            }),)
+                id: 7,
+                user_attributes: None,
+                node_data: NodeData::Array(zarr_meta3.clone()),
+            }),
         );
     }
 }

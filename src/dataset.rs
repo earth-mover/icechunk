@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    AddNodeError, ArrayIndices, ArrayStructure, AttributesTable, ChunkPayload, Dataset,
-    GroupStructure, ManifestsTable, NodeStructure, Path, StructureTable, UpdateNodeError,
-    UserAttributes, ZarrArrayMetadata,
+    AddNodeError, ArrayIndices, AttributesTable, ChunkPayload, Dataset, ManifestsTable, NodeData,
+    NodeStructure, Path, StructureTable, UpdateNodeError, UserAttributes, ZarrArrayMetadata,
 };
 
 /// FIXME: what do we want to do with implicit groups?
@@ -47,11 +46,14 @@ impl Dataset {
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
             None => Err(UpdateNodeError::NotFound),
-            Some(NodeStructure::Group(..)) => Err(UpdateNodeError::NotAnArray),
-            Some(NodeStructure::Array(..)) => {
+            Some(NodeStructure {
+                node_data: NodeData::Array(..),
+                ..
+            }) => {
                 self.updated_arrays.insert(path, metadata);
                 Ok(())
             }
+            Some(_) => Err(UpdateNodeError::NotAnArray),
         }
     }
 
@@ -81,11 +83,14 @@ impl Dataset {
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
             None => Err(UpdateNodeError::NotFound),
-            Some(NodeStructure::Group(..)) => Err(UpdateNodeError::NotAnArray),
-            Some(NodeStructure::Array(..)) => {
+            Some(NodeStructure {
+                node_data: NodeData::Array(..),
+                ..
+            }) => {
                 self.set_chunks.insert((path, coord), data);
                 Ok(())
             }
+            Some(_) => Err(UpdateNodeError::NotAnArray),
         }
     }
 
@@ -101,10 +106,10 @@ impl Dataset {
         structure.get_node(path)
     }
 
-    pub async fn get_user_attributes(&self, path: Path) -> Option<UserAttributes> {
+    pub async fn get_user_attributes(&self, _path: Path) -> Option<UserAttributes> {
         todo!()
     }
-    pub async fn get_chunk(&self, path: Path, coord: ArrayIndices) -> ChunkPayload {
+    pub async fn get_chunk(&self, _path: Path, _coord: ArrayIndices) -> ChunkPayload {
         todo!()
     }
 
