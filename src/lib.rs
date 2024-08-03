@@ -213,10 +213,9 @@ pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
 type TableOffset = u32;
-type TableLength = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableRegion(TableOffset, TableLength);
+pub struct TableRegion(TableOffset, TableOffset);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Flags(); // FIXME: implement
@@ -234,10 +233,10 @@ enum UserAttributesStructure {
     Ref(UserAttributesRef),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ManifestExtents(Vec<ArrayIndices>);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ManifestRef {
     object_id: ObjectId,
     location: TableRegion,
@@ -266,7 +265,7 @@ pub enum NodeType {
 
 #[derive(Debug, PartialEq)]
 pub enum NodeData {
-    Array(ZarrArrayMetadata), //(manifests: Vec<ManifestRef>)
+    Array(ZarrArrayMetadata, Vec<ManifestRef>),
     Group,
 }
 

@@ -2,16 +2,19 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
-        Array, AsArray, FixedSizeBinaryArray, ListArray, ListBuilder, RecordBatch, StringArray,
-        StringBuilder, UInt32Array, UInt8Array,
+        Array, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder, ListArray,
+        ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray, UInt32Array,
+        UInt32Builder, UInt8Array,
     },
-    datatypes::{Field, Schema, UInt32Type, UInt64Type, UInt8Type},
+    datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
 };
+use itertools::izip;
 
 use crate::{
-    ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags, NodeData,
-    NodeId, NodeStructure, NodeType, ObjectId, Path, StorageTransformers, UserAttributes,
-    UserAttributesRef, UserAttributesStructure, ZarrArrayMetadata,
+    ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
+    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId, Path,
+    StorageTransformers, TableRegion, UserAttributes, UserAttributesRef, UserAttributesStructure,
+    ZarrArrayMetadata,
 };
 
 pub struct StructureTable {
@@ -113,6 +116,51 @@ impl StructureTable {
         })
     }
 
+    // FIXME: there should be a failure reason here, so return a Result
+    fn build_manifest_refs(&self, idx: usize) -> Option<Vec<ManifestRef>> {
+        let manifest_refs_array = self
+            .batch
+            .column_by_name("manifest_references")?
+            .as_struct_opt()?;
+        if manifest_refs_array.is_valid(idx) {
+            let refs = manifest_refs_array
+                .column_by_name("reference")?
+                .as_list_opt::<i32>()?
+                .value(idx);
+            let refs = refs.as_fixed_size_binary_opt()?;
+
+            let row_from = manifest_refs_array
+                .column_by_name("start_row")?
+                .as_list_opt::<i32>()?
+                .value(idx);
+            let row_from = row_from.as_primitive_opt::<UInt32Type>()?;
+
+            let row_to = manifest_refs_array
+                .column_by_name("end_row")?
+                .as_list_opt::<i32>()?
+                .value(idx);
+            let row_to = row_to.as_primitive_opt::<UInt32Type>()?;
+
+            // FIXME: add extents and flags
+
+            let it = izip!(refs.iter(), row_from.iter(), row_to.iter())
+                .filter_map(|(r, f, t)| Some((r?.try_into().ok()?, f?, t?)));
+            let res = it
+                .map(|(r, f, t)| ManifestRef {
+                    object_id: ObjectId(r),
+                    location: TableRegion(f, t),
+                    // FIXME: flags
+                    flags: Flags(),
+                    // FIXME: extents
+                    extents: ManifestExtents(vec![]),
+                })
+                .collect();
+            Some(res)
+        } else {
+            None
+        }
+    }
+
     fn build_node_structure(&self, path: &Path, idx: usize) -> Option<NodeStructure> {
         let node_type = self
             .batch
@@ -136,7 +184,10 @@ impl StructureTable {
                 path: path.clone(),
                 id,
                 user_attributes,
-                node_data: NodeData::Array(self.build_zarr_array_metadata(idx)?),
+                node_data: NodeData::Array(
+                    self.build_zarr_array_metadata(idx)?,
+                    self.build_manifest_refs(idx)?,
+                ),
             }),
             _ => None,
         }
@@ -285,8 +336,7 @@ where
 fn mk_user_attributes_array<T: IntoIterator<Item = Option<UserAttributes>>>(
     coll: T,
 ) -> StringArray {
-    let iter = coll.into_iter();
-    StringArray::from_iter(iter)
+    StringArray::from_iter(coll)
 }
 
 fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
@@ -298,8 +348,99 @@ fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
 }
 
 fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(coll: T) -> UInt32Array {
-    let iter = coll.into_iter();
-    UInt32Array::from_iter(iter)
+    UInt32Array::from_iter(coll)
+}
+
+fn mk_manifest_refs_array<T, P>(coll: T) -> StructArray
+where
+    T: IntoIterator<Item = Option<P>>,
+    P: IntoIterator<Item = ManifestRef>,
+{
+    let mut ref_array = ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
+    let mut from_row_array = ListBuilder::new(UInt32Builder::new());
+    let mut to_row_array = ListBuilder::new(UInt32Builder::new());
+
+    for m in coll {
+        match m {
+            None => {
+                ref_array.append_null();
+                from_row_array.append_null();
+                to_row_array.append_null();
+            }
+            Some(manifests) => {
+                for manifest in manifests {
+                    ref_array
+                        .values()
+                        .append_value(manifest.object_id.0)
+                        .expect("Error appending to manifest reference array");
+                    from_row_array.values().append_value(manifest.location.0);
+                    to_row_array.values().append_value(manifest.location.1);
+                }
+                ref_array.append(true);
+                from_row_array.append(true);
+                to_row_array.append(true);
+            }
+        }
+    }
+    let ref_array = ref_array.finish();
+    let from_row_array = from_row_array.finish();
+    let to_row_array = to_row_array.finish();
+
+    // I don't know how to create non nullabe list arrays directly
+    let (_, offsets, values, nulls) = ref_array.into_parts();
+    let field = Arc::new(Field::new(
+        "item",
+        arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+        false,
+    ));
+    let ref_array = ListArray::new(field, offsets, values, nulls);
+
+    let (_, offsets, values, nulls) = from_row_array.into_parts();
+    let field = Arc::new(Field::new(
+        "item",
+        arrow::datatypes::DataType::UInt32,
+        false,
+    ));
+    let from_row_array = ListArray::new(field, offsets, values, nulls);
+
+    let (_, offsets, values, nulls) = to_row_array.into_parts();
+    let field = Arc::new(Field::new(
+        "item",
+        arrow::datatypes::DataType::UInt32,
+        false,
+    ));
+    let to_row_array = ListArray::new(field, offsets, values, nulls);
+
+    StructArray::from(vec![
+        (
+            Arc::new(Field::new_list(
+                "reference",
+                Field::new(
+                    "item",
+                    arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                    false,
+                ),
+                true,
+            )),
+            Arc::new(ref_array) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new_list(
+                "start_row",
+                Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                true,
+            )),
+            Arc::new(from_row_array) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new_list(
+                "end_row",
+                Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                true,
+            )),
+            Arc::new(to_row_array) as ArrayRef,
+        ),
+    ])
 }
 
 // For testing only
@@ -317,6 +458,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
     let mut user_attributes_vec = Vec::new();
     let mut user_attributes_ref = Vec::new();
     let mut user_attributes_row = Vec::new();
+    let mut manifest_refs_vec = Vec::new();
     // FIXME: add user_attributes_flags
     for node in coll {
         ids.push(node.id);
@@ -353,8 +495,9 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
                 codecs.push(None);
                 storage_transformers.push(None);
                 dimension_names.push(None);
+                manifest_refs_vec.push(None);
             }
-            NodeData::Array(zarr_metadata) => {
+            NodeData::Array(zarr_metadata, manifest_refs) => {
                 types.push(NodeType::Array);
                 shapes.push(Some(zarr_metadata.shape));
                 data_types.push(Some(zarr_metadata.data_type));
@@ -363,6 +506,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
                 codecs.push(Some(zarr_metadata.codecs));
                 storage_transformers.push(zarr_metadata.storage_transformers);
                 dimension_names.push(zarr_metadata.dimension_names);
+                manifest_refs_vec.push(Some(manifest_refs));
             }
         }
     }
@@ -380,6 +524,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
     let user_attributes_vec = mk_user_attributes_array(user_attributes_vec);
     let user_attributes_ref = mk_user_attributes_ref_array(user_attributes_ref);
     let user_attributes_row = mk_user_attributes_row_array(user_attributes_row);
+    let manifest_refs = mk_manifest_refs_array(manifest_refs_vec);
 
     let columns: Vec<Arc<dyn Array>> = vec![
         Arc::new(ids),
@@ -395,6 +540,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
         Arc::new(user_attributes_vec),
         Arc::new(user_attributes_ref),
         Arc::new(user_attributes_row),
+        Arc::new(manifest_refs),
     ];
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", arrow::datatypes::DataType::UInt32, false),
@@ -440,6 +586,31 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             arrow::datatypes::DataType::UInt32,
             true,
         ),
+        Field::new(
+            "manifest_references",
+            arrow::datatypes::DataType::Struct(Fields::from(vec![
+                Field::new_list(
+                    "reference",
+                    Field::new(
+                        "item",
+                        arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                        false,
+                    ),
+                    true,
+                ),
+                Field::new_list(
+                    "start_row",
+                    Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                    true,
+                ),
+                Field::new_list(
+                    "end_row",
+                    Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                    true,
+                ),
+            ])),
+            true,
+        ),
     ]));
     let batch = RecordBatch::try_new(schema, columns).expect("Error creating record batch");
     StructureTable { batch }
@@ -480,6 +651,18 @@ mod tests {
             dimension_names: None,
             ..zarr_meta2.clone()
         };
+        let man_ref1 = ManifestRef {
+            object_id: ObjectId::random(),
+            location: TableRegion(0, 1),
+            flags: Flags(),
+            extents: ManifestExtents(vec![]),
+        };
+        let man_ref2 = ManifestRef {
+            object_id: ObjectId::random(),
+            location: TableRegion(0, 1),
+            flags: Flags(),
+            extents: ManifestExtents(vec![]),
+        };
 
         let oid = ObjectId::random();
         let nodes = vec![
@@ -515,19 +698,22 @@ mod tests {
                     location: 42,
                     flags: Flags(),
                 })),
-                node_data: NodeData::Array(zarr_meta1.clone()),
+                node_data: NodeData::Array(
+                    zarr_meta1.clone(),
+                    vec![man_ref1.clone(), man_ref2.clone()],
+                ),
             },
             NodeStructure {
                 path: "/array2".into(),
                 id: 6,
                 user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone()),
+                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             },
             NodeStructure {
                 path: "/b/array3".into(),
                 id: 7,
                 user_attributes: None,
-                node_data: NodeData::Array(zarr_meta3.clone()),
+                node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
         let st = mk_structure_table(nodes);
@@ -564,7 +750,7 @@ mod tests {
                     location: 42,
                     flags: Flags(),
                 })),
-                node_data: NodeData::Array(zarr_meta1.clone()),
+                node_data: NodeData::Array(zarr_meta1.clone(), vec![man_ref1, man_ref2]),
             }),
         );
         let node = st.get_node(&"/array2".into());
@@ -574,7 +760,7 @@ mod tests {
                 path: "/array2".into(),
                 id: 6,
                 user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone()),
+                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             }),
         );
         let node = st.get_node(&"/b/array3".into());
@@ -584,7 +770,7 @@ mod tests {
                 path: "/b/array3".into(),
                 id: 7,
                 user_attributes: None,
-                node_data: NodeData::Array(zarr_meta3.clone()),
+                node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),
         );
     }
