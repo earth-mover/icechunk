@@ -246,6 +246,7 @@ The first two requirements rule out string encoding.
 The latter requirement rules out structs or lists.
 
 So we opt for a variable length binary encoding.
+The chunk coord is created by encoding each element of the tuple a big endian `uint16` and then simply concatenating the bytes together in order. For the common case of arrays <= 4 dimensions, this would use 8 bytes or less per chunk coord.
 
 ### Chunk Files
 
