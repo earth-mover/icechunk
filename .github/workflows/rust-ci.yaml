@@ -1,0 +1,72 @@
+# This is mostly copied from the rust-analyzer repo
+# https://github.com/rust-lang/rust-analyzer/blob/12e7aa3132217cc6a6c1151d468be35d7b365999/.github/workflows/ci.yaml
+
+name: Rust CI
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  push:
+    branches:
+      - main
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  rust:
+    name: Rust CI
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ./
+    #permissions:
+      #contents: read
+      #actions: read
+      #pull-requests: read
+    env:
+      #CC: deny_c
+      RUST_CHANNEL: 'stable'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest-m]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target"
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+
+      - name: Check
+        if: matrix.os == 'ubuntu-latest-m' || github.event_name == 'push'
+        env:
+          AWS_ACCESS_KEY_ID: minio123
+          AWS_SECRET_ACCESS_KEY: minio123
+          AWS_DEFAULT_REGION: "us-east-1"
+        run: |
+          just pre-commit

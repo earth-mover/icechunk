@@ -204,8 +204,7 @@ impl TryFrom<&[u8]> for ObjectId {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let buf = value.try_into();
-        buf.map(ObjectId)
-            .map_err(|_| "Invalid ObjectId buffer length")
+        buf.map(ObjectId).map_err(|_| "Invalid ObjectId buffer length")
     }
 }
 
@@ -327,9 +326,18 @@ pub enum StorageError {
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 trait Storage {
-    async fn fetch_structure(&self, id: &ObjectId) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
-    async fn fetch_attributes(&self, id: &ObjectId) -> Result<Arc<AttributesTable>, StorageError>; // FIXME: format flags
-    async fn fetch_manifests(&self, id: &ObjectId) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
+    async fn fetch_structure(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
+    async fn fetch_attributes(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<AttributesTable>, StorageError>; // FIXME: format flags
+    async fn fetch_manifests(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
 
     async fn write_structure(
         &self,
