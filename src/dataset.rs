@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::{
-    AddNodeError, ArrayIndices, AttributesTable, ChunkPayload, Dataset, ManifestsTable, NodeData,
-    NodeStructure, Path, StructureTable, UpdateNodeError, UserAttributes, ZarrArrayMetadata,
+    AddNodeError, ArrayIndices, AttributesTable, ChunkPayload, Dataset, ManifestsTable,
+    NodeData, NodeStructure, Path, StructureTable, UpdateNodeError, UserAttributes,
+    ZarrArrayMetadata,
 };
 
 /// FIXME: what do we want to do with implicit groups?
@@ -46,10 +47,7 @@ impl Dataset {
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
             None => Err(UpdateNodeError::NotFound),
-            Some(NodeStructure {
-                node_data: NodeData::Array(..),
-                ..
-            }) => {
+            Some(NodeStructure { node_data: NodeData::Array(..), .. }) => {
                 self.updated_arrays.insert(path, metadata);
                 Ok(())
             }
@@ -83,10 +81,7 @@ impl Dataset {
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
             None => Err(UpdateNodeError::NotFound),
-            Some(NodeStructure {
-                node_data: NodeData::Array(..),
-                ..
-            }) => {
+            Some(NodeStructure { node_data: NodeData::Array(..), .. }) => {
                 self.set_chunks.insert((path, coord), data);
                 Ok(())
             }
@@ -98,11 +93,7 @@ impl Dataset {
 
     // FIXME: we should have errros here, not only None
     pub async fn get_node(&self, path: &Path) -> Option<NodeStructure> {
-        let structure = self
-            .storage
-            .fetch_structure(&self.structure_id)
-            .await
-            .ok()?;
+        let structure = self.storage.fetch_structure(&self.structure_id).await.ok()?;
         structure.get_node(path)
     }
 
@@ -121,11 +112,7 @@ impl Dataset {
     /// Files that are reused from previous commits are not returned because they don't need saving
     pub async fn consolidate(
         &mut self,
-    ) -> (
-        Arc<StructureTable>,
-        Vec<Arc<AttributesTable>>,
-        Vec<Arc<ManifestsTable>>,
-    ) {
+    ) -> (Arc<StructureTable>, Vec<Arc<AttributesTable>>, Vec<Arc<ManifestsTable>>) {
         todo!()
     }
 }
