@@ -1,21 +1,79 @@
 use std::{num::NonZeroU64, sync::Arc};
 
+use std::collections::HashMap;
+
+use arrow::array::FixedSizeListBuilder;
+use arrow::array::Float32Builder;
+use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::DataType as ArrowDataType;
+use arrow::datatypes::UnionFields;
+use arrow::error::ArrowError;
+
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-        ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray,
-        UInt32Array, UInt32Builder, UInt8Array,
+        Array, ArrayRef, AsArray, BinaryArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+        FixedSizeListArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray,
+        UInt32Array, UInt32Builder, UInt8Array, UnionArray,
     },
-    datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
+    datatypes::{
+        Field, Fields, Float32Type, Float64Type, Int32Type, Int64Type, Schema, UInt32Type,
+        UInt64Type, UInt8Type,
+    },
 };
 use itertools::izip;
 
 use crate::{
     ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
-    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
-    Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
-    UserAttributesStructure, ZarrArrayMetadata,
+    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId, Path,
+    StorageTransformers, TableRegion, UserAttributes, UserAttributesRef, UserAttributesStructure,
+    ZarrArrayMetadata,
 };
+
+// TODO: is there a better pattern
+const NONE_FILL_VALUE_SENTINEL: i8 = 0i8;
+
+fn fill_value_union_fields() -> UnionFields {
+    [
+        (
+            NONE_FILL_VALUE_SENTINEL,
+            Arc::new(Field::new("none", ArrowDataType::Int8, false)),
+        ),
+        (
+            FillValue::Int32(0).discriminant(),
+            Arc::new(Field::new("int32", ArrowDataType::Int32, true)),
+        ),
+        (
+            FillValue::Int64(0).discriminant(),
+            Arc::new(Field::new("int64", ArrowDataType::Int64, true)),
+        ),
+        (
+            FillValue::Float32(0f32).discriminant(),
+            Arc::new(Field::new("float32", ArrowDataType::Float32, true)),
+        ),
+        (
+            FillValue::Float64(0f64).discriminant(),
+            Arc::new(Field::new("float64", ArrowDataType::Float64, true)),
+        ),
+        (
+            FillValue::Complex64(0f32, 0f32).discriminant(),
+            Arc::new(Field::new(
+                "complex64",
+                ArrowDataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(ArrowDataType::Float32, true)),
+                    2, // 2 element list for complex numbers
+                ),
+                false,
+            )),
+        ),
+        (
+            FillValue::RawBits(vec![b'1']).discriminant(),
+            Arc::new(Field::new("raw", ArrowDataType::Binary, true)),
+        ),
+    ]
+    .into_iter()
+    .collect::<UnionFields>()
+}
 
 pub struct StructureTable {
     batch: RecordBatch,
@@ -95,12 +153,21 @@ impl StructureTable {
             )
         };
 
+        let fill_values = decode_fill_values_array(
+            self.batch.column_by_name("fill_value")?
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .unwrap()
+                .clone() // TODO: don't understand this
+        );
+        let fill_value = fill_values[idx].to_owned().unwrap();
+
         Some(ZarrArrayMetadata {
             shape,
             data_type,
             chunk_shape,
             chunk_key_encoding,
-            fill_value: FillValue::Int8(0), // FIXME: implement
+            fill_value,
             codecs,
             storage_transformers,
             dimension_names,
@@ -407,6 +474,145 @@ where
     ])
 }
 
+fn to_fill_value(type_name: &str, value: Arc<dyn Array>) -> Option<FillValue> {
+    dbg!("in to_fill_value");
+    let result: Option<FillValue> = match type_name {
+        "none" => None,
+        "int32" => Some(FillValue::Int32(
+            value.as_primitive_opt::<Int32Type>()?.value(0),
+        )),
+        "int64" => Some(FillValue::Int64(
+            value.as_primitive_opt::<Int64Type>()?.value(0),
+        )),
+        "float32" => Some(FillValue::Float32(
+            value.as_primitive_opt::<Float32Type>()?.value(0),
+        )),
+        "float64" => Some(FillValue::Float64(
+            value.as_primitive_opt::<Float64Type>()?.value(0),
+        )),
+        "complex64" => {
+            // TODO: Learn about making this a function that's generic in Float32, Float64
+            let fill_value = value.as_fixed_size_list().value(0);
+            let as_array = fill_value.as_primitive_opt::<Float32Type>()?;
+            Some(FillValue::Complex64(as_array.value(0), as_array.value(1)))
+        }
+        "raw" => {
+            let as_vec = value.as_binary_opt::<i32>()?.values().as_slice().to_owned();
+            Some(FillValue::RawBits(as_vec))
+        }
+        _ => None,
+    };
+    result
+}
+
+fn mk_fill_values_array(fill_values: Vec<Option<FillValue>>) -> Result<UnionArray, ArrowError> {
+    let mut none_vec = Vec::new();
+    let mut int32_vec = Vec::new();
+    let mut int64_vec = Vec::new();
+    let mut float32_vec = Vec::new();
+    let mut float64_vec = Vec::new();
+    let mut complex64_vec = Vec::new();
+    let mut rawbits_vec = Vec::new();
+
+    let mut type_ids: Vec<i8> = Vec::new();
+    let mut offsets_vec: Vec<i32> = Vec::new();
+
+    // Construct the UnionArray, sadly UnionBuilder does not support the more complex types
+    // like ListArray or Binary
+    // Iterate over input; append to vecs
+    for val in fill_values.iter() {
+        // TODO: what if there are no matches?
+        match val.to_owned() {
+            None => {
+                // required because type_ids.len() == offsets_vec.len() is enforced
+                offsets_vec.push(0i32);
+                type_ids.push(NONE_FILL_VALUE_SENTINEL);
+                if none_vec.len() == 0 {
+                    none_vec.push(0i8)
+                }
+            }
+            Some(FillValue::Int32(v)) => {
+                offsets_vec.push(int32_vec.len() as i32);
+                int32_vec.push(v);
+                type_ids.push(FillValue::Int32(0).discriminant());
+            }
+            Some(FillValue::Int64(v)) => {
+                offsets_vec.push(int64_vec.len() as i32);
+                int64_vec.push(v);
+                type_ids.push(FillValue::Int64(0i64).discriminant());
+            }
+            Some(FillValue::Float32(v)) => {
+                offsets_vec.push(float32_vec.len() as i32);
+                float32_vec.push(v);
+                type_ids.push(FillValue::Float32(0f32).discriminant());
+            }
+            Some(FillValue::Float64(v)) => {
+                offsets_vec.push(float64_vec.len() as i32);
+                float64_vec.push(v);
+                type_ids.push(FillValue::Float64(0f64).discriminant());
+            }
+            Some(FillValue::Complex64(r, i)) => {
+                offsets_vec.push(complex64_vec.len() as i32);
+                complex64_vec.push((r, i));
+                type_ids.push(FillValue::Complex64(0f32, 0f32).discriminant());
+            }
+            Some(FillValue::RawBits(v)) => {
+                offsets_vec.push(rawbits_vec.len() as i32);
+                rawbits_vec.push(v);
+                type_ids.push(FillValue::RawBits(vec![b'1']).discriminant());
+            }
+            _ => (), // TODO:
+        }
+    }
+
+    let type_ids = type_ids.into_iter().collect::<ScalarBuffer<i8>>();
+    let offsets = offsets_vec.into_iter().collect::<ScalarBuffer<i32>>();
+    let children: Vec<Arc<dyn Array>> = vec![
+        // order here MUST match order of union_fields
+        Arc::new(Int8Array::from(none_vec)),
+        Arc::new(Int32Array::from(int32_vec)),
+        Arc::new(Int64Array::from(int64_vec)),
+        Arc::new(Float32Array::from(float32_vec)),
+        Arc::new(Float64Array::from(float64_vec)),
+        Arc::new(build_complex_list_array(complex64_vec)),
+        Arc::new(BinaryArray::from_iter_values(
+            rawbits_vec.iter().map(|x| x.as_slice()),
+        )),
+    ];
+    // dbg!(children.clone(), type_ids.clone(), offsets.clone());
+
+    UnionArray::try_new(fill_value_union_fields(), type_ids, Some(offsets), children)
+}
+
+fn decode_fill_values_array(array: UnionArray) -> Vec<Option<FillValue>> {
+    let mut fill_values = Vec::new();
+    let type_names = array.type_names();
+    dbg!(type_names.clone(), array.clone(), array.len());
+    for idx in 0..array.len() {
+        // DC: Why can't this be outside the for?
+        let type_id = array.type_id(idx);
+        let type_name = type_names[type_id as usize];
+        dbg!(type_name, array.value(idx).clone());
+        // TODO: I think I need Result instead of Option somewhere
+        fill_values.push(
+            to_fill_value(type_name, array.value(idx)), //.ok_or("Error Decoding fill value")
+        )
+    }
+    fill_values
+}
+
+fn build_complex_list_array(values: Vec<(f32, f32)>) -> FixedSizeListArray {
+    let values_builder = Float32Builder::new();
+    let mut builder = FixedSizeListBuilder::new(values_builder, 2);
+    for val in values.iter() {
+        let (real, imag) = val;
+        builder.values().append_value(real.to_owned());
+        builder.values().append_value(imag.to_owned());
+        builder.append(true);
+    }
+    builder.finish()
+}
+
 // For testing only
 pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     coll: T,
@@ -418,6 +624,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let mut data_types = Vec::new();
     let mut chunk_shapes = Vec::new();
     let mut chunk_key_encodings = Vec::new();
+    let mut fill_values = Vec::new();
     let mut codecs = Vec::new();
     let mut storage_transformers = Vec::new();
     let mut dimension_names = Vec::new();
@@ -458,6 +665,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
                 data_types.push(None);
                 chunk_shapes.push(None);
                 chunk_key_encodings.push(None);
+                fill_values.push(None);
                 codecs.push(None);
                 storage_transformers.push(None);
                 dimension_names.push(None);
@@ -469,6 +677,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
                 data_types.push(Some(zarr_metadata.data_type));
                 chunk_shapes.push(Some(zarr_metadata.chunk_shape));
                 chunk_key_encodings.push(Some(zarr_metadata.chunk_key_encoding));
+                fill_values.push(Some(zarr_metadata.fill_value));
                 codecs.push(Some(zarr_metadata.codecs));
                 storage_transformers.push(zarr_metadata.storage_transformers);
                 dimension_names.push(zarr_metadata.dimension_names);
@@ -477,6 +686,8 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
         }
     }
 
+    // DC: Vec -> Arrow Arrays, why not directly up top?
+    // Also are you allowed to change type like this
     let ids = mk_id_array(ids);
     let types = mk_type_array(types);
     let paths = mk_path_array(paths);
@@ -484,6 +695,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let data_types = mk_data_type_array(data_types);
     let chunk_shapes = mk_chunk_shape_array(chunk_shapes);
     let chunk_key_encodings = mk_chunk_key_encoding_array(chunk_key_encodings);
+    let fill_values = mk_fill_values_array(fill_values).unwrap(); // TODO: remove unwrap here
     let codecs = mk_codecs_array(codecs);
     let storage_transformers = mk_storage_transformers_array(storage_transformers);
     let dimension_names = mk_dimension_names_array(dimension_names);
@@ -492,6 +704,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let user_attributes_row = mk_user_attributes_row_array(user_attributes_row);
     let manifest_refs = mk_manifest_refs_array(manifest_refs_vec);
 
+    // TODO: DC: what is this dyn thing?
     let columns: Vec<Arc<dyn Array>> = vec![
         Arc::new(ids),
         Arc::new(types),
@@ -500,6 +713,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
         Arc::new(data_types),
         Arc::new(chunk_shapes),
         Arc::new(chunk_key_encodings),
+        Arc::new(fill_values),
         Arc::new(codecs),
         Arc::new(storage_transformers),
         Arc::new(dimension_names),
@@ -524,8 +738,15 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
             true,
         ),
         Field::new("chunk_key_encoding", arrow::datatypes::DataType::UInt8, true),
-        // FIXME:
-        //Field::new("fill_value", todo!(), true),
+        Field::new(
+            "fill_value",
+            arrow::datatypes::DataType::Union(
+                // TODO: Is dense correct here?
+                fill_value_union_fields(),
+                arrow::datatypes::UnionMode::Dense,
+            ),
+            true,
+        ),
         Field::new("codecs", arrow::datatypes::DataType::Utf8, true),
         Field::new("storage_transformers", arrow::datatypes::DataType::Utf8, true),
         Field::new_list(
@@ -573,6 +794,15 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     StructureTable { batch }
 }
 
+fn fixed_size_list_array_from_vec(value: Vec<f32>) -> FixedSizeListArray {
+    let values_builder = Float32Builder::new();
+    let mut builder = FixedSizeListBuilder::new(values_builder, 2);
+    builder.values().append_value(value[0]);
+    builder.values().append_value(value[1]);
+    builder.append(true);
+    builder.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -601,7 +831,9 @@ mod tests {
         };
         let zarr_meta2 = ZarrArrayMetadata {
             storage_transformers: None,
+            data_type: DataType::Int32,
             dimension_names: Some(vec![None, None, Some("t".to_string())]),
+            fill_value: FillValue::Int32(0i32),
             ..zarr_meta1.clone()
         };
         let zarr_meta3 =
@@ -732,5 +964,62 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),
         );
+    }
+    #[test]
+    fn test_fill_values_vec_roundtrip() {
+        let fill_values = vec![
+            None, // for groups
+            Some(FillValue::Int32(0i32)),
+            Some(FillValue::Int64(0i64)),
+            Some(FillValue::Float32(0f32)),
+            Some(FillValue::Float64(0f64)),
+            Some(FillValue::Complex64(0f32, 1f32)),
+            Some(FillValue::RawBits(vec![b'1'])),
+        ];
+
+        // TOOD: understand this clone
+        let encoded =
+            mk_fill_values_array(fill_values.clone()).expect("Failed to decode fill_value.");
+        let decoded = decode_fill_values_array(encoded);
+
+        assert_eq!(fill_values, decoded);
+    }
+
+    #[test]
+    fn test_fill_value_decode() {
+        // int32
+        let value = 1i32;
+        let expected = FillValue::Int32(value);
+        let encoded = Int32Array::from(vec![value]);
+        let actual = to_fill_value("int32", Arc::new(encoded)).unwrap();
+        assert_eq!(expected, actual);
+
+        // int64
+        let value = 1i64;
+        let expected = FillValue::Int64(value);
+        let encoded = Int64Array::from(vec![value]);
+        let actual = to_fill_value("int64", Arc::new(encoded)).unwrap();
+        assert_eq!(expected, actual);
+
+        // float64
+        let value = 1f64;
+        let expected = FillValue::Float64(value);
+        let encoded = Float64Array::from(vec![value]);
+        let actual = to_fill_value("float64", Arc::new(encoded)).unwrap();
+        assert_eq!(expected, actual);
+
+        // // complex64
+        let value = vec![1.0f32, 2.0f32];
+        let expected = FillValue::Complex64(value[0], value[1]);
+        let encoded = fixed_size_list_array_from_vec(value);
+        let actual = to_fill_value("complex64", Arc::new(encoded)).unwrap();
+        assert_eq!(expected, actual);
+
+        // // binary
+        let value = b"123";
+        let expected = FillValue::RawBits(value.to_vec());
+        let encoded = BinaryArray::from_vec(vec![value]);
+        let actual = to_fill_value("raw", Arc::new(encoded)).unwrap();
+        assert_eq!(expected, actual);
     }
 }

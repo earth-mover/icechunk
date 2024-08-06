@@ -154,25 +154,32 @@ impl From<ChunkKeyEncoding> for u8 {
     }
 }
 
+#[repr(u8)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum FillValue {
-    Bool(bool),
-    Int8(i8),
-    Int16(i16),
-    Int32(i32),
+    // Bool(bool),
+    // Int8(i8),
+    // Int16(i16),
+    Int32(i32) = 1,
     Int64(i64),
-    UInt8(u8),
-    UInt16(u16),
-    UInt32(u32),
-    UInt64(u64),
-    Float16(f32),
+    // UInt8(u8),
+    // UInt16(u16),
+    // UInt32(u32),
+    // UInt64(u64),
+    // Float16(f32),
     Float32(f32),
     Float64(f64),
     Complex64(f32, f32),
-    Complex128(f64, f64),
+    // Complex128(f64, f64),
     RawBits(Vec<u8>),
 }
 
+impl FillValue {
+    // https://doc.rust-lang.org/reference/items/enumerations.html#pointer-casting
+    fn discriminant(&self) -> i8 {
+        unsafe { *(self as *const Self as *const i8) }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Codecs(String); // FIXME: define
 
