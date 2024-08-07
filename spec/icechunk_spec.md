@@ -15,6 +15,7 @@ The most common scenarios is for a dataset to contain a single Zarr group with m
 | Column | Array |
 | Metadata File | State File |
 | Snapshot | Snapshot |
+| Catalog | Catalog |
 
 ## Goals
 
