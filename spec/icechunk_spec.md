@@ -13,7 +13,7 @@ The most common scenarios is for a dataset to contain a single Zarr group with m
 |--|--|
 | Table | Dataset |
 | Column | Array |
-| Catalog | State File |
+| Metadata File | State File |
 | Snapshot | Snapshot |
 
 ## Goals
