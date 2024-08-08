@@ -3,10 +3,10 @@
 The Icechunk specification is a storage specification for [Zarr](https://zarr-specs.readthedocs.io/en/latest/specs.html) data.
 Icechunk is inspired by Apache Iceberg and borrows many concepts and ideas from the [Iceberg Spec](https://iceberg.apache.org/spec/#version-2-row-level-deletes).
 
-This specification describes a single Icechunk **store**.
-A store is a Zarr store containing one or more interrelated Arrays and Groups, which must be updated consistently.
-The most common scenarios is for a store to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
-However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
+This specification describes a single Icechunk **dataset**.
+A dataset is defined as a Zarr store containing one or more interrelated Arrays and Groups which must be updated consistently.
+The most common scenario is for a dataset to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
+However, formally a dataset can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
 
 ## Goals
 
@@ -39,17 +39,17 @@ Stores do not require random-access writes. Once written, chunk and metadata fil
 
 Icechunk uses a series of linked metadata files to describe the state of the store.
 
-- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file.
-- The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
-- **Chunk Manifests** store references to individual chunks.
-- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large, to prevent the structure file from becoming too big.
-- **Chunk files** store the actual compressed chunk data.
+- The **state file** is the entry point to the dataset. It stores a record of snapshots, each of which is a pointer to a single structure file.
+- The **structure file** records all of the different arrays and groups in the dataset, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
+- **Chunk Manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
+- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
+- **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
 
-When reading a store, the client first opens the state file and chooses a specific snapshot to open.
-The client then reads the structure file to determine the structure and hierarchy of the store.
+When reading a dataset, the client first opens the state file and chooses a structure file corresponding to a specific snapshot to open.
+The client then reads the structure file to determine the structure and hierarchy of the dataset.
+
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
-
-When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
+When writing a new dataset snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
 Ensuring atomicity of the swap operation is the responsibility of the [catalog](#catalog).
 
 
@@ -109,14 +109,14 @@ The contents of the state file metadata must be compatible with the following JS
 | generation | YES | int | An integer which must be incremented whenever the state file is updated |
 | store_root | NO | str | A URI which points to the root location of the store in object storage. If blank, the store root is assumed to be in the same directory as the state file itself. | 
 | snapshots | YES | array[snapshot] | A list of all of the snapshots. |
-| refs | NO | mapping[reference] | A mapping of references to snapshots |
+| refs | NO | mapping[reference] | A mapping of references (string names) to snapshots |
 
 A snapshot contains the following properties
 
 | Name | Required | Type | Description |
 |--|--|--|--|
 | snapshot-id | YES | str UID | Unique identifier for the snapshot |
-| parent-snapshot-id | NO | str UID | Parent snapshot (null for no parent) |
+| parent-snapshot-id | YES |  null OR str UID | Parent snapshot (null for no parent) |
 | timestamp-ms | YES | int | When was snapshot commited |
 | structure-file | YES | str | Name of the structure file for this snapshot |
 | properties | NO | object | arbitrary user-defined attributes to associate with this snapshot | 
