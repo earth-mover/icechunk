@@ -29,7 +29,7 @@ Icechunk only requires that file systems support the following operations:
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
 - **Deletes** - Stores delete files that are no longer used (via a garbage-collection operation).
 
-These requirements are compatible with object stores, like S3.
+These requirements are compatible with object stores, like S3, as well as with filesystems.
 
 Stores do not require random-access writes. Once written, chunk and metadata files are immutable until they are deleted.
 
@@ -42,7 +42,7 @@ Icechunk uses a series of linked metadata files to describe the state of the sto
 - The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file.
 - The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
 - **Chunk Manifests** store references to individual chunks.
-- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
+- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large, to prevent the structure file from becoming too big.
 - **Chunk files** store the actual compressed chunk data.
 
 When reading a store, the client first opens the state file and chooses a specific snapshot to open.
@@ -132,7 +132,7 @@ References are a mapping of string names to snapshots
 
 ### File Layout
 
-The state file can be stored separately from the rest of the data or together with it. The rest of the data files in the store must be kept in a directory with the following structure.
+The state file can be stored separately from the rest of the data or together with it. The rest of the data files must be kept in a directory with the following structure.
 
 - `$ROOT` base URI (s3, gcs, file, etc.)
 - `$ROOT/state.json` (optional) state file
