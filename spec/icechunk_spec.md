@@ -6,29 +6,19 @@ Icechunk is inspired by Apache Iceberg and borrows many concepts and ideas from 
 This specification describes a single Icechunk **dataset**.
 A dataset is defined as a Zarr store containing one or more interrelated Arrays and Groups which must be updated consistently.
 The most common scenarios is for a dataset to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
-
-## Comparison with Iceberg
-
-| Iceberg Entity | Icechunk Entity |
-|--|--|
-| Table | Dataset |
-| Column | Array |
-| Metadata File | State File |
-| Snapshot | Snapshot |
-| Catalog | Catalog |
+However, formally a dataset can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
 
 ## Goals
 
 The goals of the specification are as follows:
 
-1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a dataset. Writes across multiple arrays and chunks will be commited via a single atomic operation and will not be partially visible. Readers will not acquire locks.
+1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a dataset. Writes to arrays will be commited via a single atomic operation and will not be partially visible. Readers will not acquire locks.
 2. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-
-[TODO: there must be more, but these seem like the big ones for now]
+3. **Time travel** - Previous snapshots of a dataset remain accessible after new ones have been written. Reverting to an early snapshot is trivial and inexpensive.
 
 ### Filesytem Operations
 
-The required filesystem operations are identical to Iceberg. Icechunk only requires that file systems support the following operations:
+Icechunk only requires that file systems support the following operations:
 
 - **In-place write** - Files are not moved or altered once they are written.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
@@ -47,14 +37,15 @@ Like Iceberg, Icechunk uses a series of linked metadata files to describe the st
 - The **state file** is the entry point to the dataset. It stores a record of snapshots, each of which is a pointer to a single structure file.
 - The **structure file** records all of the different arrays and groups in the dataset, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
 - **Chunk Manifests** store references to individual chunks.
-- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file.
+- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data.
 
-When reading a dataset, the client first open the state file and chooses a specific snapshot to open.
+When reading a dataset, the client first opens the state file and chooses a specific snapshot to open.
 The client then reads the structure file to determine the structure and hierarchy of the dataset.
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
-When writing a new dataset snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot .
+When writing a new dataset snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
+Ensuring atomicity of the swap operation is the responsibility of the catalog.
 
 
 ```mermaid
@@ -140,9 +131,9 @@ The state file can be stored separately from the rest of the data or together wi
 - `$ROOT` base URI (s3, gcs, file, etc.)
 - `$ROOT/state.json` (optional) state file
 - `$ROOT/s/` for the structure files
-- `$ROOT/a/` arrays and groups attribute information
-- `$ROOT/i/` array chunk manifests (i for index or inventory)
-- `$ROOT/c/` array chunks
+- `$ROOT/a/` for attribute files
+- `$ROOT/m/` for array chunk manifests
+- `$ROOT/c/` for array chunks
 
 ### Structure Files
 
@@ -154,7 +145,7 @@ Each row of the file represents an individual node (array or group) of the Zarr 
 The structure file has the following Arrow schema:
 
 ```
-id: uint16 not null
+id: uint32 not null
   -- field metadata --
   description: 'unique identifier for the node'
 type: string not null
@@ -218,11 +209,11 @@ Chunk manifest files are Parquet files.
 They have the following arrow schema.
 
 ```
-id: uint32 not null
 array_id: uint32 not null
 coord: binary not null
 inline_data: binary
-chunk_file: string
+chunk_id: binary
+virtual_path: string
 offset: uint64
 length: uint32 not null
 ```
@@ -271,3 +262,16 @@ Applications may choose to arrange chunks within files in different ways to opti
 ### Read Snapshot
 
 ### Expire Snapshots
+
+
+## Appendices
+
+### Comparison with Iceberg
+
+| Iceberg Entity | Icechunk Entity |
+|--|--|
+| Table | Dataset |
+| Column | Array |
+| Metadata File | State File |
+| Snapshot | Snapshot |
+| Catalog | Catalog |

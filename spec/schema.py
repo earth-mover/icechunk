@@ -2,7 +2,7 @@ import pyarrow as pa
 
 structure_schema = pa.schema(
     [
-        pa.field("id", pa.uint16(), nullable=False, metadata={"description": "unique identifier for the node"}),
+        pa.field("id", pa.uint32(), nullable=False, metadata={"description": "unique identifier for the node"}),
         pa.field("type", pa.string(), nullable=False, metadata={"description": "array or group"}),
         pa.field("path", pa.string(), nullable=False, metadata={"description": "path to the node within the store"}),
         pa.field(
@@ -97,11 +97,11 @@ print(structure_schema)
 
 manifest_schema = pa.schema(
     [
-        pa.field("id", pa.uint32(), nullable=False),
         pa.field("array_id", pa.uint32(), nullable=False),
         pa.field("coord", pa.binary(), nullable=False),
         pa.field("inline_data", pa.binary(), nullable=True),
-        pa.field("chunk_file", pa.string(), nullable=True),
+        pa.field("chunk_id", pa.binary(), nullable=True),
+        pa.field("virtual_path", pa.string(), nullable=True),
         pa.field("offset", pa.uint64(), nullable=True),
         pa.field("length", pa.uint32(), nullable=False)
     ]
