@@ -29,11 +29,7 @@ pub mod structure;
 use async_trait::async_trait;
 use manifest::ManifestsTable;
 use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    num::NonZeroU64,
-    path::PathBuf,
-    sync::Arc,
+    collections::HashMap, fmt::Display, num::NonZeroU64, path::PathBuf, sync::Arc,
 };
 use structure::StructureTable;
 
@@ -265,13 +261,13 @@ pub enum NodeType {
     Array,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeData {
     Array(ZarrArrayMetadata, Vec<ManifestRef>),
     Group,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeStructure {
     id: NodeId,
     path: Path,
@@ -310,15 +306,19 @@ pub struct ChunkInfo {
 // FIXME: this will hold the arrow file
 pub struct AttributesTable();
 
+// FIXME: implement std::error::Error for these
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AddNodeError {
     AlreadyExists,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpdateNodeError {
     NotFound,
     NotAnArray,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {
     NotFound,
     Deadlock,
@@ -364,24 +364,11 @@ pub struct Dataset {
     structure_id: ObjectId,
     storage: Box<dyn Storage>,
 
-    new_groups: HashSet<Path>,
-    new_arrays: HashMap<Path, ZarrArrayMetadata>,
+    last_node_id: Option<NodeId>,
+    new_groups: HashMap<Path, NodeId>,
+    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
     updated_arrays: HashMap<Path, ZarrArrayMetadata>,
-    updated_attributes: HashMap<Path, UserAttributes>,
+    updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<(Path, ArrayIndices), ChunkPayload>,
-}
-
-impl Dataset {
-    pub fn new(storage: Box<dyn Storage>, structure_id: ObjectId) -> Self {
-        Dataset {
-            structure_id,
-            storage,
-            new_groups: HashSet::new(),
-            new_arrays: HashMap::new(),
-            updated_arrays: HashMap::new(),
-            updated_attributes: HashMap::new(),
-            set_chunks: HashMap::new(),
-        }
-    }
+    set_chunks: HashMap<(Path, ArrayIndices), Option<ChunkPayload>>,
 }
