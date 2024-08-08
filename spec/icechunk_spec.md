@@ -3,18 +3,23 @@
 The Icechunk specification is a storage specification for [Zarr](https://zarr-specs.readthedocs.io/en/latest/specs.html) data.
 Icechunk is inspired by Apache Iceberg and borrows many concepts and ideas from the [Iceberg Spec](https://iceberg.apache.org/spec/#version-2-row-level-deletes).
 
-This specification describes a single Icechunk **dataset**.
-A dataset is defined as a Zarr store containing one or more interrelated Arrays and Groups which must be updated consistently.
-The most common scenarios is for a dataset to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
-However, formally a dataset can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
+This specification describes a single Icechunk **store**.
+A store is a Zarr store containing one or more interrelated Arrays and Groups, which must be updated consistently.
+The most common scenarios is for a store to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
+However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
 
 ## Goals
 
 The goals of the specification are as follows:
 
-1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a dataset. Writes to arrays will be commited via a single atomic operation and will not be partially visible. Readers will not acquire locks.
+1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to arrays will be commited via a single atomic operation and will not be partially visible. Readers will not acquire locks.
 2. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-3. **Time travel** - Previous snapshots of a dataset remain accessible after new ones have been written. Reverting to an early snapshot is trivial and inexpensive.
+3. **Time travel** - Previous snapshots of a store remain accessible after new ones have been written. Reverting to an early snapshot is trivial and inexpensive.
+4. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
+
+### Non Goals
+
+1. **Low Latency** - Icechunk is designed to support analytical workloads for large stores. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
 
 ### Filesytem Operations
 
@@ -22,29 +27,29 @@ Icechunk only requires that file systems support the following operations:
 
 - **In-place write** - Files are not moved or altered once they are written.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
-- **Deletes** - Datasets delete files that are no longer used (via a garbage-collection operation).
+- **Deletes** - Stores delete files that are no longer used (via a garbage-collection operation).
 
 These requirements are compatible with object stores, like S3.
 
-Datasets do not require random-access writes. Once written, chunk and metadata files are immutable until they are deleted.
+Stores do not require random-access writes. Once written, chunk and metadata files are immutable until they are deleted.
 
 ## Specification
 
 ### Overview
 
-Icechunk uses a series of linked metadata files to describe the state of the dataset.
+Icechunk uses a series of linked metadata files to describe the state of the store.
 
-- The **state file** is the entry point to the dataset. It stores a record of snapshots, each of which is a pointer to a single structure file.
-- The **structure file** records all of the different arrays and groups in the dataset, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
+- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file.
+- The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
 - **Chunk Manifests** store references to individual chunks.
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data.
 
-When reading a dataset, the client first opens the state file and chooses a specific snapshot to open.
-The client then reads the structure file to determine the structure and hierarchy of the dataset.
+When reading a store, the client first opens the state file and chooses a specific snapshot to open.
+The client then reads the structure file to determine the structure and hierarchy of the store.
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
-When writing a new dataset snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
+When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
 Ensuring atomicity of the swap operation is the responsibility of the [catalog](#catalog).
 
 
@@ -88,7 +93,7 @@ flowchart TD
 
 ### State File
 
-The **state file** records the current state of the dataset.
+The **state file** records the current state of the store.
 All transactions occur by updating or replacing the state file.
 The state file contains, at minimum, a pointer to the latest structure file snapshot.
 A state file doesn't actually have to be a file; responsibility for storing, retrieving, and updating a state file lies with the [catalog](#catalog), and different catalog implementations may do this in different ways.
@@ -100,7 +105,7 @@ The contents of the state file metadata must be compatible with the following JS
 
 | Name | Required | Type | Description |
 |--|--|--|--|
-| id | YES | str UID | A unique identifier for the dataset |
+| id | YES | str UID | A unique identifier for the store |
 | generation | YES | int | An integer which must be incremented whenever the state file is updated |
 | store_root | NO | str | A URI which points to the root location of the store in object storage. If blank, the store root is assumed to be in the same directory as the state file itself. | 
 | snapshots | YES | array[snapshot] | A list of all of the snapshots. |
@@ -127,7 +132,7 @@ References are a mapping of string names to snapshots
 
 ### File Layout
 
-The state file can be stored separately from the rest of the data or together with it. The rest of the data files in the dataset must be kept in a directory with the following structure.
+The state file can be stored separately from the rest of the data or together with it. The rest of the data files in the store must be kept in a directory with the following structure.
 
 - `$ROOT` base URI (s3, gcs, file, etc.)
 - `$ROOT/state.json` (optional) state file
@@ -138,10 +143,10 @@ The state file can be stored separately from the rest of the data or together wi
 
 ### Structure Files
 
-The structure file fully describes the schema of the dataset, including all arrays and groups.
+The structure file fully describes the schema of the store, including all arrays and groups.
 
 The structure file is a Parquet file.
-Each row of the file represents an individual node (array or group) of the Zarr dataset. 
+Each row of the file represents an individual node (array or group) of the Zarr store. 
 
 The structure file has the following Arrow schema:
 
@@ -256,27 +261,27 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 ## Catalog
 
-An Icechunk _catalog_ is a database for keeping track of one or more state files for Icechunk Datasets.
-This specification is limited to the Dataset itself, and does not specify in detail all of the possible features or capabilities of a catalog.
+An Icechunk _catalog_ is a database for keeping track of one or more state files for Icechunk Stores.
+This specification is limited to the Store itself, and does not specify in detail all of the possible features or capabilities of a catalog.
 
 A catalog must support the following basic logical interface (here defined in Python pseudocode):
 
 ```python
-def create_dataset(dataset_identifier, initial_state: StateMetadata) -> None
-    """Create a new dataset in the catalog"""
+def create_store(store_identifier, initial_state: StateMetadata) -> None
+    """Create a new store in the catalog"""
     ...
 
-def load_dataset(dataset_identifier) -> StateMetadata:
-    """Retrieve the state metadata for a single dataset."""
+def load_store(store_identifier) -> StateMetadata:
+    """Retrieve the state metadata for a single store."""
     ...
 
-def commit_dataset(dataset_identifier, previous_generation: int, new_state: StateMetadata) -> None:
-    """Atomically update a dataset's statefile.
+def commit_store(store_identifier, previous_generation: int, new_state: StateMetadata) -> None:
+    """Atomically update a store's statefile.
     Should fail if another session has incremented the generation parameter."""
     ...
 
-def delete_dataset(dataset_identifier) -> None:
-    """Remove a dataset from the catalog."""
+def delete_store(store_identifier) -> None:
+    """Remove a store from the catalog."""
     ...
 ```
 
@@ -295,12 +300,12 @@ def delete_dataset(dataset_identifier) -> None:
 
 ### Comparison with Iceberg
 
-Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the dataset.
-But while Iceberg describes a table, the Icechunk dataset is a Zarr store (hierarchical structure of Arrays and Groups.)
+Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the store.
+But while Iceberg describes a table, the Icechunk store is a Zarr store (hierarchical structure of Arrays and Groups.)
 
 | Iceberg Entity | Icechunk Entity | Comment |
 |--|--|--|
-| Table | Dataset | The fundamental entity described by the spec |
+| Table | Store | The fundamental entity described by the spec |
 | Column | Array | The logical container for a homogenous collection of values | 
 | Metadata File | State File | The highest-level entry point into the dataset |
 | Snapshot | Snapshot | A single committed snapshot of the dataset |
