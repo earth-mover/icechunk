@@ -27,7 +27,13 @@ impl StructureTable {
         let paths: &StringArray = self.batch.column_by_name("path")?.as_string_opt()?;
         let needle = path.to_str();
         let idx = paths.iter().position(|s| s == needle);
-        idx.and_then(|idx| self.build_node_structure(path, idx))
+        idx.and_then(|idx| self.build_node_structure(idx))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = NodeStructure> + '_ {
+        let max = self.batch.num_rows();
+        // FIXME: unwrap
+        (0..max).map(|idx| self.build_node_structure(idx).unwrap())
     }
 
     // FIXME: there should be a failure reason here, so return a Result
@@ -100,7 +106,7 @@ impl StructureTable {
             data_type,
             chunk_shape,
             chunk_key_encoding,
-            fill_value: FillValue::Int8(0), // FIXME: implement
+            fill_value: FillValue::Int32(0), // FIXME: implement
             codecs,
             storage_transformers,
             dimension_names,
@@ -150,21 +156,22 @@ impl StructureTable {
         }
     }
 
-    fn build_node_structure(&self, path: &Path, idx: usize) -> Option<NodeStructure> {
+    fn build_node_structure(&self, idx: usize) -> Option<NodeStructure> {
         let node_type =
             self.batch.column_by_name("type")?.as_string_opt::<i32>()?.value(idx);
         let id =
             self.batch.column_by_name("id")?.as_primitive_opt::<UInt32Type>()?.value(idx);
+        let path = self.batch.column_by_name("path")?.as_string_opt::<i32>()?.value(idx);
         let user_attributes = self.build_user_attributes(idx);
         match node_type {
             "group" => Some(NodeStructure {
-                path: path.clone(),
+                path: path.into(),
                 id,
                 user_attributes,
                 node_data: NodeData::Group,
             }),
             "array" => Some(NodeStructure {
-                path: path.clone(),
+                path: path.into(),
                 id,
                 user_attributes,
                 node_data: NodeData::Array(
