@@ -2,9 +2,9 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder, ListArray,
-        ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray, UInt32Array,
-        UInt32Builder, UInt8Array,
+        Array, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+        ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray,
+        UInt32Array, UInt32Builder, UInt8Array,
     },
     datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
 };
@@ -12,9 +12,9 @@ use itertools::izip;
 
 use crate::{
     ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
-    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId, Path,
-    StorageTransformers, TableRegion, UserAttributes, UserAttributesRef, UserAttributesStructure,
-    ZarrArrayMetadata,
+    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
+    Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
+    UserAttributesStructure, ZarrArrayMetadata,
 };
 
 pub struct StructureTable {
@@ -27,7 +27,13 @@ impl StructureTable {
         let paths: &StringArray = self.batch.column_by_name("path")?.as_string_opt()?;
         let needle = path.to_str();
         let idx = paths.iter().position(|s| s == needle);
-        idx.and_then(|idx| self.build_node_structure(path, idx))
+        idx.and_then(|idx| self.build_node_structure(idx))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = NodeStructure> + '_ {
+        let max = self.batch.num_rows();
+        // FIXME: unwrap
+        (0..max).map(|idx| self.build_node_structure(idx).unwrap())
     }
 
     // FIXME: there should be a failure reason here, so return a Result
@@ -43,10 +49,7 @@ impl StructureTable {
             .flatten()
             .collect();
         let data_type = DataType::try_from(
-            self.batch
-                .column_by_name("data_type")?
-                .as_string_opt::<i32>()?
-                .value(idx),
+            self.batch.column_by_name("data_type")?.as_string_opt::<i32>()?.value(idx),
         )
         .ok()?;
         let chunk_shape = ChunkShape(
@@ -75,22 +78,16 @@ impl StructureTable {
                 .to_string(),
         );
 
-        let storage_transformers = self
-            .batch
-            .column_by_name("storage_transformers")?
-            .as_string_opt::<i32>()?;
+        let storage_transformers =
+            self.batch.column_by_name("storage_transformers")?.as_string_opt::<i32>()?;
         let storage_transformers = if storage_transformers.is_null(idx) {
             None
         } else {
-            Some(StorageTransformers(
-                storage_transformers.value(idx).to_string(),
-            ))
+            Some(StorageTransformers(storage_transformers.value(idx).to_string()))
         };
 
-        let dimension_names = self
-            .batch
-            .column_by_name("dimension_names")?
-            .as_list_opt::<i32>()?;
+        let dimension_names =
+            self.batch.column_by_name("dimension_names")?.as_list_opt::<i32>()?;
         let dimension_names = if dimension_names.is_null(idx) {
             None
         } else {
@@ -109,7 +106,7 @@ impl StructureTable {
             data_type,
             chunk_shape,
             chunk_key_encoding,
-            fill_value: FillValue::Int8(0), // FIXME: implement
+            fill_value: FillValue::Int32(0), // FIXME: implement
             codecs,
             storage_transformers,
             dimension_names,
@@ -118,10 +115,8 @@ impl StructureTable {
 
     // FIXME: there should be a failure reason here, so return a Result
     fn build_manifest_refs(&self, idx: usize) -> Option<Vec<ManifestRef>> {
-        let manifest_refs_array = self
-            .batch
-            .column_by_name("manifest_references")?
-            .as_struct_opt()?;
+        let manifest_refs_array =
+            self.batch.column_by_name("manifest_references")?.as_struct_opt()?;
         if manifest_refs_array.is_valid(idx) {
             let refs = manifest_refs_array
                 .column_by_name("reference")?
@@ -161,27 +156,22 @@ impl StructureTable {
         }
     }
 
-    fn build_node_structure(&self, path: &Path, idx: usize) -> Option<NodeStructure> {
-        let node_type = self
-            .batch
-            .column_by_name("type")?
-            .as_string_opt::<i32>()?
-            .value(idx);
-        let id = self
-            .batch
-            .column_by_name("id")?
-            .as_primitive_opt::<UInt32Type>()?
-            .value(idx);
+    fn build_node_structure(&self, idx: usize) -> Option<NodeStructure> {
+        let node_type =
+            self.batch.column_by_name("type")?.as_string_opt::<i32>()?.value(idx);
+        let id =
+            self.batch.column_by_name("id")?.as_primitive_opt::<UInt32Type>()?.value(idx);
+        let path = self.batch.column_by_name("path")?.as_string_opt::<i32>()?.value(idx);
         let user_attributes = self.build_user_attributes(idx);
         match node_type {
             "group" => Some(NodeStructure {
-                path: path.clone(),
+                path: path.into(),
                 id,
                 user_attributes,
                 node_data: NodeData::Group,
             }),
             "array" => Some(NodeStructure {
-                path: path.clone(),
+                path: path.into(),
                 id,
                 user_attributes,
                 node_data: NodeData::Array(
@@ -194,14 +184,10 @@ impl StructureTable {
     }
 
     fn build_user_attributes(&self, idx: usize) -> Option<UserAttributesStructure> {
-        let inline = self
-            .batch
-            .column_by_name("user_attributes")?
-            .as_string_opt::<i32>()?;
+        let inline =
+            self.batch.column_by_name("user_attributes")?.as_string_opt::<i32>()?;
         if inline.is_valid(idx) {
-            Some(UserAttributesStructure::Inline(
-                inline.value(idx).to_string(),
-            ))
+            Some(UserAttributesStructure::Inline(inline.value(idx).to_string()))
         } else {
             self.build_user_attributes_ref(idx)
         }
@@ -265,17 +251,11 @@ where
     T: IntoIterator<Item = Option<P>>,
     P: IntoIterator<Item = u64>,
 {
-    let iter = coll
-        .into_iter()
-        .map(|opt| opt.map(|p| p.into_iter().map(Some)));
+    let iter = coll.into_iter().map(|opt| opt.map(|p| p.into_iter().map(Some)));
     // I don't know how to create a ListArray that has not nullable elements
     let res = ListArray::from_iter_primitive::<UInt64Type, _, _>(iter);
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt64,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt64, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -293,11 +273,7 @@ where
         .map(|opt| opt.map(|p| p.0.iter().map(|n| Some(n.get())).collect::<Vec<_>>()));
     let res = ListArray::from_iter_primitive::<UInt64Type, _, _>(iter);
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt64,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt64, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -347,7 +323,9 @@ fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
         .expect("Bad ObjectId size")
 }
 
-fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(coll: T) -> UInt32Array {
+fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(
+    coll: T,
+) -> UInt32Array {
     UInt32Array::from_iter(coll)
 }
 
@@ -356,7 +334,8 @@ where
     T: IntoIterator<Item = Option<P>>,
     P: IntoIterator<Item = ManifestRef>,
 {
-    let mut ref_array = ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
+    let mut ref_array =
+        ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
     let mut from_row_array = ListBuilder::new(UInt32Builder::new());
     let mut to_row_array = ListBuilder::new(UInt32Builder::new());
 
@@ -396,19 +375,11 @@ where
     let ref_array = ListArray::new(field, offsets, values, nulls);
 
     let (_, offsets, values, nulls) = from_row_array.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt32,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
     let from_row_array = ListArray::new(field, offsets, values, nulls);
 
     let (_, offsets, values, nulls) = to_row_array.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt32,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
     let to_row_array = ListArray::new(field, offsets, values, nulls);
 
     StructArray::from(vec![
@@ -444,7 +415,9 @@ where
 }
 
 // For testing only
-pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> StructureTable {
+pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
+    coll: T,
+) -> StructureTable {
     let mut ids = Vec::new();
     let mut types = Vec::new();
     let mut paths = Vec::new();
@@ -557,19 +530,11 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             Field::new("item", arrow::datatypes::DataType::UInt64, false),
             true,
         ),
-        Field::new(
-            "chunk_key_encoding",
-            arrow::datatypes::DataType::UInt8,
-            true,
-        ),
+        Field::new("chunk_key_encoding", arrow::datatypes::DataType::UInt8, true),
         // FIXME:
         //Field::new("fill_value", todo!(), true),
         Field::new("codecs", arrow::datatypes::DataType::Utf8, true),
-        Field::new(
-            "storage_transformers",
-            arrow::datatypes::DataType::Utf8,
-            true,
-        ),
+        Field::new("storage_transformers", arrow::datatypes::DataType::Utf8, true),
         Field::new_list(
             "dimension_names",
             Field::new("item", arrow::datatypes::DataType::Utf8, true),
@@ -581,11 +546,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
             true,
         ),
-        Field::new(
-            "user_attributes_row",
-            arrow::datatypes::DataType::UInt32,
-            true,
-        ),
+        Field::new("user_attributes_row", arrow::datatypes::DataType::UInt32, true),
         Field::new(
             "manifest_references",
             arrow::datatypes::DataType::Struct(Fields::from(vec![
@@ -593,7 +554,9 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
                     "reference",
                     Field::new(
                         "item",
-                        arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                        arrow::datatypes::DataType::FixedSizeBinary(
+                            ObjectId::SIZE as i32,
+                        ),
                         false,
                     ),
                     true,
@@ -612,7 +575,8 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             true,
         ),
     ]));
-    let batch = RecordBatch::try_new(schema, columns).expect("Error creating record batch");
+    let batch =
+        RecordBatch::try_new(schema, columns).expect("Error creating record batch");
     StructureTable { batch }
 }
 
@@ -647,10 +611,8 @@ mod tests {
             dimension_names: Some(vec![None, None, Some("t".to_string())]),
             ..zarr_meta1.clone()
         };
-        let zarr_meta3 = ZarrArrayMetadata {
-            dimension_names: None,
-            ..zarr_meta2.clone()
-        };
+        let zarr_meta3 =
+            ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
             location: TableRegion(0, 1),
@@ -687,7 +649,9 @@ mod tests {
             NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline("some inline".to_string())),
+                user_attributes: Some(UserAttributesStructure::Inline(
+                    "some inline".to_string(),
+                )),
                 node_data: NodeData::Group,
             },
             NodeStructure {
@@ -725,7 +689,9 @@ mod tests {
             Some(NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline("some inline".to_string())),
+                user_attributes: Some(UserAttributesStructure::Inline(
+                    "some inline".to_string()
+                )),
                 node_data: NodeData::Group,
             }),
         );

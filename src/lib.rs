@@ -22,21 +22,20 @@
 /// - A `Dataset` concrete type, implements the high level interface, using an Storage
 ///   implementation and the data tables.
 pub mod dataset;
+pub mod manifest;
 pub mod storage;
 pub mod structure;
 
 use async_trait::async_trait;
+use manifest::ManifestsTable;
 use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    num::NonZeroU64,
-    path::PathBuf,
-    sync::Arc,
+    collections::HashMap, fmt::Display, num::NonZeroU64, path::PathBuf, sync::Arc,
 };
 use structure::StructureTable;
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 /// An ND index to an element in an array.
-pub type ArrayIndices = Vec<u64>;
+pub struct ArrayIndices(pub Vec<u64>);
 
 /// The shape of an array.
 /// 0 is a valid shape member
@@ -136,9 +135,9 @@ impl TryFrom<u8> for ChunkKeyEncoding {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            c if { c == '/' as u8 } => Ok(ChunkKeyEncoding::Slash),
-            c if { c == '.' as u8 } => Ok(ChunkKeyEncoding::Dot),
-            c if { c == 'x' as u8 } => Ok(ChunkKeyEncoding::Default),
+            b'/' => Ok(ChunkKeyEncoding::Slash),
+            b'.' => Ok(ChunkKeyEncoding::Dot),
+            b'x' => Ok(ChunkKeyEncoding::Default),
             _ => Err("Invalid chunk key encoding character"),
         }
     }
@@ -147,9 +146,9 @@ impl TryFrom<u8> for ChunkKeyEncoding {
 impl From<ChunkKeyEncoding> for u8 {
     fn from(value: ChunkKeyEncoding) -> Self {
         match value {
-            ChunkKeyEncoding::Slash => '/' as u8,
-            ChunkKeyEncoding::Dot => '.' as u8,
-            ChunkKeyEncoding::Default => 'x' as u8,
+            ChunkKeyEncoding::Slash => b'/',
+            ChunkKeyEncoding::Dot => b'.',
+            ChunkKeyEncoding::Default => b'x',
         }
     }
 }
@@ -204,8 +203,7 @@ impl TryFrom<&[u8]> for ObjectId {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let buf = value.try_into();
-        buf.map(ObjectId)
-            .map_err(|_| "Invalid ObjectId buffer length")
+        buf.map(ObjectId).map_err(|_| "Invalid ObjectId buffer length")
     }
 }
 
@@ -237,7 +235,7 @@ enum UserAttributesStructure {
 struct ManifestExtents(Vec<ArrayIndices>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ManifestRef {
+pub struct ManifestRef {
     object_id: ObjectId,
     location: TableRegion,
     flags: Flags,
@@ -263,13 +261,13 @@ pub enum NodeType {
     Array,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeData {
     Array(ZarrArrayMetadata, Vec<ManifestRef>),
     Group,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeStructure {
     id: NodeId,
     path: Path,
@@ -277,24 +275,28 @@ pub struct NodeStructure {
     node_data: NodeData,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChunkRef {
     id: ObjectId, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChunkPayload {
     Inline(Vec<u8>), // FIXME: optimize copies
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChunkInfo {
     node: NodeId,
     coord: ArrayIndices,
@@ -304,18 +306,19 @@ pub struct ChunkInfo {
 // FIXME: this will hold the arrow file
 pub struct AttributesTable();
 
-// FIXME: this will hold the arrow file
-pub struct ManifestsTable();
-
+// FIXME: implement std::error::Error for these
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AddNodeError {
     AlreadyExists,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpdateNodeError {
     NotFound,
     NotAnArray,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {
     NotFound,
     Deadlock,
@@ -326,10 +329,19 @@ pub enum StorageError {
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-trait Storage {
-    async fn fetch_structure(&self, id: &ObjectId) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
-    async fn fetch_attributes(&self, id: &ObjectId) -> Result<Arc<AttributesTable>, StorageError>; // FIXME: format flags
-    async fn fetch_manifests(&self, id: &ObjectId) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
+pub trait Storage {
+    async fn fetch_structure(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
+    async fn fetch_attributes(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<AttributesTable>, StorageError>; // FIXME: format flags
+    async fn fetch_manifests(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
 
     async fn write_structure(
         &self,
@@ -352,10 +364,11 @@ pub struct Dataset {
     structure_id: ObjectId,
     storage: Box<dyn Storage>,
 
-    new_groups: HashSet<Path>,
-    new_arrays: HashMap<Path, ZarrArrayMetadata>,
+    last_node_id: Option<NodeId>,
+    new_groups: HashMap<Path, NodeId>,
+    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
     updated_arrays: HashMap<Path, ZarrArrayMetadata>,
-    updated_attributes: HashMap<Path, UserAttributes>,
+    updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<(Path, ArrayIndices), ChunkPayload>,
+    set_chunks: HashMap<(Path, ArrayIndices), Option<ChunkPayload>>,
 }
