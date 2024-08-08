@@ -32,7 +32,7 @@ Datasets do not require random-access writes. Once written, chunk and metadata f
 
 ### Overview
 
-Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the dataset.
+Icechunk uses a series of linked metadata files to describe the state of the dataset.
 
 - The **state file** is the entry point to the dataset. It stores a record of snapshots, each of which is a pointer to a single structure file.
 - The **structure file** records all of the different arrays and groups in the dataset, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
@@ -45,7 +45,7 @@ The client then reads the structure file to determine the structure and hierarch
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
 When writing a new dataset snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
-Ensuring atomicity of the swap operation is the responsibility of the catalog.
+Ensuring atomicity of the swap operation is the responsibility of the [catalog](#catalog).
 
 
 ```mermaid
@@ -91,9 +91,10 @@ flowchart TD
 The **state file** records the current state of the dataset.
 All transactions occur by updating or replacing the state file.
 The state file contains, at minimum, a pointer to the latest structure file snapshot.
+A state file doesn't actually have to be a file; responsibility for storing, retrieving, and updating a state file lies with the [catalog](#catalog), and different catalog implementations may do this in different ways.
+Below we describe the state file as a JSON file, which is the most straightforward implementation.
 
-
-The state file is a JSON file. It contains the following required and optional fields.
+The contents of the state file metadata must be compatible with the following JSON schema:
 
 [TODO: convert to JSON schema]
 
@@ -185,9 +186,9 @@ attrs_reference: struct<attrs_file: string not null, row: uint16 not null, flags
   child 2, flags: uint16
   -- field metadata --
   description: 'user-defined attributes, stored in a separate attributes ' + 4
-inventories: list<item: struct<inventory_file: string not null, row: uint16 not null, extent: list<item: fixed_size_list<item: uint16>[2]> not null, flags: uint16>>
-  child 0, item: struct<inventory_file: string not null, row: uint16 not null, extent: list<item: fixed_size_list<item: uint16>[2]> not null, flags: uint16>
-      child 0, inventory_file: string not null
+manifests: list<item: struct<manifest_id: uint16 not null, row: uint16 not null, extent: list<item: fixed_size_list<item: uint16>[2]> not null, flags: uint16>>
+  child 0, item: struct<manifest_id: uint16 not null, row: uint16 not null, extent: list<item: fixed_size_list<item: uint16>[2]> not null, flags: uint16>
+      child 0, manifest_id: uint16 not null
       child 1, row: uint16 not null
       child 2, extent: list<item: fixed_size_list<item: uint16>[2]> not null
           child 0, item: fixed_size_list<item: uint16>[2]
@@ -197,7 +198,7 @@ inventories: list<item: struct<inventory_file: string not null, row: uint16 not 
 
 ### Attributes Files
 
-[TODO: do we really need attributes files?]
+Attribute files hold user-defined attributes separately from the structure file.
 
 ### Chunk Manifest Files
 
@@ -253,6 +254,32 @@ Chunk files can be:
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
 
+## Catalog
+
+An Icechunk _catalog_ is a database for keeping track of one or more state files for Icechunk Datasets.
+This specification is limited to the Dataset itself, and does not specify in detail all of the possible features or capabilities of a catalog.
+
+A catalog must support the following basic logical interface (here defined in Python pseudocode):
+
+```python
+def create_dataset(dataset_identifier, initial_state: StateMetadata) -> None
+    """Create a new dataset in the catalog"""
+    ...
+
+def load_dataset(dataset_identifier) -> StateMetadata:
+    """Retrieve the state metadata for a single dataset."""
+    ...
+
+def commit_dataset(dataset_identifier, previous_generation: int, new_state: StateMetadata) -> None:
+    """Atomically update a dataset's statefile.
+    Should fail if another session has incremented the generation parameter."""
+    ...
+
+def delete_dataset(dataset_identifier) -> None:
+    """Remove a dataset from the catalog."""
+    ...
+```
+
 ## Algorithms
 
 ### Initialize New Store
@@ -268,10 +295,13 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 ### Comparison with Iceberg
 
-| Iceberg Entity | Icechunk Entity |
-|--|--|
-| Table | Dataset |
-| Column | Array |
-| Metadata File | State File |
-| Snapshot | Snapshot |
-| Catalog | Catalog |
+Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the dataset.
+But while Iceberg describes a table, the Icechunk dataset is a Zarr store (hierarchical structure of Arrays and Groups.)
+
+| Iceberg Entity | Icechunk Entity | Comment |
+|--|--|--|
+| Table | Dataset | The fundamental entity described by the spec |
+| Column | Array | The logical container for a homogenous collection of values | 
+| Metadata File | State File | The highest-level entry point into the dataset |
+| Snapshot | Snapshot | A single committed snapshot of the dataset |
+| Catalog | Catalog | A central place to track changes to one or more state files |

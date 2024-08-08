@@ -77,11 +77,11 @@ structure_schema = pa.schema(
             metadata={"description": "user-defined attributes, stored in a separate attributes file"}
         ),
         pa.field(
-            "inventories",
+            "manifests",
             pa.list_(
                 pa.struct(
                     [
-                        pa.field("inventory_file", pa.string(), nullable=False),
+                        pa.field("manifest_id", pa.uint16(), nullable=False),
                         pa.field("row", pa.uint16(), nullable=False),
                         pa.field("extent", pa.list_(pa.list_(pa.uint16(), 2)), nullable=False),
                         pa.field("flags", pa.uint16(), nullable=True)
