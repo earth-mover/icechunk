@@ -18,3 +18,4 @@ debug = true
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
+proptest = "1.0.0"
