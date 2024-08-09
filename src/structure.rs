@@ -1,8 +1,8 @@
-use std::{num::NonZeroU64, sync::Arc};
+use std::{iter::zip, num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+        Array, ArrayRef, AsArray, BinaryArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
         ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray,
         UInt32Array, UInt32Builder, UInt8Array,
     },
@@ -12,8 +12,8 @@ use itertools::izip;
 
 use crate::{
     ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
-    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
-    Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
+    IcechunkFormatError, ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType,
+    ObjectId, Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
     UserAttributesStructure, ZarrArrayMetadata,
 };
 
@@ -101,12 +101,20 @@ impl StructureTable {
             )
         };
 
+        let encoded_fill_value = self
+            .batch
+            .column_by_name("fill_value")?
+            .as_binary_opt::<i32>()?
+            .value(idx);
+        let fill_value =
+            FillValue::from_data_type_and_value(&data_type, encoded_fill_value).ok()?;
+
         Some(ZarrArrayMetadata {
             shape,
             data_type,
             chunk_shape,
             chunk_key_encoding,
-            fill_value: FillValue::Int32(0), // FIXME: implement
+            fill_value,
             codecs,
             storage_transformers,
             dimension_names,
@@ -285,6 +293,16 @@ where
     UInt8Array::from_iter(iter)
 }
 
+fn mk_fill_values_array<T>(coll: T) -> BinaryArray
+where
+    T: IntoIterator<Item = Option<FillValue>>,
+{
+    let iter = coll
+        .into_iter()
+        .map(|fv| fv.as_ref().map(|f| f.to_be_bytes()));
+    BinaryArray::from_iter(iter)
+}
+
 fn mk_codecs_array<T: IntoIterator<Item = Option<Codecs>>>(coll: T) -> StringArray {
     let iter = coll.into_iter().map(|x| x.map(|x| x.0));
     StringArray::from_iter(iter)
@@ -425,6 +443,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let mut data_types = Vec::new();
     let mut chunk_shapes = Vec::new();
     let mut chunk_key_encodings = Vec::new();
+    let mut fill_values = Vec::new();
     let mut codecs = Vec::new();
     let mut storage_transformers = Vec::new();
     let mut dimension_names = Vec::new();
@@ -465,6 +484,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
                 data_types.push(None);
                 chunk_shapes.push(None);
                 chunk_key_encodings.push(None);
+                fill_values.push(None);
                 codecs.push(None);
                 storage_transformers.push(None);
                 dimension_names.push(None);
@@ -476,6 +496,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
                 data_types.push(Some(zarr_metadata.data_type));
                 chunk_shapes.push(Some(zarr_metadata.chunk_shape));
                 chunk_key_encodings.push(Some(zarr_metadata.chunk_key_encoding));
+                fill_values.push(Some(zarr_metadata.fill_value));
                 codecs.push(Some(zarr_metadata.codecs));
                 storage_transformers.push(zarr_metadata.storage_transformers);
                 dimension_names.push(zarr_metadata.dimension_names);
@@ -491,6 +512,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let data_types = mk_data_type_array(data_types);
     let chunk_shapes = mk_chunk_shape_array(chunk_shapes);
     let chunk_key_encodings = mk_chunk_key_encoding_array(chunk_key_encodings);
+    let fill_values = mk_fill_values_array(fill_values);
     let codecs = mk_codecs_array(codecs);
     let storage_transformers = mk_storage_transformers_array(storage_transformers);
     let dimension_names = mk_dimension_names_array(dimension_names);
@@ -507,6 +529,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
         Arc::new(data_types),
         Arc::new(chunk_shapes),
         Arc::new(chunk_key_encodings),
+        Arc::new(fill_values),
         Arc::new(codecs),
         Arc::new(storage_transformers),
         Arc::new(dimension_names),
@@ -531,8 +554,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
             true,
         ),
         Field::new("chunk_key_encoding", arrow::datatypes::DataType::UInt8, true),
-        // FIXME:
-        //Field::new("fill_value", todo!(), true),
+        Field::new("fill_value", arrow::datatypes::DataType::Binary, true),
         Field::new("codecs", arrow::datatypes::DataType::Utf8, true),
         Field::new("storage_transformers", arrow::datatypes::DataType::Utf8, true),
         Field::new_list(
@@ -581,10 +603,44 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
 }
 
 #[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
+mod strategies {
+    use crate::FillValue;
+    use proptest::prelude::*;
+    use proptest::prop_oneof;
+    use proptest::strategy::Strategy;
 
+    pub fn fill_value_strategy() -> impl Strategy<Value = FillValue> {
+        use proptest::collection::vec;
+        prop_oneof![
+            any::<bool>().prop_map(FillValue::Bool),
+            any::<i8>().prop_map(FillValue::Int8),
+            any::<i16>().prop_map(FillValue::Int16),
+            any::<i32>().prop_map(FillValue::Int32),
+            any::<i64>().prop_map(FillValue::Int64),
+            any::<u8>().prop_map(FillValue::UInt8),
+            any::<u16>().prop_map(FillValue::UInt16),
+            any::<u32>().prop_map(FillValue::UInt32),
+            any::<u64>().prop_map(FillValue::UInt64),
+            any::<f32>().prop_map(FillValue::Float16),
+            any::<f32>().prop_map(FillValue::Float32),
+            any::<f64>().prop_map(FillValue::Float64),
+            (any::<f32>(), any::<f32>()).prop_map(|(real, imag)| FillValue::Complex64(real, imag)),
+            (any::<f64>(), any::<f64>()).prop_map(|(real, imag)| FillValue::Complex128(real, imag)),
+            vec(any::<u8>(), 0..64).prop_map(FillValue::RawBits),
+        ]
+    }
+
+    pub fn fill_values_vec_strategy() -> impl Strategy<Value = Vec<Option<FillValue>>> {
+        use proptest::collection::vec;
+        vec(proptest::option::of(fill_value_strategy()), 0..10)
+    }
+}
+
+#[cfg(test)]
+mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
 
     #[test]
     fn test_get_node() {
@@ -608,7 +664,9 @@ mod tests {
         };
         let zarr_meta2 = ZarrArrayMetadata {
             storage_transformers: None,
+            data_type: DataType::Int32,
             dimension_names: Some(vec![None, None, Some("t".to_string())]),
+            fill_value: FillValue::Int32(0i32),
             ..zarr_meta1.clone()
         };
         let zarr_meta3 =
@@ -739,5 +797,74 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),
         );
+    }
+
+    fn decode_fill_values_array(
+        dtypes: Vec<Option<DataType>>,
+        array: BinaryArray,
+    ) -> Result<Vec<Option<FillValue>>, IcechunkFormatError> {
+        zip(dtypes, array.iter())
+            .map(|(dt, value)| {
+                dt.map(|dt| {
+                    FillValue::from_data_type_and_value(
+                        &dt,
+                        value.ok_or(IcechunkFormatError::NullFillValueError)?,
+                    )
+                })
+            })
+            .map(|x| x.transpose())
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn test_fill_values_vec_roundtrip() {
+        let fill_values = vec![
+            Some(FillValue::Bool(true)),
+            Some(FillValue::Bool(false)),
+            None, // for groups
+            Some(FillValue::Int8(0i8)),
+            Some(FillValue::Int16(0i16)),
+            Some(FillValue::Int32(0i32)),
+            Some(FillValue::Int64(0i64)),
+            None,
+            Some(FillValue::UInt8(0u8)),
+            Some(FillValue::UInt16(0u16)),
+            Some(FillValue::UInt32(0u32)),
+            Some(FillValue::UInt64(0u64)),
+            None, // for groups
+            Some(FillValue::Float16(0f32)),
+            Some(FillValue::Float32(0f32)),
+            Some(FillValue::Float64(0f64)),
+            None, // for groups
+            Some(FillValue::Complex64(0f32, 1f32)),
+            Some(FillValue::Complex128(0f64, 1f64)),
+            None, // for groups
+            Some(FillValue::RawBits(vec![b'1'])),
+        ];
+
+        let dtypes: Vec<Option<DataType>> = fill_values
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.get_data_type()))
+            .collect();
+        let encoded = mk_fill_values_array(fill_values.clone());
+        let decoded = decode_fill_values_array(dtypes, encoded).unwrap();
+
+        assert_eq!(fill_values, decoded);
+    }
+
+    proptest! {
+        #[test]
+        fn test_fill_values_vec_roundtrip_prop(
+            fill_values in strategies::fill_values_vec_strategy()
+        ) {
+            let dtypes: Vec<Option<DataType>> = fill_values
+                .iter()
+                .map(|x| x.as_ref().map(|x| x.get_data_type()))
+                .collect();
+            let encoded = mk_fill_values_array(fill_values.clone());
+            let decoded = decode_fill_values_array(dtypes, encoded).unwrap();
+            prop_assert_eq!(fill_values, decoded);
+        }
     }
 }

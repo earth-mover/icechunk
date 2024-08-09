@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest-m]
+        os: [ubuntu-latest]
 
     steps:
       - name: Checkout repository
@@ -63,7 +63,7 @@ jobs:
         run: cargo install --locked cargo-deny
 
       - name: Check
-        if: matrix.os == 'ubuntu-latest-m' || github.event_name == 'push'
+        if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
         env:
           AWS_ACCESS_KEY_ID: minio123
           AWS_SECRET_ACCESS_KEY: minio123
