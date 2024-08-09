@@ -1,12 +1,20 @@
 # Icechunk Specification
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
+
+## Introduction
+
 The Icechunk specification is a storage specification for [Zarr](https://zarr-specs.readthedocs.io/en/latest/specs.html) data.
 Icechunk is inspired by Apache Iceberg and borrows many concepts and ideas from the [Iceberg Spec](https://iceberg.apache.org/spec/#version-2-row-level-deletes).
 
 This specification describes a single Icechunk **store**.
-A store is defined as a Zarr store containing one or more interrelated Arrays and Groups which must be updated consistently.
+A store is defined as a Zarr store containing one or more Arrays and Groups.
 The most common scenario is for a store to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
 However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
+Users of Icechunk SHOULD aim to scope their stores only to related arrays and groups that require consistent transactional updates.
+
+All the data and metadata for a store are stored in **warehouse**, typically a directory in object storage or file storage.
+A separate **catalog** is used to track the latest version of of store.
 
 ## Goals
 
@@ -25,7 +33,7 @@ The goals of the specification are as follows:
 
 Icechunk only requires that file systems support the following operations:
 
-- **In-place write** - Files are not moved or altered once they are written.
+- **In-place write** - Files are not moved or altered once they are written. Strong read-after-write consistency is expected.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
 - **Deletes** - Stores delete files that are no longer used (via a garbage-collection operation).
 
@@ -45,20 +53,25 @@ Icechunk uses a series of linked metadata files to describe the state of the sto
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
 
-When reading a store, the client first opens the state file and chooses a structure file corresponding to a specific snapshot to open.
+When reading a store, the client receives a pointer to a state file from the catalog, read the state file, and  chooses a structure file corresponding to a specific snapshot to open.
 The client then reads the structure file to determine the structure and hierarchy of the store.
-
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
-When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file. Finally, in an atomic swap operation, it replaces the state file with a new state file recording the presence of the new snapshot.
+
+When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file and state file.
+Finally, in an atomic swap operation, it updates the pointer to the state file in the catalog.
 Ensuring atomicity of the swap operation is the responsibility of the [catalog](#catalog).
 
 
 ```mermaid
 flowchart TD
     subgraph catalog
-    state[State File]
+    cat_pointer[Current Statefile Pointer]
     end
     subgraph metadata
+    subgraph state_files
+    old_state[State File 1]
+    state[State File 2]
+    end
     subgraph structure
     structure1[Structure File 1]
     structure2[Structure File 2]
@@ -78,6 +91,7 @@ flowchart TD
     chunk4[Chunk File 4]
     end
     
+    cat_pointer --> state
     state -- snapshot ID --> structure2
     structure1 --> attrs
     structure1 --> manifestA
@@ -91,15 +105,25 @@ flowchart TD
     
 ```
 
+### File Layout
+
+All data and metadata files are stored in a warehouse (typically an object store) using the following directory structure.
+
+- `$ROOT` base URI (s3, gcs, file, etc.)
+- `$ROOT/t/` state files
+- `$ROOT/s/` for the structure files
+- `$ROOT/a/` for attribute files
+- `$ROOT/m/` for array chunk manifests
+- `$ROOT/c/` for array chunks
+
 ### State File
 
-The **state file** records the current state of the store.
-All transactions occur by updating or replacing the state file.
-The state file contains, at minimum, a pointer to the latest structure file snapshot.
-A state file doesn't actually have to be a file; responsibility for storing, retrieving, and updating a state file lies with the [catalog](#catalog), and different catalog implementations may do this in different ways.
-Below we describe the state file as a JSON file, which is the most straightforward implementation.
+The **state file** records the current state and history of the store.
+All commits occur by creating a new state file and updating the pointer in the catalog to this new state file.
+The state file contains a list of active (non-expired) snapshots.
+Each snapshot includes a pointer to the structure file for that snapshot.
 
-The contents of the state file metadata must be compatible with the following JSON schema:
+The state file is a JSON file with the following JSON schema:
 
 [TODO: convert to JSON schema]
 
@@ -123,23 +147,11 @@ A snapshot contains the following properties
 
 References are a mapping of string names to snapshots
 
-
 | Name | Required | Type | Description |
 |--|--|--|--|
 | name | YES | str | Name of the reference|
 | snapshot-id | YES | str UID | What snaphot does it point to |
 | type | YES | "tag" / "branch" | Whether the reference is a tag or a branch | 
-
-### File Layout
-
-The state file can be stored separately from the rest of the data or together with it. The rest of the data files must be kept in a directory with the following structure.
-
-- `$ROOT` base URI (s3, gcs, file, etc.)
-- `$ROOT/state.json` (optional) state file
-- `$ROOT/s/` for the structure files
-- `$ROOT/a/` for attribute files
-- `$ROOT/m/` for array chunk manifests
-- `$ROOT/c/` for array chunks
 
 ### Structure Files
 
@@ -261,29 +273,29 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 ## Catalog
 
-An Icechunk _catalog_ is a database for keeping track of one or more state files for Icechunk Stores.
+An Icechunk _catalog_ is a database for keeping track of pointers to state files for Icechunk Stores.
 This specification is limited to the Store itself, and does not specify in detail all of the possible features or capabilities of a catalog.
 
-A catalog must support the following basic logical interface (here defined in Python pseudocode):
+A catalog MUST support the following basic logical interface (here defined in Python pseudocode):
 
 ```python
-def create_store(store_identifier, initial_state: StateMetadata) -> None
-    """Create a new store in the catalog"""
+def get_store_statefile_location(store_identifier) -> URI:
+    """Get the location of a store state file."""
     ...
 
-def load_store(store_identifier) -> StateMetadata:
-    """Retrieve the state metadata for a single store."""
-    ...
-
-def commit_store(store_identifier, previous_generation: int, new_state: StateMetadata) -> None:
-    """Atomically update a store's statefile.
-    Should fail if another session has incremented the generation parameter."""
+def set_store_statefile_location(store_identifier, previous_statefile_location) -> None:
+    """Set the location of a store state file.
+    Should fail of the client's previous_statefile_location
+    is not consistent with the catalog."""
     ...
 
 def delete_store(store_identifier) -> None:
     """Remove a store from the catalog."""
     ...
 ```
+
+A catalog MAY also store the state metadata directly within its database, eliminating the need for an additional request to fetch the state file.
+This does not remove the need for the state file to be stored in the warehouse.
 
 ## Algorithms
 
