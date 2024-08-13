@@ -860,7 +860,6 @@ mod tests {
                 })
             })
             .map(|x| x.transpose())
-            .into_iter()
             .collect()
     }
 

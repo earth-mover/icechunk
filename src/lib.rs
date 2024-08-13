@@ -355,7 +355,7 @@ impl FillValue {
             FillValue::Float64(_) => DataType::Float64,
             FillValue::Complex64(_, _) => DataType::Complex64,
             FillValue::Complex128(_, _) => DataType::Complex128,
-            FillValue::RawBits(v) => DataType::RawBits(v.len() as usize),
+            FillValue::RawBits(v) => DataType::RawBits(v.len()),
         }
     }
 
@@ -373,16 +373,12 @@ impl FillValue {
             FillValue::Float16(v) => v.to_be_bytes().into(),
             FillValue::Float32(v) => v.to_be_bytes().into(),
             FillValue::Float64(v) => v.to_be_bytes().into(),
-            FillValue::Complex64(r, i) => r
-                .to_be_bytes()
-                .into_iter()
-                .chain(i.to_be_bytes().into_iter())
-                .collect(),
-            FillValue::Complex128(r, i) => r
-                .to_be_bytes()
-                .into_iter()
-                .chain(i.to_be_bytes().into_iter())
-                .collect(),
+            FillValue::Complex64(r, i) => {
+                r.to_be_bytes().into_iter().chain(i.to_be_bytes()).collect()
+            }
+            FillValue::Complex128(r, i) => {
+                r.to_be_bytes().into_iter().chain(i.to_be_bytes()).collect()
+            }
             FillValue::RawBits(v) => v.to_owned(),
         }
     }
