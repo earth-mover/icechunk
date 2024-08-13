@@ -686,8 +686,10 @@ mod strategies {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IcechunkFormatError;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
+    use std::iter::zip;
 
     #[test]
     fn test_get_node() {
