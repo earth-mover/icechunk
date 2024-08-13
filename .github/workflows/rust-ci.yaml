@@ -56,7 +56,7 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "rust -> target"
+          # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Install cargo-deny
