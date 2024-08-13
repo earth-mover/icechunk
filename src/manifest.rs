@@ -7,6 +7,7 @@ use arrow::{
     },
     datatypes::{Field, Schema, UInt32Type, UInt64Type},
 };
+use futures::{Stream, StreamExt};
 use itertools::Itertools;
 
 use crate::{
@@ -15,7 +16,7 @@ use crate::{
 };
 
 pub struct ManifestsTable {
-    batch: RecordBatch,
+    pub batch: RecordBatch,
 }
 
 impl ManifestsTable {
@@ -28,6 +29,18 @@ impl ManifestsTable {
         // FIXME: return error type
         let idx = self.get_chunk_info_index(coords, region)?;
         self.get_row(idx)
+    }
+
+    pub fn iter(
+        // FIXME: I need an arc here to be able to implement node_chunk_iterator in dataset.rs
+        self: Arc<Self>,
+        from: Option<TableOffset>,
+        to: Option<TableOffset>,
+    ) -> impl Iterator<Item = ChunkInfo> {
+        let from = from.unwrap_or(0);
+        let to = to.unwrap_or(self.batch.num_rows() as u32);
+        // FIXME: unwrap
+        (from..to).map(move |idx| self.get_row(idx).unwrap())
     }
 
     fn get_row(&self, row: TableOffset) -> Option<ChunkInfo> {
@@ -149,7 +162,7 @@ impl From<&ArrayIndices> for Vec<u8> {
     }
 }
 
-pub fn mk_manifests_table<T: IntoIterator<Item = ChunkInfo>>(coll: T) -> ManifestsTable {
+pub async fn mk_manifests_table(chunks: impl Stream<Item = ChunkInfo>) -> ManifestsTable {
     let mut array_ids = Vec::new();
     let mut coords = Vec::new();
     let mut chunk_ids = Vec::new();
@@ -159,7 +172,8 @@ pub fn mk_manifests_table<T: IntoIterator<Item = ChunkInfo>>(coll: T) -> Manifes
     let mut lengths = Vec::new();
     let mut extras: Vec<Option<()>> = Vec::new();
 
-    for chunk in coll {
+    futures::pin_mut!(chunks);
+    while let Some(chunk) = chunks.next().await {
         array_ids.push(chunk.node);
         coords.push(chunk.coord);
         // FIXME:
@@ -290,8 +304,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_get_chunk_info() {
+    #[tokio::test]
+    async fn test_get_chunk_info() {
         let c1a = ChunkInfo {
             node: 1,
             coord: ArrayIndices(vec![0, 0, 0]),
@@ -336,13 +350,14 @@ mod tests {
             }),
         };
 
-        let table = mk_manifests_table(vec![
+        let table = mk_manifests_table(futures::stream::iter(vec![
             c1a.clone(),
             c2a.clone(),
             c3a.clone(),
             c1b.clone(),
             c1c.clone(),
-        ]);
+        ]))
+        .await;
         let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(1, 3));
         assert_eq!(res.as_ref(), None);
         let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(0, 3));

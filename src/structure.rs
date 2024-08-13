@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub struct StructureTable {
-    batch: RecordBatch,
+    pub batch: RecordBatch,
 }
 
 impl StructureTable {
@@ -34,6 +34,12 @@ impl StructureTable {
         let max = self.batch.num_rows();
         // FIXME: unwrap
         (0..max).map(|idx| self.build_node_structure(idx).unwrap())
+    }
+
+    pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeStructure> {
+        let max = self.batch.num_rows();
+        // FIXME: unwrap
+        (0..max).map(move |idx| self.build_node_structure(idx).unwrap())
     }
 
     // FIXME: there should be a failure reason here, so return a Result

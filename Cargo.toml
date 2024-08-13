@@ -7,8 +7,9 @@ readme = "README.md"
 publish = false
 
 [dependencies]
-arrow = "52.2.0"
+arrow = { version = "52.2.0", features = ["prettyprint"] }
 async-trait = "0.1.81"
+futures = "0.3.30"
 itertools = "0.13.0"
 rand = "0.8.5"
 

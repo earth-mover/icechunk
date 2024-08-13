@@ -468,7 +468,7 @@ pub struct ZarrArrayMetadata {
     dimension_names: Option<Vec<Option<DimensionName>>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum NodeType {
     Group,
     Array,
@@ -488,28 +488,37 @@ pub struct NodeStructure {
     node_data: NodeData,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl NodeStructure {
+    pub fn node_type(&self) -> NodeType {
+        match &self.node_data {
+            NodeData::Group => NodeType::Group,
+            NodeData::Array(_, _) => NodeType::Array,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ChunkRef {
     id: ObjectId, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum ChunkPayload {
     Inline(Vec<u8>), // FIXME: optimize copies
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ChunkInfo {
     node: NodeId,
     coord: ArrayIndices,
@@ -574,14 +583,18 @@ pub trait Storage {
 }
 
 pub struct Dataset {
-    structure_id: ObjectId,
-    storage: Box<dyn Storage>,
-
+    storage: Arc<dyn Storage>,
+    structure_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
+    change_set: ChangeSet,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
     updated_arrays: HashMap<Path, ZarrArrayMetadata>,
     updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<(Path, ArrayIndices), Option<ChunkPayload>>,
+    set_chunks: HashMap<Path, HashMap<ArrayIndices, Option<ChunkPayload>>>,
 }
