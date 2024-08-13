@@ -360,7 +360,7 @@ impl FillValue {
 
     fn to_be_bytes(&self) -> Vec<u8> {
         match self {
-            FillValue::Bool(v) => vec![if v.to_owned() {1} else {0}],
+            FillValue::Bool(v) => vec![if v.to_owned() { 1 } else { 0 }],
             FillValue::Int8(v) => v.to_be_bytes().into(),
             FillValue::Int16(v) => v.to_be_bytes().into(),
             FillValue::Int32(v) => v.to_be_bytes().into(),
@@ -418,7 +418,8 @@ impl TryFrom<&[u8]> for ObjectId {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let buf = value.try_into();
-        buf.map(ObjectId).map_err(|_| "Invalid ObjectId buffer length")
+        buf.map(ObjectId)
+            .map_err(|_| "Invalid ObjectId buffer length")
     }
 }
 
@@ -545,18 +546,9 @@ pub enum StorageError {
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 pub trait Storage {
-    async fn fetch_structure(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
-    async fn fetch_attributes(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<AttributesTable>, StorageError>; // FIXME: format flags
-    async fn fetch_manifests(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
+    async fn fetch_structure(&self, id: &ObjectId) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
+    async fn fetch_attributes(&self, id: &ObjectId) -> Result<Arc<AttributesTable>, StorageError>; // FIXME: format flags
+    async fn fetch_manifests(&self, id: &ObjectId) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
 
     async fn write_structure(
         &self,
