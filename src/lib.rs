@@ -338,6 +338,7 @@ impl FillValue {
         }
     }
 
+    #[allow(dead_code)]
     fn get_data_type(&self) -> DataType {
         match self {
             FillValue::Bool(_) => DataType::Bool,

@@ -1,4 +1,4 @@
-use std::{iter::zip, num::NonZeroU64, sync::Arc};
+use std::{num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
@@ -12,9 +12,9 @@ use itertools::izip;
 
 use crate::{
     ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
-    IcechunkFormatError, ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType,
-    ObjectId, Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
-    UserAttributesStructure, ZarrArrayMetadata,
+    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId, Path,
+    StorageTransformers, TableRegion, UserAttributes, UserAttributesRef, UserAttributesStructure,
+    ZarrArrayMetadata,
 };
 
 pub struct StructureTable {
