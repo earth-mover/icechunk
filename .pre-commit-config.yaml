@@ -1,9 +1,9 @@
 repos:
   - repo: local
     hooks:
-      - id: rustfmt
-        name: rustfmt
-        description: Check if all files follow the rustfmt style
-        entry: cargo fmt --all
+      - id: format-lint
+        name: just
+        description: Run the just pre-commit step
+        entry: just pre-commit
         language: system
         pass_filenames: false
