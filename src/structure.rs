@@ -656,7 +656,7 @@ mod strategies {
     use proptest::prop_oneof;
     use proptest::strategy::Strategy;
 
-    pub fn fill_value_strategy() -> impl Strategy<Value = FillValue> {
+    pub(crate) fn fill_value_strategy() -> impl Strategy<Value = FillValue> {
         use proptest::collection::vec;
         prop_oneof![
             any::<bool>().prop_map(FillValue::Bool),
@@ -677,7 +677,7 @@ mod strategies {
         ]
     }
 
-    pub fn fill_values_vec_strategy() -> impl Strategy<Value = Vec<Option<FillValue>>> {
+    pub(crate) fn fill_values_vec_strategy() -> impl Strategy<Value = Vec<Option<FillValue>>> {
         use proptest::collection::vec;
         vec(proptest::option::of(fill_value_strategy()), 0..10)
     }
