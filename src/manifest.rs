@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use arrow::{
     array::{
-        Array, AsArray, BinaryArray, FixedSizeBinaryArray, GenericBinaryBuilder, RecordBatch,
-        StringArray, UInt32Array, UInt64Array,
+        Array, AsArray, BinaryArray, FixedSizeBinaryArray, GenericBinaryBuilder,
+        RecordBatch, StringArray, UInt32Array, UInt64Array,
     },
     datatypes::{Field, Schema, UInt32Type, UInt64Type},
 };
@@ -19,7 +19,11 @@ pub struct ManifestsTable {
 }
 
 impl ManifestsTable {
-    pub fn get_chunk_info(&self, coords: &ArrayIndices, region: &TableRegion) -> Option<ChunkInfo> {
+    pub fn get_chunk_info(
+        &self,
+        coords: &ArrayIndices,
+        region: &TableRegion,
+    ) -> Option<ChunkInfo> {
         // FIXME: make this fast, currently it's a linear search
         // FIXME: return error type
         let idx = self.get_chunk_info_index(coords, region)?;
@@ -31,41 +35,27 @@ impl ManifestsTable {
             return None;
         }
 
-        let id_col = self
-            .batch
-            .column_by_name("array_id")?
-            .as_primitive_opt::<UInt32Type>()?;
-        let coords_col = self
-            .batch
-            .column_by_name("coords")?
-            .as_binary_opt::<i32>()?;
-        let offset_col = self
-            .batch
-            .column_by_name("offset")?
-            .as_primitive_opt::<UInt64Type>()?;
-        let length_col = self
-            .batch
-            .column_by_name("length")?
-            .as_primitive_opt::<UInt64Type>()?;
-        let inline_col = self
-            .batch
-            .column_by_name("inline_data")?
-            .as_binary_opt::<i32>()?;
-        let chunk_id_col = self
-            .batch
-            .column_by_name("chunk_id")?
-            .as_fixed_size_binary_opt()?;
-        let virtual_path_col = self
-            .batch
-            .column_by_name("virtual_path")?
-            .as_string_opt::<i32>()?;
+        let id_col =
+            self.batch.column_by_name("array_id")?.as_primitive_opt::<UInt32Type>()?;
+        let coords_col = self.batch.column_by_name("coords")?.as_binary_opt::<i32>()?;
+        let offset_col =
+            self.batch.column_by_name("offset")?.as_primitive_opt::<UInt64Type>()?;
+        let length_col =
+            self.batch.column_by_name("length")?.as_primitive_opt::<UInt64Type>()?;
+        let inline_col =
+            self.batch.column_by_name("inline_data")?.as_binary_opt::<i32>()?;
+        let chunk_id_col =
+            self.batch.column_by_name("chunk_id")?.as_fixed_size_binary_opt()?;
+        let virtual_path_col =
+            self.batch.column_by_name("virtual_path")?.as_string_opt::<i32>()?;
         // FIXME: do something with extras
         let _extra_col = self.batch.column_by_name("extra")?.as_string_opt::<i32>()?;
 
         // These arrays cannot contain null values, we don't need to check using `is_null`
         let idx = row as usize;
         let id = id_col.value(idx);
-        let coords = ArrayIndices::unchecked_try_from_slice(coords_col.value(idx)).ok()?;
+        let coords =
+            ArrayIndices::unchecked_try_from_slice(coords_col.value(idx)).ok()?;
 
         if inline_col.is_valid(idx) {
             // we have an inline chunk
@@ -97,11 +87,7 @@ impl ManifestsTable {
                 Some(ChunkInfo {
                     node: id,
                     coord: coords,
-                    payload: ChunkPayload::Ref(ChunkRef {
-                        id: chunk_id,
-                        offset,
-                        length,
-                    }),
+                    payload: ChunkPayload::Ref(ChunkRef { id: chunk_id, offset, length }),
                 })
             }
         }
@@ -135,11 +121,7 @@ impl ArrayIndices {
     // FIXME: better error type
     pub fn try_from_slice(rank: usize, slice: &[u8]) -> Result<Self, String> {
         if slice.len() != rank * 8 {
-            Err(format!(
-                "Invalid slice length {}, expecting {}",
-                slice.len(),
-                rank
-            ))
+            Err(format!("Invalid slice length {}, expecting {}", slice.len(), rank))
         } else {
             ArrayIndices::unchecked_try_from_slice(slice)
         }
@@ -198,11 +180,7 @@ pub fn mk_manifests_table<T: IntoIterator<Item = ChunkInfo>>(coll: T) -> Manifes
                 virtual_paths.push(None);
                 offsets.push(Some(offset));
             }
-            ChunkPayload::Virtual(VirtualChunkRef {
-                location,
-                offset,
-                length,
-            }) => {
+            ChunkPayload::Virtual(VirtualChunkRef { location, offset, length }) => {
                 lengths.push(length);
                 inline_data.push(None);
                 chunk_ids.push(None);
@@ -246,7 +224,8 @@ pub fn mk_manifests_table<T: IntoIterator<Item = ChunkInfo>>(coll: T) -> Manifes
         Field::new("virtual_path", arrow::datatypes::DataType::Utf8, true),
         Field::new("extra", arrow::datatypes::DataType::Utf8, true),
     ]));
-    let batch = RecordBatch::try_new(schema, columns).expect("Error creating record batch");
+    let batch =
+        RecordBatch::try_new(schema, columns).expect("Error creating record batch");
     ManifestsTable { batch }
 }
 
@@ -254,7 +233,9 @@ fn mk_offsets_array<T: IntoIterator<Item = Option<u64>>>(coll: T) -> UInt64Array
     coll.into_iter().collect()
 }
 
-fn mk_virtual_paths_array<T: IntoIterator<Item = Option<String>>>(coll: T) -> StringArray {
+fn mk_virtual_paths_array<T: IntoIterator<Item = Option<String>>>(
+    coll: T,
+) -> StringArray {
     coll.into_iter().collect()
 }
 
@@ -284,7 +265,9 @@ fn mk_coords_array<T: IntoIterator<Item = ArrayIndices>>(coll: T) -> BinaryArray
     builder.finish()
 }
 
-fn mk_chunk_ids_array<T: IntoIterator<Item = Option<ObjectId>>>(coll: T) -> FixedSizeBinaryArray {
+fn mk_chunk_ids_array<T: IntoIterator<Item = Option<ObjectId>>>(
+    coll: T,
+) -> FixedSizeBinaryArray {
     let iter = coll.into_iter().map(|oid| oid.map(|oid| oid.0));
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, ObjectId::SIZE as i32)
         .expect("Bad ObjectId size")
