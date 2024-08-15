@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ops::Range,
     sync::{Arc, RwLock},
 };
 
@@ -7,7 +8,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::{
-    AttributesTable, ManifestsTable, ObjectId, Storage, StorageError, StructureTable,
+    AttributesTable, ChunkOffset, ManifestsTable, ObjectId, Storage, StorageError,
+    StructureTable,
 };
 
 #[derive(Default)]
@@ -40,7 +42,7 @@ impl Storage for InMemoryStorage {
             .or(Err(StorageError::Deadlock))?
             .get(id)
             .cloned()
-            .ok_or(StorageError::NotFound)
+            .ok_or(StorageError::NotFound(id.clone()))
     }
 
     async fn fetch_attributes(
@@ -52,7 +54,7 @@ impl Storage for InMemoryStorage {
             .or(Err(StorageError::Deadlock))?
             .get(id)
             .cloned()
-            .ok_or(StorageError::NotFound)
+            .ok_or(StorageError::NotFound(id.clone()))
     }
 
     async fn fetch_manifests(
@@ -64,7 +66,7 @@ impl Storage for InMemoryStorage {
             .or(Err(StorageError::Deadlock))?
             .get(id)
             .cloned()
-            .ok_or(StorageError::NotFound)
+            .ok_or(StorageError::NotFound(id.clone()))
     }
 
     async fn write_structure(
@@ -105,19 +107,33 @@ impl Storage for InMemoryStorage {
 
     async fn fetch_chunk(
         &self,
-        _id: &ObjectId,
-        _range: &Option<std::ops::Range<crate::ChunkOffset>>,
+        id: &ObjectId,
+        range: &Option<Range<ChunkOffset>>,
     ) -> Result<Arc<Bytes>, StorageError> {
         // avoid unused warning
-        let _x = &self.chunk_files;
-        todo!()
+        let chunk = self
+            .chunk_files
+            .read()
+            .or(Err(StorageError::Deadlock))?
+            .get(id)
+            .cloned()
+            .ok_or(StorageError::NotFound(id.clone()))?;
+        if let Some(range) = range {
+            Ok(Arc::new(chunk.slice((range.start as usize)..(range.end as usize))))
+        } else {
+            Ok(Arc::clone(&chunk))
+        }
     }
 
     async fn write_chunk(
         &self,
-        _id: ObjectId,
-        _bytes: bytes::Bytes,
+        id: ObjectId,
+        bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
-        todo!()
+        self.chunk_files
+            .write()
+            .or(Err(StorageError::Deadlock))?
+            .insert(id, Arc::new(bytes));
+        Ok(())
     }
 }

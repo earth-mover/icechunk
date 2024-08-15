@@ -6,6 +6,7 @@ use std::{
 
 use futures::{Stream, StreamExt};
 use itertools::Either;
+use thiserror::Error;
 
 use crate::{
     manifest::mk_manifests_table, structure::mk_structure_table, AddNodeError,
@@ -127,7 +128,7 @@ impl Dataset {
             self.change_set.add_group(path, id);
             Ok(())
         } else {
-            Err(AddNodeError::AlreadyExists)
+            Err(AddNodeError::AlreadyExists(path))
         }
     }
 
@@ -144,7 +145,7 @@ impl Dataset {
             self.change_set.add_array(path, id, metadata);
             Ok(())
         } else {
-            Err(AddNodeError::AlreadyExists)
+            Err(AddNodeError::AlreadyExists(path))
         }
     }
 
@@ -157,12 +158,12 @@ impl Dataset {
         metadata: ZarrArrayMetadata,
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
-            None => Err(UpdateNodeError::NotFound),
+            None => Err(UpdateNodeError::NotFound(path)),
             Some(NodeStructure { node_data: NodeData::Array(..), .. }) => {
                 self.change_set.update_array(path, metadata);
                 Ok(())
             }
-            Some(_) => Err(UpdateNodeError::NotAnArray),
+            Some(_) => Err(UpdateNodeError::NotAnArray(path)),
         }
     }
 
@@ -173,7 +174,7 @@ impl Dataset {
         atts: Option<UserAttributes>,
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
-            None => Err(UpdateNodeError::NotFound),
+            None => Err(UpdateNodeError::NotFound(path)),
             Some(_) => {
                 self.change_set.update_user_attributes(path, atts);
                 Ok(())
@@ -191,12 +192,12 @@ impl Dataset {
         data: Option<ChunkPayload>,
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
-            None => Err(UpdateNodeError::NotFound),
+            None => Err(UpdateNodeError::NotFound(path)),
             Some(NodeStructure { node_data: NodeData::Array(..), .. }) => {
                 self.change_set.set_chunk(path, coord, data);
                 Ok(())
             }
-            Some(_) => Err(UpdateNodeError::NotAnArray),
+            Some(_) => Err(UpdateNodeError::NotAnArray(path)),
         }
     }
 
@@ -553,16 +554,14 @@ impl Dataset {
         let new_manifest_id = ObjectId::random();
         self.storage
             .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
-            .await
-            .map_err(FlushError::StorageError)?;
+            .await?;
 
         let all_nodes = self.updated_nodes(&new_manifest_id, &region_tracker).await;
         let new_structure = mk_structure_table(all_nodes);
         let new_structure_id = ObjectId::random();
         self.storage
             .write_structure(new_structure_id.clone(), Arc::new(new_structure))
-            .await
-            .map_err(FlushError::StorageError)?;
+            .await?;
 
         self.structure_id = Some(new_structure_id.clone());
         self.change_set = ChangeSet::default();
@@ -587,10 +586,12 @@ impl TableRegionTracker {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FlushError {
+    #[error("no changes made to the dataset")]
     NoChangesToFlush,
-    StorageError(StorageError),
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
 }
 
 #[cfg(test)]
@@ -636,10 +637,7 @@ mod tests {
             .await,
         );
         let manifest_id = ObjectId::random();
-        storage
-            .write_manifests(manifest_id.clone(), manifest)
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        storage.write_manifests(manifest_id.clone(), manifest).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -685,10 +683,7 @@ mod tests {
 
         let structure = Arc::new(mk_structure_table(nodes.clone()));
         let structure_id = ObjectId::random();
-        storage
-            .write_structure(structure_id.clone(), structure)
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        storage.write_structure(structure_id.clone(), structure).await?;
         let mut ds = Dataset::update(Arc::new(storage), structure_id);
 
         // retrieve the old array node
@@ -696,9 +691,7 @@ mod tests {
         assert_eq!(nodes.get(1), node.as_ref());
 
         // add a new array and retrieve its node
-        ds.add_group("/group".to_string().into())
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        ds.add_group("/group".to_string().into()).await?;
 
         let zarr_meta2 = ZarrArrayMetadata {
             shape: vec![3],
@@ -712,9 +705,7 @@ mod tests {
         };
 
         let new_array_path: PathBuf = "/group/array2".to_string().into();
-        ds.add_array(new_array_path.clone(), zarr_meta2.clone())
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
@@ -729,8 +720,7 @@ mod tests {
 
         // set user attributes for the new array and retrieve them
         ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".to_string()))
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+            .await?;
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
             node,
@@ -750,8 +740,7 @@ mod tests {
             ArrayIndices(vec![0]),
             Some(ChunkPayload::Inline(vec![0, 0, 0, 7])),
         )
-        .await
-        .map_err(|err| format!("{err:#?}"))?;
+        .await?;
 
         let chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0])).await;
         assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 7])));
@@ -762,8 +751,7 @@ mod tests {
 
         // update old array use attriutes and check them
         ds.set_user_attributes(array1_path.clone(), Some("{updated: true}".to_string()))
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+            .await?;
         let node = ds.get_node(&array1_path).await.unwrap();
         assert_eq!(
             node.user_attributes,
@@ -772,9 +760,7 @@ mod tests {
 
         // update old array zarr metadata and check it
         let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
-        ds.update_array(array1_path.clone(), new_zarr_meta1)
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
         let node = ds.get_node(&array1_path).await;
         if let Some(NodeStructure {
             node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
@@ -792,8 +778,7 @@ mod tests {
             ArrayIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline(vec![0, 0, 0, 99])),
         )
-        .await
-        .map_err(|err| format!("{err:#?}"))?;
+        .await?;
 
         let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
         assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 99])));
@@ -888,8 +873,8 @@ mod tests {
         let mut ds = Dataset::create(Arc::clone(&storage));
 
         // add a new array and retrieve its node
-        ds.add_group("/".into()).await.map_err(|err| format!("{err:#?}"))?;
-        let structure_id = ds.flush().await.map_err(|err| format!("{err:#?}"))?;
+        ds.add_group("/".into()).await?;
+        let structure_id = ds.flush().await?;
 
         assert_eq!(Some(structure_id), ds.structure_id);
         assert_eq!(
@@ -901,8 +886,8 @@ mod tests {
                 node_data: NodeData::Group
             })
         );
-        ds.add_group("/group".into()).await.map_err(|err| format!("{err:#?}"))?;
-        let _structure_id = ds.flush().await.map_err(|err| format!("{err:#?}"))?;
+        ds.add_group("/group".into()).await?;
+        let _structure_id = ds.flush().await?;
         assert_eq!(
             ds.get_node(&"/".into()).await,
             Some(NodeStructure {
@@ -933,9 +918,7 @@ mod tests {
         };
 
         let new_array_path: PathBuf = "/group/array1".to_string().into();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone())
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
         // we set a chunk in a new array
         ds.set_chunk(
@@ -943,10 +926,9 @@ mod tests {
             ArrayIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline(b"hello".into())),
         )
-        .await
-        .map_err(|err| format!("{err:#?}"))?;
+        .await?;
 
-        let _structure_id = ds.flush().await.map_err(|err| format!("{err:#?}"))?;
+        let _structure_id = ds.flush().await?;
         assert_eq!(
             ds.get_node(&"/".into()).await,
             Some(NodeStructure {
@@ -985,8 +967,7 @@ mod tests {
             ArrayIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline(b"bye".into())),
         )
-        .await
-        .map_err(|err| format!("{err:#?}"))?;
+        .await?;
 
         // we add a new chunk in an existing array
         ds.set_chunk(
@@ -994,11 +975,9 @@ mod tests {
             ArrayIndices(vec![0, 0, 1]),
             Some(ChunkPayload::Inline(b"new chunk".into())),
         )
-        .await
-        .map_err(|err| format!("{err:#?}"))?;
+        .await?;
 
-        let previous_structure_id =
-            ds.flush().await.map_err(|err| format!("{err:#?}"))?;
+        let previous_structure_id = ds.flush().await?;
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline(b"bye".into()))
@@ -1009,22 +988,17 @@ mod tests {
         );
 
         // we delete a chunk
-        ds.set_chunk(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None)
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        ds.set_chunk(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None).await?;
 
         let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
         // we change zarr metadata
-        ds.update_array(new_array_path.clone(), new_meta.clone())
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+        ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
 
         // we change user attributes metadata
         ds.set_user_attributes(new_array_path.clone(), Some("{foo:42}".to_string()))
-            .await
-            .map_err(|err| format!("{err:#?}"))?;
+            .await?;
 
-        let structure_id = ds.flush().await.map_err(|err| format!("{err:#?}"))?;
+        let structure_id = ds.flush().await?;
         let ds = Dataset::update(Arc::clone(&storage), structure_id);
 
         assert_eq!(

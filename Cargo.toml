@@ -13,6 +13,7 @@ bytes = "1.7.1"
 futures = "0.3.30"
 itertools = "0.13.0"
 rand = "0.8.5"
+thiserror = "1.0.63"
 
 [profile.release-with-debug]
 inherits = "release"
