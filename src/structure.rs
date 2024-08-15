@@ -2,9 +2,9 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, BinaryArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-        ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray, UInt32Array,
-        UInt32Builder, UInt8Array,
+        Array, ArrayRef, AsArray, BinaryArray, FixedSizeBinaryArray,
+        FixedSizeBinaryBuilder, ListArray, ListBuilder, RecordBatch, StringArray,
+        StringBuilder, StructArray, UInt32Array, UInt32Builder, UInt8Array,
     },
     datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
 };
@@ -12,9 +12,9 @@ use itertools::izip;
 
 use crate::{
     ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
-    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId, Path,
-    StorageTransformers, TableRegion, UserAttributes, UserAttributesRef, UserAttributesStructure,
-    ZarrArrayMetadata,
+    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
+    Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
+    UserAttributesStructure, ZarrArrayMetadata,
 };
 
 pub struct StructureTable {
@@ -49,10 +49,7 @@ impl StructureTable {
             .flatten()
             .collect();
         let data_type = DataType::try_from(
-            self.batch
-                .column_by_name("data_type")?
-                .as_string_opt::<i32>()?
-                .value(idx),
+            self.batch.column_by_name("data_type")?.as_string_opt::<i32>()?.value(idx),
         )
         .ok()?;
         let chunk_shape = ChunkShape(
@@ -81,22 +78,16 @@ impl StructureTable {
                 .to_string(),
         );
 
-        let storage_transformers = self
-            .batch
-            .column_by_name("storage_transformers")?
-            .as_string_opt::<i32>()?;
+        let storage_transformers =
+            self.batch.column_by_name("storage_transformers")?.as_string_opt::<i32>()?;
         let storage_transformers = if storage_transformers.is_null(idx) {
             None
         } else {
-            Some(StorageTransformers(
-                storage_transformers.value(idx).to_string(),
-            ))
+            Some(StorageTransformers(storage_transformers.value(idx).to_string()))
         };
 
-        let dimension_names = self
-            .batch
-            .column_by_name("dimension_names")?
-            .as_list_opt::<i32>()?;
+        let dimension_names =
+            self.batch.column_by_name("dimension_names")?.as_list_opt::<i32>()?;
         let dimension_names = if dimension_names.is_null(idx) {
             None
         } else {
@@ -110,11 +101,8 @@ impl StructureTable {
             )
         };
 
-        let encoded_fill_value = self
-            .batch
-            .column_by_name("fill_value")?
-            .as_binary_opt::<i32>()?
-            .value(idx);
+        let encoded_fill_value =
+            self.batch.column_by_name("fill_value")?.as_binary_opt::<i32>()?.value(idx);
         let fill_value =
             FillValue::from_data_type_and_value(&data_type, encoded_fill_value).ok()?;
 
@@ -132,10 +120,8 @@ impl StructureTable {
 
     // FIXME: there should be a failure reason here, so return a Result
     fn build_manifest_refs(&self, idx: usize) -> Option<Vec<ManifestRef>> {
-        let manifest_refs_array = self
-            .batch
-            .column_by_name("manifest_references")?
-            .as_struct_opt()?;
+        let manifest_refs_array =
+            self.batch.column_by_name("manifest_references")?.as_struct_opt()?;
         if manifest_refs_array.is_valid(idx) {
             let refs = manifest_refs_array
                 .column_by_name("reference")?
@@ -176,21 +162,11 @@ impl StructureTable {
     }
 
     fn build_node_structure(&self, idx: usize) -> Option<NodeStructure> {
-        let node_type = self
-            .batch
-            .column_by_name("type")?
-            .as_string_opt::<i32>()?
-            .value(idx);
-        let id = self
-            .batch
-            .column_by_name("id")?
-            .as_primitive_opt::<UInt32Type>()?
-            .value(idx);
-        let path = self
-            .batch
-            .column_by_name("path")?
-            .as_string_opt::<i32>()?
-            .value(idx);
+        let node_type =
+            self.batch.column_by_name("type")?.as_string_opt::<i32>()?.value(idx);
+        let id =
+            self.batch.column_by_name("id")?.as_primitive_opt::<UInt32Type>()?.value(idx);
+        let path = self.batch.column_by_name("path")?.as_string_opt::<i32>()?.value(idx);
         let user_attributes = self.build_user_attributes(idx);
         match node_type {
             "group" => Some(NodeStructure {
@@ -213,14 +189,10 @@ impl StructureTable {
     }
 
     fn build_user_attributes(&self, idx: usize) -> Option<UserAttributesStructure> {
-        let inline = self
-            .batch
-            .column_by_name("user_attributes")?
-            .as_string_opt::<i32>()?;
+        let inline =
+            self.batch.column_by_name("user_attributes")?.as_string_opt::<i32>()?;
         if inline.is_valid(idx) {
-            Some(UserAttributesStructure::Inline(
-                inline.value(idx).to_string(),
-            ))
+            Some(UserAttributesStructure::Inline(inline.value(idx).to_string()))
         } else {
             self.build_user_attributes_ref(idx)
         }
@@ -284,17 +256,11 @@ where
     T: IntoIterator<Item = Option<P>>,
     P: IntoIterator<Item = u64>,
 {
-    let iter = coll
-        .into_iter()
-        .map(|opt| opt.map(|p| p.into_iter().map(Some)));
+    let iter = coll.into_iter().map(|opt| opt.map(|p| p.into_iter().map(Some)));
     // I don't know how to create a ListArray that has not nullable elements
     let res = ListArray::from_iter_primitive::<UInt64Type, _, _>(iter);
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt64,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt64, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -312,11 +278,7 @@ where
         .map(|opt| opt.map(|p| p.0.iter().map(|n| Some(n.get())).collect::<Vec<_>>()));
     let res = ListArray::from_iter_primitive::<UInt64Type, _, _>(iter);
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt64,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt64, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -332,9 +294,7 @@ fn mk_fill_values_array<T>(coll: T) -> BinaryArray
 where
     T: IntoIterator<Item = Option<FillValue>>,
 {
-    let iter = coll
-        .into_iter()
-        .map(|fv| fv.as_ref().map(|f| f.to_be_bytes()));
+    let iter = coll.into_iter().map(|fv| fv.as_ref().map(|f| f.to_be_bytes()));
     BinaryArray::from_iter(iter)
 }
 
@@ -376,7 +336,9 @@ fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
         .expect("Bad ObjectId size")
 }
 
-fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(coll: T) -> UInt32Array {
+fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(
+    coll: T,
+) -> UInt32Array {
     UInt32Array::from_iter(coll)
 }
 
@@ -385,7 +347,8 @@ where
     T: IntoIterator<Item = Option<P>>,
     P: IntoIterator<Item = ManifestRef>,
 {
-    let mut ref_array = ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
+    let mut ref_array =
+        ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
     let mut from_row_array = ListBuilder::new(UInt32Builder::new());
     let mut to_row_array = ListBuilder::new(UInt32Builder::new());
 
@@ -425,19 +388,11 @@ where
     let ref_array = ListArray::new(field, offsets, values, nulls);
 
     let (_, offsets, values, nulls) = from_row_array.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt32,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
     let from_row_array = ListArray::new(field, offsets, values, nulls);
 
     let (_, offsets, values, nulls) = to_row_array.into_parts();
-    let field = Arc::new(Field::new(
-        "item",
-        arrow::datatypes::DataType::UInt32,
-        false,
-    ));
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
     let to_row_array = ListArray::new(field, offsets, values, nulls);
 
     StructArray::from(vec![
@@ -473,7 +428,9 @@ where
 }
 
 // For testing only
-pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> StructureTable {
+pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
+    coll: T,
+) -> StructureTable {
     let mut ids = Vec::new();
     let mut types = Vec::new();
     let mut paths = Vec::new();
@@ -591,18 +548,10 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             Field::new("item", arrow::datatypes::DataType::UInt64, false),
             true,
         ),
-        Field::new(
-            "chunk_key_encoding",
-            arrow::datatypes::DataType::UInt8,
-            true,
-        ),
+        Field::new("chunk_key_encoding", arrow::datatypes::DataType::UInt8, true),
         Field::new("fill_value", arrow::datatypes::DataType::Binary, true),
         Field::new("codecs", arrow::datatypes::DataType::Utf8, true),
-        Field::new(
-            "storage_transformers",
-            arrow::datatypes::DataType::Utf8,
-            true,
-        ),
+        Field::new("storage_transformers", arrow::datatypes::DataType::Utf8, true),
         Field::new_list(
             "dimension_names",
             Field::new("item", arrow::datatypes::DataType::Utf8, true),
@@ -614,11 +563,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
             true,
         ),
-        Field::new(
-            "user_attributes_row",
-            arrow::datatypes::DataType::UInt32,
-            true,
-        ),
+        Field::new("user_attributes_row", arrow::datatypes::DataType::UInt32, true),
         Field::new(
             "manifest_references",
             arrow::datatypes::DataType::Struct(Fields::from(vec![
@@ -626,7 +571,9 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
                     "reference",
                     Field::new(
                         "item",
-                        arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                        arrow::datatypes::DataType::FixedSizeBinary(
+                            ObjectId::SIZE as i32,
+                        ),
                         false,
                     ),
                     true,
@@ -645,7 +592,8 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(coll: T) -> Str
             true,
         ),
     ]));
-    let batch = RecordBatch::try_new(schema, columns).expect("Error creating record batch");
+    let batch =
+        RecordBatch::try_new(schema, columns).expect("Error creating record batch");
     StructureTable { batch }
 }
 
@@ -671,13 +619,16 @@ mod strategies {
             any::<f32>().prop_map(FillValue::Float16),
             any::<f32>().prop_map(FillValue::Float32),
             any::<f64>().prop_map(FillValue::Float64),
-            (any::<f32>(), any::<f32>()).prop_map(|(real, imag)| FillValue::Complex64(real, imag)),
-            (any::<f64>(), any::<f64>()).prop_map(|(real, imag)| FillValue::Complex128(real, imag)),
+            (any::<f32>(), any::<f32>())
+                .prop_map(|(real, imag)| FillValue::Complex64(real, imag)),
+            (any::<f64>(), any::<f64>())
+                .prop_map(|(real, imag)| FillValue::Complex128(real, imag)),
             vec(any::<u8>(), 0..64).prop_map(FillValue::RawBits),
         ]
     }
 
-    pub(crate) fn fill_values_vec_strategy() -> impl Strategy<Value = Vec<Option<FillValue>>> {
+    pub(crate) fn fill_values_vec_strategy(
+    ) -> impl Strategy<Value = Vec<Option<FillValue>>> {
         use proptest::collection::vec;
         vec(proptest::option::of(fill_value_strategy()), 0..10)
     }
@@ -718,10 +669,8 @@ mod tests {
             fill_value: FillValue::Int32(0i32),
             ..zarr_meta1.clone()
         };
-        let zarr_meta3 = ZarrArrayMetadata {
-            dimension_names: None,
-            ..zarr_meta2.clone()
-        };
+        let zarr_meta3 =
+            ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
             location: TableRegion(0, 1),
@@ -758,7 +707,9 @@ mod tests {
             NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline("some inline".to_string())),
+                user_attributes: Some(UserAttributesStructure::Inline(
+                    "some inline".to_string(),
+                )),
                 node_data: NodeData::Group,
             },
             NodeStructure {
@@ -796,7 +747,9 @@ mod tests {
             Some(NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline("some inline".to_string())),
+                user_attributes: Some(UserAttributesStructure::Inline(
+                    "some inline".to_string()
+                )),
                 node_data: NodeData::Group,
             }),
         );
@@ -889,10 +842,8 @@ mod tests {
             Some(FillValue::RawBits(vec![b'1'])),
         ];
 
-        let dtypes: Vec<Option<DataType>> = fill_values
-            .iter()
-            .map(|x| x.as_ref().map(|x| x.get_data_type()))
-            .collect();
+        let dtypes: Vec<Option<DataType>> =
+            fill_values.iter().map(|x| x.as_ref().map(|x| x.get_data_type())).collect();
         let encoded = mk_fill_values_array(fill_values.clone());
         let decoded = decode_fill_values_array(dtypes, encoded).unwrap();
 
