@@ -34,6 +34,7 @@ use std::{
     sync::Arc,
 };
 use structure::StructureTable;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum IcechunkFormatError {
@@ -531,20 +532,25 @@ pub struct ChunkInfo {
 pub struct AttributesTable();
 
 // FIXME: implement std::error::Error for these
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum AddNodeError {
-    AlreadyExists,
+    #[error("node already exists at `{0}`")]
+    AlreadyExists(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum UpdateNodeError {
-    NotFound,
-    NotAnArray,
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("there is not an array at `{0}`")]
+    NotAnArray(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum StorageError {
-    NotFound,
+    #[error("object not found `{0:?}`")]
+    NotFound(ObjectId),
+    #[error("synchronization error on the Storage instance")]
     Deadlock,
 }
 
