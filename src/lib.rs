@@ -546,20 +546,20 @@ pub enum UpdateNodeError {
     NotAnArray(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum StorageError {
     #[error("object not found `{0:?}`")]
     NotFound(ObjectId),
     #[error("synchronization error on the Storage instance")]
     Deadlock,
-    #[error("")]
-    ParseError(Path),
     #[error("Error contacting object store `{0:?}`")]
-    ObjectStoreError(String),
+    ObjectStoreError(Arc<dyn std::error::Error>),
     #[error("Storage layer error: {0}")]
-    StorageLayerError(String),
+    StorageLayerError(Arc<dyn std::error::Error>),
     #[error("Error reading or writing to/from parquet files: `{0:?}`")]
-    ParquetError(String),
+    ParquetError(Arc<dyn std::error::Error>),
+    #[error("Storage layer error: {0}")]
+    MiscError(String),
 }
 
 /// Fetch and write the parquet files that represent the dataset in object store
