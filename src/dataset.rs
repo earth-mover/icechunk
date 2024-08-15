@@ -622,7 +622,10 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store()),
             Arc::new(ObjectStorage::new_local_store(Path::new(&temp_dir_name)).unwrap()),
             // Arc::new(ObjectStorage::new_s3_store_from_env("foo".to_string()).unwrap()),
-            Arc::new(ObjectStorage::new_s3_store_with_config("foo".to_string()).unwrap()),
+            Arc::new(
+                ObjectStorage::new_s3_store_with_config("testbucket".to_string())
+                    .unwrap(),
+            ),
         ];
         for storage in storages {
 
@@ -953,7 +956,10 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store()),
             Arc::new(ObjectStorage::new_local_store(Path::new(&temp_dir_name)).unwrap()),
             // Arc::new(ObjectStorage::new_s3_store_from_env("foo".to_string()).unwrap()),
-            Arc::new(ObjectStorage::new_s3_store_with_config("testbucket".to_string()).unwrap()),
+            Arc::new(
+                ObjectStorage::new_s3_store_with_config("testbucket".to_string())
+                    .unwrap(),
+            ),
         ];
         for storage in storages {
             let mut ds = Dataset::create(Arc::clone(&storage));

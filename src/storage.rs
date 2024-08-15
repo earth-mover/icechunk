@@ -55,18 +55,18 @@ impl ObjectStorage {
         })
     }
     pub fn new_s3_store_from_env(
-        bucket_name: String,
+        bucket_name: impl Into<String>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
         let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket_name)
+            .with_bucket_name(bucket_name.into())
             .build()
             .map_err(|err| StorageError::UrlParseError(Box::new(err)))?;
         Ok(ObjectStorage { store: Arc::new(store) })
     }
 
     pub fn new_s3_store_with_config(
-        bucket_name: String,
+        bucket_name: impl Into<String>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
         let store = AmazonS3Builder::new()
@@ -75,14 +75,13 @@ impl ObjectStorage {
             .with_secret_access_key("minio123")
             .with_endpoint("http://localhost:9000")
             .with_allow_http(true)
-            .with_bucket_name(bucket_name)
+            .with_bucket_name(bucket_name.into())
             .build()
             .map_err(|err| StorageError::UrlParseError(Box::new(err)))?;
         Ok(ObjectStorage { store: Arc::new(store) })
     }
 
-    fn get_path(filetype: FileType, id: &ObjectId) -> Path {
-        let ObjectId(asu8) = id;
+    fn get_path(filetype: FileType, ObjectId(asu8): &ObjectId) -> Path {
         let prefix = filetype.get_prefix();
         // TODO: be careful about allocation here
         let path = format!("{}/{}", prefix, BASE64_URL_SAFE.encode(asu8));
