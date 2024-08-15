@@ -27,9 +27,11 @@ pub mod storage;
 pub mod structure;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use manifest::ManifestsTable;
 use std::{
-    collections::HashMap, fmt::Display, num::NonZeroU64, path::PathBuf, sync::Arc,
+    collections::HashMap, fmt::Display, num::NonZeroU64, ops::Range, path::PathBuf,
+    sync::Arc,
 };
 use structure::StructureTable;
 
@@ -564,6 +566,11 @@ pub trait Storage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError>; // FIXME: format flags
+    async fn fetch_chunk(
+        &self,
+        id: &ObjectId,
+        range: &Option<Range<ChunkOffset>>,
+    ) -> Result<Arc<Bytes>, StorageError>; // FIXME: format flags
 
     async fn write_structure(
         &self,
@@ -580,6 +587,7 @@ pub trait Storage {
         id: ObjectId,
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError>;
+    async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError>;
 }
 
 pub struct Dataset {

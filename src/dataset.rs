@@ -57,7 +57,7 @@ impl ChangeSet {
             .or_insert(HashMap::from([(coord, data)]));
     }
 
-    fn get_chunk(
+    fn get_chunk_ref(
         &self,
         path: &Path,
         coords: &ArrayIndices,
@@ -271,7 +271,7 @@ impl Dataset {
                 id: *id,
                 path: path.clone(),
                 user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
-                // We put no manifests in new arrays, see get_chunk to understand how chunks get
+                // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
                 // fetched for those arrays
                 node_data: NodeData::Array(meta.clone(), vec![]),
             }
@@ -290,7 +290,7 @@ impl Dataset {
         })
     }
 
-    pub async fn get_chunk(
+    pub async fn get_chunk_ref(
         &self,
         path: &Path,
         coords: &ArrayIndices,
@@ -302,7 +302,7 @@ impl Dataset {
             NodeData::Array(_, manifests) => {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
-                let session_chunk = self.change_set.get_chunk(path, coords).cloned();
+                let session_chunk = self.change_set.get_chunk_ref(path, coords).cloned();
                 // If session_chunk is not None we have to return it, because is the update the
                 // user made in the current session
                 // If session_chunk == None, user hasn't modified the chunk in this session and we
@@ -409,7 +409,7 @@ impl Dataset {
         chunks: impl Iterator<Item = ChunkInfo> + 'a,
     ) -> impl Iterator<Item = ChunkInfo> + 'a {
         chunks.filter_map(move |chunk| {
-            match self.change_set.get_chunk(&path, &chunk.coord) {
+            match self.change_set.get_chunk_ref(&path, &chunk.coord) {
                 None => Some(chunk),
                 Some(new_payload) => {
                     new_payload.clone().map(|pl| ChunkInfo { payload: pl, ..chunk })
@@ -753,11 +753,11 @@ mod tests {
         .await
         .map_err(|err| format!("{err:#?}"))?;
 
-        let chunk = ds.get_chunk(&new_array_path, &ArrayIndices(vec![0])).await;
+        let chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0])).await;
         assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 7])));
 
         // retrieve a non initialized chunk of the new array
-        let non_chunk = ds.get_chunk(&new_array_path, &ArrayIndices(vec![1])).await;
+        let non_chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![1])).await;
         assert_eq!(non_chunk, None);
 
         // update old array use attriutes and check them
@@ -795,7 +795,7 @@ mod tests {
         .await
         .map_err(|err| format!("{err:#?}"))?;
 
-        let chunk = ds.get_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
+        let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
         assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 99])));
 
         Ok(())
@@ -975,7 +975,7 @@ mod tests {
             }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
         ));
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline(b"hello".into()))
         );
 
@@ -1000,11 +1000,11 @@ mod tests {
         let previous_structure_id =
             ds.flush().await.map_err(|err| format!("{err:#?}"))?;
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline(b"bye".into()))
         );
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
             Some(ChunkPayload::Inline(b"new chunk".into()))
         );
 
@@ -1028,11 +1028,11 @@ mod tests {
         let ds = Dataset::update(Arc::clone(&storage), structure_id);
 
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline(b"bye".into()))
         );
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
             None
         );
         assert!(matches!(
@@ -1048,11 +1048,11 @@ mod tests {
         //test the previous version is still alive
         let ds = Dataset::update(Arc::clone(&storage), previous_structure_id);
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline(b"bye".into()))
         );
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
             Some(ChunkPayload::Inline(b"new chunk".into()))
         );
 

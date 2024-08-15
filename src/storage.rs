@@ -4,6 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use bytes::Bytes;
 
 use crate::{
     AttributesTable, ManifestsTable, ObjectId, Storage, StorageError, StructureTable,
@@ -14,6 +15,7 @@ pub struct InMemoryStorage {
     struct_files: Arc<RwLock<HashMap<ObjectId, Arc<StructureTable>>>>,
     attr_files: Arc<RwLock<HashMap<ObjectId, Arc<AttributesTable>>>>,
     man_files: Arc<RwLock<HashMap<ObjectId, Arc<ManifestsTable>>>>,
+    chunk_files: Arc<RwLock<HashMap<ObjectId, Arc<Bytes>>>>,
 }
 
 impl InMemoryStorage {
@@ -22,6 +24,7 @@ impl InMemoryStorage {
             struct_files: Arc::new(RwLock::new(HashMap::new())),
             attr_files: Arc::new(RwLock::new(HashMap::new())),
             man_files: Arc::new(RwLock::new(HashMap::new())),
+            chunk_files: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -98,5 +101,23 @@ impl Storage for InMemoryStorage {
             .or(Err(StorageError::Deadlock))?
             .insert(id, Arc::clone(&table));
         Ok(())
+    }
+
+    async fn fetch_chunk(
+        &self,
+        _id: &ObjectId,
+        _range: &Option<std::ops::Range<crate::ChunkOffset>>,
+    ) -> Result<Arc<Bytes>, StorageError> {
+        // avoid unused warning
+        let _x = &self.chunk_files;
+        todo!()
+    }
+
+    async fn write_chunk(
+        &self,
+        _id: ObjectId,
+        _bytes: bytes::Bytes,
+    ) -> Result<(), StorageError> {
+        todo!()
     }
 }
