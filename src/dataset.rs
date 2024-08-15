@@ -597,105 +597,39 @@ pub enum FlushError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashSet,
-        env::temp_dir,
-        error::Error,
-        num::NonZeroU64,
-        path::{Path, PathBuf},
+        collections::HashSet, env::temp_dir, error::Error, num::NonZeroU64, path::PathBuf,
     };
 
     use crate::{
-        manifest::mk_manifests_table, storage::InMemoryStorage, storage::ObjectStorage,
-        structure::mk_structure_table, ChunkInfo, ChunkKeyEncoding, ChunkRef, ChunkShape,
-        Codecs, DataType, FillValue, Flags, ManifestExtents, StorageTransformers,
-        TableRegion,
+        manifest::mk_manifests_table,
+        storage::{InMemoryStorage, ObjectStorage},
+        structure::mk_structure_table,
+        ChunkInfo, ChunkKeyEncoding, ChunkRef, ChunkShape, Codecs, DataType, FillValue,
+        Flags, ManifestExtents, StorageTransformers, TableRegion,
     };
 
     use super::*;
     use pretty_assertions::assert_eq;
+    use rand;
+    use rand::{distributions::Alphanumeric, Rng}; // 0.8
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
         let temp_dir_name = temp_dir();
+        let prefix: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
         let storages: [Arc<dyn Storage>; 4] = [
             Arc::new(InMemoryStorage::new()),
             Arc::new(ObjectStorage::new_in_memory_store()),
-            Arc::new(ObjectStorage::new_local_store(Path::new(&temp_dir_name)).unwrap()),
-            // Arc::new(ObjectStorage::new_s3_store_from_env("foo".to_string()).unwrap()),
+            Arc::new(ObjectStorage::new_local_store(temp_dir_name).unwrap()),
+            // Arc::new(ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap()),
             Arc::new(
-                ObjectStorage::new_s3_store_with_config("testbucket".to_string())
+                ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
                     .unwrap(),
             ),
-        ];
-        for storage in storages {
-
-        let array_id = 2;
-        let chunk1 = ChunkInfo {
-            node: array_id,
-            coord: ArrayIndices(vec![0, 0, 0]),
-            payload: ChunkPayload::Ref(ChunkRef {
-                id: ObjectId::random(),
-                offset: 0,
-                length: 4,
-            }),
-        };
-
-        let chunk2 = ChunkInfo {
-            node: array_id,
-            coord: ArrayIndices(vec![0, 0, 1]),
-            payload: ChunkPayload::Inline(vec![0, 0, 0, 42]),
-        };
-
-        let manifest = Arc::new(
-            mk_manifests_table(futures::stream::iter(vec![
-                chunk1.clone(),
-                chunk2.clone(),
-            ]))
-            .await,
-        );
-        let manifest_id = ObjectId::random();
-        storage.write_manifests(manifest_id.clone(), manifest).await?;
-
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![2, 2, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
-        let manifest_ref = ManifestRef {
-            object_id: manifest_id,
-            location: TableRegion(0, 2),
-            flags: Flags(),
-            extents: ManifestExtents(vec![]),
-        };
-        let array1_path: PathBuf = "/array1".to_string().into();
-        let nodes = vec![
-            NodeStructure {
-                path: "/".into(),
-                id: 1,
-                user_attributes: None,
-                node_data: NodeData::Group,
-            },
-            NodeStructure {
-                path: array1_path.clone(),
-                id: array_id,
-                user_attributes: Some(UserAttributesStructure::Inline(
-                    "{foo:1}".to_string(),
-                )),
-                node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
-            },
         ];
         for storage in storages {
             let array_id = 2;
@@ -709,10 +643,11 @@ mod tests {
                 }),
             };
 
-        let structure = Arc::new(mk_structure_table(nodes.clone()));
-        let structure_id = ObjectId::random();
-        storage.write_structure(structure_id.clone(), structure).await?;
-        let mut ds = Dataset::update(Arc::new(storage), structure_id);
+            let chunk2 = ChunkInfo {
+                node: array_id,
+                coord: ArrayIndices(vec![0, 0, 1]),
+                payload: ChunkPayload::Inline(vec![0, 0, 0, 42]),
+            };
 
             let manifest = Arc::new(
                 mk_manifests_table(futures::stream::iter(vec![
@@ -722,50 +657,21 @@ mod tests {
                 .await,
             );
             let manifest_id = ObjectId::random();
-            storage
-                .write_manifests(manifest_id.clone(), manifest)
-                .await
-                .map_err(|err| format!("{err:#?}"))?;
+            storage.write_manifests(manifest_id.clone(), manifest).await?;
 
-        // add a new array and retrieve its node
-        ds.add_group("/group".to_string().into()).await?;
-
-        let zarr_meta2 = ZarrArrayMetadata {
-            shape: vec![3],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
-
-        let new_array_path: PathBuf = "/group/array2".to_string().into();
-        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
-
-        let node = ds.get_node(&new_array_path).await;
-        assert_eq!(
-            node,
-            Some(NodeStructure {
-                path: new_array_path.clone(),
-                id: 4,
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            })
-        );
-
-        // set user attributes for the new array and retrieve them
-        ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".to_string()))
-            .await?;
-        let node = ds.get_node(&new_array_path).await;
-        assert_eq!(
-            node,
-            Some(NodeStructure {
-                path: "/group/array2".into(),
-                id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline(
-                    "{n:42}".to_string(),
+            let zarr_meta1 = ZarrArrayMetadata {
+                shape: vec![2, 2, 2],
+                data_type: DataType::Int32,
+                chunk_shape: ChunkShape(vec![
+                    NonZeroU64::new(1).unwrap(),
+                    NonZeroU64::new(1).unwrap(),
+                    NonZeroU64::new(1).unwrap(),
+                ]),
+                chunk_key_encoding: ChunkKeyEncoding::Slash,
+                fill_value: FillValue::Int32(0),
+                codecs: Codecs("codec".to_string()),
+                storage_transformers: Some(StorageTransformers(
+                    "tranformers".to_string(),
                 )),
                 dimension_names: Some(vec![
                     Some("x".to_string()),
@@ -797,73 +703,115 @@ mod tests {
                 },
             ];
 
-        // set a chunk for the new array and  retrieve it
-        ds.set_chunk(
-            new_array_path.clone(),
-            ArrayIndices(vec![0]),
-            Some(ChunkPayload::Inline(vec![0, 0, 0, 7])),
-        )
-        .await?;
+            let structure = Arc::new(mk_structure_table(nodes.clone()));
+            let structure_id = ObjectId::random();
+            storage.write_structure(structure_id.clone(), structure).await?;
+            let mut ds = Dataset::update(storage, structure_id);
 
             // retrieve the old array node
             let node = ds.get_node(&array1_path).await;
             assert_eq!(nodes.get(1), node.as_ref());
 
             // add a new array and retrieve its node
-            ds.add_group("/group".to_string().into())
-                .await
-                .map_err(|err| format!("{err:#?}"))?;
+            ds.add_group("/group".to_string().into()).await?;
 
-        // update old array use attriutes and check them
-        ds.set_user_attributes(array1_path.clone(), Some("{updated: true}".to_string()))
+            let zarr_meta2 = ZarrArrayMetadata {
+                shape: vec![3],
+                data_type: DataType::Int32,
+                chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+                chunk_key_encoding: ChunkKeyEncoding::Slash,
+                fill_value: FillValue::Int32(0),
+                codecs: Codecs("codec".to_string()),
+                storage_transformers: Some(StorageTransformers(
+                    "tranformers".to_string(),
+                )),
+                dimension_names: Some(vec![Some("t".to_string())]),
+            };
+
+            let new_array_path: PathBuf = "/group/array2".to_string().into();
+            ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
+
+            let node = ds.get_node(&new_array_path).await;
+            assert_eq!(
+                node,
+                Some(NodeStructure {
+                    path: new_array_path.clone(),
+                    id: 4,
+                    user_attributes: None,
+                    node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+                })
+            );
+
+            // set user attributes for the new array and retrieve them
+            ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".to_string()))
+                .await?;
+            let node = ds.get_node(&new_array_path).await;
+            assert_eq!(
+                node,
+                Some(NodeStructure {
+                    path: "/group/array2".into(),
+                    id: 4,
+                    user_attributes: Some(UserAttributesStructure::Inline(
+                        "{n:42}".to_string(),
+                    )),
+                    node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+                })
+            );
+
+            // set a chunk for the new array and  retrieve it
+            ds.set_chunk(
+                new_array_path.clone(),
+                ArrayIndices(vec![0]),
+                Some(ChunkPayload::Inline(vec![0, 0, 0, 7])),
+            )
             .await?;
-        let node = ds.get_node(&array1_path).await.unwrap();
-        assert_eq!(
-            node.user_attributes,
-            Some(UserAttributesStructure::Inline("{updated: true}".to_string()))
-        );
 
-        // update old array zarr metadata and check it
-        let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
-        ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
-        let node = ds.get_node(&array1_path).await;
-        if let Some(NodeStructure {
-            node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
-            ..
-        }) = node
-        {
-            assert_eq!(shape, vec![2, 2, 3]);
-        } else {
-            panic!("Failed to update zarr metadata");
+            let chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0])).await;
+            assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 7])));
+
+            // retrieve a non initialized chunk of the new array
+            let non_chunk =
+                ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![1])).await;
+            assert_eq!(non_chunk, None);
+
+            // update old array use attriutes and check them
+            ds.set_user_attributes(
+                array1_path.clone(),
+                Some("{updated: true}".to_string()),
+            )
+            .await?;
+            let node = ds.get_node(&array1_path).await.unwrap();
+            assert_eq!(
+                node.user_attributes,
+                Some(UserAttributesStructure::Inline("{updated: true}".to_string()))
+            );
+
+            // update old array zarr metadata and check it
+            let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
+            ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
+            let node = ds.get_node(&array1_path).await;
+            if let Some(NodeStructure {
+                node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
+                ..
+            }) = node
+            {
+                assert_eq!(shape, vec![2, 2, 3]);
+            } else {
+                panic!("Failed to update zarr metadata");
+            }
+
+            // set old array chunk and check them
+            ds.set_chunk(
+                array1_path.clone(),
+                ArrayIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline(vec![0, 0, 0, 99])),
+            )
+            .await?;
+
+            let chunk =
+                ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
+            assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 99])));
         }
-
-<<<<<<< HEAD
-        // set old array chunk and check them
-        ds.set_chunk(
-            array1_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(vec![0, 0, 0, 99])),
-        )
-        .await?;
-
-        let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
-        assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 99])));
-
-||||||| parent of ef51b3a (Store: Add object_store backend.)
-        // set old array chunk and check them
-        ds.set_chunk(
-            array1_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(vec![0, 0, 0, 99])),
-        )
-        .await
-        .map_err(|err| format!("{err:#?}"))?;
-
-        let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
-        assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 99])));
-
-=======
->>>>>>> ef51b3a (Store: Add object_store backend.)
         Ok(())
     }
 
@@ -951,160 +899,154 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let temp_dir_name = temp_dir();
+        let prefix: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
         let storages: [Arc<dyn Storage>; 4] = [
             Arc::new(InMemoryStorage::new()),
             Arc::new(ObjectStorage::new_in_memory_store()),
-            Arc::new(ObjectStorage::new_local_store(Path::new(&temp_dir_name)).unwrap()),
-            // Arc::new(ObjectStorage::new_s3_store_from_env("foo".to_string()).unwrap()),
+            Arc::new(ObjectStorage::new_local_store(temp_dir_name).unwrap()),
+            // Arc::new(ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap()),
             Arc::new(
-                ObjectStorage::new_s3_store_with_config("testbucket".to_string())
+                ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
                     .unwrap(),
             ),
         ];
         for storage in storages {
             let mut ds = Dataset::create(Arc::clone(&storage));
 
-        // add a new array and retrieve its node
-        ds.add_group("/".into()).await?;
-        let structure_id = ds.flush().await?;
+            // add a new array and retrieve its node
+            ds.add_group("/".into()).await?;
+            let structure_id = ds.flush().await?;
 
-        assert_eq!(Some(structure_id), ds.structure_id);
-        assert_eq!(
-            ds.get_node(&"/".into()).await,
-            Some(NodeStructure {
-                id: 1,
-                path: "/".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        ds.add_group("/group".into()).await?;
-        let _structure_id = ds.flush().await?;
-        assert_eq!(
-            ds.get_node(&"/".into()).await,
-            Some(NodeStructure {
-                id: 1,
-                path: "/".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        assert_eq!(
-            ds.get_node(&"/group".into()).await,
-            Some(NodeStructure {
-                id: 2,
-                path: "/group".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+            assert_eq!(Some(structure_id), ds.structure_id);
+            assert_eq!(
+                ds.get_node(&"/".into()).await,
+                Some(NodeStructure {
+                    id: 1,
+                    path: "/".into(),
+                    user_attributes: None,
+                    node_data: NodeData::Group
+                })
+            );
+            ds.add_group("/group".into()).await?;
+            let _structure_id = ds.flush().await?;
+            assert_eq!(
+                ds.get_node(&"/".into()).await,
+                Some(NodeStructure {
+                    id: 1,
+                    path: "/".into(),
+                    user_attributes: None,
+                    node_data: NodeData::Group
+                })
+            );
+            assert_eq!(
+                ds.get_node(&"/group".into()).await,
+                Some(NodeStructure {
+                    id: 2,
+                    path: "/group".into(),
+                    user_attributes: None,
+                    node_data: NodeData::Group
+                })
+            );
+            let zarr_meta = ZarrArrayMetadata {
+                shape: vec![1, 1, 2],
+                data_type: DataType::Int32,
+                chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+                chunk_key_encoding: ChunkKeyEncoding::Slash,
+                fill_value: FillValue::Int32(0),
+                codecs: Codecs("codec".to_string()),
+                storage_transformers: Some(StorageTransformers(
+                    "tranformers".to_string(),
+                )),
+                dimension_names: Some(vec![Some("t".to_string())]),
+            };
 
-        let new_array_path: PathBuf = "/group/array1".to_string().into();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+            let new_array_path: PathBuf = "/group/array1".to_string().into();
+            ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
-        // we set a chunk in a new array
-        ds.set_chunk(
-            new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(b"hello".into())),
-        )
-        .await?;
-
-        let _structure_id = ds.flush().await?;
-        assert_eq!(
-            ds.get_node(&"/".into()).await,
-            Some(NodeStructure {
-                id: 1,
-                path: "/".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        assert_eq!(
-            ds.get_node(&"/group".into()).await,
-            Some(NodeStructure {
-                id: 2,
-                path: "/group".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        assert!(matches!(
-            ds.get_node(&new_array_path).await,
-            Some(NodeStructure {
-                id: 3,
-                path,
-                user_attributes: None,
-                node_data: NodeData::Array(meta, manifests)
-            }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
-        ));
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
-            Some(ChunkPayload::Inline(b"hello".into()))
-        );
-
-        // we modify a chunk in an existing array
-        ds.set_chunk(
-            new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(b"bye".into())),
-        )
-        .await?;
-
-        // we add a new chunk in an existing array
-        ds.set_chunk(
-            new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 1]),
-            Some(ChunkPayload::Inline(b"new chunk".into())),
-        )
-        .await?;
-
-        let previous_structure_id = ds.flush().await?;
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
-            Some(ChunkPayload::Inline(b"bye".into()))
-        );
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
-            Some(ChunkPayload::Inline(b"new chunk".into()))
-        );
-
-        // we delete a chunk
-        ds.set_chunk(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None).await?;
-
-        let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
-        // we change zarr metadata
-        ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
-
-        // we change user attributes metadata
-        ds.set_user_attributes(new_array_path.clone(), Some("{foo:42}".to_string()))
+            // we set a chunk in a new array
+            ds.set_chunk(
+                new_array_path.clone(),
+                ArrayIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline(b"hello".into())),
+            )
             .await?;
 
-        let structure_id = ds.flush().await?;
-        let ds = Dataset::update(Arc::clone(&storage), structure_id);
+            let _structure_id = ds.flush().await?;
+            assert_eq!(
+                ds.get_node(&"/".into()).await,
+                Some(NodeStructure {
+                    id: 1,
+                    path: "/".into(),
+                    user_attributes: None,
+                    node_data: NodeData::Group
+                })
+            );
+            assert_eq!(
+                ds.get_node(&"/group".into()).await,
+                Some(NodeStructure {
+                    id: 2,
+                    path: "/group".into(),
+                    user_attributes: None,
+                    node_data: NodeData::Group
+                })
+            );
+            assert!(matches!(
+                ds.get_node(&new_array_path).await,
+                Some(NodeStructure {
+                    id: 3,
+                    path,
+                    user_attributes: None,
+                    node_data: NodeData::Array(meta, manifests)
+                }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
+            ));
+            assert_eq!(
+                ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+                Some(ChunkPayload::Inline(b"hello".into()))
+            );
+
+            // we modify a chunk in an existing array
+            ds.set_chunk(
+                new_array_path.clone(),
+                ArrayIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline(b"bye".into())),
+            )
+            .await?;
+
+            // we add a new chunk in an existing array
+            ds.set_chunk(
+                new_array_path.clone(),
+                ArrayIndices(vec![0, 0, 1]),
+                Some(ChunkPayload::Inline(b"new chunk".into())),
+            )
+            .await?;
+
+            let previous_structure_id = ds.flush().await?;
+            assert_eq!(
+                ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+                Some(ChunkPayload::Inline(b"bye".into()))
+            );
+            assert_eq!(
+                ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+                Some(ChunkPayload::Inline(b"new chunk".into()))
+            );
+
+            // we delete a chunk
+            ds.set_chunk(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None)
+                .await?;
 
             let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
             // we change zarr metadata
-            ds.update_array(new_array_path.clone(), new_meta.clone())
-                .await
-                .map_err(|err| format!("{err:#?}"))?;
+            ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
 
             // we change user attributes metadata
             ds.set_user_attributes(new_array_path.clone(), Some("{foo:42}".to_string()))
-                .await
-                .map_err(|err| format!("{err:#?}"))?;
+                .await?;
 
-            let structure_id = ds.flush().await.map_err(|err| format!("{err:#?}"))?;
+            let structure_id = ds.flush().await?;
             let ds = Dataset::update(Arc::clone(&storage), structure_id);
 
             assert_eq!(

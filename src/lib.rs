@@ -30,8 +30,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use manifest::ManifestsTable;
 use std::{
-    collections::HashMap, error::Error, fmt::Display, num::NonZeroU64, ops::Range,
-    path::PathBuf, sync::Arc,
+    collections::HashMap, fmt::Display, num::NonZeroU64, ops::Range, path::PathBuf,
+    sync::Arc,
 };
 use structure::StructureTable;
 use thiserror::Error;
@@ -553,10 +553,13 @@ pub enum StorageError {
     #[error("synchronization error on the Storage instance")]
     Deadlock,
     #[error("")]
-    UrlParseError(Box<dyn Error>),
-    // TODO: distinguish between Read and Write errors?
-    StorageLayerError(Box<dyn Error>),
-    ParquetReadError(Box<dyn Error>),
+    ParseError(Path),
+    #[error("Error contacting object store `{0:?}`")]
+    ObjectStoreError(String),
+    #[error("Storage layer error: {0}")]
+    StorageLayerError(String),
+    #[error("Error reading or writing to/from parquet files: `{0:?}`")]
+    ParquetError(String),
 }
 
 /// Fetch and write the parquet files that represent the dataset in object store

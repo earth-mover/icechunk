@@ -15,7 +15,7 @@ use parquet::arrow::{
 
 use crate::{
     AttributesTable, ChunkOffset, ManifestsTable, ObjectId, Storage, StorageError,
-    StructureTable, StorageError::StorageLayerError,
+    StorageError::StorageLayerError, StructureTable,
 };
 use object_store::{local::LocalFileSystem, memory::InMemory, path::Path, ObjectStore};
 
@@ -38,35 +38,43 @@ impl FileType {
 // #[derive(Default)]
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
+    prefix: String,
 }
 
 impl ObjectStorage {
     pub fn new_in_memory_store() -> ObjectStorage {
-        ObjectStorage { store: Arc::new(InMemory::new()) }
+        ObjectStorage { store: Arc::new(InMemory::new()), prefix: "".into() }
     }
     pub fn new_local_store(
-        prefix: &std::path::Path,
+        prefix: std::path::PathBuf,
     ) -> Result<ObjectStorage, StorageError> {
         Ok(ObjectStorage {
             store: Arc::new(
-                LocalFileSystem::new_with_prefix(prefix)
-                    .map_err(|err| StorageLayerError(Box::new(err)))?,
+                LocalFileSystem::new_with_prefix(&prefix)
+                    .map_err(|err| StorageLayerError(err.to_string()))?,
             ),
+            prefix: prefix
+                .to_str()
+                .ok_or("Couldn't convert prefix to string")
+                .map_err(|err| StorageError::StorageLayerError(err.to_owned()))?
+                .to_owned(),
         })
     }
     pub fn new_s3_store_from_env(
         bucket_name: impl Into<String>,
+        prefix: impl Into<String>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket_name.into())
             .build()
-            .map_err(|err| StorageError::UrlParseError(Box::new(err)))?;
-        Ok(ObjectStorage { store: Arc::new(store) })
+            .map_err(|err| StorageError::ObjectStoreError(err.to_string()))?;
+        Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
     pub fn new_s3_store_with_config(
         bucket_name: impl Into<String>,
+        prefix: impl Into<String>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
         let store = AmazonS3Builder::new()
@@ -77,34 +85,35 @@ impl ObjectStorage {
             .with_allow_http(true)
             .with_bucket_name(bucket_name.into())
             .build()
-            .map_err(|err| StorageError::UrlParseError(Box::new(err)))?;
-        Ok(ObjectStorage { store: Arc::new(store) })
+            .map_err(|err| StorageError::ObjectStoreError(err.to_string()))?;
+        Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
-    fn get_path(filetype: FileType, ObjectId(asu8): &ObjectId) -> Path {
-        let prefix = filetype.get_prefix();
+    fn get_path(&self, filetype: FileType, ObjectId(asu8): &ObjectId) -> Path {
+        let type_prefix = filetype.get_prefix();
         // TODO: be careful about allocation here
-        let path = format!("{}/{}", prefix, BASE64_URL_SAFE.encode(asu8));
+        let path =
+            format!("{}/{}/{}", self.prefix, type_prefix, BASE64_URL_SAFE.encode(asu8));
         Path::from(path)
     }
 
     async fn read_parquet(&self, path: &Path) -> Result<RecordBatch, StorageError> {
+        // TODO: avoid this read since we are always reading the whole thing.
         let meta = self
             .store
             .head(path)
             .await
-            .map_err(|err| StorageError::ParquetReadError(Box::new(err)))?;
+            .map_err(|err| StorageError::ParquetError(err.to_string()))?;
         let reader = ParquetObjectReader::new(Arc::clone(&self.store), meta);
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader)
             .await
-            .map_err(|err| StorageError::ParquetReadError(Box::new(err)))?
+            .map_err(|err| StorageError::ParquetError(err.to_string()))?
             .build()
-            .map_err(|err| StorageError::ParquetReadError(Box::new(err)))?;
+            .map_err(|err| StorageError::ParquetError(err.to_string()))?;
 
-        // only one batch ever? Assert that
-        // Use `if let`;
-        let batch = builder.next().await.unwrap().unwrap();
-        Ok(batch)
+        // TODO: do we always have only one batch ever? Assert that
+        // TODO: Use `if let`;
+        Ok(builder.next().await.unwrap().unwrap())
     }
 
     async fn write_parquet(
@@ -112,18 +121,19 @@ impl ObjectStorage {
         path: &Path,
         batch: &RecordBatch,
     ) -> Result<(), StorageError> {
+        use crate::StorageError::ParquetError;
         let mut buffer = Vec::new();
         let mut writer = AsyncArrowWriter::try_new(&mut buffer, batch.schema(), None)
-            .map_err(|err| StorageLayerError(Box::new(err)))?;
-        writer.write(batch).await.map_err(|err| StorageLayerError(Box::new(err)))?;
-        writer.close().await.map_err(|err| StorageLayerError(Box::new(err)))?;
+            .map_err(|err| ParquetError(err.to_string()))?;
+        writer.write(batch).await.map_err(|err| ParquetError(err.to_string()))?;
+        writer.close().await.map_err(|err| ParquetError(err.to_string()))?;
 
         // TODO: find object_store streaming interface
         let payload = object_store::PutPayload::from(buffer);
         self.store
             .put(path, payload)
             .await
-            .map_err(|err| StorageLayerError(Box::new(err)))?;
+            .map_err(|err| StorageLayerError(err.to_string()))?;
         Ok(())
     }
 }
@@ -134,7 +144,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<StructureTable>, StorageError> {
-        let path = ObjectStorage::get_path(FileType::Structure, id);
+        let path = self.get_path(FileType::Structure, id);
         let batch = self.read_parquet(&path).await?;
         Ok(Arc::new(StructureTable { batch }))
     }
@@ -150,7 +160,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
-        let path = ObjectStorage::get_path(FileType::Manifest, id);
+        let path = self.get_path(FileType::Manifest, id);
         let batch = self.read_parquet(&path).await?;
         Ok(Arc::new(ManifestsTable { batch }))
     }
@@ -160,7 +170,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<StructureTable>,
     ) -> Result<(), StorageError> {
-        let path = ObjectStorage::get_path(FileType::Structure, &id);
+        let path = self.get_path(FileType::Structure, &id);
         self.write_parquet(&path, &table.batch).await?;
         Ok(())
     }
@@ -181,7 +191,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
-        let path = ObjectStorage::get_path(FileType::Manifest, &id);
+        let path = self.get_path(FileType::Manifest, &id);
         self.write_parquet(&path, &table.batch).await?;
         Ok(())
     }
