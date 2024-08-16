@@ -23,7 +23,7 @@ enum FileType {
     Attributes,
 }
 impl FileType {
-    pub fn get_prefix(&self) -> &str {
+    pub(crate) fn get_prefix(&self) -> &str {
         match self {
             FileType::Structure => "s/",
             FileType::Manifest => "m/",
