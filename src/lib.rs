@@ -562,6 +562,8 @@ pub enum StorageError {
     ParquetError(#[from] parquet_errors::ParquetError),
     #[error("Error reading RecordBatch from parquet files.")]
     BadRecordBatchRead,
+    #[error("Bad byte range for chunk read `{0:?}`.")]
+    BadByteRange(Option<Range<ChunkOffset>>),
     #[error("I/O error: `{0:?}`")]
     IOError(#[from] io::Error),
 }

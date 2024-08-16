@@ -176,18 +176,35 @@ impl Storage for ObjectStorage {
 
     async fn fetch_chunk(
         &self,
-        _x_id: &ObjectId,
-        _range: &Option<std::ops::Range<crate::ChunkOffset>>,
+        id: &ObjectId,
+        range: &Option<std::ops::Range<crate::ChunkOffset>>,
     ) -> Result<Bytes, StorageError> {
-        todo!()
+        let path = self.get_path(CHUNK_PREFIX, &id);
+        // TODO: shall we split `range` into multiple ranges and use get_ranges?
+        // I can't tell that `get_range` does splitting
+        if let Some(range) = range {
+            Ok(self
+                .store
+                .get_range(&path, (range.start as usize)..(range.end as usize))
+                .await?)
+        } else {
+            // TODO: Can't figure out if `get` is the most efficient way to get the whole object.
+            Ok(self.store.get(&path).await?.bytes().await?)
+        }
     }
 
     async fn write_chunk(
         &self,
-        _id: ObjectId,
-        _bytes: bytes::Bytes,
+        id: ObjectId,
+        bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
-        todo!()
+        let path = self.get_path(CHUNK_PREFIX, &id);
+        let upload = self.store.put_multipart(&path).await?;
+        // TODO: new_with_chunk_size?
+        let mut write = object_store::WriteMultipart::new(upload);
+        write.write(&bytes);
+        write.finish().await?;
+        Ok(())
     }
 }
 
