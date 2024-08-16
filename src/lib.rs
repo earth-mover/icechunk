@@ -576,7 +576,7 @@ pub trait Storage {
         &self,
         id: &ObjectId,
         range: &Option<Range<ChunkOffset>>,
-    ) -> Result<Arc<Bytes>, StorageError>; // FIXME: format flags
+    ) -> Result<Bytes, StorageError>; // FIXME: format flags
 
     async fn write_structure(
         &self,
