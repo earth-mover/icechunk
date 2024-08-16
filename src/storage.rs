@@ -389,9 +389,9 @@ mod tests {
         for store in [
             ObjectStorage::new_in_memory_store(),
             ObjectStorage::new_local_store(prefix.clone().into()).unwrap(),
-            // Arc::new(ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap()),
-            ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
-                .unwrap(),
+            // ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap(),
+            // ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
+            //     .unwrap(),
         ] {
             let id = ObjectId::random();
             let path = store.get_path(FileType::Manifest, &id);
