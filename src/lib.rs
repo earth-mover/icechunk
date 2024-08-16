@@ -28,9 +28,14 @@ pub mod structure;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use itertools::Itertools;
 use manifest::ManifestsTable;
 use std::{
-    collections::HashMap, fmt::Display, num::NonZeroU64, ops::Range, path::PathBuf,
+    collections::HashMap,
+    fmt::{self, Display},
+    num::NonZeroU64,
+    ops::Range,
+    path::PathBuf,
     sync::Arc,
 };
 use structure::StructureTable;
@@ -130,7 +135,7 @@ impl Display for DataType {
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct ChunkShape(Vec<NonZeroU64>);
+pub struct ChunkShape(pub Vec<NonZeroU64>);
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ChunkKeyEncoding {
@@ -389,10 +394,10 @@ impl FillValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Codecs(String); // FIXME: define
+pub struct Codecs(pub String); // FIXME: define
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StorageTransformers(String); // FIXME: define
+pub struct StorageTransformers(pub String); // FIXME: define
 
 pub type DimensionName = String;
 
@@ -403,7 +408,7 @@ pub type NodeId = u32;
 
 /// The id of a file in object store
 /// FIXME: should this be passed by ref everywhere?
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Hash, Clone, PartialEq, Eq)]
 pub struct ObjectId([u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
@@ -411,6 +416,14 @@ impl ObjectId {
 
     pub fn random() -> ObjectId {
         ObjectId(rand::random())
+    }
+
+    const FAKE: ObjectId = ObjectId([0; 16]);
+}
+
+impl fmt::Debug for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:02x}", self.0.iter().format(""))
     }
 }
 
@@ -432,43 +445,43 @@ type TableOffset = u32;
 pub struct TableRegion(TableOffset, TableOffset);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Flags(); // FIXME: implement
+pub struct Flags(); // FIXME: implement
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct UserAttributesRef {
-    object_id: ObjectId,
-    location: TableOffset,
-    flags: Flags,
+pub struct UserAttributesRef {
+    pub object_id: ObjectId,
+    pub location: TableOffset,
+    pub flags: Flags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum UserAttributesStructure {
+pub enum UserAttributesStructure {
     Inline(UserAttributes),
     Ref(UserAttributesRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ManifestExtents(Vec<ArrayIndices>);
+pub struct ManifestExtents(pub Vec<ArrayIndices>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestRef {
-    object_id: ObjectId,
-    location: TableRegion,
-    flags: Flags,
-    extents: ManifestExtents,
+    pub object_id: ObjectId,
+    pub location: TableRegion,
+    pub flags: Flags,
+    pub extents: ManifestExtents,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZarrArrayMetadata {
-    shape: ArrayShape,
-    data_type: DataType,
-    chunk_shape: ChunkShape,
-    chunk_key_encoding: ChunkKeyEncoding,
-    fill_value: FillValue,
-    codecs: Codecs,
-    storage_transformers: Option<StorageTransformers>,
+    pub shape: ArrayShape,
+    pub data_type: DataType,
+    pub chunk_shape: ChunkShape,
+    pub chunk_key_encoding: ChunkKeyEncoding,
+    pub fill_value: FillValue,
+    pub codecs: Codecs,
+    pub storage_transformers: Option<StorageTransformers>,
     // each dimension name can be null in Zarr
-    dimension_names: Option<Vec<Option<DimensionName>>>,
+    pub dimension_names: Option<Vec<Option<DimensionName>>>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -485,10 +498,10 @@ pub enum NodeData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeStructure {
-    id: NodeId,
-    path: Path,
-    user_attributes: Option<UserAttributesStructure>,
-    node_data: NodeData,
+    pub id: NodeId,
+    pub path: Path,
+    pub user_attributes: Option<UserAttributesStructure>,
+    pub node_data: NodeData,
 }
 
 impl NodeStructure {
