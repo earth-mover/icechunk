@@ -49,11 +49,10 @@ impl ObjectStorage {
                 LocalFileSystem::new_with_prefix(&prefix)
                     .map_err(|err| StorageLayerError(Arc::new(err)))?,
             ),
-            prefix: prefix
-                .to_str()
-                //TODO:
-                .ok_or(StorageError::MiscError("Couldn't convert prefix to string".to_string()))?
-                .to_owned(),
+            // We rely on `new_with_prefix` to create the `prefix` directory
+            // if it doesn't exist. It will also add the prefix to any path
+            // so we set ObjectStorate::prefix to an empty string.
+            prefix: "".to_string(),
         })
     }
     pub fn new_s3_store_from_env(
@@ -88,8 +87,12 @@ impl ObjectStorage {
     fn get_path(&self, filetype: FileType, ObjectId(asu8): &ObjectId) -> Path {
         let type_prefix = filetype.get_prefix();
         // TODO: be careful about allocation here
-        let path =
-            format!("{}/{}/{}", self.prefix, type_prefix, BASE64_URL_SAFE.encode(asu8));
+        let path = format!(
+            "{}/{}/{}.parquet",
+            self.prefix,
+            type_prefix,
+            BASE64_URL_SAFE.encode(asu8)
+        );
         Path::from(path)
     }
 
@@ -117,7 +120,9 @@ impl ObjectStorage {
         if let Some(batch) = maybe_batch {
             batch.map_err(|err| ParquetError(Arc::new(err)))
         } else {
-            Err(StorageError::MiscError("ParquetError:No more record batches".to_string()))
+            Err(StorageError::MiscError(
+                "ParquetError:No more record batches".to_string(),
+            ))
         }
     }
 
