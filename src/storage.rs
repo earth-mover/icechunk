@@ -18,7 +18,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, path::Path, ObjectS
 
 const STRUCTURE_PREFIX: &str = "s/";
 const MANIFEST_PREFIX: &str = "m/";
-const ATTRIBUTES_PREFIX: &str = "a/";
+// const ATTRIBUTES_PREFIX: &str = "a/";
 const CHUNK_PREFIX: &str = "c/";
 
 // #[derive(Default)]
@@ -179,7 +179,7 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
         range: &Option<std::ops::Range<crate::ChunkOffset>>,
     ) -> Result<Bytes, StorageError> {
-        let path = self.get_path(CHUNK_PREFIX, &id);
+        let path = self.get_path(CHUNK_PREFIX, id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
         if let Some(range) = range {

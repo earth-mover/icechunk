@@ -30,7 +30,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use itertools::Itertools;
 use manifest::ManifestsTable;
-use object_store;
 use parquet::errors as parquet_errors;
 use std::{
     collections::HashMap,
