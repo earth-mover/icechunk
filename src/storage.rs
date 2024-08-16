@@ -16,25 +16,10 @@ use bytes::Bytes;
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, path::Path, ObjectStore};
 
-// TODO: constant
 const STRUCTURE_PREFIX: &str = "s/";
-#[allow(dead_code)]
-enum FileType {
-    Structure,
-    Manifest,
-    Attributes,
-    Chunk,
-}
-impl FileType {
-    pub(crate) fn get_prefix(&self) -> &str {
-        match self {
-            FileType::Structure => "s/",
-            FileType::Manifest => "m/",
-            FileType::Attributes => "a/",
-            FileType::Chunk => "c",
-        }
-    }
-}
+const MANIFEST_PREFIX: &str = "m/";
+const ATTRIBUTES_PREFIX: &str = "a/";
+const CHUNK_PREFIX: &str = "c/";
 
 // #[derive(Default)]
 pub struct ObjectStorage {
@@ -84,13 +69,12 @@ impl ObjectStorage {
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
-    fn get_path(&self, filetype: FileType, ObjectId(asu8): &ObjectId) -> Path {
-        let type_prefix = filetype.get_prefix();
+    fn get_path(&self, file_prefix: &str, ObjectId(asu8): &ObjectId) -> Path {
         // TODO: be careful about allocation here
         let path = format!(
             "{}/{}/{}.parquet",
             self.prefix,
-            type_prefix,
+            file_prefix,
             BASE64_URL_SAFE.encode(asu8)
         );
         Path::from(path)
@@ -138,7 +122,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<StructureTable>, StorageError> {
-        let path = self.get_path(FileType::Structure, id);
+        let path = self.get_path(STRUCTURE_PREFIX, id);
         let batch = self.read_parquet(&path).await?;
         Ok(Arc::new(StructureTable { batch }))
     }
@@ -154,7 +138,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
-        let path = self.get_path(FileType::Manifest, id);
+        let path = self.get_path(MANIFEST_PREFIX, id);
         let batch = self.read_parquet(&path).await?;
         Ok(Arc::new(ManifestsTable { batch }))
     }
@@ -164,7 +148,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<StructureTable>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(FileType::Structure, &id);
+        let path = self.get_path(STRUCTURE_PREFIX, &id);
         self.write_parquet(&path, &table.batch).await?;
         Ok(())
     }
@@ -175,7 +159,7 @@ impl Storage for ObjectStorage {
         _table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         todo!()
-        // let path = ObjectStorage::get_path(FileType::Structure, &id);
+        // let path = ObjectStorage::get_path(ATTRIBUTES_PREFIX, &id);
         // self.write_parquet(&path, &table.batch).await?;
         // Ok(())
     }
@@ -185,7 +169,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(FileType::Manifest, &id);
+        let path = self.get_path(MANIFEST_PREFIX, &id);
         self.write_parquet(&path, &table.batch).await?;
         Ok(())
     }
@@ -347,7 +331,7 @@ mod tests {
     use rand::distributions::Alphanumeric;
     use rand::Rng;
 
-    use super::{FileType, ObjectStorage};
+    use super::ObjectStorage;
 
     fn make_record_batch() -> RecordBatch {
         let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -374,7 +358,7 @@ mod tests {
             //     .unwrap(),
         ] {
             let id = ObjectId::random();
-            let path = store.get_path(FileType::Manifest, &id);
+            let path = store.get_path("foo_prefix/", &id);
             store.write_parquet(&path, &batch).await.unwrap();
             let actual = store.read_parquet(&path).await.unwrap();
             assert_eq!(actual, batch)
