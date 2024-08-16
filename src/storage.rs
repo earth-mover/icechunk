@@ -178,7 +178,7 @@ impl Storage for ObjectStorage {
         &self,
         _x_id: &ObjectId,
         _range: &Option<std::ops::Range<crate::ChunkOffset>>,
-    ) -> Result<Arc<Bytes>, StorageError> {
+    ) -> Result<Bytes, StorageError> {
         todo!()
     }
 
@@ -198,7 +198,7 @@ pub struct InMemoryStorage {
     struct_files: Arc<RwLock<HashMap<ObjectId, Arc<StructureTable>>>>,
     attr_files: Arc<RwLock<HashMap<ObjectId, Arc<AttributesTable>>>>,
     man_files: Arc<RwLock<HashMap<ObjectId, Arc<ManifestsTable>>>>,
-    chunk_files: Arc<RwLock<HashMap<ObjectId, Arc<Bytes>>>>,
+    chunk_files: Arc<RwLock<HashMap<ObjectId, Bytes>>>,
 }
 
 impl InMemoryStorage {
@@ -290,7 +290,7 @@ impl Storage for InMemoryStorage {
         &self,
         id: &ObjectId,
         range: &Option<Range<ChunkOffset>>,
-    ) -> Result<Arc<Bytes>, StorageError> {
+    ) -> Result<Bytes, StorageError> {
         // avoid unused warning
         let chunk = self
             .chunk_files
@@ -300,9 +300,9 @@ impl Storage for InMemoryStorage {
             .cloned()
             .ok_or(StorageError::NotFound(id.clone()))?;
         if let Some(range) = range {
-            Ok(Arc::new(chunk.slice((range.start as usize)..(range.end as usize))))
+            Ok(chunk.slice((range.start as usize)..(range.end as usize)))
         } else {
-            Ok(Arc::clone(&chunk))
+            Ok(chunk.clone())
         }
     }
 
@@ -311,10 +311,7 @@ impl Storage for InMemoryStorage {
         id: ObjectId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
-        self.chunk_files
-            .write()
-            .or(Err(StorageError::Deadlock))?
-            .insert(id, Arc::new(bytes));
+        self.chunk_files.write().or(Err(StorageError::Deadlock))?.insert(id, bytes);
         Ok(())
     }
 }
