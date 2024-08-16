@@ -567,8 +567,6 @@ pub enum StorageError {
     NotFound(ObjectId),
     #[error("synchronization error on the Storage instance")]
     Deadlock,
-    // TODO: pattern match on ObjectStore error
-    // combine with StorageLayerError
     #[error("Error contacting object store {0}")]
     ObjectStore(#[from] object_store::Error),
     #[error("Error reading or writing to/from parquet files: {0}")]
