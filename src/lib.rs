@@ -29,8 +29,10 @@ pub mod structure;
 use async_trait::async_trait;
 use bytes::Bytes;
 use manifest::ManifestsTable;
+use object_store;
+use parquet::errors as parquet_errors;
 use std::{
-    collections::HashMap, fmt::Display, num::NonZeroU64, ops::Range, path::PathBuf,
+    collections::HashMap, fmt::Display, io, num::NonZeroU64, ops::Range, path::PathBuf,
     sync::Arc,
 };
 use structure::StructureTable;
@@ -546,20 +548,22 @@ pub enum UpdateNodeError {
     NotAnArray(Path),
 }
 
-#[derive(Clone, Debug, Error)]
+#[derive(Debug, Error)]
 pub enum StorageError {
     #[error("object not found `{0:?}`")]
     NotFound(ObjectId),
     #[error("synchronization error on the Storage instance")]
     Deadlock,
+    // TODO: pattern match on ObjectStore error
+    // combine with StorageLayerError
     #[error("Error contacting object store `{0:?}`")]
-    ObjectStoreError(Arc<dyn std::error::Error>),
-    #[error("Storage layer error: {0}")]
-    StorageLayerError(Arc<dyn std::error::Error>),
+    ObjectStore(#[from] object_store::Error),
     #[error("Error reading or writing to/from parquet files: `{0:?}`")]
-    ParquetError(Arc<dyn std::error::Error>),
-    #[error("Storage layer error: {0}")]
-    MiscError(String),
+    ParquetError(#[from] parquet_errors::ParquetError),
+    #[error("Error reading RecordBatch from parquet files.")]
+    BadRecordBatchRead,
+    #[error("I/O error: `{0:?}`")]
+    IOError(#[from] io::Error),
 }
 
 /// Fetch and write the parquet files that represent the dataset in object store

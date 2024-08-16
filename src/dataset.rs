@@ -586,7 +586,7 @@ impl TableRegionTracker {
     }
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum FlushError {
     #[error("no changes made to the dataset")]
     NoChangesToFlush,

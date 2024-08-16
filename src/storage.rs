@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     AttributesTable, ChunkOffset, ManifestsTable, ObjectId, Storage, StorageError,
-    StorageError::StorageLayerError, StructureTable,
+    StructureTable,
 };
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
@@ -16,11 +16,14 @@ use bytes::Bytes;
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, path::Path, ObjectStore};
 
+// TODO: constant
+const STRUCTURE_PREFIX: &str = "s/";
 #[allow(dead_code)]
 enum FileType {
     Structure,
     Manifest,
     Attributes,
+    Chunk,
 }
 impl FileType {
     pub(crate) fn get_prefix(&self) -> &str {
@@ -28,6 +31,7 @@ impl FileType {
             FileType::Structure => "s/",
             FileType::Manifest => "m/",
             FileType::Attributes => "a/",
+            FileType::Chunk => "c",
         }
     }
 }
@@ -45,13 +49,9 @@ impl ObjectStorage {
     pub fn new_local_store(
         prefix: std::path::PathBuf,
     ) -> Result<ObjectStorage, StorageError> {
-        create_dir_all(prefix.as_path())
-            .map_err(|err| StorageLayerError(Arc::new(err)))?;
+        create_dir_all(prefix.as_path())?;
         Ok(ObjectStorage {
-            store: Arc::new(
-                LocalFileSystem::new_with_prefix(&prefix)
-                    .map_err(|err| StorageLayerError(Arc::new(err)))?,
-            ),
+            store: Arc::new(LocalFileSystem::new_with_prefix(&prefix)?),
             // We rely on `new_with_prefix` to create the `prefix` directory
             // if it doesn't exist. It will also add the prefix to any path
             // so we set ObjectStorate::prefix to an empty string.
@@ -63,10 +63,8 @@ impl ObjectStorage {
         prefix: impl Into<String>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
-        let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket_name.into())
-            .build()
-            .map_err(|err| StorageError::ObjectStoreError(Arc::new(err)))?;
+        let store =
+            AmazonS3Builder::from_env().with_bucket_name(bucket_name.into()).build()?;
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
@@ -82,8 +80,7 @@ impl ObjectStorage {
             .with_endpoint("http://localhost:9000")
             .with_allow_http(true)
             .with_bucket_name(bucket_name.into())
-            .build()
-            .map_err(|err| StorageError::ObjectStoreError(Arc::new(err)))?;
+            .build()?;
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
@@ -100,32 +97,20 @@ impl ObjectStorage {
     }
 
     async fn read_parquet(&self, path: &Path) -> Result<RecordBatch, StorageError> {
-        use crate::StorageError::ParquetError;
         use parquet::arrow::{
             async_reader::ParquetObjectReader, ParquetRecordBatchStreamBuilder,
         };
 
         // TODO: avoid this read since we are always reading the whole thing.
-        let meta = self
-            .store
-            .head(path)
-            .await
-            .map_err(|err| StorageError::ParquetError(Arc::new(err)))?;
+        let meta = self.store.head(path).await?;
         let reader = ParquetObjectReader::new(Arc::clone(&self.store), meta);
-        let mut builder = ParquetRecordBatchStreamBuilder::new(reader)
-            .await
-            .map_err(|err| StorageError::ParquetError(Arc::new(err)))?
-            .build()
-            .map_err(|err| StorageError::ParquetError(Arc::new(err)))?;
-
+        let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?.build()?;
         // TODO: do we always have only one batch ever? Assert that
         let maybe_batch = builder.next().await;
         if let Some(batch) = maybe_batch {
-            batch.map_err(|err| ParquetError(Arc::new(err)))
+            Ok(batch?)
         } else {
-            Err(StorageError::MiscError(
-                "ParquetError:No more record batches".to_string(),
-            ))
+            Err(StorageError::BadRecordBatchRead)
         }
     }
 
@@ -134,20 +119,15 @@ impl ObjectStorage {
         path: &Path,
         batch: &RecordBatch,
     ) -> Result<(), StorageError> {
-        use crate::StorageError::ParquetError;
         use parquet::arrow::async_writer::AsyncArrowWriter;
         let mut buffer = Vec::new();
-        let mut writer = AsyncArrowWriter::try_new(&mut buffer, batch.schema(), None)
-            .map_err(|err| ParquetError(Arc::new(err)))?;
-        writer.write(batch).await.map_err(|err| ParquetError(Arc::new(err)))?;
-        writer.close().await.map_err(|err| ParquetError(Arc::new(err)))?;
+        let mut writer = AsyncArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
+        writer.write(batch).await?;
+        writer.close().await?;
 
         // TODO: find object_store streaming interface
         let payload = object_store::PutPayload::from(buffer);
-        self.store
-            .put(path, payload)
-            .await
-            .map_err(|err| StorageLayerError(Arc::new(err)))?;
+        self.store.put(path, payload).await?;
         Ok(())
     }
 }
