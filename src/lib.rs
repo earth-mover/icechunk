@@ -567,16 +567,16 @@ pub enum StorageError {
     NotFound(ObjectId),
     #[error("synchronization error on the Storage instance")]
     Deadlock,
-    #[error("Error contacting object store {0}")]
+    #[error("error contacting object store {0}")]
     ObjectStore(#[from] object_store::Error),
-    #[error("Error reading or writing to/from parquet files: {0}")]
+    #[error("error reading or writing to/from parquet files: {0}")]
     ParquetError(#[from] parquet_errors::ParquetError),
-    #[error("Error reading RecordBatch from parquet files.")]
-    BadRecordBatchRead,
-    #[error("Bad byte range for chunk read `{0:?}`.")]
-    BadByteRange(Option<Range<ChunkOffset>>),
-    #[error("I/O error: `{0:?}`")]
+    #[error("error reading RecordBatch from parquet file {0}.")]
+    BadRecordBatchRead(String),
+    #[error("i/o error: `{0:?}`")]
     IOError(#[from] io::Error),
+    #[error("bad path: {0}")]
+    BadPath(Path),
 }
 
 /// Fetch and write the parquet files that represent the dataset in object store
