@@ -85,7 +85,7 @@ impl ObjectStorage {
             async_reader::ParquetObjectReader, ParquetRecordBatchStreamBuilder,
         };
 
-        // TODO: avoid this read since we are always reading the whole thing.
+        // TODO: avoid this metadata read since we are always reading the whole thing.
         let meta = self.store.head(path).await?;
         let reader = ParquetObjectReader::new(Arc::clone(&self.store), meta);
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?.build()?;

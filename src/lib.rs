@@ -556,9 +556,9 @@ pub enum StorageError {
     Deadlock,
     // TODO: pattern match on ObjectStore error
     // combine with StorageLayerError
-    #[error("Error contacting object store `{0:?}`")]
+    #[error("Error contacting object store {0}")]
     ObjectStore(#[from] object_store::Error),
-    #[error("Error reading or writing to/from parquet files: `{0:?}`")]
+    #[error("Error reading or writing to/from parquet files: {0}")]
     ParquetError(#[from] parquet_errors::ParquetError),
     #[error("Error reading RecordBatch from parquet files.")]
     BadRecordBatchRead,
