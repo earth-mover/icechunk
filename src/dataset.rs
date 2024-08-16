@@ -596,9 +596,7 @@ pub enum FlushError {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashSet, env::temp_dir, error::Error, num::NonZeroU64, path::PathBuf,
-    };
+    use std::{collections::HashSet, error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
         manifest::mk_manifests_table,
@@ -610,26 +608,12 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
-    use rand;
-    use rand::{distributions::Alphanumeric, Rng}; // 0.8
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
-        let temp_dir_name = temp_dir();
-        let prefix: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        let storages: [Arc<dyn Storage>; 4] = [
+        let storages: [Arc<dyn Storage>; 2] = [
             Arc::new(InMemoryStorage::new()),
             Arc::new(ObjectStorage::new_in_memory_store()),
-            Arc::new(ObjectStorage::new_local_store(temp_dir_name).unwrap()),
-            // Arc::new(ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap()),
-            Arc::new(
-                ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
-                    .unwrap(),
-            ),
         ];
         for storage in storages {
             let array_id = 2;
@@ -898,21 +882,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let temp_dir_name = temp_dir();
-        let prefix: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        let storages: [Arc<dyn Storage>; 4] = [
+        let storages: [Arc<dyn Storage>; 2] = [
             Arc::new(InMemoryStorage::new()),
             Arc::new(ObjectStorage::new_in_memory_store()),
-            Arc::new(ObjectStorage::new_local_store(temp_dir_name).unwrap()),
-            // Arc::new(ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap()),
-            Arc::new(
-                ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
-                    .unwrap(),
-            ),
         ];
         for storage in storages {
             let mut ds = Dataset::create(Arc::clone(&storage));

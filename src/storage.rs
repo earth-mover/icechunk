@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use std::{
     collections::HashMap,
+    fs::create_dir_all,
     ops::Range,
     sync::{Arc, RwLock},
 };
@@ -44,6 +45,8 @@ impl ObjectStorage {
     pub fn new_local_store(
         prefix: std::path::PathBuf,
     ) -> Result<ObjectStorage, StorageError> {
+        create_dir_all(prefix.as_path())
+            .map_err(|err| StorageLayerError(Arc::new(err)))?;
         Ok(ObjectStorage {
             store: Arc::new(
                 LocalFileSystem::new_with_prefix(&prefix)
@@ -349,5 +352,52 @@ impl Storage for InMemoryStorage {
             .or(Err(StorageError::Deadlock))?
             .insert(id, Arc::new(bytes));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::ObjectId;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use rand;
+    use rand::distributions::Alphanumeric;
+    use rand::Rng;
+
+    use super::{FileType, ObjectStorage};
+
+    fn make_record_batch() -> RecordBatch {
+        let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_write_parquet_object_storage() {
+        // simple test to make sure we can speak to all stores
+        let batch = make_record_batch();
+        let prefix: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+
+        for store in [
+            ObjectStorage::new_in_memory_store(),
+            ObjectStorage::new_local_store(prefix.clone().into()).unwrap(),
+            // Arc::new(ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap()),
+            ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
+                .unwrap(),
+        ] {
+            let id = ObjectId::random();
+            let path = store.get_path(FileType::Manifest, &id);
+            store.write_parquet(&path, &batch).await.unwrap();
+            let actual = store.read_parquet(&path).await.unwrap();
+            assert_eq!(actual, batch)
+        }
     }
 }
