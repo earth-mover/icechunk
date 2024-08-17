@@ -120,7 +120,7 @@ ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?
 ```
  "#,
     );
-    ds.set_user_attributes(array1_path.clone(), Some("{n:42}".to_string())).await?;
+    ds.set_user_attributes(array1_path.clone(), Some("{n:42}".into())).await?;
     print_nodes(&ds).await;
 
     println!("## Committing");
@@ -141,7 +141,7 @@ ds.flush().await?;
     ds.set_chunk(
         array1_path.clone(),
         ArrayIndices(vec![0]),
-        Some(ChunkPayload::Inline(b"hello".into())),
+        Some(ChunkPayload::Inline("hello".into())),
     )
     .await?;
     println!(
@@ -197,7 +197,7 @@ let mut ds = Dataset::update(Arc::clone(&storage), ObjectId.from("{v2_id:?}"));
     ds.set_chunk(
         array1_path.clone(),
         ArrayIndices(vec![1]),
-        Some(icechunk::ChunkPayload::Inline(b"bye".into())),
+        Some(icechunk::ChunkPayload::Inline("bye".into())),
     )
     .await?;
 

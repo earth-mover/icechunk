@@ -8,6 +8,7 @@ use arrow::{
     },
     datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
 };
+use bytes::Bytes;
 use itertools::izip;
 
 use crate::{
@@ -196,9 +197,11 @@ impl StructureTable {
 
     fn build_user_attributes(&self, idx: usize) -> Option<UserAttributesStructure> {
         let inline =
-            self.batch.column_by_name("user_attributes")?.as_string_opt::<i32>()?;
+            self.batch.column_by_name("user_attributes")?.as_binary_opt::<i32>()?;
         if inline.is_valid(idx) {
-            Some(UserAttributesStructure::Inline(inline.value(idx).to_string()))
+            Some(UserAttributesStructure::Inline(Bytes::copy_from_slice(
+                inline.value(idx),
+            )))
         } else {
             self.build_user_attributes_ref(idx)
         }
@@ -330,8 +333,8 @@ where
 
 fn mk_user_attributes_array<T: IntoIterator<Item = Option<UserAttributes>>>(
     coll: T,
-) -> StringArray {
-    StringArray::from_iter(coll)
+) -> BinaryArray {
+    BinaryArray::from_iter(coll)
 }
 
 fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
@@ -563,7 +566,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
             Field::new("item", arrow::datatypes::DataType::Utf8, true),
             true,
         ),
-        Field::new("user_attributes", arrow::datatypes::DataType::Utf8, true),
+        Field::new("user_attributes", arrow::datatypes::DataType::Binary, true),
         Field::new(
             "user_attributes_ref",
             arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
@@ -714,7 +717,7 @@ mod tests {
                 path: "/b/c".into(),
                 id: 4,
                 user_attributes: Some(UserAttributesStructure::Inline(
-                    "some inline".to_string(),
+                    "some inline".into(),
                 )),
                 node_data: NodeData::Group,
             },
@@ -754,7 +757,7 @@ mod tests {
                 path: "/b/c".into(),
                 id: 4,
                 user_attributes: Some(UserAttributesStructure::Inline(
-                    "some inline".to_string()
+                    "some inline".into()
                 )),
                 node_data: NodeData::Group,
             }),

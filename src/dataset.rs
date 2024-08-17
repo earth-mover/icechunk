@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Either;
 use thiserror::Error;
@@ -314,6 +315,14 @@ impl Dataset {
         }
     }
 
+    pub async fn get_chunk(&self, path: &Path, coords: &ArrayIndices) -> Option<Bytes> {
+        match self.get_chunk_ref(path, coords).await? {
+            ChunkPayload::Inline(bytes) => Some(bytes),
+            ChunkPayload::Virtual(_) => todo!(),
+            ChunkPayload::Ref(_) => todo!(),
+        }
+    }
+
     async fn get_old_chunk(
         &self,
         manifests: &[ManifestRef],
@@ -607,7 +616,7 @@ pub enum FlushError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, error::Error, num::NonZeroU64, path::PathBuf};
+    use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
         manifest::mk_manifests_table, storage::InMemoryStorage,
@@ -617,6 +626,7 @@ mod tests {
     };
 
     use super::*;
+    use itertools::Itertools;
     use pretty_assertions::assert_eq;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -637,7 +647,7 @@ mod tests {
         let chunk2 = ChunkInfo {
             node: array_id,
             coord: ArrayIndices(vec![0, 0, 1]),
-            payload: ChunkPayload::Inline(vec![0, 0, 0, 42]),
+            payload: ChunkPayload::Inline("hello".into()),
         };
 
         let manifest = Arc::new(
@@ -685,9 +695,7 @@ mod tests {
             NodeStructure {
                 path: array1_path.clone(),
                 id: array_id,
-                user_attributes: Some(UserAttributesStructure::Inline(
-                    "{foo:1}".to_string(),
-                )),
+                user_attributes: Some(UserAttributesStructure::Inline("{foo:1}".into())),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
             },
         ];
@@ -730,17 +738,14 @@ mod tests {
         );
 
         // set user attributes for the new array and retrieve them
-        ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".to_string()))
-            .await?;
+        ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".into())).await?;
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
             node,
             Some(NodeStructure {
                 path: "/group/array2".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline(
-                    "{n:42}".to_string(),
-                )),
+                user_attributes: Some(UserAttributesStructure::Inline("{n:42}".into(),)),
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             })
         );
@@ -749,24 +754,24 @@ mod tests {
         ds.set_chunk(
             new_array_path.clone(),
             ArrayIndices(vec![0]),
-            Some(ChunkPayload::Inline(vec![0, 0, 0, 7])),
+            Some(ChunkPayload::Inline("foo".into())),
         )
         .await?;
 
         let chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0])).await;
-        assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 7])));
+        assert_eq!(chunk, Some(ChunkPayload::Inline("foo".into())));
 
         // retrieve a non initialized chunk of the new array
         let non_chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![1])).await;
         assert_eq!(non_chunk, None);
 
         // update old array use attriutes and check them
-        ds.set_user_attributes(array1_path.clone(), Some("{updated: true}".to_string()))
+        ds.set_user_attributes(array1_path.clone(), Some("{updated: true}".into()))
             .await?;
         let node = ds.get_node(&array1_path).await.unwrap();
         assert_eq!(
             node.user_attributes,
-            Some(UserAttributesStructure::Inline("{updated: true}".to_string()))
+            Some(UserAttributesStructure::Inline("{updated: true}".into()))
         );
 
         // update old array zarr metadata and check it
@@ -787,12 +792,12 @@ mod tests {
         ds.set_chunk(
             array1_path.clone(),
             ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(vec![0, 0, 0, 99])),
+            Some(ChunkPayload::Inline("bac".into())),
         )
         .await?;
 
         let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
-        assert_eq!(chunk, Some(ChunkPayload::Inline(vec![0, 0, 0, 99])));
+        assert_eq!(chunk, Some(ChunkPayload::Inline("bac".into())));
 
         Ok(())
     }
@@ -831,46 +836,49 @@ mod tests {
         change_set.set_chunk(
             "foo/bar".into(),
             ArrayIndices(vec![1, 0]),
-            Some(ChunkPayload::Inline(b"bar1".into())),
+            Some(ChunkPayload::Inline("bar1".into())),
         );
         change_set.set_chunk(
             "foo/bar".into(),
             ArrayIndices(vec![1, 1]),
-            Some(ChunkPayload::Inline(b"bar2".into())),
+            Some(ChunkPayload::Inline("bar2".into())),
         );
         change_set.set_chunk(
             "foo/baz".into(),
             ArrayIndices(vec![0]),
-            Some(ChunkPayload::Inline(b"baz1".into())),
+            Some(ChunkPayload::Inline("baz1".into())),
         );
         change_set.set_chunk(
             "foo/baz".into(),
             ArrayIndices(vec![1]),
-            Some(ChunkPayload::Inline(b"baz2".into())),
+            Some(ChunkPayload::Inline("baz2".into())),
         );
 
         {
-            let all_chunks: HashSet<_> = change_set.new_arrays_chunk_iterator().collect();
-            let expected_chunks = [
-                ChunkInfo {
-                    node: 1,
-                    coord: ArrayIndices(vec![1, 0]),
-                    payload: ChunkPayload::Inline(b"bar1".into()),
-                },
-                ChunkInfo {
-                    node: 1,
-                    coord: ArrayIndices(vec![1, 1]),
-                    payload: ChunkPayload::Inline(b"bar2".into()),
-                },
+            let all_chunks: Vec<_> = change_set
+                .new_arrays_chunk_iterator()
+                .sorted_by_key(|c| c.coord.clone())
+                .collect();
+            let expected_chunks: Vec<_> = [
                 ChunkInfo {
                     node: 2,
                     coord: ArrayIndices(vec![0]),
-                    payload: ChunkPayload::Inline(b"baz1".into()),
+                    payload: ChunkPayload::Inline("baz1".into()),
                 },
                 ChunkInfo {
                     node: 2,
                     coord: ArrayIndices(vec![1]),
-                    payload: ChunkPayload::Inline(b"baz2".into()),
+                    payload: ChunkPayload::Inline("baz2".into()),
+                },
+                ChunkInfo {
+                    node: 1,
+                    coord: ArrayIndices(vec![1, 0]),
+                    payload: ChunkPayload::Inline("bar1".into()),
+                },
+                ChunkInfo {
+                    node: 1,
+                    coord: ArrayIndices(vec![1, 1]),
+                    payload: ChunkPayload::Inline("bar2".into()),
                 },
             ]
             .into();
@@ -938,7 +946,7 @@ mod tests {
         ds.set_chunk(
             new_array_path.clone(),
             ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(b"hello".into())),
+            Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
 
@@ -972,14 +980,14 @@ mod tests {
         ));
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
-            Some(ChunkPayload::Inline(b"hello".into()))
+            Some(ChunkPayload::Inline("hello".into()))
         );
 
         // we modify a chunk in an existing array
         ds.set_chunk(
             new_array_path.clone(),
             ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline(b"bye".into())),
+            Some(ChunkPayload::Inline("bye".into())),
         )
         .await?;
 
@@ -987,18 +995,18 @@ mod tests {
         ds.set_chunk(
             new_array_path.clone(),
             ArrayIndices(vec![0, 0, 1]),
-            Some(ChunkPayload::Inline(b"new chunk".into())),
+            Some(ChunkPayload::Inline("new chunk".into())),
         )
         .await?;
 
         let previous_structure_id = ds.flush().await?;
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
-            Some(ChunkPayload::Inline(b"bye".into()))
+            Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
-            Some(ChunkPayload::Inline(b"new chunk".into()))
+            Some(ChunkPayload::Inline("new chunk".into()))
         );
 
         // we delete a chunk
@@ -1009,15 +1017,14 @@ mod tests {
         ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
 
         // we change user attributes metadata
-        ds.set_user_attributes(new_array_path.clone(), Some("{foo:42}".to_string()))
-            .await?;
+        ds.set_user_attributes(new_array_path.clone(), Some("{foo:42}".into())).await?;
 
         let structure_id = ds.flush().await?;
         let ds = Dataset::update(Arc::clone(&storage), structure_id);
 
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
-            Some(ChunkPayload::Inline(b"bye".into()))
+            Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
@@ -1030,18 +1037,18 @@ mod tests {
                 path,
                 user_attributes: Some(atts),
                 node_data: NodeData::Array(meta, manifests)
-            }) if path == new_array_path && meta == new_meta.clone() && manifests.len() == 1 && atts == UserAttributesStructure::Inline("{foo:42}".to_string())
+            }) if path == new_array_path && meta == new_meta.clone() && manifests.len() == 1 && atts == UserAttributesStructure::Inline("{foo:42}".into())
         ));
 
         //test the previous version is still alive
         let ds = Dataset::update(Arc::clone(&storage), previous_structure_id);
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
-            Some(ChunkPayload::Inline(b"bye".into()))
+            Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
-            Some(ChunkPayload::Inline(b"new chunk".into()))
+            Some(ChunkPayload::Inline("new chunk".into()))
         );
 
         Ok(())

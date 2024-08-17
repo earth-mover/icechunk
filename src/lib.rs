@@ -25,6 +25,7 @@ pub mod dataset;
 pub mod manifest;
 pub mod storage;
 pub mod structure;
+pub mod zarr;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -49,7 +50,7 @@ pub enum IcechunkFormatError {
     NullFillValueError,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 /// An ND index to an element in an array.
 pub struct ArrayIndices(pub Vec<u64>);
 
@@ -403,14 +404,14 @@ pub struct StorageTransformers(pub String); // FIXME: define
 
 pub type DimensionName = String;
 
-pub type UserAttributes = String; // FIXME: better definition
+pub type UserAttributes = Bytes; // FIXME: better definition
 
 /// The internal id of an array or group, unique only to a single store version
 pub type NodeId = u32;
 
 /// The id of a file in object store
 /// FIXME: should this be passed by ref everywhere?
-#[derive(Hash, Clone, PartialEq, Eq)]
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectId([u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
@@ -515,28 +516,28 @@ impl NodeStructure {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkRef {
     id: ObjectId, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChunkPayload {
-    Inline(Vec<u8>), // FIXME: optimize copies
+    Inline(Bytes), // FIXME: optimize copies
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkInfo {
     node: NodeId,
     coord: ArrayIndices,
