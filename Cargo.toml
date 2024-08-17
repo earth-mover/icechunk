@@ -10,8 +10,11 @@ publish = false
 arrow = { version = "52.2.0", features = ["prettyprint"] }
 async-trait = "0.1.81"
 bytes = "1.7.1"
+base64 = "0.22.1"
 futures = "0.3.30"
 itertools = "0.13.0"
+object_store = { version = "0.10.2", features = ["aws"] }
+parquet = { version = "52.2.0", features = ["object_store"] }
 rand = "0.8.5"
 thiserror = "1.0.63"
 

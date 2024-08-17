@@ -30,9 +30,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use itertools::Itertools;
 use manifest::ManifestsTable;
+use parquet::errors as parquet_errors;
 use std::{
     collections::HashMap,
     fmt::{self, Display},
+    io,
     num::NonZeroU64,
     ops::Range,
     path::PathBuf,
@@ -559,12 +561,22 @@ pub enum UpdateNodeError {
     NotAnArray(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum StorageError {
     #[error("object not found `{0:?}`")]
     NotFound(ObjectId),
     #[error("synchronization error on the Storage instance")]
     Deadlock,
+    #[error("error contacting object store {0}")]
+    ObjectStore(#[from] object_store::Error),
+    #[error("error reading or writing to/from parquet files: {0}")]
+    ParquetError(#[from] parquet_errors::ParquetError),
+    #[error("error reading RecordBatch from parquet file {0}.")]
+    BadRecordBatchRead(String),
+    #[error("i/o error: `{0:?}`")]
+    IOError(#[from] io::Error),
+    #[error("bad path: {0}")]
+    BadPath(Path),
 }
 
 /// Fetch and write the parquet files that represent the dataset in object store
