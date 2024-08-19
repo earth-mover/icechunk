@@ -555,11 +555,30 @@ pub enum AddNodeError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeleteNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("there is not an array at `{0}`")]
+    NotAnArray(Path),
+    #[error("there is not a group at `{0}`")]
+    NotAGroup(Path),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum UpdateNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
     #[error("there is not an array at `{0}`")]
     NotAnArray(Path),
+    // TODO: Don't we need a NotAGroup here?
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum GetNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("the array at `{0}` has been deleted in this session")]
+    PreviouslyDeleted(Path),
 }
 
 #[derive(Debug, Error)]
@@ -637,4 +656,6 @@ pub struct ChangeSet {
     updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<Path, HashMap<ArrayIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashMap<Path, NodeId>,
+    deleted_arrays: HashMap<Path, NodeId>,
 }

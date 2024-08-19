@@ -11,10 +11,10 @@ use thiserror::Error;
 
 use crate::{
     manifest::mk_manifests_table, structure::mk_structure_table, AddNodeError,
-    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, Dataset, Flags, ManifestExtents,
-    ManifestRef, NodeData, NodeId, NodeStructure, ObjectId, Path, Storage, StorageError,
-    TableRegion, UpdateNodeError, UserAttributes, UserAttributesStructure,
-    ZarrArrayMetadata,
+    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, Dataset, DeleteNodeError, Flags,
+    GetNodeError, ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure,
+    ObjectId, Path, Storage, StorageError, TableRegion, UpdateNodeError, UserAttributes,
+    UserAttributesStructure, ZarrArrayMetadata,
 };
 
 impl ChangeSet {
@@ -26,16 +26,54 @@ impl ChangeSet {
         self.new_groups.get(path)
     }
 
+    fn delete_group(
+        &mut self,
+        path: Path,
+        node_id: NodeId,
+    ) -> Result<(), DeleteNodeError> {
+        // TODO: test delete a deleted group.
+        // TODO: test delete a non-existent group
+        let was_new = self.new_groups.remove(&path).is_some();
+        self.updated_attributes.remove(&path);
+        if !was_new {
+            self.deleted_groups.insert(path, node_id);
+        }
+        Ok(())
+    }
+
     fn add_array(&mut self, path: Path, node_id: NodeId, metadata: ZarrArrayMetadata) {
         self.new_arrays.insert(path, (node_id, metadata));
     }
 
-    fn get_array(&self, path: &Path) -> Option<&(NodeId, ZarrArrayMetadata)> {
-        self.new_arrays.get(path)
+    fn get_array(
+        &self,
+        path: &Path,
+    ) -> Result<&(NodeId, ZarrArrayMetadata), GetNodeError> {
+        if self.deleted_arrays.get(path).is_some() {
+            Err(GetNodeError::PreviouslyDeleted(path.clone()))
+        } else {
+            self.new_arrays.get(path).ok_or(GetNodeError::NotFound(path.clone()))
+        }
     }
 
     fn update_array(&mut self, path: Path, metadata: ZarrArrayMetadata) {
+        // TODO: consider only inserting for arrays not present in `self.new_arrays`?
         self.updated_arrays.insert(path, metadata);
+    }
+
+    fn delete_array(
+        &mut self,
+        path: Path,
+        node_id: NodeId,
+    ) -> Result<(), DeleteNodeError> {
+        // if deleting a new array created in this session, just remove the entry
+        // from new_arrays
+        let was_new = self.new_arrays.remove(&path).is_some();
+        self.updated_arrays.remove(&path);
+        if !was_new {
+            self.deleted_arrays.insert(path, node_id);
+        }
+        Ok(())
     }
 
     fn get_updated_zarr_metadata(&self, path: &Path) -> Option<&ZarrArrayMetadata> {
@@ -133,6 +171,19 @@ impl Dataset {
         }
     }
 
+    pub async fn delete_group(&mut self, path: Path) -> Result<(), DeleteNodeError> {
+        let node =
+            self.get_node(&path).await.ok_or(DeleteNodeError::NotFound(path.clone()))?;
+
+        match node.node_data {
+            NodeData::Group => {
+                self.change_set.delete_group(path, node.id)?;
+                Ok(())
+            }
+            NodeData::Array(_, _) => Err(DeleteNodeError::NotAGroup(path)),
+        }
+    }
+
     /// Add an array to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
@@ -165,6 +216,20 @@ impl Dataset {
                 Ok(())
             }
             Some(_) => Err(UpdateNodeError::NotAnArray(path)),
+        }
+    }
+
+    pub async fn delete_array(&mut self, path: Path) -> Result<(), DeleteNodeError> {
+        // TODO: add a cheaper `get_node_id_and_type`?
+        let node =
+            self.get_node(&path).await.ok_or(DeleteNodeError::NotFound(path.clone()))?;
+
+        match node.node_data {
+            NodeData::Array(_, _) => {
+                self.change_set.delete_array(path, node.id)?;
+                Ok(())
+            }
+            NodeData::Group => Err(DeleteNodeError::NotAnArray(path)),
         }
     }
 
@@ -231,6 +296,11 @@ impl Dataset {
         self.get_new_node(path).or(self.get_existing_node(path).await)
     }
 
+    async fn get_node_id(&self, path: &Path) -> Result<NodeId, GetNodeError> {
+        // FIXME: more efficient lookup
+        Ok(self.get_node(path).await.ok_or(GetNodeError::NotFound(path.clone()))?.id)
+    }
+
     async fn get_existing_node(&self, path: &Path) -> Option<NodeStructure> {
         let structure_id = self.structure_id.as_ref()?;
         let structure = self.storage.fetch_structure(structure_id).await.ok()?;
@@ -265,7 +335,7 @@ impl Dataset {
     }
 
     fn get_new_array(&self, path: &Path) -> Option<NodeStructure> {
-        self.change_set.get_array(path).map(|(id, meta)| {
+        self.change_set.get_array(path).ok().map(|(id, meta)| {
             let meta =
                 self.change_set.get_updated_zarr_metadata(path).unwrap_or(meta).clone();
             let atts = self.change_set.get_user_attributes(path).cloned();
@@ -709,6 +779,11 @@ mod tests {
         let node = ds.get_node(&array1_path).await;
         assert_eq!(nodes.get(1), node.as_ref());
 
+        let group_name = "/tbd-group".to_string();
+        ds.add_group(group_name.clone().into()).await?;
+        ds.delete_group(group_name.clone().into()).await?;
+        assert!(ds.delete_group(group_name.clone().into()).await.is_err());
+
         // add a new array and retrieve its node
         ds.add_group("/group".to_string().into()).await?;
 
@@ -726,12 +801,19 @@ mod tests {
         let new_array_path: PathBuf = "/group/array2".to_string().into();
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
+        ds.delete_array(new_array_path.clone()).await?;
+        // Delete a non-existent array
+        assert!(ds.delete_array(new_array_path.clone()).await.is_err());
+        assert!(ds.delete_array(new_array_path.clone()).await.is_err());
+
+        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
+
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
             node,
             Some(NodeStructure {
                 path: new_array_path.clone(),
-                id: 4,
+                id: 6,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             })
@@ -744,7 +826,7 @@ mod tests {
             node,
             Some(NodeStructure {
                 path: "/group/array2".into(),
-                id: 4,
+                id: 6,
                 user_attributes: Some(UserAttributesStructure::Inline("{n:42}".into(),)),
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             })
