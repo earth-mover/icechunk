@@ -90,7 +90,12 @@ impl ChangeSet {
         self.updated_attributes.get(path)
     }
 
-    fn set_chunk(&mut self, path: Path, coord: ArrayIndices, data: Option<ChunkPayload>) {
+    fn set_chunk_ref(
+        &mut self,
+        path: Path,
+        coord: ArrayIndices,
+        data: Option<ChunkPayload>,
+    ) {
         self.set_chunks
             .entry(path)
             .and_modify(|h| {
@@ -258,21 +263,18 @@ impl Dataset {
     // Record the write, referenceing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
-    pub async fn set_chunk(
+    pub async fn set_chunk_ref(
         &mut self,
         path: Path,
         coord: ArrayIndices,
         data: Option<ChunkPayload>,
     ) -> Result<(), UpdateNodeError> {
-        match self
-            .get_node(&path)
-            .await
-            .map_err(|_| UpdateNodeError::NotFound(path.clone()))?
-        {
-            NodeStructure { node_data: NodeData::Array(..), .. } => {
-                self.change_set.set_chunk(path, coord, data);
+        match self.get_node(&path).await {
+            Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => {
+                self.change_set.set_chunk_ref(path, coord, data);
                 Ok(())
             }
+            Err(GetNodeError::NotFound(path)) => Err(UpdateNodeError::NotFound(path)),
             _ => Err(UpdateNodeError::NotAnArray(path)),
         }
     }
@@ -317,6 +319,26 @@ impl Dataset {
         }
     }
 
+    pub async fn get_array(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+        match self.get_node(path).await {
+            res @ Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => res,
+            Ok(NodeStructure { node_data: NodeData::Group, .. }) => {
+                Err(GetNodeError::NotFound(path.clone()))
+            }
+            other => other,
+        }
+    }
+
+    pub async fn get_group(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+        match self.get_node(path).await {
+            res @ Ok(NodeStructure { node_data: NodeData::Group, .. }) => res,
+            Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => {
+                Err(GetNodeError::NotFound(path.clone()))
+            }
+            other => other,
+        }
+    }
+
     async fn get_existing_node(
         &self,
         path: &Path,
@@ -325,6 +347,7 @@ impl Dataset {
         let structure_id =
             self.structure_id.as_ref().ok_or(GetNodeError::NotFound(path.clone()))?;
         let structure = self.storage.fetch_structure(structure_id).await?;
+
         let session_atts = self
             .change_set
             .get_user_attributes(path)
@@ -426,6 +449,32 @@ impl Dataset {
             ChunkPayload::Inline(bytes) => Some(bytes),
             //FIXME: implement virtual fetch
             ChunkPayload::Virtual(_) => todo!(),
+        }
+    }
+
+    pub async fn set_chunk(
+        &mut self,
+        path: &Path,
+        coord: &ArrayIndices,
+        data: Bytes,
+    ) -> Result<(), UpdateNodeError> {
+        // TODO: support inline chunks
+        match self.get_array(path).await {
+            Ok(_) => {
+                let new_id = ObjectId::random();
+                self.storage
+                    .write_chunk(new_id.clone(), data.clone())
+                    .await
+                    .map_err(UpdateNodeError::StorageError)?;
+                let payload = ChunkPayload::Ref(ChunkRef {
+                    id: new_id,
+                    offset: 0,
+                    length: data.len() as u64,
+                });
+                self.change_set.set_chunk_ref(path.clone(), coord.clone(), Some(payload));
+                Ok(())
+            }
+            Err(_) => Err(UpdateNodeError::NotFound(path.clone())),
         }
     }
 
@@ -885,7 +934,7 @@ mod tests {
         );
 
         // set a chunk for the new array and  retrieve it
-        ds.set_chunk(
+        ds.set_chunk_ref(
             new_array_path.clone(),
             ArrayIndices(vec![0]),
             Some(ChunkPayload::Inline("foo".into())),
@@ -928,7 +977,7 @@ mod tests {
         }
 
         // set old array chunk and check them
-        ds.set_chunk(
+        ds.set_chunk_ref(
             array1_path.clone(),
             ArrayIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("bac".into())),
@@ -977,25 +1026,25 @@ mod tests {
         change_set.add_array("foo/baz".into(), 2, zarr_meta);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk("foo/bar".into(), ArrayIndices(vec![0, 1]), None);
+        change_set.set_chunk_ref("foo/bar".into(), ArrayIndices(vec![0, 1]), None);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk(
+        change_set.set_chunk_ref(
             "foo/bar".into(),
             ArrayIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
         );
-        change_set.set_chunk(
+        change_set.set_chunk_ref(
             "foo/bar".into(),
             ArrayIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
         );
-        change_set.set_chunk(
+        change_set.set_chunk_ref(
             "foo/baz".into(),
             ArrayIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
         );
-        change_set.set_chunk(
+        change_set.set_chunk_ref(
             "foo/baz".into(),
             ArrayIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
@@ -1093,7 +1142,7 @@ mod tests {
         let _structure_id = ds.flush().await?;
 
         // we set a chunk in a new array
-        ds.set_chunk(
+        ds.set_chunk_ref(
             new_array_path.clone(),
             ArrayIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("hello".into())),
@@ -1134,7 +1183,7 @@ mod tests {
         );
 
         // we modify a chunk in an existing array
-        ds.set_chunk(
+        ds.set_chunk_ref(
             new_array_path.clone(),
             ArrayIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("bye".into())),
@@ -1142,7 +1191,7 @@ mod tests {
         .await?;
 
         // we add a new chunk in an existing array
-        ds.set_chunk(
+        ds.set_chunk_ref(
             new_array_path.clone(),
             ArrayIndices(vec![0, 0, 1]),
             Some(ChunkPayload::Inline("new chunk".into())),
@@ -1160,7 +1209,8 @@ mod tests {
         );
 
         // we delete a chunk
-        ds.set_chunk(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None).await?;
+        ds.set_chunk_ref(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None)
+            .await?;
 
         let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
         // we change zarr metadata

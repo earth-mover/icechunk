@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::create_dir_all,
     ops::Range,
     sync::{Arc, RwLock},
@@ -218,6 +218,11 @@ impl InMemoryStorage {
             man_files: Arc::new(RwLock::new(HashMap::new())),
             chunk_files: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Intended for tests
+    pub fn chunk_ids(&self) -> HashSet<ObjectId> {
+        self.chunk_files.read().unwrap().keys().cloned().collect()
     }
 }
 

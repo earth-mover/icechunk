@@ -678,7 +678,7 @@ pub enum AddNodeError {
     AlreadyExists(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum DeleteNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
@@ -688,20 +688,21 @@ pub enum DeleteNodeError {
     NotAGroup(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum UpdateNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
     #[error("there is not an array at `{0}`")]
     NotAnArray(Path),
-    // TODO: Don't we need a NotAGroup here?
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
 }
 
 #[derive(Debug, Error)]
 pub enum GetNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
-    #[error("storage error when searching for node")]
+    #[error("error contacting storage")]
     StorageError(#[from] StorageError),
 }
 

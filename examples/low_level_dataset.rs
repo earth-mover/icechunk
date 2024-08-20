@@ -154,7 +154,7 @@ ds.flush().await?;
     println!();
     println!();
     println!("## Adding an inline chunk");
-    ds.set_chunk(
+    ds.set_chunk_ref(
         array1_path.clone(),
         ArrayIndices(vec![0]),
         Some(ChunkPayload::Inline("hello".into())),
@@ -210,7 +210,7 @@ let mut ds = Dataset::update(Arc::clone(&storage), ObjectId.from("{v2_id:?}"));
     print_nodes(&ds).await;
 
     println!("## Adding a new inline chunk");
-    ds.set_chunk(
+    ds.set_chunk_ref(
         array1_path.clone(),
         ArrayIndices(vec![1]),
         Some(icechunk::ChunkPayload::Inline("bye".into())),
