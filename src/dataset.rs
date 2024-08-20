@@ -849,7 +849,7 @@ mod tests {
         // Delete a non-existent array
         assert!(ds.delete_array(new_array_path.clone()).await.is_err());
         assert!(ds.delete_array(new_array_path.clone()).await.is_err());
-        assert!(ds.get_node(&new_array_path.clone().into()).await.is_err());
+        assert!(ds.get_node(&new_array_path.clone()).await.is_err());
 
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
