@@ -2,19 +2,18 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, BinaryArray, FixedSizeBinaryArray,
+        Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, FixedSizeBinaryArray,
         FixedSizeBinaryBuilder, ListArray, ListBuilder, RecordBatch, StringArray,
         StringBuilder, StructArray, UInt32Array, UInt32Builder, UInt8Array,
     },
     datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
 };
-use bytes::Bytes;
 use itertools::izip;
 
 use crate::{
-    ChunkKeyEncoding, ChunkShape, Codecs, DataType, DimensionName, FillValue, Flags,
+    ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName, FillValue, Flags,
     ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
-    Path, StorageTransformers, TableRegion, UserAttributes, UserAttributesRef,
+    Path, StorageTransformer, TableRegion, UserAttributes, UserAttributesRef,
     UserAttributesStructure, ZarrArrayMetadata,
 };
 
@@ -77,20 +76,35 @@ impl StructureTable {
 
         let chunk_key_encoding = key_encoding_u8.try_into().ok()?;
 
-        let codecs = Codecs(
-            self.batch
-                .column_by_name("codecs")?
-                .as_string_opt::<i32>()?
-                .value(idx)
-                .to_string(),
-        );
+        let codecs = self
+            .batch
+            .column_by_name("codecs")?
+            .as_list_opt::<i32>()?
+            .value(idx)
+            .as_binary_opt::<i32>()?
+            .iter()
+            // FIXME: handle parse error
+            .filter_map(|maybe_json| {
+                maybe_json.and_then(|json| serde_json::from_slice(json).ok())
+            })
+            .collect();
 
         let storage_transformers =
-            self.batch.column_by_name("storage_transformers")?.as_string_opt::<i32>()?;
+            self.batch.column_by_name("storage_transformers")?.as_list_opt::<i32>()?;
+
         let storage_transformers = if storage_transformers.is_null(idx) {
             None
         } else {
-            Some(StorageTransformers(storage_transformers.value(idx).to_string()))
+            Some(
+                storage_transformers
+                    .value(idx)
+                    .as_binary_opt::<i32>()?
+                    .iter()
+                    .filter_map(|maybe_json| {
+                        maybe_json.and_then(|json| serde_json::from_slice(json).ok())
+                    })
+                    .collect(),
+            )
         };
 
         let dimension_names =
@@ -199,9 +213,10 @@ impl StructureTable {
         let inline =
             self.batch.column_by_name("user_attributes")?.as_binary_opt::<i32>()?;
         if inline.is_valid(idx) {
-            Some(UserAttributesStructure::Inline(Bytes::copy_from_slice(
-                inline.value(idx),
-            )))
+            // FIXME: error handling
+            UserAttributes::try_new(inline.value(idx))
+                .ok()
+                .map(UserAttributesStructure::Inline)
         } else {
             self.build_user_attributes_ref(idx)
         }
@@ -307,16 +322,44 @@ where
     BinaryArray::from_iter(iter)
 }
 
-fn mk_codecs_array<T: IntoIterator<Item = Option<Codecs>>>(coll: T) -> StringArray {
-    let iter = coll.into_iter().map(|x| x.map(|x| x.0));
-    StringArray::from_iter(iter)
+fn mk_codecs_array<T, P>(coll: T) -> ListArray
+where
+    T: IntoIterator<Item = Option<P>>,
+    P: IntoIterator<Item = Codec>,
+{
+    let mut b = ListBuilder::new(BinaryBuilder::new());
+    for maybe_list in coll.into_iter() {
+        let it = maybe_list.map(|codecs| {
+            codecs.into_iter().map(|codec| Some(serde_json::to_vec(&codec).unwrap()))
+        });
+        b.append_option(it)
+    }
+    let res = b.finish();
+
+    // I don't know how to create non nullabe list arrays directly
+    let (_, offsets, values, nulls) = res.into_parts();
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::Binary, false));
+    ListArray::new(field, offsets, values, nulls)
 }
 
-fn mk_storage_transformers_array<T: IntoIterator<Item = Option<StorageTransformers>>>(
-    coll: T,
-) -> StringArray {
-    let iter = coll.into_iter().map(|x| x.map(|x| x.0));
-    StringArray::from_iter(iter)
+fn mk_storage_transformers_array<T, P>(coll: T) -> ListArray
+where
+    T: IntoIterator<Item = Option<P>>,
+    P: IntoIterator<Item = StorageTransformer>,
+{
+    let mut b = ListBuilder::new(BinaryBuilder::new());
+    for maybe_list in coll.into_iter() {
+        let it = maybe_list.map(|codecs| {
+            codecs.into_iter().map(|tr| Some(serde_json::to_vec(&tr).unwrap()))
+        });
+        b.append_option(it)
+    }
+    let res = b.finish();
+
+    // I don't know how to create non nullabe list arrays directly
+    let (_, offsets, values, nulls) = res.into_parts();
+    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::Binary, false));
+    ListArray::new(field, offsets, values, nulls)
 }
 
 fn mk_dimension_names_array<T, P>(coll: T) -> ListArray
@@ -334,7 +377,7 @@ where
 fn mk_user_attributes_array<T: IntoIterator<Item = Option<UserAttributes>>>(
     coll: T,
 ) -> BinaryArray {
-    BinaryArray::from_iter(coll)
+    BinaryArray::from_iter(coll.into_iter().map(|ua| ua.map(|ua| ua.to_bytes())))
 }
 
 fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
@@ -559,8 +602,16 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
         ),
         Field::new("chunk_key_encoding", arrow::datatypes::DataType::UInt8, true),
         Field::new("fill_value", arrow::datatypes::DataType::Binary, true),
-        Field::new("codecs", arrow::datatypes::DataType::Utf8, true),
-        Field::new("storage_transformers", arrow::datatypes::DataType::Utf8, true),
+        Field::new_list(
+            "codecs",
+            Field::new("item", arrow::datatypes::DataType::Binary, false),
+            true,
+        ),
+        Field::new_list(
+            "storage_transformers",
+            Field::new("item", arrow::datatypes::DataType::Binary, false),
+            true,
+        ),
         Field::new_list(
             "dimension_names",
             Field::new("item", arrow::datatypes::DataType::Utf8, true),
@@ -649,7 +700,10 @@ mod tests {
     use crate::IcechunkFormatError;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
-    use std::iter::zip;
+    use std::{
+        collections::HashMap,
+        iter::{self, zip},
+    };
 
     #[test]
     fn test_get_node() {
@@ -663,8 +717,21 @@ mod tests {
             ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float32(0f32),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+
+            codecs: vec![Codec {
+                name: "mycodec".to_string(),
+                configuration: Some(HashMap::from_iter(iter::once((
+                    "foo".to_string(),
+                    serde_json::Value::from(42),
+                )))),
+            }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: Some(HashMap::from_iter(iter::once((
+                    "foo".to_string(),
+                    serde_json::Value::from(42),
+                )))),
+            }]),
             dimension_names: Some(vec![
                 Some("x".to_string()),
                 Some("y".to_string()),
@@ -717,7 +784,7 @@ mod tests {
                 path: "/b/c".into(),
                 id: 4,
                 user_attributes: Some(UserAttributesStructure::Inline(
-                    "some inline".into(),
+                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
                 node_data: NodeData::Group,
             },
@@ -757,7 +824,7 @@ mod tests {
                 path: "/b/c".into(),
                 id: 4,
                 user_attributes: Some(UserAttributesStructure::Inline(
-                    "some inline".into()
+                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
                 node_data: NodeData::Group,
             }),

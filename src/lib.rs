@@ -32,10 +32,12 @@ use bytes::Bytes;
 use itertools::Itertools;
 use manifest::ManifestsTable;
 use parquet::errors as parquet_errors;
+use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, TryFromInto};
 use std::{
     collections::HashMap,
     fmt::{self, Display},
-    io,
+    io, iter,
     num::NonZeroU64,
     ops::Range,
     path::PathBuf,
@@ -60,8 +62,9 @@ pub type ArrayShape = Vec<u64>;
 
 pub type Path = PathBuf;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[serde(rename_all = "lowercase")]
 pub enum DataType {
     Bool,
     Int8,
@@ -77,6 +80,7 @@ pub enum DataType {
     Float64,
     Complex64,
     Complex128,
+    // FIXME: serde serialization
     RawBits(usize),
 }
 
@@ -140,7 +144,60 @@ impl Display for DataType {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+impl From<ChunkShape> for NameConfigSerializer {
+    fn from(value: ChunkShape) -> Self {
+        let arr = serde_json::Value::Array(
+            value
+                .0
+                .iter()
+                .map(|v| {
+                    serde_json::Value::Number(serde_json::value::Number::from(v.get()))
+                })
+                .collect(),
+        );
+        let kvs = serde_json::value::Map::from_iter(iter::once((
+            "chunk_shape".to_string(),
+            arr,
+        )));
+        Self {
+            name: "regular".to_string(),
+            configuration: serde_json::Value::Object(kvs),
+        }
+    }
+}
+
+impl TryFrom<NameConfigSerializer> for ChunkShape {
+    type Error = &'static str;
+
+    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
+        match value {
+            NameConfigSerializer {
+                name,
+                configuration: serde_json::Value::Object(kvs),
+            } if name == "regular" => {
+                let values = kvs
+                    .get("chunk_shape")
+                    .and_then(|v| v.as_array())
+                    .ok_or("cannot parse ChunkShape")?;
+                let shape = values
+                    .iter()
+                    .map(|v| v.as_u64().and_then(|u64| NonZeroU64::try_from(u64).ok()))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or("cannot parse ChunkShape")?;
+                Ok(ChunkShape(shape))
+            }
+            _ => Err("cannot parse ChunkShape"),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct NameConfigSerializer {
+    name: String,
+    configuration: serde_json::Value,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ChunkKeyEncoding {
     Slash,
     Dot,
@@ -170,8 +227,46 @@ impl From<ChunkKeyEncoding> for u8 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl From<ChunkKeyEncoding> for NameConfigSerializer {
+    fn from(_value: ChunkKeyEncoding) -> Self {
+        let kvs = serde_json::value::Map::from_iter(iter::once((
+            "separator".to_string(),
+            serde_json::Value::String("/".to_string()),
+        )));
+        Self {
+            name: "default".to_string(),
+            configuration: serde_json::Value::Object(kvs),
+        }
+    }
+}
+
+impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
+    type Error = &'static str;
+
+    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
+        //FIXME: we are hardcoding / as the separator
+        match value {
+            NameConfigSerializer {
+                name,
+                configuration: serde_json::Value::Object(kvs),
+            } if name == "default" => {
+                if let Some("/") =
+                    kvs.get("separator").ok_or("cannot parse ChunkKeyEncoding")?.as_str()
+                {
+                    Ok(ChunkKeyEncoding::Slash)
+                } else {
+                    Err("cannot parse ChunkKeyEncoding")
+                }
+            }
+            _ => Err("cannot parse ChunkKeyEncoding"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum FillValue {
+    // FIXME: test all json (de)serializations
     Bool(bool),
     Int8(i8),
     Int16(i16),
@@ -396,15 +491,38 @@ impl FillValue {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Codecs(pub String); // FIXME: define
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Codec {
+    pub name: String,
+    pub configuration: Option<HashMap<String, serde_json::Value>>,
+}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StorageTransformers(pub String); // FIXME: define
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageTransformer {
+    pub name: String,
+    pub configuration: Option<HashMap<String, serde_json::Value>>,
+}
 
 pub type DimensionName = String;
 
-pub type UserAttributes = Bytes; // FIXME: better definition
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserAttributes {
+    #[serde(flatten)]
+    pub parsed: serde_json::Value,
+}
+
+impl UserAttributes {
+    pub fn try_new(json: &[u8]) -> Result<UserAttributes, serde_json::Error> {
+        serde_json::from_slice(json).map(|json| UserAttributes { parsed: json })
+    }
+
+    pub fn to_bytes(&self) -> Bytes {
+        // We can unwrap because a Value is always valid json
+        serde_json::to_vec(&self.parsed)
+            .expect("Bug in UserAttributes serialization")
+            .into()
+    }
+}
 
 /// The internal id of an array or group, unique only to a single store version
 pub type NodeId = u32;
@@ -474,15 +592,21 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZarrArrayMetadata {
     pub shape: ArrayShape,
     pub data_type: DataType,
+
+    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
+    #[serde(rename = "chunk_grid")]
     pub chunk_shape: ChunkShape,
+
+    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
     pub chunk_key_encoding: ChunkKeyEncoding,
     pub fill_value: FillValue,
-    pub codecs: Codecs,
-    pub storage_transformers: Option<StorageTransformers>,
+    pub codecs: Vec<Codec>,
+    pub storage_transformers: Option<Vec<StorageTransformer>>,
     // each dimension name can be null in Zarr
     pub dimension_names: Option<Vec<Option<DimensionName>>>,
 }
@@ -622,8 +746,9 @@ pub trait Storage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError>;
 }
 
+#[derive(Clone)]
 pub struct Dataset {
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn Storage + Send + Sync>,
     structure_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
