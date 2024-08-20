@@ -1,9 +1,9 @@
-use std::{num::NonZeroU64, sync::Arc};
+use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{
     storage::InMemoryStorage, ArrayIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
-    Codecs, DataType, Dataset, FillValue, Path, Storage, StorageTransformers,
-    ZarrArrayMetadata,
+    Codec, DataType, Dataset, FillValue, Path, Storage, StorageTransformer,
+    UserAttributes, ZarrArrayMetadata,
 };
 use itertools::Itertools;
 
@@ -21,7 +21,7 @@ let mut ds = Dataset::create(Arc::clone(&storage));
 "#,
     );
 
-    let storage: Arc<dyn Storage> = Arc::new(InMemoryStorage::new());
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
     let mut ds = Dataset::create(Arc::clone(&storage));
 
     println!();
@@ -97,8 +97,20 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
         ]),
         chunk_key_encoding: ChunkKeyEncoding::Slash,
         fill_value: FillValue::Int32(0),
-        codecs: Codecs("codec".to_string()),
-        storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+        codecs: vec![Codec {
+            name: "mycodec".to_string(),
+            configuration: Some(HashMap::from_iter(iter::once((
+                "foo".to_string(),
+                serde_json::Value::from(42),
+            )))),
+        }],
+        storage_transformers: Some(vec![StorageTransformer {
+            name: "mytransformer".to_string(),
+            configuration: Some(HashMap::from_iter(iter::once((
+                "foo".to_string(),
+                serde_json::Value::from(42),
+            )))),
+        }]),
         dimension_names: Some(vec![
             Some("x".to_string()),
             Some("y".to_string()),
@@ -120,7 +132,11 @@ ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?
 ```
  "#,
     );
-    ds.set_user_attributes(array1_path.clone(), Some("{n:42}".into())).await?;
+    ds.set_user_attributes(
+        array1_path.clone(),
+        Some(UserAttributes::try_new(b"{n:42}").unwrap()),
+    )
+    .await?;
     print_nodes(&ds).await;
 
     println!("## Committing");

@@ -11,10 +11,10 @@ use thiserror::Error;
 
 use crate::{
     manifest::mk_manifests_table, structure::mk_structure_table, AddNodeError,
-    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, Dataset, Flags, ManifestExtents,
-    ManifestRef, NodeData, NodeId, NodeStructure, ObjectId, Path, Storage, StorageError,
-    TableRegion, UpdateNodeError, UserAttributes, UserAttributesStructure,
-    ZarrArrayMetadata,
+    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, ChunkRef, Dataset, Flags,
+    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, ObjectId, Path,
+    Storage, StorageError, TableRegion, UpdateNodeError, UserAttributes,
+    UserAttributesStructure, ZarrArrayMetadata,
 };
 
 impl ChangeSet {
@@ -96,20 +96,20 @@ impl ChangeSet {
 /// FIXME: what do we want to do with implicit groups?
 ///
 impl Dataset {
-    pub fn create(storage: Arc<dyn Storage>) -> Self {
+    pub fn create(storage: Arc<dyn Storage + Send + Sync>) -> Self {
         Dataset::new(storage, None)
     }
 
     // FIXME: the ObjectIds should include a type of object to avoid mistakes at compile time
     pub fn update(
-        storage: Arc<dyn Storage>,
+        storage: Arc<dyn Storage + Send + Sync>,
         previous_version_structure_id: ObjectId,
     ) -> Self {
         Dataset::new(storage, Some(previous_version_structure_id))
     }
 
     fn new(
-        storage: Arc<dyn Storage>,
+        storage: Arc<dyn Storage + Send + Sync>,
         previous_version_structure_id: Option<ObjectId>,
     ) -> Self {
         Dataset {
@@ -317,9 +317,14 @@ impl Dataset {
 
     pub async fn get_chunk(&self, path: &Path, coords: &ArrayIndices) -> Option<Bytes> {
         match self.get_chunk_ref(path, coords).await? {
+            ChunkPayload::Ref(ChunkRef { id, .. }) => {
+                // FIXME: handle error
+                // TODO: we don't have a way to distinguish if we want to pass a range or not
+                self.storage.fetch_chunk(&id, &None).await.ok()
+            }
             ChunkPayload::Inline(bytes) => Some(bytes),
+            //FIXME: implement virtual fetch
             ChunkPayload::Virtual(_) => todo!(),
-            ChunkPayload::Ref(_) => todo!(),
         }
     }
 
@@ -621,7 +626,7 @@ mod tests {
     use crate::{
         manifest::mk_manifests_table, storage::InMemoryStorage,
         structure::mk_structure_table, ChunkInfo, ChunkKeyEncoding, ChunkRef, ChunkShape,
-        Codecs, DataType, FillValue, Flags, ManifestExtents, StorageTransformers,
+        Codec, DataType, FillValue, Flags, ManifestExtents, StorageTransformer,
         TableRegion,
     };
 
@@ -670,8 +675,11 @@ mod tests {
             ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
             dimension_names: Some(vec![
                 Some("x".to_string()),
                 Some("y".to_string()),
@@ -695,7 +703,9 @@ mod tests {
             NodeStructure {
                 path: array1_path.clone(),
                 id: array_id,
-                user_attributes: Some(UserAttributesStructure::Inline("{foo:1}".into())),
+                user_attributes: Some(UserAttributesStructure::Inline(
+                    UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
+                )),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
             },
         ];
@@ -718,8 +728,11 @@ mod tests {
             chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
@@ -738,14 +751,20 @@ mod tests {
         );
 
         // set user attributes for the new array and retrieve them
-        ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".into())).await?;
+        ds.set_user_attributes(
+            new_array_path.clone(),
+            Some(UserAttributes::try_new(br#"{"n":42}"#).unwrap()),
+        )
+        .await?;
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
             node,
             Some(NodeStructure {
                 path: "/group/array2".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline("{n:42}".into(),)),
+                user_attributes: Some(UserAttributesStructure::Inline(
+                    UserAttributes::try_new(br#"{"n":42}"#).unwrap()
+                )),
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             })
         );
@@ -766,12 +785,17 @@ mod tests {
         assert_eq!(non_chunk, None);
 
         // update old array use attriutes and check them
-        ds.set_user_attributes(array1_path.clone(), Some("{updated: true}".into()))
-            .await?;
+        ds.set_user_attributes(
+            array1_path.clone(),
+            Some(UserAttributes::try_new(br#"{"updated": true}"#).unwrap()),
+        )
+        .await?;
         let node = ds.get_node(&array1_path).await.unwrap();
         assert_eq!(
             node.user_attributes,
-            Some(UserAttributesStructure::Inline("{updated: true}".into()))
+            Some(UserAttributesStructure::Inline(
+                UserAttributes::try_new(br#"{"updated": true}"#).unwrap()
+            ))
         );
 
         // update old array zarr metadata and check it
@@ -817,8 +841,11 @@ mod tests {
             ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
             dimension_names: Some(vec![
                 Some("x".to_string()),
                 Some("y".to_string()),
@@ -888,7 +915,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage> = Arc::new(InMemoryStorage::new());
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
         let mut ds = Dataset::create(Arc::clone(&storage));
 
         // add a new array and retrieve its node
@@ -931,8 +958,11 @@ mod tests {
             chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
-            codecs: Codecs("codec".to_string()),
-            storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
@@ -1017,7 +1047,11 @@ mod tests {
         ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
 
         // we change user attributes metadata
-        ds.set_user_attributes(new_array_path.clone(), Some("{foo:42}".into())).await?;
+        ds.set_user_attributes(
+            new_array_path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":42}"#).unwrap()),
+        )
+        .await?;
 
         let structure_id = ds.flush().await?;
         let ds = Dataset::update(Arc::clone(&storage), structure_id);
@@ -1037,7 +1071,9 @@ mod tests {
                 path,
                 user_attributes: Some(atts),
                 node_data: NodeData::Array(meta, manifests)
-            }) if path == new_array_path && meta == new_meta.clone() && manifests.len() == 1 && atts == UserAttributesStructure::Inline("{foo:42}".into())
+            }) if path == new_array_path && meta == new_meta.clone() &&
+                    manifests.len() == 1 &&
+                    atts == UserAttributesStructure::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
         ));
 
         //test the previous version is still alive

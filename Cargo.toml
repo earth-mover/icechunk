@@ -17,6 +17,9 @@ object_store = { version = "0.10.2", features = ["aws"] }
 parquet = { version = "52.2.0", features = ["object_store"] }
 rand = "0.8.5"
 thiserror = "1.0.63"
+serde_json = "1.0.125"
+serde = { version = "1.0.208", features = ["derive"] }
+serde_with = "3.9.0"
 
 [profile.release-with-debug]
 inherits = "release"
