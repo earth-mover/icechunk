@@ -778,6 +778,8 @@ pub struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
     updated_arrays: HashMap<Path, ZarrArrayMetadata>,
+    // These paths may point to Arrays or Groups,
+    // since both Groups and Arrays support UserAttributes
     updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<Path, HashMap<ArrayIndices, Option<ChunkPayload>>>,

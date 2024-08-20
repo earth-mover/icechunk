@@ -70,6 +70,7 @@ impl ChangeSet {
         // from new_arrays
         let was_new = self.new_arrays.remove(&path).is_some();
         self.updated_arrays.remove(&path);
+        self.updated_attributes.remove(&path);
         self.set_chunks.remove(&path);
         if !was_new {
             self.deleted_arrays.insert(path, node_id);
@@ -936,6 +937,11 @@ mod tests {
 
         let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
         assert_eq!(chunk, Some(ChunkPayload::Inline("bac".into())));
+
+        let path: Path = "/group/array2".into();
+        assert!(ds.change_set.updated_attributes.contains_key(&path));
+        assert!(ds.delete_array(path.clone()).await.is_ok());
+        assert!(!ds.change_set.updated_attributes.contains_key(&path));
 
         Ok(())
     }
