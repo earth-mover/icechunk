@@ -50,7 +50,7 @@ impl ChangeSet {
         path: &Path,
     ) -> Result<&(NodeId, ZarrArrayMetadata), GetNodeError> {
         if self.deleted_arrays.get(path).is_some() {
-            Err(GetNodeError::PreviouslyDeleted(path.clone()))
+            Err(GetNodeError::NotFound(path.clone()))
         } else {
             self.new_arrays.get(path).ok_or(GetNodeError::NotFound(path.clone()))
         }
@@ -70,6 +70,7 @@ impl ChangeSet {
         // from new_arrays
         let was_new = self.new_arrays.remove(&path).is_some();
         self.updated_arrays.remove(&path);
+        self.set_chunks.remove(&path);
         if !was_new {
             self.deleted_arrays.insert(path, node_id);
         }

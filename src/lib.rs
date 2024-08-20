@@ -577,8 +577,6 @@ pub enum UpdateNodeError {
 pub enum GetNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
-    #[error("the array at `{0}` has been deleted in this session")]
-    PreviouslyDeleted(Path),
 }
 
 #[derive(Debug, Error)]
