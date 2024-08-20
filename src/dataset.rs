@@ -297,11 +297,6 @@ impl Dataset {
         self.get_new_node(path).or(self.get_existing_node(path).await)
     }
 
-    async fn get_node_id(&self, path: &Path) -> Result<NodeId, GetNodeError> {
-        // FIXME: more efficient lookup
-        Ok(self.get_node(path).await.ok_or(GetNodeError::NotFound(path.clone()))?.id)
-    }
-
     async fn get_existing_node(&self, path: &Path) -> Option<NodeStructure> {
         let structure_id = self.structure_id.as_ref()?;
         let structure = self.storage.fetch_structure(structure_id).await.ok()?;
