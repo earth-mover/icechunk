@@ -733,15 +733,6 @@ mod tests {
     use super::*;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
-    // use proptest::prelude::*;
-
-    // proptest! {
-    //     #[tokio::test(flavor = "multi_thread")]
-    //     async fn test_dataset_get_set() {
-    //         let storage = InMemoryStorage::new();
-
-    //     }
-    // }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
