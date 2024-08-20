@@ -163,9 +163,9 @@ impl Dataset {
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
     pub async fn add_group(&mut self, path: Path) -> Result<(), AddNodeError> {
-        if self.get_node(&path).await.is_none() {
+        if self.get_node(&path).await.is_err() {
             let id = self.reserve_node_id().await;
-            self.change_set.add_group(path, id);
+            self.change_set.add_group(path.clone(), id);
             Ok(())
         } else {
             Err(AddNodeError::AlreadyExists(path))
@@ -173,8 +173,10 @@ impl Dataset {
     }
 
     pub async fn delete_group(&mut self, path: Path) -> Result<(), DeleteNodeError> {
-        let node =
-            self.get_node(&path).await.ok_or(DeleteNodeError::NotFound(path.clone()))?;
+        let node = self
+            .get_node(&path)
+            .await
+            .map_err(|_| DeleteNodeError::NotFound(path.clone()))?;
 
         match node.node_data {
             NodeData::Group => {
@@ -193,7 +195,7 @@ impl Dataset {
         path: Path,
         metadata: ZarrArrayMetadata,
     ) -> Result<(), AddNodeError> {
-        if self.get_node(&path).await.is_none() {
+        if self.get_node(&path).await.is_err() {
             let id = self.reserve_node_id().await;
             self.change_set.add_array(path, id, metadata);
             Ok(())
@@ -210,20 +212,25 @@ impl Dataset {
         path: Path,
         metadata: ZarrArrayMetadata,
     ) -> Result<(), UpdateNodeError> {
-        match self.get_node(&path).await {
-            None => Err(UpdateNodeError::NotFound(path)),
-            Some(NodeStructure { node_data: NodeData::Array(..), .. }) => {
+        match self
+            .get_node(&path)
+            .await
+            .map_err(|_| UpdateNodeError::NotFound(path.clone()))?
+        {
+            NodeStructure { node_data: NodeData::Array(..), .. } => {
                 self.change_set.update_array(path, metadata);
                 Ok(())
             }
-            Some(_) => Err(UpdateNodeError::NotAnArray(path)),
+            _ => Err(UpdateNodeError::NotAnArray(path)),
         }
     }
 
     pub async fn delete_array(&mut self, path: Path) -> Result<(), DeleteNodeError> {
         // TODO: add a cheaper `get_node_id_and_type`?
-        let node =
-            self.get_node(&path).await.ok_or(DeleteNodeError::NotFound(path.clone()))?;
+        let node = self
+            .get_node(&path)
+            .await
+            .map_err(|_| DeleteNodeError::NotFound(path.clone()))?;
 
         match node.node_data {
             NodeData::Array(_, _) => {
@@ -240,13 +247,11 @@ impl Dataset {
         path: Path,
         atts: Option<UserAttributes>,
     ) -> Result<(), UpdateNodeError> {
-        match self.get_node(&path).await {
-            None => Err(UpdateNodeError::NotFound(path)),
-            Some(_) => {
-                self.change_set.update_user_attributes(path, atts);
-                Ok(())
-            }
-        }
+        self.get_node(&path)
+            .await
+            .map_err(|_| UpdateNodeError::NotFound(path.clone()))?;
+        self.change_set.update_user_attributes(path, atts);
+        Ok(())
     }
 
     // Record the write, referenceing or delete of a chunk
@@ -258,13 +263,16 @@ impl Dataset {
         coord: ArrayIndices,
         data: Option<ChunkPayload>,
     ) -> Result<(), UpdateNodeError> {
-        match self.get_node(&path).await {
-            None => Err(UpdateNodeError::NotFound(path)),
-            Some(NodeStructure { node_data: NodeData::Array(..), .. }) => {
+        match self
+            .get_node(&path)
+            .await
+            .map_err(|_| UpdateNodeError::NotFound(path.clone()))?
+        {
+            NodeStructure { node_data: NodeData::Array(..), .. } => {
                 self.change_set.set_chunk(path, coord, data);
                 Ok(())
             }
-            Some(_) => Err(UpdateNodeError::NotAnArray(path)),
+            _ => Err(UpdateNodeError::NotAnArray(path)),
         }
     }
 
@@ -290,22 +298,38 @@ impl Dataset {
         new
     }
 
-    // FIXME: add list, deletes, moves
+    // FIXME: add list, moves
 
-    // FIXME: we should have errros here, not only None
-    pub async fn get_node(&self, path: &Path) -> Option<NodeStructure> {
-        self.get_new_node(path).or(self.get_existing_node(path).await)
+    pub async fn get_node(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+        // We need to look for nodes in self.change_set and the structure file
+        let new_node = self.get_new_node(path);
+        if new_node.is_err() {
+            if self.change_set.deleted_groups.contains_key(path)
+                || self.change_set.deleted_arrays.contains_key(path)
+            {
+                Err(GetNodeError::NotFound(path.clone()))
+            } else {
+                self.get_existing_node(path).await
+            }
+        } else {
+            new_node
+        }
     }
 
-    async fn get_existing_node(&self, path: &Path) -> Option<NodeStructure> {
-        let structure_id = self.structure_id.as_ref()?;
-        let structure = self.storage.fetch_structure(structure_id).await.ok()?;
+    async fn get_existing_node(
+        &self,
+        path: &Path,
+    ) -> Result<NodeStructure, GetNodeError> {
+        // An existing node is one that is present in a structure file on storage
+        let structure_id =
+            self.structure_id.as_ref().ok_or(GetNodeError::NotFound(path.clone()))?;
+        let structure = self.storage.fetch_structure(structure_id).await?;
         let session_atts = self
             .change_set
             .get_user_attributes(path)
             .cloned()
             .map(|a| a.map(UserAttributesStructure::Inline));
-        let res = structure.get_node(path)?;
+        let res = structure.get_node(path).ok_or(GetNodeError::NotFound(path.clone()))?;
         let res = NodeStructure {
             user_attributes: session_atts.unwrap_or(res.user_attributes),
             ..res
@@ -314,48 +338,58 @@ impl Dataset {
             self.change_set.get_updated_zarr_metadata(path).cloned()
         {
             if let NodeData::Array(_, manifests) = res.node_data {
-                Some(NodeStructure {
+                Ok(NodeStructure {
                     node_data: NodeData::Array(session_meta, manifests),
                     ..res
                 })
             } else {
-                Some(res)
+                Ok(res)
             }
         } else {
-            Some(res)
+            Ok(res)
         }
     }
 
-    fn get_new_node(&self, path: &Path) -> Option<NodeStructure> {
-        self.get_new_array(path).or(self.get_new_group(path))
+    fn get_new_node(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+        self.get_new_array(path).or_else(|_| self.get_new_group(path))
     }
 
-    fn get_new_array(&self, path: &Path) -> Option<NodeStructure> {
-        self.change_set.get_array(path).ok().map(|(id, meta)| {
-            let meta =
-                self.change_set.get_updated_zarr_metadata(path).unwrap_or(meta).clone();
-            let atts = self.change_set.get_user_attributes(path).cloned();
-            NodeStructure {
-                id: *id,
-                path: path.clone(),
-                user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
-                // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
-                // fetched for those arrays
-                node_data: NodeData::Array(meta.clone(), vec![]),
-            }
-        })
+    fn get_new_array(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+        self.change_set
+            .get_array(path)
+            .ok()
+            .map(|(id, meta)| {
+                let meta = self
+                    .change_set
+                    .get_updated_zarr_metadata(path)
+                    .unwrap_or(meta)
+                    .clone();
+                let atts = self.change_set.get_user_attributes(path).cloned();
+                NodeStructure {
+                    id: *id,
+                    path: path.clone(),
+                    user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
+                    // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
+                    // fetched for those arrays
+                    node_data: NodeData::Array(meta.clone(), vec![]),
+                }
+            })
+            .ok_or(GetNodeError::NotFound(path.clone()))
     }
 
-    fn get_new_group(&self, path: &Path) -> Option<NodeStructure> {
-        self.change_set.get_group(path).map(|id| {
-            let atts = self.change_set.get_user_attributes(path).cloned();
-            NodeStructure {
-                id: *id,
-                path: path.clone(),
-                user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
-                node_data: NodeData::Group,
-            }
-        })
+    fn get_new_group(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+        self.change_set
+            .get_group(path)
+            .map(|id| {
+                let atts = self.change_set.get_user_attributes(path).cloned();
+                NodeStructure {
+                    id: *id,
+                    path: path.clone(),
+                    user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
+                    node_data: NodeData::Group,
+                }
+            })
+            .ok_or(GetNodeError::NotFound(path.clone()))
     }
 
     pub async fn get_chunk_ref(
@@ -364,7 +398,7 @@ impl Dataset {
         coords: &ArrayIndices,
     ) -> Option<ChunkPayload> {
         // FIXME: better error type
-        let node = self.get_node(path).await?;
+        let node = self.get_node(path).await.ok()?;
         match node.node_data {
             NodeData::Group => None,
             NodeData::Array(_, manifests) => {
@@ -694,6 +728,15 @@ mod tests {
     use super::*;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
+    // use proptest::prelude::*;
+
+    // proptest! {
+    //     #[tokio::test(flavor = "multi_thread")]
+    //     async fn test_dataset_get_set() {
+    //         let storage = InMemoryStorage::new();
+
+    //     }
+    // }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
@@ -773,12 +816,13 @@ mod tests {
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await;
-        assert_eq!(nodes.get(1), node.as_ref());
+        assert_eq!(nodes.get(1).unwrap(), node.as_ref().unwrap());
 
         let group_name = "/tbd-group".to_string();
         ds.add_group(group_name.clone().into()).await?;
         ds.delete_group(group_name.clone().into()).await?;
         assert!(ds.delete_group(group_name.clone().into()).await.is_err());
+        assert!(ds.get_node(&group_name.into()).await.is_err());
 
         // add a new array and retrieve its node
         ds.add_group("/group".to_string().into()).await?;
@@ -801,31 +845,32 @@ mod tests {
         // Delete a non-existent array
         assert!(ds.delete_array(new_array_path.clone()).await.is_err());
         assert!(ds.delete_array(new_array_path.clone()).await.is_err());
+        assert!(ds.get_node(&new_array_path.clone().into()).await.is_err());
 
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
-            node,
+            node.ok(),
             Some(NodeStructure {
                 path: new_array_path.clone(),
                 id: 6,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            })
+            }),
         );
 
         // set user attributes for the new array and retrieve them
         ds.set_user_attributes(new_array_path.clone(), Some("{n:42}".into())).await?;
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
-            node,
+            node.ok(),
             Some(NodeStructure {
                 path: "/group/array2".into(),
                 id: 6,
                 user_attributes: Some(UserAttributesStructure::Inline("{n:42}".into(),)),
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            })
+            }),
         );
 
         // set a chunk for the new array and  retrieve it
@@ -856,7 +901,7 @@ mod tests {
         let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
         ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
         let node = ds.get_node(&array1_path).await;
-        if let Some(NodeStructure {
+        if let Ok(NodeStructure {
             node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
             ..
         }) = node
@@ -975,7 +1020,7 @@ mod tests {
 
         assert_eq!(Some(structure_id), ds.structure_id);
         assert_eq!(
-            ds.get_node(&"/".into()).await,
+            ds.get_node(&"/".into()).await.ok(),
             Some(NodeStructure {
                 id: 1,
                 path: "/".into(),
@@ -986,7 +1031,7 @@ mod tests {
         ds.add_group("/group".into()).await?;
         let _structure_id = ds.flush().await?;
         assert_eq!(
-            ds.get_node(&"/".into()).await,
+            ds.get_node(&"/".into()).await.ok(),
             Some(NodeStructure {
                 id: 1,
                 path: "/".into(),
@@ -995,7 +1040,7 @@ mod tests {
             })
         );
         assert_eq!(
-            ds.get_node(&"/group".into()).await,
+            ds.get_node(&"/group".into()).await.ok(),
             Some(NodeStructure {
                 id: 2,
                 path: "/group".into(),
@@ -1030,7 +1075,7 @@ mod tests {
 
         let _structure_id = ds.flush().await?;
         assert_eq!(
-            ds.get_node(&"/".into()).await,
+            ds.get_node(&"/".into()).await.ok(),
             Some(NodeStructure {
                 id: 1,
                 path: "/".into(),
@@ -1039,7 +1084,7 @@ mod tests {
             })
         );
         assert_eq!(
-            ds.get_node(&"/group".into()).await,
+            ds.get_node(&"/group".into()).await.ok(),
             Some(NodeStructure {
                 id: 2,
                 path: "/group".into(),
@@ -1048,7 +1093,7 @@ mod tests {
             })
         );
         assert!(matches!(
-            ds.get_node(&new_array_path).await,
+            ds.get_node(&new_array_path).await.ok(),
             Some(NodeStructure {
                 id: 3,
                 path,
@@ -1109,7 +1154,7 @@ mod tests {
             None
         );
         assert!(matches!(
-            ds.get_node(&new_array_path).await,
+            ds.get_node(&new_array_path).await.ok(),
             Some(NodeStructure {
                 id: 3,
                 path,

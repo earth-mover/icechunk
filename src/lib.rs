@@ -573,10 +573,12 @@ pub enum UpdateNodeError {
     // TODO: Don't we need a NotAGroup here?
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum GetNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
+    #[error("storage error when searching for node")]
+    StorageError(#[from] StorageError),
 }
 
 #[derive(Debug, Error)]

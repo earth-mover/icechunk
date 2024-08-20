@@ -126,7 +126,7 @@ impl Store {
             .dataset
             .get_node(path)
             .await
-            .ok_or(StoreError::NodeNotFound { path: path.clone() })?;
+            .map_err(|_| StoreError::NodeNotFound { path: path.clone() })?;
         let atts = match node.user_attributes {
             None => None,
             Some(UserAttributesStructure::Inline(atts)) => Some(atts),
