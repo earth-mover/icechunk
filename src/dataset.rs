@@ -768,7 +768,7 @@ mod tests {
         prop_assert!(dataset.get_node(&path).await.is_err());
 
         // adding a new group must succeed
-        dataset.add_group(path.clone()).await.unwrap();
+        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
 
         // Getting a group just added must succeed
         let node = dataset.get_node(&path).await;
@@ -781,7 +781,7 @@ mod tests {
         prop_assert!(dataset.add_group(path.clone()).await.is_err());
 
         // deleting the added group must succeed
-        dataset.delete_group(path.clone()).await.unwrap();
+        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
 
         // deleting twice must fail
         prop_assert!(dataset.delete_group(path.clone()).await.is_err());
