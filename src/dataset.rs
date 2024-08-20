@@ -49,7 +49,7 @@ impl ChangeSet {
         &self,
         path: &Path,
     ) -> Result<&(NodeId, ZarrArrayMetadata), GetNodeError> {
-        if self.deleted_arrays.get(path).is_some() {
+        if self.deleted_arrays.contains_key(path) {
             Err(GetNodeError::NotFound(path.clone()))
         } else {
             self.new_arrays.get(path).ok_or(GetNodeError::NotFound(path.clone()))
