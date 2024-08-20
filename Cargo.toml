@@ -28,4 +28,5 @@ debug = true
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 proptest = "1.0.0"
+test-strategy = "0.4.0"
 tokio = { version = "1.39.2", features = ["rt-multi-thread", "macros"] }

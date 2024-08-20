@@ -721,6 +721,27 @@ pub enum FlushError {
 }
 
 #[cfg(test)]
+mod strategies {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use proptest::prelude::*;
+    use proptest::strategy::Strategy;
+
+    use crate::storage::InMemoryStorage;
+    use crate::{Dataset, Path};
+
+    pub(crate) fn node_path_strategy() -> impl Strategy<Value = Path> {
+        any::<PathBuf>()
+    }
+
+    pub(crate) fn dataset_strategy() -> impl Strategy<Value = Dataset> {
+        let storage = InMemoryStorage::new();
+        let dataset = Dataset::new(Arc::new(storage), None);
+        prop_oneof![Just(dataset)]
+    }
+}
+#[cfg(test)]
 mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
@@ -734,6 +755,40 @@ mod tests {
     use super::*;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
+    use proptest::prelude::{prop_assert, prop_assert_eq};
+    use strategies::*;
+    use test_strategy::proptest;
+
+    #[proptest(async = "tokio")]
+    async fn test_add_delete_group(
+        #[strategy(node_path_strategy())] path: Path,
+        #[strategy(dataset_strategy())] mut dataset: Dataset,
+    ) {
+        // getting any path from an empty dataset must fail
+        prop_assert!(dataset.get_node(&path).await.is_err());
+
+        // adding a new group must succeed
+        dataset.add_group(path.clone()).await.unwrap();
+
+        // Getting a group just added must succeed
+        let node = dataset.get_node(&path).await;
+        prop_assert!(node.is_ok());
+
+        // Getting the group twice must be equal
+        prop_assert_eq!(node.unwrap(), dataset.get_node(&path).await.unwrap());
+
+        // adding an existing group fails
+        prop_assert!(dataset.add_group(path.clone()).await.is_err());
+
+        // deleting the added group must succeed
+        dataset.delete_group(path.clone()).await.unwrap();
+
+        // deleting twice must fail
+        prop_assert!(dataset.delete_group(path.clone()).await.is_err());
+
+        // getting a deleted group must fail
+        prop_assert!(dataset.get_node(&path).await.is_err());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {

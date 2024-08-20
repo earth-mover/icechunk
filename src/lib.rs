@@ -765,7 +765,14 @@ pub trait Storage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError>;
 }
 
-#[derive(Clone)]
+impl fmt::Debug for dyn Storage + Send + Sync {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // FIXME
+        write!(f, "Storage")
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Dataset {
     storage: Arc<dyn Storage + Send + Sync>,
     structure_id: Option<ObjectId>,
