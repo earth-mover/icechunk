@@ -679,11 +679,30 @@ pub enum AddNodeError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeleteNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("there is not an array at `{0}`")]
+    NotAnArray(Path),
+    #[error("there is not a group at `{0}`")]
+    NotAGroup(Path),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum UpdateNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
     #[error("there is not an array at `{0}`")]
     NotAnArray(Path),
+    // TODO: Don't we need a NotAGroup here?
+}
+
+#[derive(Debug, Error)]
+pub enum GetNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("storage error when searching for node")]
+    StorageError(#[from] StorageError),
 }
 
 #[derive(Debug, Error)]
@@ -759,7 +778,11 @@ pub struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
     updated_arrays: HashMap<Path, ZarrArrayMetadata>,
+    // These paths may point to Arrays or Groups,
+    // since both Groups and Arrays support UserAttributes
     updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<Path, HashMap<ArrayIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashMap<Path, NodeId>,
+    deleted_arrays: HashMap<Path, NodeId>,
 }

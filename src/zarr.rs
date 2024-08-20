@@ -126,10 +126,9 @@ impl Store {
     }
 
     async fn get_metadata(&self, _key: &str, path: &Path) -> StoreResult<Bytes> {
-        // FIXME: handle error
-        let node = self.dataset.get_node(path).await.ok_or(StoreError::NotFound(
-            KeyNotFoundError::NodeNotFound { path: path.clone() },
-        ))?;
+        let node = self.dataset.get_node(path).await.map_err(|_| {
+            StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
+        })?;
         let user_attributes = match node.user_attributes {
             None => None,
             Some(UserAttributesStructure::Inline(atts)) => Some(atts),
