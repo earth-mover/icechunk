@@ -915,7 +915,7 @@ mod tests {
         // adding to the same path must fail
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_err());
 
-        // adding to the same path must fail
+        // first delete must succeed
         prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
 
         // deleting twice must fail
