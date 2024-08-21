@@ -739,7 +739,8 @@ mod strategies {
         any::<PathBuf>()
     }
 
-    pub(crate) fn datasets() -> impl Strategy<Value = Dataset> {
+    pub(crate) fn empty_datasets() -> impl Strategy<Value = Dataset> {
+        // FIXME: add storages strategy
         let storage = InMemoryStorage::new();
         let dataset = Dataset::new(Arc::new(storage), None);
         prop_oneof![Just(dataset)]
@@ -848,7 +849,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_group(
         #[strategy(node_paths())] path: Path,
-        #[strategy(datasets())] mut dataset: Dataset,
+        #[strategy(empty_datasets())] mut dataset: Dataset,
     ) {
         // getting any path from an empty dataset must fail
         prop_assert!(dataset.get_node(&path).await.is_err());
@@ -883,7 +884,7 @@ mod tests {
     async fn test_add_delete_array(
         #[strategy(node_paths())] path: Path,
         #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(datasets())] mut dataset: Dataset,
+        #[strategy(empty_datasets())] mut dataset: Dataset,
     ) {
         // new array must always succeed
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
