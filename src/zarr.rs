@@ -1,18 +1,21 @@
-use std::sync::Arc;
+use std::{iter, num::NonZeroU64, sync::Arc};
 
 use bytes::Bytes;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use tokio::{spawn, sync::RwLock};
 
 use crate::{
-    AddNodeError, ArrayIndices, ChunkOffset, Dataset, NodeData, Path, UpdateNodeError,
-    UserAttributes, UserAttributesStructure, ZarrArrayMetadata,
+    AddNodeError, ArrayIndices, ArrayShape, ChunkKeyEncoding, ChunkOffset, ChunkShape,
+    Codec, DataType, Dataset, DimensionName, FillValue, IcechunkFormatError, NodeData,
+    Path, StorageTransformer, UpdateNodeError, UserAttributes, UserAttributesStructure,
+    ZarrArrayMetadata,
 };
 
 pub struct Store {
-    pub dataset: Arc<RwLock<Dataset>>,
+    dataset: Arc<RwLock<Dataset>>,
 }
 
 type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
@@ -43,6 +46,10 @@ pub enum StoreError {
 impl Store {
     pub fn new(dataset: Dataset) -> Self {
         Store { dataset: Arc::new(RwLock::new(dataset)) }
+    }
+
+    pub fn dataset(self) -> Option<Dataset> {
+        Arc::into_inner(self.dataset).map(|d| d.into_inner())
     }
 
     pub async fn empty(&self) -> StoreResult<bool> {
@@ -277,13 +284,92 @@ impl Key {
     }
 }
 
+#[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
 struct ArrayMetadata {
     zarr_format: u8,
     node_type: String,
     attributes: Option<UserAttributes>,
     #[serde(flatten)]
+    #[serde_as(as = "TryFromInto<ZarrArrayMetadataSerialzer>")]
     zarr_metadata: ZarrArrayMetadata,
+}
+
+#[serde_as]
+#[derive(Serialize, Deserialize)]
+pub struct ZarrArrayMetadataSerialzer {
+    pub shape: ArrayShape,
+    pub data_type: DataType,
+
+    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
+    #[serde(rename = "chunk_grid")]
+    pub chunk_shape: ChunkShape,
+
+    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
+    pub chunk_key_encoding: ChunkKeyEncoding,
+    pub fill_value: serde_json::Value,
+    pub codecs: Vec<Codec>,
+    pub storage_transformers: Option<Vec<StorageTransformer>>,
+    // each dimension name can be null in Zarr
+    pub dimension_names: Option<Vec<Option<DimensionName>>>,
+}
+
+impl TryFrom<ZarrArrayMetadataSerialzer> for ZarrArrayMetadata {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: ZarrArrayMetadataSerialzer) -> Result<Self, Self::Error> {
+        let ZarrArrayMetadataSerialzer {
+            shape,
+            data_type,
+            chunk_shape,
+            chunk_key_encoding,
+            fill_value,
+            codecs,
+            storage_transformers,
+            dimension_names,
+        } = value;
+        {
+            let fill_value = FillValue::from_data_type_and_json(&data_type, &fill_value)?;
+            Ok(ZarrArrayMetadata {
+                fill_value,
+                shape,
+                data_type,
+                chunk_shape,
+                chunk_key_encoding,
+                codecs,
+                storage_transformers,
+                dimension_names,
+            })
+        }
+    }
+}
+
+impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
+    fn from(value: ZarrArrayMetadata) -> Self {
+        let ZarrArrayMetadata {
+            shape,
+            data_type,
+            chunk_shape,
+            chunk_key_encoding,
+            fill_value,
+            codecs,
+            storage_transformers,
+            dimension_names,
+        } = value;
+        {
+            let fill_value = serde_json::to_value(fill_value).unwrap();
+            ZarrArrayMetadataSerialzer {
+                shape,
+                data_type,
+                chunk_shape,
+                chunk_key_encoding,
+                codecs,
+                storage_transformers,
+                dimension_names,
+                fill_value,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -316,6 +402,95 @@ impl GroupMetadata {
             // We can unpack because it comes from controlled datastructures that can be serialized
             serde_json::to_vec(self).expect("bug in GroupMetadata serialization"),
         )
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct NameConfigSerializer {
+    name: String,
+    configuration: serde_json::Value,
+}
+
+impl From<ChunkShape> for NameConfigSerializer {
+    fn from(value: ChunkShape) -> Self {
+        let arr = serde_json::Value::Array(
+            value
+                .0
+                .iter()
+                .map(|v| {
+                    serde_json::Value::Number(serde_json::value::Number::from(v.get()))
+                })
+                .collect(),
+        );
+        let kvs = serde_json::value::Map::from_iter(iter::once((
+            "chunk_shape".to_string(),
+            arr,
+        )));
+        Self {
+            name: "regular".to_string(),
+            configuration: serde_json::Value::Object(kvs),
+        }
+    }
+}
+
+impl TryFrom<NameConfigSerializer> for ChunkShape {
+    type Error = &'static str;
+
+    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
+        match value {
+            NameConfigSerializer {
+                name,
+                configuration: serde_json::Value::Object(kvs),
+            } if name == "regular" => {
+                let values = kvs
+                    .get("chunk_shape")
+                    .and_then(|v| v.as_array())
+                    .ok_or("cannot parse ChunkShape")?;
+                let shape = values
+                    .iter()
+                    .map(|v| v.as_u64().and_then(|u64| NonZeroU64::try_from(u64).ok()))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or("cannot parse ChunkShape")?;
+                Ok(ChunkShape(shape))
+            }
+            _ => Err("cannot parse ChunkShape"),
+        }
+    }
+}
+
+impl From<ChunkKeyEncoding> for NameConfigSerializer {
+    fn from(_value: ChunkKeyEncoding) -> Self {
+        let kvs = serde_json::value::Map::from_iter(iter::once((
+            "separator".to_string(),
+            serde_json::Value::String("/".to_string()),
+        )));
+        Self {
+            name: "default".to_string(),
+            configuration: serde_json::Value::Object(kvs),
+        }
+    }
+}
+
+impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
+    type Error = &'static str;
+
+    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
+        //FIXME: we are hardcoding / as the separator
+        match value {
+            NameConfigSerializer {
+                name,
+                configuration: serde_json::Value::Object(kvs),
+            } if name == "default" => {
+                if let Some("/") =
+                    kvs.get("separator").ok_or("cannot parse ChunkKeyEncoding")?.as_str()
+                {
+                    Ok(ChunkKeyEncoding::Slash)
+                } else {
+                    Err("cannot parse ChunkKeyEncoding")
+                }
+            }
+            _ => Err("cannot parse ChunkKeyEncoding"),
+        }
     }
 }
 
@@ -436,6 +611,13 @@ mod tests {
 
         let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, data);
+
+        let mut ds = store.dataset().unwrap();
+        let oid = ds.flush().await?;
+
+        let ds = Dataset::update(storage, oid);
+        let store = Store::new(ds);
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
 
         Ok(())
     }
