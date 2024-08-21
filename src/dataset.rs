@@ -802,23 +802,31 @@ mod strategies {
         ]
     }
 
-    // FIXME: ndim = 0?
-    pub(crate) fn shapes_and_dims() -> impl Strategy<Value = ShapeDim> {
+    pub(crate) fn shapes_and_dims(
+        max_ndim: Option<usize>,
+    ) -> impl Strategy<Value = ShapeDim> {
         use proptest::collection::vec;
         use proptest::option;
         use proptest::prelude::any;
 
-        // let non_zero_u64s = any::<u64>().prop_filter("0 not allowed", |x| x > &0);
-
-        // FIXME: generate ndim
-        let ndim = 2usize;
-        vec(any::<u64>(), ndim)
+        // FIXME: ndim = 0
+        let max_ndim = max_ndim.unwrap_or(4usize);
+        (1..max_ndim)
+            .prop_flat_map(|ndim| vec(1u64..26u64, ndim))
             .prop_flat_map(|shape| {
                 let ndim = shape.len();
+                let chunk_shape: Vec<BoxedStrategy<NonZeroU64>> = shape
+                    .clone()
+                    .into_iter()
+                    .map(|size| {
+                        (1u64..size + 1)
+                            .prop_map(|chunk_size| NonZeroU64::new(chunk_size).unwrap())
+                            .boxed()
+                    })
+                    .collect();
                 (
                     Just(shape),
-                    // FIXME: generate chunk shapes
-                    Just([NonZeroU64::new(1).unwrap()].repeat(ndim)),
+                    chunk_shape,
                     option::of(vec(option::of(any::<String>()), ndim)),
                 )
             })
@@ -831,7 +839,7 @@ mod strategies {
 
     prop_compose! {
         pub(crate) fn zarr_array_metadata()(
-            shape_and_dim in shapes_and_dims(),
+            shape_and_dim in shapes_and_dims(None),
             fill_value in fill_value_strategy(),
             chunk_key_encoding in chunk_key_encodings(),
             storage_transformers in storage_transformers(),
