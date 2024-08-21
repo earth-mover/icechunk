@@ -661,36 +661,12 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
 mod strategies {
     use crate::FillValue;
     use proptest::prelude::*;
-    use proptest::prop_oneof;
     use proptest::strategy::Strategy;
-
-    pub(crate) fn fill_value_strategy() -> impl Strategy<Value = FillValue> {
-        use proptest::collection::vec;
-        prop_oneof![
-            any::<bool>().prop_map(FillValue::Bool),
-            any::<i8>().prop_map(FillValue::Int8),
-            any::<i16>().prop_map(FillValue::Int16),
-            any::<i32>().prop_map(FillValue::Int32),
-            any::<i64>().prop_map(FillValue::Int64),
-            any::<u8>().prop_map(FillValue::UInt8),
-            any::<u16>().prop_map(FillValue::UInt16),
-            any::<u32>().prop_map(FillValue::UInt32),
-            any::<u64>().prop_map(FillValue::UInt64),
-            any::<f32>().prop_map(FillValue::Float16),
-            any::<f32>().prop_map(FillValue::Float32),
-            any::<f64>().prop_map(FillValue::Float64),
-            (any::<f32>(), any::<f32>())
-                .prop_map(|(real, imag)| FillValue::Complex64(real, imag)),
-            (any::<f64>(), any::<f64>())
-                .prop_map(|(real, imag)| FillValue::Complex128(real, imag)),
-            vec(any::<u8>(), 0..64).prop_map(FillValue::RawBits),
-        ]
-    }
 
     pub(crate) fn fill_values_vec_strategy(
     ) -> impl Strategy<Value = Vec<Option<FillValue>>> {
         use proptest::collection::vec;
-        vec(proptest::option::of(fill_value_strategy()), 0..10)
+        vec(proptest::option::of(any::<FillValue>()), 0..10)
     }
 }
 

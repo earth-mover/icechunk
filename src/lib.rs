@@ -44,6 +44,7 @@ use std::{
     sync::Arc,
 };
 use structure::StructureTable;
+use test_strategy::Arbitrary;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -199,7 +200,7 @@ struct NameConfigSerializer {
     configuration: serde_json::Value,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ChunkKeyEncoding {
     Slash,
     Dot,
@@ -265,7 +266,7 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FillValue {
     // FIXME: test all json (de)serializations

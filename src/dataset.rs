@@ -752,14 +752,6 @@ mod strategies {
         }]),]
     }
 
-    pub(crate) fn chunk_key_encodings() -> impl Strategy<Value = ChunkKeyEncoding> {
-        prop_oneof![
-            Just(ChunkKeyEncoding::Slash),
-            Just(ChunkKeyEncoding::Dot),
-            Just(ChunkKeyEncoding::Default),
-        ]
-    }
-
     pub(crate) fn storage_transformers(
     ) -> impl Strategy<Value = Option<Vec<StorageTransformer>>> {
         prop_oneof![
@@ -776,30 +768,6 @@ mod strategies {
         shape: ArrayShape,
         chunk_shape: ChunkShape,
         dimension_names: DimensionNames,
-    }
-
-    // FIXME: don't duplicate this!
-    pub(crate) fn fill_value_strategy() -> impl Strategy<Value = FillValue> {
-        use proptest::collection::vec;
-        prop_oneof![
-            any::<bool>().prop_map(FillValue::Bool),
-            any::<i8>().prop_map(FillValue::Int8),
-            any::<i16>().prop_map(FillValue::Int16),
-            any::<i32>().prop_map(FillValue::Int32),
-            any::<i64>().prop_map(FillValue::Int64),
-            any::<u8>().prop_map(FillValue::UInt8),
-            any::<u16>().prop_map(FillValue::UInt16),
-            any::<u32>().prop_map(FillValue::UInt32),
-            any::<u64>().prop_map(FillValue::UInt64),
-            any::<f32>().prop_map(FillValue::Float16),
-            any::<f32>().prop_map(FillValue::Float32),
-            any::<f64>().prop_map(FillValue::Float64),
-            (any::<f32>(), any::<f32>())
-                .prop_map(|(real, imag)| FillValue::Complex64(real, imag)),
-            (any::<f64>(), any::<f64>())
-                .prop_map(|(real, imag)| FillValue::Complex128(real, imag)),
-            vec(any::<u8>(), 0..64).prop_map(FillValue::RawBits),
-        ]
     }
 
     pub(crate) fn shapes_and_dims(
@@ -839,9 +807,9 @@ mod strategies {
 
     prop_compose! {
         pub(crate) fn zarr_array_metadata()(
+            chunk_key_encoding: ChunkKeyEncoding,
+            fill_value: FillValue,
             shape_and_dim in shapes_and_dims(None),
-            fill_value in fill_value_strategy(),
-            chunk_key_encoding in chunk_key_encodings(),
             storage_transformers in storage_transformers(),
             codecs in codecs(),
         ) -> ZarrArrayMetadata {
