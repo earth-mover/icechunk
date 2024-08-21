@@ -735,11 +735,11 @@ mod strategies {
         FillValue, Path, StorageTransformer, ZarrArrayMetadata,
     };
 
-    pub(crate) fn node_path_strategy() -> impl Strategy<Value = Path> {
+    pub(crate) fn node_paths() -> impl Strategy<Value = Path> {
         any::<PathBuf>()
     }
 
-    pub(crate) fn dataset_strategy() -> impl Strategy<Value = Dataset> {
+    pub(crate) fn datasets() -> impl Strategy<Value = Dataset> {
         let storage = InMemoryStorage::new();
         let dataset = Dataset::new(Arc::new(storage), None);
         prop_oneof![Just(dataset)]
@@ -871,8 +871,8 @@ mod tests {
 
     #[proptest(async = "tokio")]
     async fn test_add_delete_group(
-        #[strategy(node_path_strategy())] path: Path,
-        #[strategy(dataset_strategy())] mut dataset: Dataset,
+        #[strategy(node_paths())] path: Path,
+        #[strategy(datasets())] mut dataset: Dataset,
     ) {
         // getting any path from an empty dataset must fail
         prop_assert!(dataset.get_node(&path).await.is_err());
@@ -905,9 +905,9 @@ mod tests {
 
     #[proptest(async = "tokio")]
     async fn test_add_delete_array(
-        #[strategy(node_path_strategy())] path: Path,
+        #[strategy(node_paths())] path: Path,
         #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(dataset_strategy())] mut dataset: Dataset,
+        #[strategy(datasets())] mut dataset: Dataset,
     ) {
         // new array must always succeed
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
