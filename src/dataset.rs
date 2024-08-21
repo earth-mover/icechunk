@@ -722,6 +722,7 @@ pub enum FlushError {
 
 #[cfg(test)]
 mod strategies {
+    use std::num::NonZeroU64;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -729,7 +730,10 @@ mod strategies {
     use proptest::strategy::Strategy;
 
     use crate::storage::InMemoryStorage;
-    use crate::{Dataset, Path};
+    use crate::{
+        ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, Dataset, DimensionNames,
+        FillValue, Path, StorageTransformer, ZarrArrayMetadata,
+    };
 
     pub(crate) fn node_path_strategy() -> impl Strategy<Value = Path> {
         any::<PathBuf>()
@@ -740,7 +744,113 @@ mod strategies {
         let dataset = Dataset::new(Arc::new(storage), None);
         prop_oneof![Just(dataset)]
     }
+
+    pub(crate) fn codecs() -> impl Strategy<Value = Vec<Codec>> {
+        prop_oneof![Just(vec![Codec {
+            name: "mycodec".to_string(),
+            configuration: None
+        }]),]
+    }
+
+    pub(crate) fn chunk_key_encodings() -> impl Strategy<Value = ChunkKeyEncoding> {
+        prop_oneof![
+            Just(ChunkKeyEncoding::Slash),
+            Just(ChunkKeyEncoding::Dot),
+            Just(ChunkKeyEncoding::Default),
+        ]
+    }
+
+    pub(crate) fn storage_transformers(
+    ) -> impl Strategy<Value = Option<Vec<StorageTransformer>>> {
+        prop_oneof![
+            Just(Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }])),
+            Just(None),
+        ]
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct ShapeDim {
+        shape: ArrayShape,
+        chunk_shape: ChunkShape,
+        dimension_names: DimensionNames,
+    }
+
+    // FIXME: don't duplicate this!
+    pub(crate) fn fill_value_strategy() -> impl Strategy<Value = FillValue> {
+        use proptest::collection::vec;
+        prop_oneof![
+            any::<bool>().prop_map(FillValue::Bool),
+            any::<i8>().prop_map(FillValue::Int8),
+            any::<i16>().prop_map(FillValue::Int16),
+            any::<i32>().prop_map(FillValue::Int32),
+            any::<i64>().prop_map(FillValue::Int64),
+            any::<u8>().prop_map(FillValue::UInt8),
+            any::<u16>().prop_map(FillValue::UInt16),
+            any::<u32>().prop_map(FillValue::UInt32),
+            any::<u64>().prop_map(FillValue::UInt64),
+            any::<f32>().prop_map(FillValue::Float16),
+            any::<f32>().prop_map(FillValue::Float32),
+            any::<f64>().prop_map(FillValue::Float64),
+            (any::<f32>(), any::<f32>())
+                .prop_map(|(real, imag)| FillValue::Complex64(real, imag)),
+            (any::<f64>(), any::<f64>())
+                .prop_map(|(real, imag)| FillValue::Complex128(real, imag)),
+            vec(any::<u8>(), 0..64).prop_map(FillValue::RawBits),
+        ]
+    }
+
+    // FIXME: ndim = 0?
+    pub(crate) fn shapes_and_dims() -> impl Strategy<Value = ShapeDim> {
+        use proptest::collection::vec;
+        use proptest::option;
+        use proptest::prelude::any;
+
+        // let non_zero_u64s = any::<u64>().prop_filter("0 not allowed", |x| x > &0);
+
+        // FIXME: generate ndim
+        let ndim = 2usize;
+        vec(any::<u64>(), ndim)
+            .prop_flat_map(|shape| {
+                let ndim = shape.len();
+                (
+                    Just(shape),
+                    // FIXME: generate chunk shapes
+                    Just([NonZeroU64::new(1).unwrap()].repeat(ndim)),
+                    option::of(vec(option::of(any::<String>()), ndim)),
+                )
+            })
+            .prop_map(|(shape, chunk_shape, dimension_names)| ShapeDim {
+                shape,
+                chunk_shape: ChunkShape(chunk_shape),
+                dimension_names,
+            })
+    }
+
+    prop_compose! {
+        pub(crate) fn zarr_array_metadata()(
+            shape_and_dim in shapes_and_dims(),
+            fill_value in fill_value_strategy(),
+            chunk_key_encoding in chunk_key_encodings(),
+            storage_transformers in storage_transformers(),
+            codecs in codecs(),
+        ) -> ZarrArrayMetadata {
+            ZarrArrayMetadata {
+                shape: shape_and_dim.shape,
+                data_type: fill_value.get_data_type(),
+                chunk_shape: shape_and_dim.chunk_shape,
+                chunk_key_encoding,
+                fill_value,
+                codecs,
+                storage_transformers,
+                dimension_names: shape_and_dim.dimension_names,
+            }
+        }
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
@@ -788,6 +898,31 @@ mod tests {
 
         // getting a deleted group must fail
         prop_assert!(dataset.get_node(&path).await.is_err());
+
+        // adding again must succeed
+        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+    }
+
+    #[proptest(async = "tokio")]
+    async fn test_add_delete_array(
+        #[strategy(node_path_strategy())] path: Path,
+        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
+        #[strategy(dataset_strategy())] mut dataset: Dataset,
+    ) {
+        // new array must always succeed
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+
+        // adding to the same path must fail
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_err());
+
+        // adding to the same path must fail
+        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+
+        // deleting twice must fail
+        prop_assert!(dataset.delete_array(path.clone()).await.is_err());
+
+        // adding again must succeed
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]

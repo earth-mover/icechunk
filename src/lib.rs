@@ -59,6 +59,8 @@ pub struct ArrayIndices(pub Vec<u64>);
 /// The shape of an array.
 /// 0 is a valid shape member
 pub type ArrayShape = Vec<u64>;
+pub type DimensionName = String;
+pub type DimensionNames = Option<Vec<Option<DimensionName>>>;
 
 pub type Path = PathBuf;
 
@@ -503,8 +505,6 @@ pub struct StorageTransformer {
     pub configuration: Option<HashMap<String, serde_json::Value>>,
 }
 
-pub type DimensionName = String;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAttributes {
     #[serde(flatten)]
@@ -608,7 +608,7 @@ pub struct ZarrArrayMetadata {
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     // each dimension name can be null in Zarr
-    pub dimension_names: Option<Vec<Option<DimensionName>>>,
+    pub dimension_names: DimensionNames,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
