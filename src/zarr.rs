@@ -41,6 +41,8 @@ pub enum StoreError {
     BadMetadata(#[from] serde_json::Error),
     #[error("add node error: `{0}`")]
     AddNode(#[from] AddNodeError),
+    #[error("store method `{0}` is not implemented by Icechunk")]
+    Unimplemented(&'static str),
 }
 
 impl Store {
@@ -73,13 +75,13 @@ impl Store {
 
     // TODO: prototype argument
     pub async fn get_partial_values(
-        // TODO: calling this argument self gives a compiler error for some reason
-        this: Arc<Self>,
+        // We need an Arc here because otherwise we cannot spawn concurrent tasks
+        self: Arc<Self>,
         key_ranges: impl IntoIterator<Item = (String, ByteRange)>,
     ) -> StoreResult<Vec<StoreResult<Bytes>>> {
         let mut tasks = Vec::new();
         for (key, range) in key_ranges {
-            let this = Arc::clone(&this);
+            let this = Arc::clone(&self);
             tasks.push(spawn(async move { this.get(&key, &range).await }));
         }
         let mut outputs = Vec::with_capacity(tasks.len());
@@ -135,7 +137,7 @@ impl Store {
         &mut self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
-        unimplemented!()
+        Err(StoreError::Unimplemented("set_partial_values"))
     }
 
     pub fn supports_listing(&self) -> StoreResult<bool> {
@@ -181,6 +183,7 @@ impl Store {
         let user_attributes = match node.user_attributes {
             None => None,
             Some(UserAttributesStructure::Inline(atts)) => Some(atts),
+            // FIXME: implement
             Some(UserAttributesStructure::Ref(_)) => todo!(),
         };
         match node.node_data {
