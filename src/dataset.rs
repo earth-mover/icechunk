@@ -1362,4 +1362,181 @@ mod tests {
 
         Ok(())
     }
+
+    #[cfg(test)]
+    mod state_machine_test {
+        use crate::storage::InMemoryStorage;
+        use crate::{NodeData, Path, ZarrArrayMetadata};
+        use proptest::prelude::*;
+        use proptest::strategy::{BoxedStrategy, Just};
+        use proptest_state_machine::{
+            prop_state_machine, ReferenceStateMachine, StateMachineTest,
+        };
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use tokio::runtime::Runtime;
+
+        use crate::Dataset;
+        use proptest::test_runner::Config;
+
+        use super::{node_paths, zarr_array_metadata};
+
+        #[derive(Clone, Debug)]
+        pub enum DatasetTransition {
+            AddArray(Path, ZarrArrayMetadata),
+            UpdateArray(Path, ZarrArrayMetadata),
+            AddGroup(Path),
+        }
+
+        /// An empty type used for the `ReferenceStateMachine` implementation.
+        pub struct DatasetStateMachine;
+
+        #[derive(Clone, Debug)]
+        pub struct DatasetModel {
+            arrays: HashMap<Path, ZarrArrayMetadata>,
+            groups: Vec<Path>,
+        }
+        impl DatasetModel {
+            fn new() -> Self {
+                DatasetModel { arrays: HashMap::new(), groups: Vec::new() }
+            }
+        }
+
+        impl ReferenceStateMachine for DatasetStateMachine {
+            type State = DatasetModel;
+            type Transition = DatasetTransition;
+
+            fn init_state() -> BoxedStrategy<Self::State> {
+                Just(DatasetModel::new()).boxed()
+            }
+
+            fn transitions(_state: &Self::State) -> BoxedStrategy<Self::Transition> {
+                // Using the regular proptest constructs here, the transitions can be
+                // given different weights.
+                prop_oneof![
+                    (node_paths(), zarr_array_metadata())
+                        .prop_map(|(a, b)| DatasetTransition::AddArray(a, b)),
+                    (node_paths(), zarr_array_metadata())
+                        .prop_map(|(a, b)| DatasetTransition::UpdateArray(a, b)),
+                    node_paths().prop_map(DatasetTransition::AddGroup),
+                ]
+                .boxed()
+            }
+
+            fn apply(
+                mut state: Self::State,
+                transition: &Self::Transition,
+            ) -> Self::State {
+                match transition {
+                    DatasetTransition::AddArray(path, metadata)
+                    | DatasetTransition::UpdateArray(path, metadata) => {
+                        state.arrays.insert(path.clone(), metadata.clone());
+                        // TODO: postcondition
+                    }
+
+                    DatasetTransition::AddGroup(path) => {
+                        state.groups.push(path.clone());
+                        // TODO: postcondition
+                    }
+                }
+                state
+            }
+
+            fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
+                match transition {
+                    DatasetTransition::AddArray(path, _) => {
+                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    }
+                    DatasetTransition::UpdateArray(path, _) => {
+                        state.arrays.contains_key(path)
+                    }
+                    DatasetTransition::AddGroup(path) => {
+                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    }
+                }
+            }
+        }
+
+        struct TestDataset {
+            dataset: Dataset,
+            runtime: Runtime,
+        }
+
+        impl StateMachineTest for TestDataset {
+            type SystemUnderTest = Self;
+            type Reference = DatasetStateMachine;
+
+            fn init_test(
+                _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+            ) -> Self::SystemUnderTest {
+                let storage = InMemoryStorage::new();
+                TestDataset {
+                    dataset: Dataset::create(Arc::new(storage)),
+                    runtime: Runtime::new().unwrap(),
+                }
+            }
+
+            fn apply(
+                mut state: Self::SystemUnderTest,
+                _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+                transition: DatasetTransition,
+            ) -> Self::SystemUnderTest {
+                match transition {
+                    DatasetTransition::AddArray(path, metadata) => state
+                        .runtime
+                        .block_on(state.dataset.add_array(path, metadata))
+                        .unwrap(),
+                    DatasetTransition::UpdateArray(path, metadata) => state
+                        .runtime
+                        .block_on(state.dataset.update_array(path, metadata))
+                        .unwrap(),
+                    DatasetTransition::AddGroup(path) => {
+                        state.runtime.block_on(state.dataset.add_group(path)).unwrap()
+                    }
+                }
+                state
+            }
+
+            fn check_invariants(
+                state: &Self::SystemUnderTest,
+                ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+            ) {
+                for (path, metadata) in ref_state.arrays.iter() {
+                    let node =
+                        state.runtime.block_on(state.dataset.get_array(path)).unwrap();
+                    let actual_metadata = match node.node_data {
+                        NodeData::Array(metadata, _) => Ok(metadata),
+                        _ => Err("foo"),
+                    }
+                    .unwrap();
+                    assert_eq!(metadata, &actual_metadata);
+                }
+            }
+        }
+
+        prop_state_machine! {
+            #![proptest_config(Config {
+            // Turn failure persistence off for demonstration. This means that no
+            // regression file will be captured.
+            failure_persistence: None,
+            // Enable verbose mode to make the state machine test print the
+            // transitions for each case.
+            verbose: 1,
+            .. Config::default()
+        })]
+
+        #[test]
+        fn run_dataset_state_machine_test(
+            // This is a macro's keyword - only `sequential` is currently supported.
+            sequential
+            // The number of transitions to be generated for each case. This can
+            // be a single numerical value or a range as in here.
+            1..20
+            // Macro's boilerplate to separate the following identifier.
+            =>
+            // The name of the type that implements `StateMachineTest`.
+            TestDataset
+        );
+        }
+    }
 }

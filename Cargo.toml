@@ -30,3 +30,5 @@ debug = true
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
+proptest-state-machine = "0.3.0"
+tokio = { version = "1.39.2", features = ["rt-multi-thread", "macros"] }
