@@ -31,8 +31,6 @@ impl ChangeSet {
         path: Path,
         node_id: NodeId,
     ) -> Result<(), DeleteNodeError> {
-        // TODO: test delete a deleted group.
-        // TODO: test delete a non-existent group
         let was_new = self.new_groups.remove(&path).is_some();
         self.updated_attributes.remove(&path);
         if !was_new {
@@ -771,10 +769,11 @@ pub enum FlushError {
 
 #[cfg(test)]
 mod tests {
+
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        manifest::mk_manifests_table, storage::InMemoryStorage,
+        manifest::mk_manifests_table, storage::InMemoryStorage, strategies::*,
         structure::mk_structure_table, ChunkInfo, ChunkKeyEncoding, ChunkRef, ChunkShape,
         Codec, DataType, FillValue, Flags, ManifestExtents, StorageTransformer,
         TableRegion,
@@ -783,6 +782,110 @@ mod tests {
     use super::*;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
+    use proptest::prelude::{prop_assert, prop_assert_eq};
+    use test_strategy::proptest;
+
+    #[proptest(async = "tokio")]
+    async fn test_add_delete_group(
+        #[strategy(node_paths())] path: Path,
+        #[strategy(empty_datasets())] mut dataset: Dataset,
+    ) {
+        // getting any path from an empty dataset must fail
+        prop_assert!(dataset.get_node(&path).await.is_err());
+
+        // adding a new group must succeed
+        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+
+        // Getting a group just added must succeed
+        let node = dataset.get_node(&path).await;
+        prop_assert!(node.is_ok());
+
+        // Getting the group twice must be equal
+        prop_assert_eq!(node.unwrap(), dataset.get_node(&path).await.unwrap());
+
+        // adding an existing group fails
+        prop_assert_eq!(
+            dataset.add_group(path.clone()).await.unwrap_err(),
+            AddNodeError::AlreadyExists(path.clone())
+        );
+
+        // deleting the added group must succeed
+        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+
+        // deleting twice must fail
+        prop_assert_eq!(
+            dataset.delete_group(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotFound(path.clone())
+        );
+
+        // getting a deleted group must fail
+        prop_assert!(dataset.get_node(&path).await.is_err());
+
+        // adding again must succeed
+        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+
+        // deleting again must succeed
+        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+    }
+
+    #[proptest(async = "tokio")]
+    async fn test_add_delete_array(
+        #[strategy(node_paths())] path: Path,
+        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
+        #[strategy(empty_datasets())] mut dataset: Dataset,
+    ) {
+        // new array must always succeed
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+
+        // adding to the same path must fail
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_err());
+
+        // first delete must succeed
+        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+
+        // deleting twice must fail
+        prop_assert_eq!(
+            dataset.delete_array(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotFound(path.clone())
+        );
+
+        // adding again must succeed
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+
+        // deleting again must succeed
+        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+    }
+
+    #[proptest(async = "tokio")]
+    async fn test_add_array_group_clash(
+        #[strategy(node_paths())] path: Path,
+        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
+        #[strategy(empty_datasets())] mut dataset: Dataset,
+    ) {
+        // adding a group at an existing array node must fail
+        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert_eq!(
+            dataset.add_group(path.clone()).await.unwrap_err(),
+            AddNodeError::AlreadyExists(path.clone())
+        );
+        prop_assert_eq!(
+            dataset.delete_group(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotAGroup(path.clone())
+        );
+        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+
+        // adding an array at an existing group node must fail
+        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+        prop_assert_eq!(
+            dataset.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
+            AddNodeError::AlreadyExists(path.clone())
+        );
+        prop_assert_eq!(
+            dataset.delete_array(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotAnArray(path.clone())
+        );
+        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {

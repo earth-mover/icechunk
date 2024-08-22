@@ -9,7 +9,7 @@ use tokio::{spawn, sync::RwLock};
 
 use crate::{
     AddNodeError, ArrayIndices, ArrayShape, ChunkKeyEncoding, ChunkOffset, ChunkShape,
-    Codec, DataType, Dataset, DimensionName, FillValue, IcechunkFormatError, NodeData,
+    Codec, DataType, Dataset, DimensionNames, FillValue, IcechunkFormatError, NodeData,
     Path, StorageTransformer, UpdateNodeError, UserAttributes, UserAttributesStructure,
     ZarrArrayMetadata,
 };
@@ -314,7 +314,7 @@ pub struct ZarrArrayMetadataSerialzer {
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     // each dimension name can be null in Zarr
-    pub dimension_names: Option<Vec<Option<DimensionName>>>,
+    pub dimension_names: Option<DimensionNames>,
 }
 
 impl TryFrom<ZarrArrayMetadataSerialzer> for ZarrArrayMetadata {

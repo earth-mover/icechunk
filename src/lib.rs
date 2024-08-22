@@ -24,6 +24,7 @@
 pub mod dataset;
 pub mod manifest;
 pub mod storage;
+pub mod strategies;
 pub mod structure;
 pub mod zarr;
 
@@ -43,6 +44,7 @@ use std::{
     sync::Arc,
 };
 use structure::StructureTable;
+use test_strategy::Arbitrary;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
@@ -62,6 +64,9 @@ pub struct ArrayIndices(pub Vec<u64>);
 /// The shape of an array.
 /// 0 is a valid shape member
 pub type ArrayShape = Vec<u64>;
+// each dimension name can be null in Zarr
+pub type DimensionName = Option<String>;
+pub type DimensionNames = Vec<DimensionName>;
 
 pub type Path = PathBuf;
 
@@ -171,7 +176,7 @@ impl Display for DataType {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ChunkKeyEncoding {
     Slash,
     Dot,
@@ -201,7 +206,7 @@ impl From<ChunkKeyEncoding> for u8 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FillValue {
     // FIXME: test all json (de)serializations
@@ -547,8 +552,6 @@ pub struct StorageTransformer {
     pub configuration: Option<HashMap<String, serde_json::Value>>,
 }
 
-pub type DimensionName = String;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAttributes {
     #[serde(flatten)]
@@ -645,8 +648,7 @@ pub struct ZarrArrayMetadata {
     pub fill_value: FillValue,
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
-    // each dimension name can be null in Zarr
-    pub dimension_names: Option<Vec<Option<DimensionName>>>,
+    pub dimension_names: Option<DimensionNames>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -716,7 +718,7 @@ pub enum AddNodeError {
     AlreadyExists(Path),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum DeleteNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
@@ -767,7 +769,7 @@ pub enum StorageError {
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage {
+pub trait Storage: fmt::Debug {
     async fn fetch_structure(
         &self,
         id: &ObjectId,
@@ -804,7 +806,7 @@ pub trait Storage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Dataset {
     storage: Arc<dyn Storage + Send + Sync>,
     structure_id: Option<ObjectId>,
