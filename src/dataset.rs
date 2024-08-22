@@ -722,7 +722,7 @@ pub enum FlushError {
 
 #[cfg(test)]
 mod tests {
-    pub(self) mod strategies {
+    mod strategies {
         use std::num::NonZeroU64;
         use std::path::PathBuf;
         use std::sync::Arc;
@@ -737,6 +737,7 @@ mod tests {
         };
 
         pub fn node_paths() -> impl Strategy<Value = Path> {
+            // FIXME: Add valid paths
             any::<PathBuf>()
         }
 
