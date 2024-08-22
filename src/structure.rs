@@ -365,7 +365,7 @@ where
 fn mk_dimension_names_array<T, P>(coll: T) -> ListArray
 where
     T: IntoIterator<Item = Option<P>>,
-    P: IntoIterator<Item = Option<DimensionName>>,
+    P: IntoIterator<Item = DimensionName>,
 {
     let mut b = ListBuilder::new(StringBuilder::new());
     for list in coll {

@@ -61,8 +61,8 @@ pub struct ArrayIndices(pub Vec<u64>);
 /// The shape of an array.
 /// 0 is a valid shape member
 pub type ArrayShape = Vec<u64>;
-pub type DimensionName = String;
-pub type DimensionNames = Vec<Option<DimensionName>>;
+pub type DimensionName = Option<String>;
+pub type DimensionNames = Vec<DimensionName>;
 
 pub type Path = PathBuf;
 
