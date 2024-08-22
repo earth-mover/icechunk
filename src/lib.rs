@@ -24,6 +24,7 @@
 pub mod dataset;
 pub mod manifest;
 pub mod storage;
+pub mod strategies;
 pub mod structure;
 pub mod zarr;
 
