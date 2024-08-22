@@ -31,8 +31,6 @@ impl ChangeSet {
         path: Path,
         node_id: NodeId,
     ) -> Result<(), DeleteNodeError> {
-        // TODO: test delete a deleted group.
-        // TODO: test delete a non-existent group
         let was_new = self.new_groups.remove(&path).is_some();
         self.updated_attributes.remove(&path);
         if !was_new {
@@ -757,13 +755,19 @@ mod tests {
         prop_assert_eq!(node.unwrap(), dataset.get_node(&path).await.unwrap());
 
         // adding an existing group fails
-        prop_assert!(dataset.add_group(path.clone()).await.is_err());
+        prop_assert_eq!(
+            dataset.add_group(path.clone()).await.unwrap_err(),
+            AddNodeError::AlreadyExists(path.clone())
+        );
 
         // deleting the added group must succeed
         prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
 
         // deleting twice must fail
-        prop_assert!(dataset.delete_group(path.clone()).await.is_err());
+        prop_assert_eq!(
+            dataset.delete_group(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotFound(path.clone())
+        );
 
         // getting a deleted group must fail
         prop_assert!(dataset.get_node(&path).await.is_err());
@@ -791,7 +795,10 @@ mod tests {
         prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
 
         // deleting twice must fail
-        prop_assert!(dataset.delete_array(path.clone()).await.is_err());
+        prop_assert_eq!(
+            dataset.delete_array(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotFound(path.clone())
+        );
 
         // adding again must succeed
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
@@ -808,12 +815,26 @@ mod tests {
     ) {
         // adding a group at an existing array node must fail
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
-        prop_assert!(dataset.add_group(path.clone()).await.is_err());
+        prop_assert_eq!(
+            dataset.add_group(path.clone()).await.unwrap_err(),
+            AddNodeError::AlreadyExists(path.clone())
+        );
+        prop_assert_eq!(
+            dataset.delete_group(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotAGroup(path.clone())
+        );
         prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
 
         // adding an array at an existing group node must fail
         prop_assert!(dataset.add_group(path.clone()).await.is_ok());
-        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_err());
+        prop_assert_eq!(
+            dataset.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
+            AddNodeError::AlreadyExists(path.clone())
+        );
+        prop_assert_eq!(
+            dataset.delete_array(path.clone()).await.unwrap_err(),
+            DeleteNodeError::NotAnArray(path.clone())
+        );
         prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
     }
 

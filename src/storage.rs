@@ -60,7 +60,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
         let store = AmazonS3Builder::new()
-            // TODO: Generalize the auth config
+            // FIXME: Generalize the auth config
             .with_access_key_id("minio123")
             .with_secret_access_key("minio123")
             .with_endpoint("http://localhost:9000")
