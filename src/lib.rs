@@ -34,11 +34,10 @@ use itertools::Itertools;
 use manifest::ManifestsTable;
 use parquet::errors as parquet_errors;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, TryFromInto};
 use std::{
     collections::HashMap,
     fmt::{self, Display},
-    io, iter,
+    io,
     num::NonZeroU64,
     ops::Range,
     path::PathBuf,
@@ -48,9 +47,13 @@ use structure::StructureTable;
 use test_strategy::Arbitrary;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum IcechunkFormatError {
+    #[error("error decoding fill_value from array")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
+    #[error("error decoding fill_value from json")]
+    FillValueParse { data_type: DataType, value: serde_json::Value },
+    #[error("null found decoding fill_value")]
     NullFillValueError,
 }
 
@@ -61,6 +64,7 @@ pub struct ArrayIndices(pub Vec<u64>);
 /// The shape of an array.
 /// 0 is a valid shape member
 pub type ArrayShape = Vec<u64>;
+// each dimension name can be null in Zarr
 pub type DimensionName = Option<String>;
 pub type DimensionNames = Vec<DimensionName>;
 
@@ -86,6 +90,30 @@ pub enum DataType {
     Complex128,
     // FIXME: serde serialization
     RawBits(usize),
+}
+
+impl DataType {
+    fn fits_i64(&self, n: i64) -> bool {
+        use DataType::*;
+        match self {
+            Int8 => n >= i8::MIN as i64 && n <= i8::MAX as i64,
+            Int16 => n >= i16::MIN as i64 && n <= i16::MAX as i64,
+            Int32 => n >= i32::MIN as i64 && n <= i32::MAX as i64,
+            Int64 => true,
+            _ => false,
+        }
+    }
+
+    fn fits_u64(&self, n: u64) -> bool {
+        use DataType::*;
+        match self {
+            UInt8 => n >= u8::MIN as u64 && n <= u8::MAX as u64,
+            UInt16 => n >= u16::MIN as u64 && n <= u16::MAX as u64,
+            UInt32 => n >= u32::MIN as u64 && n <= u32::MAX as u64,
+            UInt64 => true,
+            _ => false,
+        }
+    }
 }
 
 impl TryFrom<&str> for DataType {
@@ -148,59 +176,6 @@ impl Display for DataType {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
 
-impl From<ChunkShape> for NameConfigSerializer {
-    fn from(value: ChunkShape) -> Self {
-        let arr = serde_json::Value::Array(
-            value
-                .0
-                .iter()
-                .map(|v| {
-                    serde_json::Value::Number(serde_json::value::Number::from(v.get()))
-                })
-                .collect(),
-        );
-        let kvs = serde_json::value::Map::from_iter(iter::once((
-            "chunk_shape".to_string(),
-            arr,
-        )));
-        Self {
-            name: "regular".to_string(),
-            configuration: serde_json::Value::Object(kvs),
-        }
-    }
-}
-
-impl TryFrom<NameConfigSerializer> for ChunkShape {
-    type Error = &'static str;
-
-    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
-        match value {
-            NameConfigSerializer {
-                name,
-                configuration: serde_json::Value::Object(kvs),
-            } if name == "regular" => {
-                let values = kvs
-                    .get("chunk_shape")
-                    .and_then(|v| v.as_array())
-                    .ok_or("cannot parse ChunkShape")?;
-                let shape = values
-                    .iter()
-                    .map(|v| v.as_u64().and_then(|u64| NonZeroU64::try_from(u64).ok()))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or("cannot parse ChunkShape")?;
-                Ok(ChunkShape(shape))
-            }
-            _ => Err("cannot parse ChunkShape"),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct NameConfigSerializer {
-    name: String,
-    configuration: serde_json::Value,
-}
-
 #[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ChunkKeyEncoding {
     Slash,
@@ -231,42 +206,6 @@ impl From<ChunkKeyEncoding> for u8 {
     }
 }
 
-impl From<ChunkKeyEncoding> for NameConfigSerializer {
-    fn from(_value: ChunkKeyEncoding) -> Self {
-        let kvs = serde_json::value::Map::from_iter(iter::once((
-            "separator".to_string(),
-            serde_json::Value::String("/".to_string()),
-        )));
-        Self {
-            name: "default".to_string(),
-            configuration: serde_json::Value::Object(kvs),
-        }
-    }
-}
-
-impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
-    type Error = &'static str;
-
-    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
-        //FIXME: we are hardcoding / as the separator
-        match value {
-            NameConfigSerializer {
-                name,
-                configuration: serde_json::Value::Object(kvs),
-            } if name == "default" => {
-                if let Some("/") =
-                    kvs.get("separator").ok_or("cannot parse ChunkKeyEncoding")?.as_str()
-                {
-                    Ok(ChunkKeyEncoding::Slash)
-                } else {
-                    Err("cannot parse ChunkKeyEncoding")
-                }
-            }
-            _ => Err("cannot parse ChunkKeyEncoding"),
-        }
-    }
-}
-
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FillValue {
@@ -289,6 +228,112 @@ pub enum FillValue {
 }
 
 impl FillValue {
+    fn from_data_type_and_json(
+        dt: &DataType,
+        value: &serde_json::Value,
+    ) -> Result<Self, IcechunkFormatError> {
+        match (dt, value) {
+            (DataType::Bool, serde_json::Value::Bool(b)) => Ok(FillValue::Bool(*b)),
+            (DataType::Int8, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int8(n.as_i64().unwrap() as i8))
+            }
+            (DataType::Int16, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int16(n.as_i64().unwrap() as i16))
+            }
+            (DataType::Int32, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int32(n.as_i64().unwrap() as i32))
+            }
+            (DataType::Int64, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int64(n.as_i64().unwrap()))
+            }
+            (DataType::UInt8, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt8(n.as_u64().unwrap() as u8))
+            }
+            (DataType::UInt16, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt16(n.as_u64().unwrap() as u16))
+            }
+            (DataType::UInt32, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt32(n.as_u64().unwrap() as u32))
+            }
+            (DataType::UInt64, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt64(n.as_u64().unwrap()))
+            }
+            (DataType::Float16, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                // FIXME: limits logic
+                Ok(FillValue::Float16(n.as_f64().unwrap() as f32))
+            }
+            (DataType::Float32, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                // FIXME: limits logic
+                Ok(FillValue::Float32(n.as_f64().unwrap() as f32))
+            }
+            (DataType::Float64, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                // FIXME: limits logic
+                Ok(FillValue::Float64(n.as_f64().unwrap()))
+            }
+            (DataType::Complex64, serde_json::Value::Array(arr)) if arr.len() == 2 => {
+                let r = FillValue::from_data_type_and_json(&DataType::Float32, &arr[0])?;
+                let i = FillValue::from_data_type_and_json(&DataType::Float32, &arr[1])?;
+                match (r, i) {
+                    (FillValue::Float32(r), FillValue::Float32(i)) => {
+                        Ok(FillValue::Complex64(r, i))
+                    }
+                    _ => Err(IcechunkFormatError::FillValueParse {
+                        data_type: dt.clone(),
+                        value: value.clone(),
+                    }),
+                }
+            }
+            (DataType::Complex128, serde_json::Value::Array(arr)) if arr.len() == 2 => {
+                let r = FillValue::from_data_type_and_json(&DataType::Float64, &arr[0])?;
+                let i = FillValue::from_data_type_and_json(&DataType::Float64, &arr[1])?;
+                match (r, i) {
+                    (FillValue::Float64(r), FillValue::Float64(i)) => {
+                        Ok(FillValue::Complex128(r, i))
+                    }
+                    _ => Err(IcechunkFormatError::FillValueParse {
+                        data_type: dt.clone(),
+                        value: value.clone(),
+                    }),
+                }
+            }
+
+            (DataType::RawBits(n), serde_json::Value::Array(arr)) if arr.len() == *n => {
+                let bits = arr
+                    .iter()
+                    .map(|b| FillValue::from_data_type_and_json(&DataType::UInt8, b))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(FillValue::RawBits(
+                    bits.iter()
+                        .map(|b| match b {
+                            FillValue::UInt8(n) => *n,
+                            _ => 0,
+                        })
+                        .collect(),
+                ))
+            }
+            _ => Err(IcechunkFormatError::FillValueParse {
+                data_type: dt.clone(),
+                value: value.clone(),
+            }),
+        }
+    }
+
     fn from_data_type_and_value(
         dt: &DataType,
         value: &[u8],
@@ -594,22 +639,15 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
-#[serde_as]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ZarrArrayMetadata {
     pub shape: ArrayShape,
     pub data_type: DataType,
-
-    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
-    #[serde(rename = "chunk_grid")]
     pub chunk_shape: ChunkShape,
-
-    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
     pub chunk_key_encoding: ChunkKeyEncoding,
     pub fill_value: FillValue,
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
-    // each dimension name can be null in Zarr
     pub dimension_names: Option<DimensionNames>,
 }
 
@@ -680,7 +718,7 @@ pub enum AddNodeError {
     AlreadyExists(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum DeleteNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
@@ -690,20 +728,21 @@ pub enum DeleteNodeError {
     NotAGroup(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum UpdateNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
     #[error("there is not an array at `{0}`")]
     NotAnArray(Path),
-    // TODO: Don't we need a NotAGroup here?
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
 }
 
 #[derive(Debug, Error)]
 pub enum GetNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
-    #[error("storage error when searching for node")]
+    #[error("error contacting storage")]
     StorageError(#[from] StorageError),
 }
 

@@ -39,7 +39,10 @@ impl StructureTable {
     pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeStructure> {
         let max = self.batch.num_rows();
         // FIXME: unwrap
-        (0..max).map(move |idx| self.build_node_structure(idx).unwrap())
+        (0..max).map(move |idx| {
+            self.build_node_structure(idx)
+                .unwrap_or_else(|| panic!("Cannot build NodeStructure at index {idx}"))
+        })
     }
 
     // FIXME: there should be a failure reason here, so return a Result
