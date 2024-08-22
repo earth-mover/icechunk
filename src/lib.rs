@@ -730,7 +730,7 @@ pub enum StorageError {
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage {
+pub trait Storage: fmt::Debug {
     async fn fetch_structure(
         &self,
         id: &ObjectId,
@@ -765,13 +765,6 @@ pub trait Storage {
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError>;
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError>;
-}
-
-impl fmt::Debug for dyn Storage + Send + Sync {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // FIXME
-        write!(f, "Storage")
-    }
 }
 
 #[derive(Clone, Debug)]
