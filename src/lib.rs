@@ -44,7 +44,7 @@ use std::{
     sync::Arc,
 };
 use structure::StructureTable;
-#[cfg(test)] use test_strategy::Arbitrary;
+use test_strategy::Arbitrary;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -201,8 +201,6 @@ struct NameConfigSerializer {
 }
 
 #[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-// derive(Arbitrary) is only available in tests
-#[cfg_attr(test, derive(Arbitrary))]
 pub enum ChunkKeyEncoding {
     Slash,
     Dot,
@@ -269,8 +267,6 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 }
 
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
-// derive(Arbitrary) is only available in tests
-#[cfg_attr(test, derive(Arbitrary))]
 #[serde(untagged)]
 pub enum FillValue {
     // FIXME: test all json (de)serializations
