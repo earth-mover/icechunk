@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use std::{
     collections::HashMap,
+    fmt,
     fs::create_dir_all,
     ops::Range,
     sync::{Arc, RwLock},
@@ -60,7 +61,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
         let store = AmazonS3Builder::new()
-            // TODO: Generalize the auth config
+            // FIXME: Generalize the auth config
             .with_access_key_id("minio123")
             .with_secret_access_key("minio123")
             .with_endpoint("http://localhost:9000")
@@ -108,6 +109,11 @@ impl ObjectStorage {
     }
 }
 
+impl fmt::Debug for ObjectStorage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "ObjectStorage, prefix={}, store={}", self.prefix, self.store)
+    }
+}
 #[async_trait]
 impl Storage for ObjectStorage {
     async fn fetch_structure(
@@ -218,6 +224,12 @@ impl InMemoryStorage {
             man_files: Arc::new(RwLock::new(HashMap::new())),
             chunk_files: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+}
+
+impl fmt::Debug for InMemoryStorage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "InMemoryStorage at {:p}", self)
     }
 }
 
