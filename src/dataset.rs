@@ -1367,12 +1367,16 @@ mod tests {
     mod state_machine_test {
         use crate::storage::InMemoryStorage;
         use crate::{NodeData, Path, ZarrArrayMetadata};
+        use futures::Future;
+        // use futures::Future;
         use proptest::prelude::*;
+        use proptest::sample;
         use proptest::strategy::{BoxedStrategy, Just};
         use proptest_state_machine::{
             prop_state_machine, ReferenceStateMachine, StateMachineTest,
         };
         use std::collections::HashMap;
+        use std::fmt::Debug;
         use std::sync::Arc;
         use tokio::runtime::Runtime;
 
@@ -1382,24 +1386,21 @@ mod tests {
         use super::{node_paths, zarr_array_metadata};
 
         #[derive(Clone, Debug)]
-        pub enum DatasetTransition {
+        enum DatasetTransition {
             AddArray(Path, ZarrArrayMetadata),
             UpdateArray(Path, ZarrArrayMetadata),
+            DeleteArray(Option<Path>),
             AddGroup(Path),
+            DeleteGroup(Option<Path>),
         }
 
         /// An empty type used for the `ReferenceStateMachine` implementation.
-        pub struct DatasetStateMachine;
+        struct DatasetStateMachine;
 
-        #[derive(Clone, Debug)]
-        pub struct DatasetModel {
+        #[derive(Clone, Default, Debug)]
+        struct DatasetModel {
             arrays: HashMap<Path, ZarrArrayMetadata>,
             groups: Vec<Path>,
-        }
-        impl DatasetModel {
-            fn new() -> Self {
-                DatasetModel { arrays: HashMap::new(), groups: Vec::new() }
-            }
         }
 
         impl ReferenceStateMachine for DatasetStateMachine {
@@ -1407,18 +1408,48 @@ mod tests {
             type Transition = DatasetTransition;
 
             fn init_state() -> BoxedStrategy<Self::State> {
-                Just(DatasetModel::new()).boxed()
+                dbg!("======> New state");
+                Just(Default::default()).boxed()
             }
 
-            fn transitions(_state: &Self::State) -> BoxedStrategy<Self::Transition> {
-                // Using the regular proptest constructs here, the transitions can be
-                // given different weights.
+            fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
+                dbg!("generating transitions", state.clone());
+
+                // proptest-state-machine generates the transitions first,
+                // *then* applies the preconditions to decide if that transition is valid.
+                // that means we have to make sure that we are not sampling from
+                // parts of the State that are empty.
+                // i.e. we need to apply a precondition here :/
+                let delete_arrays = {
+                    if !state.arrays.is_empty() {
+                        let array_keys: Vec<Path> =
+                            state.arrays.keys().cloned().collect();
+                        sample::select(array_keys)
+                            .prop_map(|p| DatasetTransition::DeleteArray(Some(p)))
+                            .boxed()
+                    } else {
+                        Just(DatasetTransition::DeleteArray(None)).boxed()
+                    }
+                };
+
+                let delete_groups = {
+                    if !state.groups.is_empty() {
+                        sample::select(state.groups.clone())
+                            .prop_map(|p| DatasetTransition::DeleteGroup(Some(p)))
+                            .boxed()
+                    } else {
+                        Just(DatasetTransition::DeleteGroup(None)).boxed()
+                    }
+                };
+
                 prop_oneof![
                     (node_paths(), zarr_array_metadata())
                         .prop_map(|(a, b)| DatasetTransition::AddArray(a, b)),
                     (node_paths(), zarr_array_metadata())
                         .prop_map(|(a, b)| DatasetTransition::UpdateArray(a, b)),
+                    delete_arrays,
                     node_paths().prop_map(DatasetTransition::AddGroup),
+                    delete_groups,
                 ]
                 .boxed()
             }
@@ -1427,22 +1458,35 @@ mod tests {
                 mut state: Self::State,
                 transition: &Self::Transition,
             ) -> Self::State {
+                dbg!("apply");
                 match transition {
+                    // Array ops
                     DatasetTransition::AddArray(path, metadata)
                     | DatasetTransition::UpdateArray(path, metadata) => {
                         state.arrays.insert(path.clone(), metadata.clone());
                         // TODO: postcondition
                     }
+                    DatasetTransition::DeleteArray(path) => {
+                        let path = path.clone().unwrap();
+                        state.arrays.remove(&path).unwrap();
+                    }
 
+                    // Group ops
                     DatasetTransition::AddGroup(path) => {
                         state.groups.push(path.clone());
                         // TODO: postcondition
                     }
+                    DatasetTransition::DeleteGroup(Some(path)) => {
+                        let index = state.groups.iter().position(|x| x == path).unwrap();
+                        state.groups.swap_remove(index);
+                    }
+                    _ => panic!(),
                 }
                 state
             }
 
             fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
+                dbg!("in preconditions......");
                 match transition {
                     DatasetTransition::AddArray(path, _) => {
                         !state.arrays.contains_key(path) && !state.groups.contains(path)
@@ -1450,9 +1494,11 @@ mod tests {
                     DatasetTransition::UpdateArray(path, _) => {
                         state.arrays.contains_key(path)
                     }
+                    DatasetTransition::DeleteArray(path) => path.is_some(),
                     DatasetTransition::AddGroup(path) => {
                         !state.arrays.contains_key(path) && !state.groups.contains(path)
                     }
+                    DatasetTransition::DeleteGroup(p) => p.is_some(),
                 }
             }
         }
@@ -1460,6 +1506,21 @@ mod tests {
         struct TestDataset {
             dataset: Dataset,
             runtime: Runtime,
+        }
+        trait BlockOnUnwrap {
+            fn unwrap<F, T, E>(&self, future: F) -> T
+            where
+                F: Future<Output = Result<T, E>>,
+                E: Debug;
+        }
+        impl BlockOnUnwrap for Runtime {
+            fn unwrap<F, T, E>(&self, future: F) -> T
+            where
+                F: Future<Output = Result<T, E>>,
+                E: Debug,
+            {
+                self.block_on(future).unwrap()
+            }
         }
 
         impl StateMachineTest for TestDataset {
@@ -1481,18 +1542,25 @@ mod tests {
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
                 transition: DatasetTransition,
             ) -> Self::SystemUnderTest {
+                let runtime = &state.runtime;
+                let dataset = &mut state.dataset;
                 match transition {
-                    DatasetTransition::AddArray(path, metadata) => state
-                        .runtime
-                        .block_on(state.dataset.add_array(path, metadata))
-                        .unwrap(),
-                    DatasetTransition::UpdateArray(path, metadata) => state
-                        .runtime
-                        .block_on(state.dataset.update_array(path, metadata))
-                        .unwrap(),
-                    DatasetTransition::AddGroup(path) => {
-                        state.runtime.block_on(state.dataset.add_group(path)).unwrap()
+                    DatasetTransition::AddArray(path, metadata) => {
+                        runtime.unwrap(dataset.add_array(path, metadata))
                     }
+                    DatasetTransition::UpdateArray(path, metadata) => {
+                        runtime.unwrap(dataset.update_array(path, metadata))
+                    }
+                    DatasetTransition::DeleteArray(Some(path)) => {
+                        runtime.unwrap(dataset.delete_array(path))
+                    }
+                    DatasetTransition::AddGroup(path) => {
+                        runtime.unwrap(dataset.add_group(path))
+                    }
+                    DatasetTransition::DeleteGroup(Some(path)) => {
+                        runtime.unwrap(dataset.delete_group(path))
+                    }
+                    _ => panic!(),
                 }
                 state
             }
@@ -1501,15 +1569,24 @@ mod tests {
                 state: &Self::SystemUnderTest,
                 ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) {
+                let runtime = &state.runtime;
                 for (path, metadata) in ref_state.arrays.iter() {
-                    let node =
-                        state.runtime.block_on(state.dataset.get_array(path)).unwrap();
+                    let node = runtime.unwrap(state.dataset.get_array(path));
                     let actual_metadata = match node.node_data {
                         NodeData::Array(metadata, _) => Ok(metadata),
                         _ => Err("foo"),
                     }
                     .unwrap();
                     assert_eq!(metadata, &actual_metadata);
+                }
+
+                for path in ref_state.groups.iter() {
+                    let node = runtime.unwrap(state.dataset.get_group(path));
+                    match node.node_data {
+                        NodeData::Group => Ok(()),
+                        _ => Err("foo"),
+                    }
+                    .unwrap();
                 }
             }
         }
