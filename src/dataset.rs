@@ -778,8 +778,7 @@ mod tests {
         ) -> impl Strategy<Value = ShapeDim> {
             // FIXME: ndim = 0
             let max_ndim = max_ndim.unwrap_or(4usize);
-            (1..max_ndim)
-                .prop_flat_map(|ndim| vec(1u64..26u64, ndim))
+            vec(1u64..26u64, 1..max_ndim)
                 .prop_flat_map(|shape| {
                     let ndim = shape.len();
                     let chunk_shape: Vec<BoxedStrategy<NonZeroU64>> = shape
