@@ -768,7 +768,7 @@ mod strategies {
     pub(crate) struct ShapeDim {
         shape: ArrayShape,
         chunk_shape: ChunkShape,
-        dimension_names: DimensionNames,
+        dimension_names: Option<DimensionNames>,
     }
 
     pub(crate) fn shapes_and_dims(

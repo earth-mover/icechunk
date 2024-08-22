@@ -61,7 +61,7 @@ pub struct ArrayIndices(pub Vec<u64>);
 /// 0 is a valid shape member
 pub type ArrayShape = Vec<u64>;
 pub type DimensionName = String;
-pub type DimensionNames = Option<Vec<Option<DimensionName>>>;
+pub type DimensionNames = Vec<Option<DimensionName>>;
 
 pub type Path = PathBuf;
 
@@ -609,7 +609,7 @@ pub struct ZarrArrayMetadata {
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     // each dimension name can be null in Zarr
-    pub dimension_names: DimensionNames,
+    pub dimension_names: Option<DimensionNames>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
