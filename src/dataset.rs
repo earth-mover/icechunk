@@ -727,7 +727,7 @@ mod strategies {
     use std::sync::Arc;
 
     use proptest::prelude::*;
-    use proptest::strategy::Strategy;
+    use proptest::{collection::vec, option, strategy::Strategy};
 
     use crate::storage::InMemoryStorage;
     use crate::{
@@ -774,10 +774,6 @@ mod strategies {
     pub(crate) fn shapes_and_dims(
         max_ndim: Option<usize>,
     ) -> impl Strategy<Value = ShapeDim> {
-        use proptest::collection::vec;
-        use proptest::option;
-        use proptest::prelude::any;
-
         // FIXME: ndim = 0
         let max_ndim = max_ndim.unwrap_or(4usize);
         (1..max_ndim)
@@ -788,7 +784,7 @@ mod strategies {
                     .clone()
                     .into_iter()
                     .map(|size| {
-                        (1u64..size + 1)
+                        (1u64..=size)
                             .prop_map(|chunk_size| NonZeroU64::new(chunk_size).unwrap())
                             .boxed()
                     })
@@ -878,6 +874,9 @@ mod tests {
 
         // adding again must succeed
         prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+
+        // deleting again must succeed
+        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
     }
 
     #[proptest(async = "tokio")]
@@ -900,6 +899,9 @@ mod tests {
 
         // adding again must succeed
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+
+        // deleting again must succeed
+        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
