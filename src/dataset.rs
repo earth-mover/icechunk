@@ -1461,10 +1461,12 @@ mod tests {
                 dbg!("apply");
                 match transition {
                     // Array ops
-                    DatasetTransition::AddArray(path, metadata)
-                    | DatasetTransition::UpdateArray(path, metadata) => {
-                        state.arrays.insert(path.clone(), metadata.clone());
-                        // TODO: postcondition
+                    DatasetTransition::AddArray(path, metadata) => {
+                        let res = state.arrays.insert(path.clone(), metadata.clone());
+                        assert!(res.is_none());
+                    }
+                    DatasetTransition::UpdateArray(path, metadata) => {
+                        state.arrays.insert(path.clone(), metadata.clone()).unwrap();
                     }
                     DatasetTransition::DeleteArray(path) => {
                         let path = path.clone().unwrap();
@@ -1486,7 +1488,7 @@ mod tests {
             }
 
             fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
-                dbg!("in preconditions......");
+                dbg!("in preconditions...");
                 match transition {
                     DatasetTransition::AddArray(path, _) => {
                         !state.arrays.contains_key(path) && !state.groups.contains(path)
@@ -1593,11 +1595,6 @@ mod tests {
 
         prop_state_machine! {
             #![proptest_config(Config {
-            // Turn failure persistence off for demonstration. This means that no
-            // regression file will be captured.
-            failure_persistence: None,
-            // Enable verbose mode to make the state machine test print the
-            // transitions for each case.
             verbose: 1,
             .. Config::default()
         })]
