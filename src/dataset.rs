@@ -1,16 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet},
-    iter,
-    path::PathBuf,
-    sync::Arc,
-};
-
 pub use crate::format::manifest::ChunkPayload;
 pub use crate::format::structure::ZarrArrayMetadata;
 pub use crate::format::{ChunkIndices, Path};
 pub use crate::metadata::{
     ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
     DimensionNames, FillValue, StorageTransformer, UserAttributes,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+    path::PathBuf,
+    sync::Arc,
 };
 
 use bytes::Bytes;
@@ -1000,6 +999,38 @@ mod tests {
 
         // deleting again must succeed
         prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+    }
+
+    #[proptest(async = "tokio")]
+    async fn test_set_get_delete_chunk(
+        #[strategy(node_paths())] path: Path,
+        #[strategy(metadata_and_indices())] metadata_and_indices: (
+            ZarrArrayMetadata,
+            ChunkIndices,
+        ),
+        #[strategy(chunk_payloads())] payload1: ChunkPayload,
+        #[strategy(chunk_payloads())] payload2: ChunkPayload,
+        #[strategy(empty_datasets())] mut dataset: Dataset,
+    ) {
+        let (metadata, indices) = metadata_and_indices;
+
+        dataset.add_array(path.clone(), metadata.clone()).await.unwrap();
+
+        dataset
+            .set_chunk_ref(path.clone(), indices.clone(), Some(payload1.clone()))
+            .await?;
+
+        let chunk = dataset.get_chunk_ref(&path, &indices).await;
+        prop_assert_eq!(chunk, Some(payload1));
+
+        dataset
+            .set_chunk_ref(path.clone(), indices.clone(), Some(payload2.clone()))
+            .await?;
+        let chunk = dataset.get_chunk_ref(&path, &indices).await;
+        prop_assert_eq!(chunk, Some(payload2));
+
+        dataset.set_chunk_ref(path.clone(), indices.clone(), None).await.unwrap();
+        prop_assert!(dataset.get_chunk_ref(&path, &indices).await.is_none());
     }
 
     #[proptest(async = "tokio")]
