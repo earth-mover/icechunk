@@ -639,8 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_chunk_set_and_get_and_delete() -> Result<(), Box<dyn std::error::Error>>
-    {
+    async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let in_mem_storage = Arc::new(InMemoryStorage::new());
         let storage =
