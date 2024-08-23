@@ -1466,11 +1466,17 @@ mod tests {
                         assert!(res.is_none());
                     }
                     DatasetTransition::UpdateArray(path, metadata) => {
-                        state.arrays.insert(path.clone(), metadata.clone()).unwrap();
+                        state
+                            .arrays
+                            .insert(path.clone(), metadata.clone())
+                            .expect("(postcondition) insertion failed");
                     }
                     DatasetTransition::DeleteArray(path) => {
                         let path = path.clone().unwrap();
-                        state.arrays.remove(&path).unwrap();
+                        state
+                            .arrays
+                            .remove(&path)
+                            .expect("(postcondition) deletion failed");
                     }
 
                     // Group ops
@@ -1479,7 +1485,10 @@ mod tests {
                         // TODO: postcondition
                     }
                     DatasetTransition::DeleteGroup(Some(path)) => {
-                        let index = state.groups.iter().position(|x| x == path).unwrap();
+                        let index =
+                            state.groups.iter().position(|x| x == path).expect(
+                                "Attempting to delete a non-existent path: {path}",
+                            );
                         state.groups.swap_remove(index);
                     }
                     _ => panic!(),
