@@ -5,7 +5,7 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
-use tokio::{spawn, sync::RwLock};
+use tokio::spawn;
 
 use crate::{
     AddNodeError, ArrayIndices, ArrayShape, ChunkKeyEncoding, ChunkOffset, ChunkShape,
@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub struct Store {
-    dataset: Arc<RwLock<Dataset>>,
+    dataset: Dataset,
 }
 
 type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
@@ -47,15 +47,15 @@ pub enum StoreError {
 
 impl Store {
     pub fn new(dataset: Dataset) -> Self {
-        Store { dataset: Arc::new(RwLock::new(dataset)) }
+        Store { dataset }
     }
 
-    pub fn dataset(self) -> Option<Dataset> {
-        Arc::into_inner(self.dataset).map(|d| d.into_inner())
+    pub fn dataset(self) -> Dataset {
+        self.dataset
     }
 
     pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.dataset.read().await.list_nodes().await.next().is_none();
+        let res = self.dataset.list_nodes().await.next().is_none();
         Ok(res)
     }
 
@@ -119,7 +119,7 @@ impl Store {
                 }
             }
             Key::Chunk { ref node_path, ref coords } => {
-                self.dataset.write().await.set_chunk(node_path, coords, value).await?;
+                self.dataset.set_chunk(node_path, coords, value).await?;
                 Ok(())
             }
         }
@@ -168,7 +168,7 @@ impl Store {
         path: Path,
         coords: ArrayIndices,
     ) -> StoreResult<Bytes> {
-        let chunk = self.dataset.read().await.get_chunk(&path, &coords).await;
+        let chunk = self.dataset.get_chunk(&path, &coords).await;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
             key: key.to_string(),
             path,
@@ -177,7 +177,7 @@ impl Store {
     }
 
     async fn get_metadata(&self, _key: &str, path: &Path) -> StoreResult<Bytes> {
-        let node = self.dataset.read().await.get_node(path).await.map_err(|_| {
+        let node = self.dataset.get_node(path).await.map_err(|_| {
             StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
         })?;
         let user_attributes = match node.user_attributes {
@@ -195,37 +195,33 @@ impl Store {
     }
 
     async fn set_array_meta(
-        &self,
+        &mut self,
         path: Path,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
-        if self.dataset.read().await.get_array(&path).await.is_ok() {
-            let mut ds = self.dataset.write().await;
+        if self.dataset.get_array(&path).await.is_ok() {
             // TODO: we don't necessarily need to update both
-            ds.set_user_attributes(path.clone(), array_meta.attributes).await?;
-            ds.update_array(path, array_meta.zarr_metadata).await?;
+            self.dataset.set_user_attributes(path.clone(), array_meta.attributes).await?;
+            self.dataset.update_array(path, array_meta.zarr_metadata).await?;
             Ok(())
         } else {
-            let mut ds = self.dataset.write().await;
-            ds.add_array(path.clone(), array_meta.zarr_metadata).await?;
-            ds.set_user_attributes(path, array_meta.attributes).await?;
+            self.dataset.add_array(path.clone(), array_meta.zarr_metadata).await?;
+            self.dataset.set_user_attributes(path, array_meta.attributes).await?;
             Ok(())
         }
     }
 
     async fn set_group_meta(
-        &self,
+        &mut self,
         path: Path,
         group_meta: GroupMetadata,
     ) -> Result<(), StoreError> {
-        if self.dataset.read().await.get_group(&path).await.is_ok() {
-            let mut ds = self.dataset.write().await;
-            ds.set_user_attributes(path, group_meta.attributes).await?;
+        if self.dataset.get_group(&path).await.is_ok() {
+            self.dataset.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         } else {
-            let mut ds = self.dataset.write().await;
-            ds.add_group(path.clone()).await?;
-            ds.set_user_attributes(path, group_meta.attributes).await?;
+            self.dataset.add_group(path.clone()).await?;
+            self.dataset.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         }
     }
@@ -615,7 +611,7 @@ mod tests {
         let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, data);
 
-        let mut ds = store.dataset().unwrap();
+        let mut ds = store.dataset();
         let oid = ds.flush().await?;
 
         let ds = Dataset::update(storage, oid);
