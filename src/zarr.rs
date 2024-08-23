@@ -9,9 +9,9 @@ use tokio::spawn;
 
 use crate::{
     AddNodeError, ArrayIndices, ArrayShape, ChunkKeyEncoding, ChunkOffset, ChunkShape,
-    Codec, DataType, Dataset, DimensionNames, FillValue, IcechunkFormatError, NodeData,
-    Path, StorageTransformer, UpdateNodeError, UserAttributes, UserAttributesStructure,
-    ZarrArrayMetadata,
+    Codec, DataType, Dataset, DeleteNodeError, DimensionNames, FillValue,
+    IcechunkFormatError, NodeData, Path, StorageTransformer, UpdateNodeError,
+    UserAttributes, UserAttributesStructure, ZarrArrayMetadata,
 };
 
 pub struct Store {
@@ -37,6 +37,8 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("cannot update object: `{0}`")]
     CannotUpdate(#[from] UpdateNodeError),
+    #[error("cannot delete object: `{0}`")]
+    CannotDelete(#[from] DeleteNodeError),
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] serde_json::Error),
     #[error("add node error: `{0}`")]
@@ -125,8 +127,22 @@ impl Store {
         }
     }
 
-    pub async fn delete(&mut self, _key: &str) -> StoreResult<()> {
-        todo!()
+    pub async fn delete(&mut self, key: &str) -> StoreResult<()> {
+        let mut ds = self.dataset.write().await;
+        match Key::parse(key)? {
+            Key::Metadata { node_path } => {
+                let node = ds.get_node(&node_path).await.map_err(|_| {
+                    KeyNotFoundError::NodeNotFound { path: node_path.clone() }
+                })?;
+                match node.node_data {
+                    NodeData::Array(_, _) => Ok(ds.delete_array(node_path).await?),
+                    NodeData::Group => Ok(ds.delete_group(node_path).await?),
+                }
+            }
+            Key::Chunk { node_path, coords } => {
+                Ok(ds.set_chunk_ref(node_path, coords, None).await?)
+            }
+        }
     }
 
     pub fn supports_partial_writes(&self) -> StoreResult<bool> {
@@ -544,7 +560,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_metadata_set_and_get_and_delete(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
         let ds = Dataset::create(Arc::clone(&storage));
@@ -583,11 +600,28 @@ mod tests {
             zarr_meta.clone()
         );
 
+        // delete metadata tests
+        store.delete("a/b/array/zarr.json").await.unwrap();
+        assert!(matches!(
+            store.get("a/b/array/zarr.json", &(None, None)).await,
+            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
+                if path.to_str() == Some("/a/b/array"),
+        ));
+        store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
+        store.delete("a/b/zarr.json").await.unwrap();
+        assert!(matches!(
+            store.get("a/b/zarr.json", &(None, None)).await,
+            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
+                if path.to_str() == Some("/a/b"),
+        ));
+        store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
+
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_chunk_set_and_get_and_delete() -> Result<(), Box<dyn std::error::Error>>
+    {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let in_mem_storage = Arc::new(InMemoryStorage::new());
         let storage =
@@ -615,9 +649,26 @@ mod tests {
         let oid = ds.flush().await?;
 
         let ds = Dataset::update(storage, oid);
-        let store = Store::new(ds);
+        let mut store = Store::new(ds);
         assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
 
+        // delete chunk
+        store.delete("array/c/0/1/0").await.unwrap();
+        // deleting a deleted chunk is allowed
+        store.delete("array/c/0/1/0").await.unwrap();
+        // deleting non-existent chunk is allowed
+        store.delete("array/c/1/1/1").await.unwrap();
+        assert!(matches!(
+            store.get("array/c/0/1/0", &(None, None)).await,
+            Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
+                if key == "array/c/0/1/0" && path.to_str() == Some("/array") && coords == ArrayIndices([0, 1, 0].to_vec())
+        ));
+        assert!(matches!(
+            store.delete("array/foo").await,
+            Err(StoreError::InvalidKey { key }) if key == "array/foo",
+        ));
+        // FIXME: deleting an invalid chunk should not be allowed.
+        store.delete("array/c/10/1/1").await.unwrap();
         Ok(())
     }
 }
