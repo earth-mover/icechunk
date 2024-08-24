@@ -17,6 +17,7 @@ use crate::{
     UserAttributesStructure, ZarrArrayMetadata,
 };
 
+#[derive(Debug, PartialEq)]
 pub struct StructureTable {
     pub batch: RecordBatch,
 }

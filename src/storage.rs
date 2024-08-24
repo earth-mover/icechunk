@@ -393,7 +393,7 @@ impl MemCachingStorage {
         let cache = Cache::with_options(
             OptionsBuilder::new()
                 // TODO: estimate this capacity
-                .estimated_items_capacity(1000)
+                .estimated_items_capacity(0)
                 .weight_capacity(approx_max_memory_bytes)
                 .build()
                 .expect("Bug in MemCachingStorage"),
@@ -514,20 +514,21 @@ impl Storage for MemCachingStorage {
 #[cfg(test)]
 mod tests {
     use std::env::temp_dir;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use crate::ObjectId;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use itertools::Itertools;
     use rand;
     use rand::distributions::Alphanumeric;
     use rand::Rng;
 
-    use super::ObjectStorage;
+    use super::*;
 
-    fn make_record_batch() -> RecordBatch {
-        let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    fn make_record_batch(data: Vec<i32>) -> RecordBatch {
+        let id_array = Int32Array::from(data);
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap()
@@ -536,7 +537,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_write_parquet_object_storage() {
         // simple test to make sure we can speak to all stores
-        let batch = make_record_batch();
+        let batch = make_record_batch(vec![1, 2, 3, 4, 5]);
         let mut prefix = temp_dir().to_str().unwrap().to_string();
         let rdms: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -559,5 +560,179 @@ mod tests {
             let actual = store.read_parquet(&path).await.unwrap();
             assert_eq!(actual, batch)
         }
+    }
+
+    #[derive(Debug)]
+    struct LoggingStorage {
+        backend: Arc<dyn Storage + Send + Sync>,
+        fetch_log: Mutex<Vec<(String, ObjectId)>>,
+    }
+
+    impl LoggingStorage {
+        fn new(backend: Arc<dyn Storage + Send + Sync>) -> Self {
+            Self { backend, fetch_log: Mutex::new(Vec::new()) }
+        }
+
+        fn fetch_log(&self) -> Vec<(String, ObjectId)> {
+            self.fetch_log.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Storage for LoggingStorage {
+        async fn fetch_structure(
+            &self,
+            id: &ObjectId,
+        ) -> Result<Arc<StructureTable>, StorageError> {
+            self.fetch_log
+                .lock()
+                .unwrap()
+                .push(("fetch_structure".to_string(), id.clone()));
+            self.backend.fetch_structure(id).await
+        }
+
+        async fn fetch_attributes(
+            &self,
+            id: &ObjectId,
+        ) -> Result<Arc<AttributesTable>, StorageError> {
+            self.fetch_log
+                .lock()
+                .unwrap()
+                .push(("fetch_attributes".to_string(), id.clone()));
+            self.backend.fetch_attributes(id).await
+        }
+
+        async fn fetch_manifests(
+            &self,
+            id: &ObjectId,
+        ) -> Result<Arc<ManifestsTable>, StorageError> {
+            self.fetch_log
+                .lock()
+                .unwrap()
+                .push(("fetch_manifests".to_string(), id.clone()));
+            self.backend.fetch_manifests(id).await
+        }
+
+        async fn fetch_chunk(
+            &self,
+            id: &ObjectId,
+            range: &Option<Range<ChunkOffset>>,
+        ) -> Result<Bytes, StorageError> {
+            self.fetch_log.lock().unwrap().push(("fetch_chunk".to_string(), id.clone()));
+            self.backend.fetch_chunk(id, range).await
+        }
+
+        async fn write_structure(
+            &self,
+            id: ObjectId,
+            table: Arc<StructureTable>,
+        ) -> Result<(), StorageError> {
+            self.backend.write_structure(id, table).await
+        }
+
+        async fn write_attributes(
+            &self,
+            id: ObjectId,
+            table: Arc<AttributesTable>,
+        ) -> Result<(), StorageError> {
+            self.backend.write_attributes(id, table).await
+        }
+
+        async fn write_manifests(
+            &self,
+            id: ObjectId,
+            table: Arc<ManifestsTable>,
+        ) -> Result<(), StorageError> {
+            self.backend.write_manifests(id, table).await
+        }
+
+        async fn write_chunk(
+            &self,
+            id: ObjectId,
+            bytes: Bytes,
+        ) -> Result<(), StorageError> {
+            self.backend.write_chunk(id, bytes).await
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_caching_storage_caches() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+
+        let pre_existing_id = ObjectId::random();
+        let pre_exiting_table =
+            Arc::new(StructureTable { batch: make_record_batch(vec![1]) });
+        backend
+            .write_structure(pre_existing_id.clone(), Arc::clone(&pre_exiting_table))
+            .await?;
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 100_000_000);
+
+        let table = Arc::new(StructureTable { batch: make_record_batch(vec![2]) });
+        let id = ObjectId::random();
+        caching.write_structure(id.clone(), Arc::clone(&table)).await?;
+
+        assert_eq!(caching.fetch_structure(&id).await?, table);
+        assert_eq!(caching.fetch_structure(&id).await?, table);
+        // when we insert we cache, so no fetches
+        assert_eq!(logging.fetch_log(), vec![]);
+
+        // first time it sees an ID it calls the backend
+        assert_eq!(caching.fetch_structure(&pre_existing_id).await?, pre_exiting_table);
+        assert_eq!(
+            logging.fetch_log(),
+            vec![("fetch_structure".to_string(), pre_existing_id.clone())]
+        );
+
+        // only calls backend once
+        assert_eq!(caching.fetch_structure(&pre_existing_id).await?, pre_exiting_table);
+        assert_eq!(
+            logging.fetch_log(),
+            vec![("fetch_structure".to_string(), pre_existing_id.clone())]
+        );
+
+        // other walues still cached
+        assert_eq!(caching.fetch_structure(&id).await?, table);
+        assert_eq!(
+            logging.fetch_log(),
+            vec![("fetch_structure".to_string(), pre_existing_id.clone())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+
+        let id1 = ObjectId::random();
+        let table1 = Arc::new(StructureTable { batch: make_record_batch(vec![1, 2, 3]) });
+        backend.write_structure(id1.clone(), Arc::clone(&table1)).await?;
+        let id2 = ObjectId::random();
+        let table2 = Arc::new(StructureTable { batch: make_record_batch(vec![4, 5, 6]) });
+        backend.write_structure(id2.clone(), Arc::clone(&table2)).await?;
+        let id3 = ObjectId::random();
+        let table3 = Arc::new(StructureTable { batch: make_record_batch(vec![7, 8, 9]) });
+        backend.write_structure(id3.clone(), Arc::clone(&table3)).await?;
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let caching = MemCachingStorage::new(
+            Arc::clone(&logging_c),
+            // the cache can only fit 2 tables
+            2 * table1.batch.get_array_memory_size() as u64,
+        );
+
+        // we keep asking for all 3 items, but the cache can only fit 2
+        for _ in 0..20 {
+            assert_eq!(caching.fetch_structure(&id1).await?, table1);
+            assert_eq!(caching.fetch_structure(&id2).await?, table2);
+            assert_eq!(caching.fetch_structure(&id3).await?, table3);
+        }
+        // after the initial warming requests, we only request the file that doesn't fit in the cache
+        assert_eq!(logging.fetch_log()[10..].iter().unique().count(), 1);
+
+        Ok(())
     }
 }

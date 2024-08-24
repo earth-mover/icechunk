@@ -709,7 +709,7 @@ pub struct ChunkInfo {
     payload: ChunkPayload,
 }
 
-// FIXME: this will hold the arrow file
+#[derive(Debug, PartialEq)]
 pub struct AttributesTable {
     pub batch: RecordBatch,
 }
