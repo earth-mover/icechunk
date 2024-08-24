@@ -1,4 +1,8 @@
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
+use quick_cache::{
+    sync::{Cache, DefaultLifecycle},
+    DefaultHashBuilder, OptionsBuilder, Weighter,
+};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
@@ -338,6 +342,171 @@ impl Storage for InMemoryStorage {
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         self.chunk_files.write().or(Err(StorageError::Deadlock))?.insert(id, bytes);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum CacheKey {
+    Struct(ObjectId),
+    Attributes(ObjectId),
+    Manifest(ObjectId),
+    Chunk(ObjectId, Option<Range<ChunkOffset>>),
+}
+
+#[derive(Clone)]
+enum CacheValue {
+    Struct(Arc<StructureTable>),
+    Attributes(Arc<AttributesTable>),
+    Manifest(Arc<ManifestsTable>),
+    Chunk(Bytes),
+}
+
+#[derive(Debug, Clone)]
+struct CacheWeigther;
+
+#[derive(Debug)]
+pub struct MemCachingStorage {
+    backend: Arc<dyn Storage + Send + Sync>,
+    // We keep all objects in a single cache so we can effictively limit total memory usage while
+    // maintaining the LRU semantics
+    cache: Cache<CacheKey, CacheValue, CacheWeigther>,
+}
+
+impl Weighter<CacheKey, CacheValue> for CacheWeigther {
+    fn weight(&self, _key: &CacheKey, val: &CacheValue) -> u64 {
+        // We ignore the keys weigth
+        match val {
+            CacheValue::Struct(table) => table.batch.get_array_memory_size() as u64,
+            CacheValue::Attributes(table) => table.batch.get_array_memory_size() as u64,
+            CacheValue::Manifest(table) => table.batch.get_array_memory_size() as u64,
+            CacheValue::Chunk(bytes) => bytes.len() as u64,
+        }
+    }
+}
+
+impl MemCachingStorage {
+    pub fn new(
+        backend: Arc<dyn Storage + Send + Sync>,
+        approx_max_memory_bytes: u64,
+    ) -> Self {
+        let cache = Cache::with_options(
+            OptionsBuilder::new()
+                // TODO: estimate this capacity
+                .estimated_items_capacity(1000)
+                .weight_capacity(approx_max_memory_bytes)
+                .build()
+                .expect("Bug in MemCachingStorage"),
+            CacheWeigther,
+            DefaultHashBuilder::default(),
+            DefaultLifecycle::default(),
+        );
+        MemCachingStorage { backend, cache }
+    }
+}
+
+#[async_trait]
+impl Storage for MemCachingStorage {
+    async fn fetch_structure(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<StructureTable>, StorageError> {
+        match self.cache.get_value_or_guard_async(&CacheKey::Struct(id.clone())).await {
+            Ok(CacheValue::Struct(table)) => Ok(table),
+            Err(guard) => {
+                let table = self.backend.fetch_structure(id).await?;
+                let _fail_is_ok = guard.insert(CacheValue::Struct(Arc::clone(&table)));
+                Ok(table)
+            }
+            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+        }
+    }
+
+    async fn fetch_attributes(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<AttributesTable>, StorageError> {
+        match self.cache.get_value_or_guard_async(&CacheKey::Struct(id.clone())).await {
+            Ok(CacheValue::Attributes(table)) => Ok(table),
+            Err(guard) => {
+                let table = self.backend.fetch_attributes(id).await?;
+                let _fail_is_ok =
+                    guard.insert(CacheValue::Attributes(Arc::clone(&table)));
+                Ok(table)
+            }
+            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+        }
+    }
+
+    async fn fetch_manifests(
+        &self,
+        id: &ObjectId,
+    ) -> Result<Arc<ManifestsTable>, StorageError> {
+        match self.cache.get_value_or_guard_async(&CacheKey::Struct(id.clone())).await {
+            Ok(CacheValue::Manifest(table)) => Ok(table),
+            Err(guard) => {
+                let table = self.backend.fetch_manifests(id).await?;
+                let _fail_is_ok = guard.insert(CacheValue::Manifest(Arc::clone(&table)));
+                Ok(table)
+            }
+            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+        }
+    }
+
+    async fn fetch_chunk(
+        &self,
+        id: &ObjectId,
+        range: &Option<Range<ChunkOffset>>,
+    ) -> Result<Bytes, StorageError> {
+        match self
+            .cache
+            .get_value_or_guard_async(&CacheKey::Chunk(id.clone(), range.clone()))
+            .await
+        {
+            Ok(CacheValue::Chunk(table)) => Ok(table),
+            Err(guard) => {
+                let bytes = self.backend.fetch_chunk(id, range).await?;
+                let _fail_is_ok = guard.insert(CacheValue::Chunk(bytes.clone()));
+                Ok(bytes)
+            }
+            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+        }
+    }
+
+    async fn write_structure(
+        &self,
+        id: ObjectId,
+        table: Arc<StructureTable>,
+    ) -> Result<(), StorageError> {
+        self.backend.write_structure(id.clone(), Arc::clone(&table)).await?;
+        self.cache.insert(CacheKey::Struct(id), CacheValue::Struct(table));
+        Ok(())
+    }
+
+    async fn write_attributes(
+        &self,
+        id: ObjectId,
+        table: Arc<AttributesTable>,
+    ) -> Result<(), StorageError> {
+        self.backend.write_attributes(id.clone(), Arc::clone(&table)).await?;
+        self.cache.insert(CacheKey::Attributes(id), CacheValue::Attributes(table));
+        Ok(())
+    }
+
+    async fn write_manifests(
+        &self,
+        id: ObjectId,
+        table: Arc<ManifestsTable>,
+    ) -> Result<(), StorageError> {
+        self.backend.write_manifests(id.clone(), Arc::clone(&table)).await?;
+        self.cache.insert(CacheKey::Manifest(id), CacheValue::Manifest(table));
+        Ok(())
+    }
+
+    async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
+        self.backend.write_chunk(id.clone(), bytes.clone()).await?;
+        // TODO: we could add the chunk also with its full range (0, size)
+        self.cache.insert(CacheKey::Chunk(id, None), CacheValue::Chunk(bytes));
         Ok(())
     }
 }
