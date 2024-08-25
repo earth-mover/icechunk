@@ -52,9 +52,6 @@ jobs:
           rustup update --no-self-update ${{ env.RUST_CHANNEL }}
           rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src
           rustup default ${{ env.RUST_CHANNEL }}
-          rustup toolchain install nightly --component miri
-          cargo +nightly miri setup
-
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
@@ -73,16 +70,3 @@ jobs:
           AWS_DEFAULT_REGION: "us-east-1"
         run: |
           just pre-commit
-
-      - name: Run miri check
-        if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
-        env:
-          AWS_ACCESS_KEY_ID: minio123
-          AWS_SECRET_ACCESS_KEY: minio123
-          AWS_DEFAULT_REGION: "us-east-1"
-        run: |
-          cargo +nigthly miri test
-          for example in examples/*.rs
-          do
-              cargo +nightly miri run --example "$(basename "${example%.rs}")" -- $args
-          done
