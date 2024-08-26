@@ -712,7 +712,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
 
         assert!(matches!(
@@ -756,7 +756,7 @@ mod tests {
         let in_mem_storage = Arc::new(InMemoryStorage::new());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
@@ -793,7 +793,7 @@ mod tests {
         let in_mem_storage = Arc::new(InMemoryStorage::new());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
 
         store
@@ -805,19 +805,27 @@ mod tests {
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await?;
 
-        let data = Bytes::copy_from_slice(b"hello");
-        store.set("array/c/0/1/0", data.clone()).await?;
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
+        // a small inline chunk
+        let small_data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", small_data.clone()).await?;
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
+        // no new chunks written because it was inline
+        assert!(in_mem_storage.chunk_ids().is_empty());
 
+        // a big chunk
+        let big_data = Bytes::copy_from_slice(b"hello".repeat(512).as_slice());
+        store.set("array/c/0/1/1", big_data.clone()).await?;
+        assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
         let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
-        assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, data);
+        assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
         let mut ds = store.dataset();
         let oid = ds.flush().await?;
 
-        let ds = Dataset::update(storage, oid);
+        let ds = Dataset::update(storage, oid).build();
         let store = Store::new(ds);
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
+        assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
 
         Ok(())
     }
@@ -827,7 +835,7 @@ mod tests {
         let in_mem_storage = Arc::new(InMemoryStorage::new());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
 
         store
@@ -865,7 +873,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
 
         assert!(
@@ -941,7 +949,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
 
         store
@@ -975,7 +983,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-        let ds = Dataset::create(Arc::clone(&storage));
+        let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds);
 
         store

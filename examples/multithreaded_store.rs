@@ -2,13 +2,19 @@ use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use icechunk::{storage::InMemoryStorage, zarr::Store, Dataset, Storage};
+use icechunk::{
+    storage::{InMemoryStorage, MemCachingStorage},
+    zarr::Store,
+    Dataset, Storage,
+};
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-    let ds = Dataset::create(Arc::clone(&storage));
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(MemCachingStorage::new(storage, 100_000_000));
+    let ds = Dataset::create(Arc::clone(&storage)).build();
     let store = Arc::new(RwLock::new(Store::new(ds)));
 
     store

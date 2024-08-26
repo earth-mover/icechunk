@@ -16,6 +16,7 @@ use crate::{
     VirtualChunkRef,
 };
 
+#[derive(Debug, PartialEq)]
 pub struct ManifestsTable {
     pub batch: RecordBatch,
 }
