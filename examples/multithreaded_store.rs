@@ -4,8 +4,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use icechunk::{
     storage::{InMemoryStorage, MemCachingStorage},
-    zarr::Store,
-    Dataset, Storage,
+    Dataset, Storage, Store,
 };
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
