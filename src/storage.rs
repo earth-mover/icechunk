@@ -348,7 +348,7 @@ impl Storage for InMemoryStorage {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum CacheKey {
-    Struct(ObjectId),
+    Structure(ObjectId),
     Attributes(ObjectId),
     Manifest(ObjectId),
     Chunk(ObjectId, Option<Range<ChunkOffset>>),
@@ -356,28 +356,28 @@ enum CacheKey {
 
 #[derive(Clone)]
 enum CacheValue {
-    Struct(Arc<StructureTable>),
+    Structure(Arc<StructureTable>),
     Attributes(Arc<AttributesTable>),
     Manifest(Arc<ManifestsTable>),
     Chunk(Bytes),
 }
 
 #[derive(Debug, Clone)]
-struct CacheWeigther;
+struct CacheWeighter;
 
 #[derive(Debug)]
 pub struct MemCachingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     // We keep all objects in a single cache so we can effictively limit total memory usage while
     // maintaining the LRU semantics
-    cache: Cache<CacheKey, CacheValue, CacheWeigther>,
+    cache: Cache<CacheKey, CacheValue, CacheWeighter>,
 }
 
-impl Weighter<CacheKey, CacheValue> for CacheWeigther {
+impl Weighter<CacheKey, CacheValue> for CacheWeighter {
     fn weight(&self, _key: &CacheKey, val: &CacheValue) -> u64 {
         // We ignore the keys weigth
         match val {
-            CacheValue::Struct(table) => table.batch.get_array_memory_size() as u64,
+            CacheValue::Structure(table) => table.batch.get_array_memory_size() as u64,
             CacheValue::Attributes(table) => table.batch.get_array_memory_size() as u64,
             CacheValue::Manifest(table) => table.batch.get_array_memory_size() as u64,
             CacheValue::Chunk(bytes) => bytes.len() as u64,
@@ -397,7 +397,7 @@ impl MemCachingStorage {
                 .weight_capacity(approx_max_memory_bytes)
                 .build()
                 .expect("Bug in MemCachingStorage"),
-            CacheWeigther,
+            CacheWeighter,
             DefaultHashBuilder::default(),
             DefaultLifecycle::default(),
         );
@@ -411,11 +411,12 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<StructureTable>, StorageError> {
-        match self.cache.get_value_or_guard_async(&CacheKey::Struct(id.clone())).await {
-            Ok(CacheValue::Struct(table)) => Ok(table),
+        match self.cache.get_value_or_guard_async(&CacheKey::Structure(id.clone())).await
+        {
+            Ok(CacheValue::Structure(table)) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_structure(id).await?;
-                let _fail_is_ok = guard.insert(CacheValue::Struct(Arc::clone(&table)));
+                let _fail_is_ok = guard.insert(CacheValue::Structure(Arc::clone(&table)));
                 Ok(table)
             }
             Ok(_) => panic!("Logic bug in MemCachingStorage"),
@@ -426,7 +427,8 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
-        match self.cache.get_value_or_guard_async(&CacheKey::Struct(id.clone())).await {
+        match self.cache.get_value_or_guard_async(&CacheKey::Structure(id.clone())).await
+        {
             Ok(CacheValue::Attributes(table)) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_attributes(id).await?;
@@ -442,7 +444,8 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
-        match self.cache.get_value_or_guard_async(&CacheKey::Struct(id.clone())).await {
+        match self.cache.get_value_or_guard_async(&CacheKey::Structure(id.clone())).await
+        {
             Ok(CacheValue::Manifest(table)) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_manifests(id).await?;
@@ -479,7 +482,7 @@ impl Storage for MemCachingStorage {
         table: Arc<StructureTable>,
     ) -> Result<(), StorageError> {
         self.backend.write_structure(id.clone(), Arc::clone(&table)).await?;
-        self.cache.insert(CacheKey::Struct(id), CacheValue::Struct(table));
+        self.cache.insert(CacheKey::Structure(id), CacheValue::Structure(table));
         Ok(())
     }
 
