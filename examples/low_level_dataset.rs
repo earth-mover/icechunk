@@ -22,7 +22,7 @@ let mut ds = Dataset::create(Arc::clone(&storage));
     );
 
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-    let mut ds = Dataset::create(Arc::clone(&storage));
+    let mut ds = Dataset::create(Arc::clone(&storage)).build();
 
     println!();
     println!();
@@ -197,7 +197,7 @@ ds.flush().await?;
 
     println!("## Creating a new Dataset instance @ latest version");
 
-    let mut ds = Dataset::update(Arc::clone(&storage), v2_id.clone());
+    let mut ds = Dataset::update(Arc::clone(&storage), v2_id.clone()).build();
 
     println!(
         r#"
@@ -249,7 +249,7 @@ ds.flush().await?;
     );
 
     println!("Creating a new Dataset instance, on the previous version");
-    let ds = Dataset::update(Arc::clone(&storage), v2_id.clone());
+    let ds = Dataset::update(Arc::clone(&storage), v2_id.clone()).build();
 
     println!(
         r#"

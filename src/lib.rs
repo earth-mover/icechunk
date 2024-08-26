@@ -807,7 +807,20 @@ pub trait Storage: fmt::Debug {
 }
 
 #[derive(Clone, Debug)]
+pub struct DatasetConfig {
+    // Chunks smaller than this will be stored inline in the manifst
+    pub inline_threshold_bytes: u16,
+}
+
+impl Default for DatasetConfig {
+    fn default() -> Self {
+        Self { inline_threshold_bytes: 512 }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Dataset {
+    config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     structure_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,

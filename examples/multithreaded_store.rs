@@ -7,7 +7,7 @@ use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-    let ds = Dataset::create(Arc::clone(&storage));
+    let ds = Dataset::create(Arc::clone(&storage)).build();
     let store = Arc::new(RwLock::new(Store::new(ds)));
 
     store
