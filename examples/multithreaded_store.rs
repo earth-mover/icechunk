@@ -1,13 +1,20 @@
 use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use icechunk::{storage::InMemoryStorage, zarr::Store, Dataset, Storage};
+use futures::StreamExt;
+use icechunk::{
+    storage::{InMemoryStorage, MemCachingStorage},
+    zarr::Store,
+    Dataset, Storage,
+};
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-    let ds = Dataset::create(Arc::clone(&storage));
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(MemCachingStorage::new(storage, 100_000_000));
+    let ds = Dataset::create(Arc::clone(&storage)).build();
     let store = Arc::new(RwLock::new(Store::new(ds)));
 
     store
@@ -78,6 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer1.await?;
     writer2.await?;
     while (set.join_next().await).is_some() {}
+
+    let all_keys = store.read().await.list().await?.count().await;
+    println!("Found {all_keys} keys in the store: 100 chunks + 1 root group metadata + 1 array metadata");
 
     Ok(())
 }

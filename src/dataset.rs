@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -11,10 +12,10 @@ use thiserror::Error;
 
 use crate::{
     manifest::mk_manifests_table, structure::mk_structure_table, AddNodeError,
-    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, ChunkRef, Dataset, DeleteNodeError,
-    Flags, GetNodeError, ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure,
-    ObjectId, Path, Storage, StorageError, TableRegion, UpdateNodeError, UserAttributes,
-    UserAttributesStructure, ZarrArrayMetadata,
+    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, ChunkRef, Dataset, DatasetConfig,
+    DeleteNodeError, Flags, GetNodeError, ManifestExtents, ManifestRef, NodeData, NodeId,
+    NodeStructure, ObjectId, Path, Storage, StorageError, TableRegion, UpdateNodeError,
+    UserAttributes, UserAttributesStructure, ZarrArrayMetadata,
 };
 
 impl ChangeSet {
@@ -122,13 +123,20 @@ impl ChangeSet {
         }
     }
 
-    fn new_arrays_chunk_iterator(&self) -> impl Iterator<Item = ChunkInfo> + '_ {
+    fn new_arrays_chunk_iterator(
+        &self,
+    ) -> impl Iterator<Item = (PathBuf, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
             self.array_chunks_iterator(path).filter_map(|(coords, payload)| {
-                payload.as_ref().map(|p| ChunkInfo {
-                    node: *node_id,
-                    coord: coords.clone(),
-                    payload: p.clone(),
+                payload.as_ref().map(|p| {
+                    (
+                        path.clone(),
+                        ChunkInfo {
+                            node: *node_id,
+                            coord: coords.clone(),
+                            payload: p.clone(),
+                        },
+                    )
                 })
             })
         })
@@ -138,27 +146,53 @@ impl ChangeSet {
         self.new_groups.keys().chain(self.new_arrays.keys())
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct DatasetBuilder {
+    config: DatasetConfig,
+    storage: Arc<dyn Storage + Send + Sync>,
+    structure_id: Option<ObjectId>,
+}
+
+impl DatasetBuilder {
+    fn new(
+        storage: Arc<dyn Storage + Send + Sync>,
+        structure_id: Option<ObjectId>,
+    ) -> Self {
+        Self { config: DatasetConfig::default(), structure_id, storage }
+    }
+
+    pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
+        self.config.inline_threshold_bytes = threshold;
+        self
+    }
+
+    pub fn build(&self) -> Dataset {
+        Dataset::new(self.config.clone(), self.storage.clone(), self.structure_id.clone())
+    }
+}
 /// FIXME: what do we want to do with implicit groups?
 ///
 impl Dataset {
-    pub fn create(storage: Arc<dyn Storage + Send + Sync>) -> Self {
-        Dataset::new(storage, None)
+    pub fn create(storage: Arc<dyn Storage + Send + Sync>) -> DatasetBuilder {
+        DatasetBuilder::new(storage, None)
     }
 
-    // FIXME: the ObjectIds should include a type of object to avoid mistakes at compile time
     pub fn update(
         storage: Arc<dyn Storage + Send + Sync>,
         previous_version_structure_id: ObjectId,
-    ) -> Self {
-        Dataset::new(storage, Some(previous_version_structure_id))
+    ) -> DatasetBuilder {
+        DatasetBuilder::new(storage, Some(previous_version_structure_id))
     }
 
     fn new(
+        config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
         previous_version_structure_id: Option<ObjectId>,
     ) -> Self {
         Dataset {
             structure_id: previous_version_structure_id,
+            config,
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
@@ -458,19 +492,14 @@ impl Dataset {
         coord: &ArrayIndices,
         data: Bytes,
     ) -> Result<(), UpdateNodeError> {
-        // TODO: support inline chunks
         match self.get_array(path).await {
             Ok(_) => {
-                let new_id = ObjectId::random();
-                self.storage
-                    .write_chunk(new_id.clone(), data.clone())
-                    .await
-                    .map_err(UpdateNodeError::StorageError)?;
-                let payload = ChunkPayload::Ref(ChunkRef {
-                    id: new_id,
-                    offset: 0,
-                    length: data.len() as u64,
-                });
+                let payload = if data.len() > self.config.inline_threshold_bytes as usize
+                {
+                    new_materialized_chunk(self.storage.as_ref(), data).await?
+                } else {
+                    new_inline_chunk(data)
+                };
                 self.change_set.set_chunk_ref(path.clone(), coord.clone(), Some(payload));
                 Ok(())
             }
@@ -497,7 +526,9 @@ impl Dataset {
         None
     }
 
-    async fn updated_chunk_iterator(&self) -> impl Stream<Item = ChunkInfo> + '_ {
+    async fn updated_chunk_iterator(
+        &self,
+    ) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
         match self.structure_id.as_ref() {
             None => futures::future::Either::Left(futures::stream::empty()),
             Some(structure_id) => {
@@ -507,7 +538,10 @@ impl Dataset {
                 futures::future::Either::Right(
                     nodes
                         .then(move |node| async move {
-                            self.node_chunk_iterator(node).await
+                            let path = node.path.clone();
+                            self.node_chunk_iterator(node)
+                                .await
+                                .map(move |ci| (path.clone(), ci))
                         })
                         .flatten(),
                 )
@@ -709,6 +743,13 @@ impl Dataset {
         self.updated_nodes(&ObjectId::FAKE, None).await
     }
 
+    pub async fn all_chunks(&self) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
+        let existing_array_chunks = self.updated_chunk_iterator().await;
+        let new_array_chunks =
+            futures::stream::iter(self.change_set.new_arrays_chunk_iterator());
+        existing_array_chunks.chain(new_array_chunks)
+    }
+
     /// After changes to the dasate have been made, this generates and writes to `Storage` the updated datastructures.
     ///
     /// After calling this, changes are reset and the [Dataset] can continue to be used for further
@@ -718,14 +759,12 @@ impl Dataset {
     /// this id change.
     pub async fn flush(&mut self) -> Result<ObjectId, FlushError> {
         let mut region_tracker = TableRegionTracker::default();
-        let existing_array_chunks = self.updated_chunk_iterator().await;
-        let new_array_chunks =
-            futures::stream::iter(self.change_set.new_arrays_chunk_iterator());
-        let all_chunks = existing_array_chunks.chain(new_array_chunks).map(|chunk| {
-            region_tracker.update(&chunk);
+        let all_chunks = self.all_chunks().await.map(|chunk| {
+            region_tracker.update(&chunk.1);
             chunk
         });
-        let new_manifest = mk_manifests_table(all_chunks).await;
+        let new_manifest =
+            mk_manifests_table(all_chunks.map(|(_path, chunk)| chunk)).await;
         let new_manifest_id = ObjectId::random();
         self.storage
             .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
@@ -767,6 +806,22 @@ pub enum FlushError {
     NoChangesToFlush,
     #[error("error contacting storage")]
     StorageError(#[from] StorageError),
+}
+
+async fn new_materialized_chunk(
+    storage: &(dyn Storage + Send + Sync),
+    data: Bytes,
+) -> Result<ChunkPayload, UpdateNodeError> {
+    let new_id = ObjectId::random();
+    storage
+        .write_chunk(new_id.clone(), data.clone())
+        .await
+        .map_err(UpdateNodeError::StorageError)?;
+    Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
+}
+
+fn new_inline_chunk(data: Bytes) -> ChunkPayload {
+    ChunkPayload::Inline(data)
 }
 
 #[cfg(test)]
@@ -968,7 +1023,9 @@ mod tests {
         let structure = Arc::new(mk_structure_table(nodes.clone()));
         let structure_id = ObjectId::random();
         storage.write_structure(structure_id.clone(), structure).await?;
-        let mut ds = Dataset::update(Arc::new(storage), structure_id);
+        let mut ds = Dataset::update(Arc::new(storage), structure_id)
+            .with_inline_threshold_bytes(512)
+            .build();
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await;
@@ -1038,11 +1095,10 @@ mod tests {
             }),
         );
 
-        // set a chunk for the new array and  retrieve it
-        ds.set_chunk_ref(
-            new_array_path.clone(),
-            ArrayIndices(vec![0]),
-            Some(ChunkPayload::Inline("foo".into())),
+        ds.set_chunk(
+            &new_array_path,
+            &ArrayIndices(vec![0]),
+            Bytes::copy_from_slice(b"foo"),
         )
         .await?;
 
@@ -1082,15 +1138,11 @@ mod tests {
         }
 
         // set old array chunk and check them
-        ds.set_chunk_ref(
-            array1_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline("bac".into())),
-        )
-        .await?;
+        let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
+        ds.set_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0]), data.clone()).await?;
 
-        let chunk = ds.get_chunk_ref(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
-        assert_eq!(chunk, Some(ChunkPayload::Inline("bac".into())));
+        let chunk = ds.get_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
+        assert_eq!(chunk, Some(data));
 
         let path: Path = "/group/array2".into();
         assert!(ds.change_set.updated_attributes.contains_key(&path));
@@ -1158,29 +1210,41 @@ mod tests {
         {
             let all_chunks: Vec<_> = change_set
                 .new_arrays_chunk_iterator()
-                .sorted_by_key(|c| c.coord.clone())
+                .sorted_by_key(|c| c.1.coord.clone())
                 .collect();
             let expected_chunks: Vec<_> = [
-                ChunkInfo {
-                    node: 2,
-                    coord: ArrayIndices(vec![0]),
-                    payload: ChunkPayload::Inline("baz1".into()),
-                },
-                ChunkInfo {
-                    node: 2,
-                    coord: ArrayIndices(vec![1]),
-                    payload: ChunkPayload::Inline("baz2".into()),
-                },
-                ChunkInfo {
-                    node: 1,
-                    coord: ArrayIndices(vec![1, 0]),
-                    payload: ChunkPayload::Inline("bar1".into()),
-                },
-                ChunkInfo {
-                    node: 1,
-                    coord: ArrayIndices(vec![1, 1]),
-                    payload: ChunkPayload::Inline("bar2".into()),
-                },
+                (
+                    "foo/baz".into(),
+                    ChunkInfo {
+                        node: 2,
+                        coord: ArrayIndices(vec![0]),
+                        payload: ChunkPayload::Inline("baz1".into()),
+                    },
+                ),
+                (
+                    "foo/baz".into(),
+                    ChunkInfo {
+                        node: 2,
+                        coord: ArrayIndices(vec![1]),
+                        payload: ChunkPayload::Inline("baz2".into()),
+                    },
+                ),
+                (
+                    "foo/bar".into(),
+                    ChunkInfo {
+                        node: 1,
+                        coord: ArrayIndices(vec![1, 0]),
+                        payload: ChunkPayload::Inline("bar1".into()),
+                    },
+                ),
+                (
+                    "foo/bar".into(),
+                    ChunkInfo {
+                        node: 1,
+                        coord: ArrayIndices(vec![1, 1]),
+                        payload: ChunkPayload::Inline("bar2".into()),
+                    },
+                ),
             ]
             .into();
             assert_eq!(all_chunks, expected_chunks);
@@ -1190,7 +1254,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-        let mut ds = Dataset::create(Arc::clone(&storage));
+        let mut ds = Dataset::create(Arc::clone(&storage)).build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1329,7 +1393,7 @@ mod tests {
         .await?;
 
         let structure_id = ds.flush().await?;
-        let ds = Dataset::update(Arc::clone(&storage), structure_id);
+        let ds = Dataset::update(Arc::clone(&storage), structure_id).build();
 
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
@@ -1352,7 +1416,7 @@ mod tests {
         ));
 
         //test the previous version is still alive
-        let ds = Dataset::update(Arc::clone(&storage), previous_structure_id);
+        let ds = Dataset::update(Arc::clone(&storage), previous_structure_id).build();
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1540,7 +1604,7 @@ mod tests {
             ) -> Self::SystemUnderTest {
                 let storage = InMemoryStorage::new();
                 TestDataset {
-                    dataset: Dataset::create(Arc::new(storage)),
+                    dataset: Dataset::create(Arc::new(storage)).build(),
                     runtime: Runtime::new().unwrap(),
                 }
             }

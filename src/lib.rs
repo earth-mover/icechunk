@@ -28,6 +28,7 @@ pub mod strategies;
 pub mod structure;
 pub mod zarr;
 
+use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Bytes;
 use itertools::Itertools;
@@ -689,7 +690,7 @@ pub struct VirtualChunkRef {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkRef {
-    id: ObjectId, // FIXME: better type
+    id: ObjectId,
     offset: u64,
     length: u64,
 }
@@ -708,10 +709,11 @@ pub struct ChunkInfo {
     payload: ChunkPayload,
 }
 
-// FIXME: this will hold the arrow file
-pub struct AttributesTable();
+#[derive(Debug, PartialEq)]
+pub struct AttributesTable {
+    pub batch: RecordBatch,
+}
 
-// FIXME: implement std::error::Error for these
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum AddNodeError {
     #[error("node already exists at `{0}`")]
@@ -807,7 +809,20 @@ pub trait Storage: fmt::Debug {
 }
 
 #[derive(Clone, Debug)]
+pub struct DatasetConfig {
+    // Chunks smaller than this will be stored inline in the manifst
+    pub inline_threshold_bytes: u16,
+}
+
+impl Default for DatasetConfig {
+    fn default() -> Self {
+        Self { inline_threshold_bytes: 512 }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Dataset {
+    config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     structure_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
