@@ -13,8 +13,8 @@ The most common scenario is for a store to contain a single Zarr group with mult
 However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
 Users of Icechunk SHOULD aim to scope their stores only to related arrays and groups that require consistent transactional updates.
 
-All the data and metadata for a store are stored in **warehouse**, typically a directory in object storage or file storage.
-A separate **catalog** is used to track the latest version of of store.
+All the data and metadata for a store are stored in a directory in object storage or file storage.
+Optionally, an external _synchronization endpoint_ can be used to help coordinate transactional updates for storage systems which don't support atomic compare-and-swap operations.
 
 ## Goals
 
@@ -34,6 +34,7 @@ The goals of the specification are as follows:
 Icechunk only requires that file systems support the following operations:
 
 - **In-place write** - Files are not moved or altered once they are written. Strong read-after-write consistency is expected.
+  - Exception: atomic compare-and-swap support is required for the `icechunk.json` file  if an external synchronization endpoint is not used.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
 - **Deletes** - Stores delete files that are no longer used (via a garbage-collection operation).
 
@@ -47,26 +48,23 @@ Stores do not require random-access writes. Once written, chunk and metadata fil
 
 Icechunk uses a series of linked metadata files to describe the state of the store.
 
-- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file.
-- The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifests files and [optionally] attribute files.
+- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file. The latest state file is always copied to `icechunk.json`.
+- The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifest files and [optionally] attribute files.
 - **Chunk Manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
 
-When reading a store, the client receives a pointer to a state file from the catalog, read the state file, and  chooses a structure file corresponding to a specific snapshot to open.
+When reading a store, the client opens the latest state file and then chooses a structure file corresponding to a specific snapshot to open.
 The client then reads the structure file to determine the structure and hierarchy of the store.
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
 When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file and state file.
-Finally, in an atomic swap operation, it updates the pointer to the state file in the catalog.
-Ensuring atomicity of the swap operation is the responsibility of the [catalog](#catalog).
+Finally, in an atomic compare-and-swap operation, it updates the `icechunk.json` file to complete the commit.
+Storage systems that don't support atomic compare-and-swap may use an external synchronization endpoint.
 
 
 ```mermaid
 flowchart TD
-    subgraph catalog
-    cat_pointer[Current Statefile Pointer]
-    end
     subgraph metadata
     subgraph state_files
     old_state[State File 1]
@@ -91,7 +89,6 @@ flowchart TD
     chunk4[Chunk File 4]
     end
     
-    cat_pointer --> state
     state -- snapshot ID --> structure2
     structure1 --> attrs
     structure1 --> manifestA
@@ -110,6 +107,7 @@ flowchart TD
 All data and metadata files are stored in a warehouse (typically an object store) using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, file, etc.)
+- `$ROOT/icechunk.json` copy of latest state file
 - `$ROOT/t/` state files
 - `$ROOT/s/` for the structure files
 - `$ROOT/a/` for attribute files
@@ -119,7 +117,7 @@ All data and metadata files are stored in a warehouse (typically an object store
 ### State File
 
 The **state file** records the current state and history of the store.
-All commits occur by creating a new state file and updating the pointer in the catalog to this new state file.
+All commits occur by creating a new state file.
 The state file contains a list of active (non-expired) snapshots.
 Each snapshot includes a pointer to the structure file for that snapshot.
 
@@ -131,7 +129,7 @@ The state file is a JSON file with the following JSON schema:
 |--|--|--|--|
 | id | YES | str UID | A unique identifier for the store |
 | generation | YES | int | An integer which must be incremented whenever the state file is updated |
-| store_root | NO | str | A URI which points to the root location of the store in object storage. If blank, the store root is assumed to be in the same directory as the state file itself. | 
+| store_root | YES | str | A URI which points to the root location of the store in object storage. | 
 | snapshots | YES | array[snapshot] | A list of all of the snapshots. |
 | refs | NO | mapping[reference] | A mapping of references (string names) to snapshots |
 
@@ -213,6 +211,10 @@ manifests: list<item: struct<manifest_id: uint16 not null, row: uint16 not null,
       child 3, flags: uint16
 ```
 
+The most recent committed state file MUST be replicated to the file `icechunk.json` at the top-level store directory.
+During the commit process, this file is replaced with an atomic compare-and-swap operation.
+Storage systems that don't support atomic compare-and-swap may use an external synchronization endpoint for updates.
+
 ### Attributes Files
 
 Attribute files hold user-defined attributes separately from the structure file.
@@ -271,31 +273,37 @@ Chunk files can be:
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
 
-## Catalog
+## Synchronization Endpoint
 
-An Icechunk _catalog_ is a database for keeping track of pointers to state files for Icechunk Stores.
-This specification is limited to the Store itself, and does not specify in detail all of the possible features or capabilities of a catalog.
+Some storage systems (notably AWS S3) do not support an atomic compare-and-swap operation.
+To support transactions in this scenario, Icechunk defines an external _synchronization endpoint_, a stateful JSON-based REST API supporting the following operations.
 
-A catalog MUST support the following basic logical interface (here defined in Python pseudocode):
+[TODO: flesh out API specification]
 
-```python
-def get_store_statefile_location(store_identifier) -> URI:
-    """Get the location of a store state file."""
-    ...
-
-def set_store_statefile_location(store_identifier, previous_statefile_location) -> None:
-    """Set the location of a store state file.
-    Should fail of the client's previous_statefile_location
-    is not consistent with the catalog."""
-    ...
-
-def delete_store(store_identifier) -> None:
-    """Remove a store from the catalog."""
-    ...
+```yaml
+paths:
+  /{storeIdentifier}:
+    get:
+      summary: Retrieve the latest state file metadata for an Icechunk store
+      responses:
+        '200':
+          description: State file metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                ...
+    post:
+      summary: Commit new state file metadata for an Icechunk store
+      ...
 ```
 
-A catalog MAY also store the state metadata directly within its database, eliminating the need for an additional request to fetch the state file.
-This does not remove the need for the state file to be stored in the warehouse.
+The synchronization endpoint must reject updates which are not compatible with the existing stored state.
+
+When using an external synchronization endpoint, following a successful commit, the client should replicate the same data to `icechunk.json`.
+
+[TODO: how do we prevent client from accidentally just committing to `icechunk.json` without posting to the synchronization endpoint? I think synchronization endpoint needs to go in `icechunk.json`.]
 
 ## Algorithms
 
@@ -321,4 +329,3 @@ But while Iceberg describes a table, the Icechunk store is a Zarr store (hierarc
 | Column | Array | The logical container for a homogenous collection of values | 
 | Metadata File | State File | The highest-level entry point into the dataset |
 | Snapshot | Snapshot | A single committed snapshot of the dataset |
-| Catalog | Catalog | A central place to track changes to one or more state files |
