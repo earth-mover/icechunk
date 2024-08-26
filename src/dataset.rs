@@ -1005,7 +1005,9 @@ mod tests {
         let structure = Arc::new(mk_structure_table(nodes.clone()));
         let structure_id = ObjectId::random();
         storage.write_structure(structure_id.clone(), structure).await?;
-        let mut ds = Dataset::update(Arc::new(storage), structure_id).build();
+        let mut ds = Dataset::update(Arc::new(storage), structure_id)
+            .with_inline_threshold_bytes(512)
+            .build();
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await;
