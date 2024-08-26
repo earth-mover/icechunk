@@ -1,9 +1,9 @@
 use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{
-    storage::InMemoryStorage, ArrayIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
-    Codec, DataType, Dataset, FillValue, Path, Storage, StorageTransformer,
-    UserAttributes, ZarrArrayMetadata,
+    storage::{InMemoryStorage, MemCachingStorage},
+    ArrayIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, Dataset,
+    FillValue, Path, Storage, StorageTransformer, UserAttributes, ZarrArrayMetadata,
 };
 use itertools::Itertools;
 
@@ -14,15 +14,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         r#"
 ```
-let storage: Arc<dyn Storage> =
-    Arc::new(ObjectStorage::new_local_store("/tmp/demo-dataset".into())?);
+let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+let storage: Arc<dyn Storage + Send + Sync> =
+    Arc::new(MemCachingStorage::new(storage, 100_000_000));
 let mut ds = Dataset::create(Arc::clone(&storage));
 ```
 "#,
     );
 
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-    let mut ds = Dataset::create(Arc::clone(&storage)).build();
+    let mut ds = Dataset::create(Arc::new(MemCachingStorage::new(
+        Arc::clone(&storage),
+        100_000_000,
+    )))
+    .build();
 
     println!();
     println!();
@@ -134,7 +139,7 @@ ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?
     );
     ds.set_user_attributes(
         array1_path.clone(),
-        Some(UserAttributes::try_new(b"{n:42}").unwrap()),
+        Some(UserAttributes::try_new(br#"{"n":42}"#).unwrap()),
     )
     .await?;
     print_nodes(&ds).await;

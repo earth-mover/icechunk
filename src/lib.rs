@@ -28,6 +28,7 @@ pub mod strategies;
 pub mod structure;
 pub mod zarr;
 
+use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Bytes;
 use itertools::Itertools;
@@ -708,8 +709,10 @@ pub struct ChunkInfo {
     payload: ChunkPayload,
 }
 
-// FIXME: this will hold the arrow file
-pub struct AttributesTable();
+#[derive(Debug, PartialEq)]
+pub struct AttributesTable {
+    pub batch: RecordBatch,
+}
 
 // FIXME: implement std::error::Error for these
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
