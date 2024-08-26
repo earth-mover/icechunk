@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(MemCachingStorage::new(storage, 100_000_000));
-    let ds = Dataset::create(Arc::clone(&storage));
+    let ds = Dataset::create(Arc::clone(&storage)).build();
     let store = Arc::new(RwLock::new(Store::new(ds)));
 
     store
