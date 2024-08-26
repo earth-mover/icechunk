@@ -94,6 +94,8 @@ impl ChangeSet {
         coord: ArrayIndices,
         data: Option<ChunkPayload>,
     ) {
+        // this implementation makes delete idempotent
+        // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
             .entry(path)
             .and_modify(|h| {
