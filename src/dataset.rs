@@ -1410,13 +1410,10 @@ mod tests {
             type Transition = DatasetTransition;
 
             fn init_state() -> BoxedStrategy<Self::State> {
-                dbg!("======> New state");
                 Just(Default::default()).boxed()
             }
 
             fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
-                dbg!("generating transitions", state.clone());
-
                 // proptest-state-machine generates the transitions first,
                 // *then* applies the preconditions to decide if that transition is valid.
                 // that means we have to make sure that we are not sampling from
@@ -1460,7 +1457,6 @@ mod tests {
                 mut state: Self::State,
                 transition: &Self::Transition,
             ) -> Self::State {
-                dbg!("apply");
                 match transition {
                     // Array ops
                     DatasetTransition::AddArray(path, metadata) => {
@@ -1499,7 +1495,6 @@ mod tests {
             }
 
             fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
-                dbg!("in preconditions...");
                 match transition {
                     DatasetTransition::AddArray(path, _) => {
                         !state.arrays.contains_key(path) && !state.groups.contains(path)
@@ -1606,7 +1601,7 @@ mod tests {
 
         prop_state_machine! {
             #![proptest_config(Config {
-            verbose: 1,
+            verbose: 0,
             .. Config::default()
         })]
 
