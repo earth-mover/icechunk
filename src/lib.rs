@@ -24,41 +24,55 @@
 pub mod dataset;
 pub mod manifest;
 pub mod storage;
+pub mod strategies;
 pub mod structure;
+pub mod zarr;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use itertools::Itertools;
 use manifest::ManifestsTable;
+use parquet::errors as parquet_errors;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::{self, Display},
+    io,
     num::NonZeroU64,
     ops::Range,
     path::PathBuf,
     sync::Arc,
 };
 use structure::StructureTable;
+use test_strategy::Arbitrary;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum IcechunkFormatError {
+    #[error("error decoding fill_value from array")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
+    #[error("error decoding fill_value from json")]
+    FillValueParse { data_type: DataType, value: serde_json::Value },
+    #[error("null found decoding fill_value")]
     NullFillValueError,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 /// An ND index to an element in an array.
 pub struct ArrayIndices(pub Vec<u64>);
 
 /// The shape of an array.
 /// 0 is a valid shape member
 pub type ArrayShape = Vec<u64>;
+// each dimension name can be null in Zarr
+pub type DimensionName = Option<String>;
+pub type DimensionNames = Vec<DimensionName>;
 
 pub type Path = PathBuf;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[serde(rename_all = "lowercase")]
 pub enum DataType {
     Bool,
     Int8,
@@ -74,7 +88,32 @@ pub enum DataType {
     Float64,
     Complex64,
     Complex128,
+    // FIXME: serde serialization
     RawBits(usize),
+}
+
+impl DataType {
+    fn fits_i64(&self, n: i64) -> bool {
+        use DataType::*;
+        match self {
+            Int8 => n >= i8::MIN as i64 && n <= i8::MAX as i64,
+            Int16 => n >= i16::MIN as i64 && n <= i16::MAX as i64,
+            Int32 => n >= i32::MIN as i64 && n <= i32::MAX as i64,
+            Int64 => true,
+            _ => false,
+        }
+    }
+
+    fn fits_u64(&self, n: u64) -> bool {
+        use DataType::*;
+        match self {
+            UInt8 => n >= u8::MIN as u64 && n <= u8::MAX as u64,
+            UInt16 => n >= u16::MIN as u64 && n <= u16::MAX as u64,
+            UInt32 => n >= u32::MIN as u64 && n <= u32::MAX as u64,
+            UInt64 => true,
+            _ => false,
+        }
+    }
 }
 
 impl TryFrom<&str> for DataType {
@@ -137,7 +176,7 @@ impl Display for DataType {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ChunkKeyEncoding {
     Slash,
     Dot,
@@ -167,8 +206,10 @@ impl From<ChunkKeyEncoding> for u8 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum FillValue {
+    // FIXME: test all json (de)serializations
     Bool(bool),
     Int8(i8),
     Int16(i16),
@@ -187,6 +228,112 @@ pub enum FillValue {
 }
 
 impl FillValue {
+    fn from_data_type_and_json(
+        dt: &DataType,
+        value: &serde_json::Value,
+    ) -> Result<Self, IcechunkFormatError> {
+        match (dt, value) {
+            (DataType::Bool, serde_json::Value::Bool(b)) => Ok(FillValue::Bool(*b)),
+            (DataType::Int8, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int8(n.as_i64().unwrap() as i8))
+            }
+            (DataType::Int16, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int16(n.as_i64().unwrap() as i16))
+            }
+            (DataType::Int32, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int32(n.as_i64().unwrap() as i32))
+            }
+            (DataType::Int64, serde_json::Value::Number(n))
+                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
+            {
+                Ok(FillValue::Int64(n.as_i64().unwrap()))
+            }
+            (DataType::UInt8, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt8(n.as_u64().unwrap() as u8))
+            }
+            (DataType::UInt16, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt16(n.as_u64().unwrap() as u16))
+            }
+            (DataType::UInt32, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt32(n.as_u64().unwrap() as u32))
+            }
+            (DataType::UInt64, serde_json::Value::Number(n))
+                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
+            {
+                Ok(FillValue::UInt64(n.as_u64().unwrap()))
+            }
+            (DataType::Float16, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                // FIXME: limits logic
+                Ok(FillValue::Float16(n.as_f64().unwrap() as f32))
+            }
+            (DataType::Float32, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                // FIXME: limits logic
+                Ok(FillValue::Float32(n.as_f64().unwrap() as f32))
+            }
+            (DataType::Float64, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                // FIXME: limits logic
+                Ok(FillValue::Float64(n.as_f64().unwrap()))
+            }
+            (DataType::Complex64, serde_json::Value::Array(arr)) if arr.len() == 2 => {
+                let r = FillValue::from_data_type_and_json(&DataType::Float32, &arr[0])?;
+                let i = FillValue::from_data_type_and_json(&DataType::Float32, &arr[1])?;
+                match (r, i) {
+                    (FillValue::Float32(r), FillValue::Float32(i)) => {
+                        Ok(FillValue::Complex64(r, i))
+                    }
+                    _ => Err(IcechunkFormatError::FillValueParse {
+                        data_type: dt.clone(),
+                        value: value.clone(),
+                    }),
+                }
+            }
+            (DataType::Complex128, serde_json::Value::Array(arr)) if arr.len() == 2 => {
+                let r = FillValue::from_data_type_and_json(&DataType::Float64, &arr[0])?;
+                let i = FillValue::from_data_type_and_json(&DataType::Float64, &arr[1])?;
+                match (r, i) {
+                    (FillValue::Float64(r), FillValue::Float64(i)) => {
+                        Ok(FillValue::Complex128(r, i))
+                    }
+                    _ => Err(IcechunkFormatError::FillValueParse {
+                        data_type: dt.clone(),
+                        value: value.clone(),
+                    }),
+                }
+            }
+
+            (DataType::RawBits(n), serde_json::Value::Array(arr)) if arr.len() == *n => {
+                let bits = arr
+                    .iter()
+                    .map(|b| FillValue::from_data_type_and_json(&DataType::UInt8, b))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(FillValue::RawBits(
+                    bits.iter()
+                        .map(|b| match b {
+                            FillValue::UInt8(n) => *n,
+                            _ => 0,
+                        })
+                        .collect(),
+                ))
+            }
+            _ => Err(IcechunkFormatError::FillValueParse {
+                data_type: dt.clone(),
+                value: value.clone(),
+            }),
+        }
+    }
+
     fn from_data_type_and_value(
         dt: &DataType,
         value: &[u8],
@@ -393,22 +540,43 @@ impl FillValue {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Codecs(pub String); // FIXME: define
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Codec {
+    pub name: String,
+    pub configuration: Option<HashMap<String, serde_json::Value>>,
+}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StorageTransformers(pub String); // FIXME: define
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageTransformer {
+    pub name: String,
+    pub configuration: Option<HashMap<String, serde_json::Value>>,
+}
 
-pub type DimensionName = String;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserAttributes {
+    #[serde(flatten)]
+    pub parsed: serde_json::Value,
+}
 
-pub type UserAttributes = String; // FIXME: better definition
+impl UserAttributes {
+    pub fn try_new(json: &[u8]) -> Result<UserAttributes, serde_json::Error> {
+        serde_json::from_slice(json).map(|json| UserAttributes { parsed: json })
+    }
+
+    pub fn to_bytes(&self) -> Bytes {
+        // We can unwrap because a Value is always valid json
+        serde_json::to_vec(&self.parsed)
+            .expect("Bug in UserAttributes serialization")
+            .into()
+    }
+}
 
 /// The internal id of an array or group, unique only to a single store version
 pub type NodeId = u32;
 
 /// The id of a file in object store
 /// FIXME: should this be passed by ref everywhere?
-#[derive(Hash, Clone, PartialEq, Eq)]
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectId([u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
@@ -478,10 +646,9 @@ pub struct ZarrArrayMetadata {
     pub chunk_shape: ChunkShape,
     pub chunk_key_encoding: ChunkKeyEncoding,
     pub fill_value: FillValue,
-    pub codecs: Codecs,
-    pub storage_transformers: Option<StorageTransformers>,
-    // each dimension name can be null in Zarr
-    pub dimension_names: Option<Vec<Option<DimensionName>>>,
+    pub codecs: Vec<Codec>,
+    pub storage_transformers: Option<Vec<StorageTransformer>>,
+    pub dimension_names: Option<DimensionNames>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -513,28 +680,28 @@ impl NodeStructure {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkRef {
     id: ObjectId, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChunkPayload {
-    Inline(Vec<u8>), // FIXME: optimize copies
+    Inline(Bytes), // FIXME: optimize copies
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkInfo {
     node: NodeId,
     coord: ArrayIndices,
@@ -551,20 +718,50 @@ pub enum AddNodeError {
     AlreadyExists(Path),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DeleteNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("there is not an array at `{0}`")]
+    NotAnArray(Path),
+    #[error("there is not a group at `{0}`")]
+    NotAGroup(Path),
+}
+
+#[derive(Debug, Error)]
 pub enum UpdateNodeError {
     #[error("node not found at `{0}`")]
     NotFound(Path),
     #[error("there is not an array at `{0}`")]
     NotAnArray(Path),
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
+pub enum GetNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
+}
+
+#[derive(Debug, Error)]
 pub enum StorageError {
     #[error("object not found `{0:?}`")]
     NotFound(ObjectId),
     #[error("synchronization error on the Storage instance")]
     Deadlock,
+    #[error("error contacting object store {0}")]
+    ObjectStore(#[from] object_store::Error),
+    #[error("error reading or writing to/from parquet files: {0}")]
+    ParquetError(#[from] parquet_errors::ParquetError),
+    #[error("error reading RecordBatch from parquet file {0}.")]
+    BadRecordBatchRead(String),
+    #[error("i/o error: `{0:?}`")]
+    IOError(#[from] io::Error),
+    #[error("bad path: {0}")]
+    BadPath(Path),
 }
 
 /// Fetch and write the parquet files that represent the dataset in object store
@@ -572,7 +769,7 @@ pub enum StorageError {
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage {
+pub trait Storage: fmt::Debug {
     async fn fetch_structure(
         &self,
         id: &ObjectId,
@@ -609,8 +806,9 @@ pub trait Storage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError>;
 }
 
+#[derive(Clone, Debug)]
 pub struct Dataset {
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn Storage + Send + Sync>,
     structure_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
@@ -621,7 +819,11 @@ pub struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
     updated_arrays: HashMap<Path, ZarrArrayMetadata>,
+    // These paths may point to Arrays or Groups,
+    // since both Groups and Arrays support UserAttributes
     updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<Path, HashMap<ArrayIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashMap<Path, NodeId>,
+    deleted_arrays: HashMap<Path, NodeId>,
 }

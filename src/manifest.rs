@@ -7,6 +7,7 @@ use arrow::{
     },
     datatypes::{Field, Schema, UInt32Type, UInt64Type},
 };
+use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 
@@ -72,7 +73,7 @@ impl ManifestsTable {
 
         if inline_col.is_valid(idx) {
             // we have an inline chunk
-            let data = inline_col.value(idx).into();
+            let data = Bytes::copy_from_slice(inline_col.value(idx));
             Some(ChunkInfo {
                 node: id,
                 coord: coords,
@@ -257,7 +258,7 @@ fn mk_array_ids_array<T: IntoIterator<Item = u32>>(coll: T) -> UInt32Array {
     coll.into_iter().collect()
 }
 
-fn mk_inline_data_array<T: IntoIterator<Item = Option<Vec<u8>>>>(coll: T) -> BinaryArray {
+fn mk_inline_data_array<T: IntoIterator<Item = Option<Bytes>>>(coll: T) -> BinaryArray {
     BinaryArray::from_iter(coll)
 }
 
@@ -337,7 +338,7 @@ mod tests {
         let c1b = ChunkInfo {
             node: 2,
             coord: ArrayIndices(vec![0, 0, 0]),
-            payload: ChunkPayload::Inline(vec![42, 43, 44]),
+            payload: ChunkPayload::Inline("hello".into()),
         };
 
         let c1c = ChunkInfo {
