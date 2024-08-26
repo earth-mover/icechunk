@@ -1,6 +1,6 @@
 # Icechunk Specification
 
-The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
 
 ## Introduction
 
@@ -29,17 +29,18 @@ The goals of the specification are as follows:
 
 1. **Low Latency** - Icechunk is designed to support analytical workloads for large stores. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
 
-### Filesytem Operations
+### Storage Operations
 
-Icechunk only requires that file systems support the following operations:
+Icechunk requires that the storage system support the following operations:
 
-- **In-place write** - Files are not moved or altered once they are written. Strong read-after-write consistency is expected.
+- **In-place write** - Files are not moved or altered once they are written. Strong read-after-write and list-after-write consistency is expected.
+- **Conditional write if-not-exists** - For the commit process to be safe and consistent, the storage system must guard against two files of the same name being created at the same time.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
-- **Deletes** - Stores delete files that are no longer used (via a garbage-collection operation).
+- **Deletes** - Delete files that are no longer used (via a garbage-collection operation).
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
-Stores do not require random-access writes. Once written, chunk and metadata files are immutable until they are deleted.
+The storage system does is not required to support random-access writes. Once written, chunk and metadata files are immutable until they are deleted.
 
 ## Specification
 
