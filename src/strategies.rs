@@ -19,7 +19,7 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
     // FIXME: add storages strategy
     let storage = InMemoryStorage::new();
-    let dataset = Dataset::create(Arc::new(storage));
+    let dataset = Dataset::create(Arc::new(storage)).build();
     prop_oneof![Just(dataset)]
 }
 
