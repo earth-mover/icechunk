@@ -576,7 +576,7 @@ mod tests {
             Self { backend, fetch_log: Mutex::new(Vec::new()) }
         }
 
-        fn fetch_log(&self) -> Vec<(String, ObjectId)> {
+        fn fetch_operations(&self) -> Vec<(String, ObjectId)> {
             self.fetch_log.lock().unwrap().clone()
         }
     }
@@ -680,26 +680,26 @@ mod tests {
         assert_eq!(caching.fetch_structure(&id).await?, table);
         assert_eq!(caching.fetch_structure(&id).await?, table);
         // when we insert we cache, so no fetches
-        assert_eq!(logging.fetch_log(), vec![]);
+        assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
         assert_eq!(caching.fetch_structure(&pre_existing_id).await?, pre_exiting_table);
         assert_eq!(
-            logging.fetch_log(),
+            logging.fetch_operations(),
             vec![("fetch_structure".to_string(), pre_existing_id.clone())]
         );
 
         // only calls backend once
         assert_eq!(caching.fetch_structure(&pre_existing_id).await?, pre_exiting_table);
         assert_eq!(
-            logging.fetch_log(),
+            logging.fetch_operations(),
             vec![("fetch_structure".to_string(), pre_existing_id.clone())]
         );
 
         // other walues still cached
         assert_eq!(caching.fetch_structure(&id).await?, table);
         assert_eq!(
-            logging.fetch_log(),
+            logging.fetch_operations(),
             vec![("fetch_structure".to_string(), pre_existing_id.clone())]
         );
         Ok(())
@@ -734,7 +734,7 @@ mod tests {
             assert_eq!(caching.fetch_structure(&id3).await?, table3);
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
-        assert_eq!(logging.fetch_log()[10..].iter().unique().count(), 1);
+        assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);
 
         Ok(())
     }
