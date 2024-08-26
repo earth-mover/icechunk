@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -122,13 +123,20 @@ impl ChangeSet {
         }
     }
 
-    fn new_arrays_chunk_iterator(&self) -> impl Iterator<Item = ChunkInfo> + '_ {
+    fn new_arrays_chunk_iterator(
+        &self,
+    ) -> impl Iterator<Item = (PathBuf, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
             self.array_chunks_iterator(path).filter_map(|(coords, payload)| {
-                payload.as_ref().map(|p| ChunkInfo {
-                    node: *node_id,
-                    coord: coords.clone(),
-                    payload: p.clone(),
+                payload.as_ref().map(|p| {
+                    (
+                        path.clone(),
+                        ChunkInfo {
+                            node: *node_id,
+                            coord: coords.clone(),
+                            payload: p.clone(),
+                        },
+                    )
                 })
             })
         })
@@ -518,7 +526,9 @@ impl Dataset {
         None
     }
 
-    async fn updated_chunk_iterator(&self) -> impl Stream<Item = ChunkInfo> + '_ {
+    async fn updated_chunk_iterator(
+        &self,
+    ) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
         match self.structure_id.as_ref() {
             None => futures::future::Either::Left(futures::stream::empty()),
             Some(structure_id) => {
@@ -528,7 +538,10 @@ impl Dataset {
                 futures::future::Either::Right(
                     nodes
                         .then(move |node| async move {
-                            self.node_chunk_iterator(node).await
+                            let path = node.path.clone();
+                            self.node_chunk_iterator(node)
+                                .await
+                                .map(move |ci| (path.clone(), ci))
                         })
                         .flatten(),
                 )
@@ -730,6 +743,13 @@ impl Dataset {
         self.updated_nodes(&ObjectId::FAKE, None).await
     }
 
+    pub async fn all_chunks(&self) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
+        let existing_array_chunks = self.updated_chunk_iterator().await;
+        let new_array_chunks =
+            futures::stream::iter(self.change_set.new_arrays_chunk_iterator());
+        existing_array_chunks.chain(new_array_chunks)
+    }
+
     /// After changes to the dasate have been made, this generates and writes to `Storage` the updated datastructures.
     ///
     /// After calling this, changes are reset and the [Dataset] can continue to be used for further
@@ -739,14 +759,12 @@ impl Dataset {
     /// this id change.
     pub async fn flush(&mut self) -> Result<ObjectId, FlushError> {
         let mut region_tracker = TableRegionTracker::default();
-        let existing_array_chunks = self.updated_chunk_iterator().await;
-        let new_array_chunks =
-            futures::stream::iter(self.change_set.new_arrays_chunk_iterator());
-        let all_chunks = existing_array_chunks.chain(new_array_chunks).map(|chunk| {
-            region_tracker.update(&chunk);
+        let all_chunks = self.all_chunks().await.map(|chunk| {
+            region_tracker.update(&chunk.1);
             chunk
         });
-        let new_manifest = mk_manifests_table(all_chunks).await;
+        let new_manifest =
+            mk_manifests_table(all_chunks.map(|(_path, chunk)| chunk)).await;
         let new_manifest_id = ObjectId::random();
         self.storage
             .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
@@ -1192,29 +1210,41 @@ mod tests {
         {
             let all_chunks: Vec<_> = change_set
                 .new_arrays_chunk_iterator()
-                .sorted_by_key(|c| c.coord.clone())
+                .sorted_by_key(|c| c.1.coord.clone())
                 .collect();
             let expected_chunks: Vec<_> = [
-                ChunkInfo {
-                    node: 2,
-                    coord: ArrayIndices(vec![0]),
-                    payload: ChunkPayload::Inline("baz1".into()),
-                },
-                ChunkInfo {
-                    node: 2,
-                    coord: ArrayIndices(vec![1]),
-                    payload: ChunkPayload::Inline("baz2".into()),
-                },
-                ChunkInfo {
-                    node: 1,
-                    coord: ArrayIndices(vec![1, 0]),
-                    payload: ChunkPayload::Inline("bar1".into()),
-                },
-                ChunkInfo {
-                    node: 1,
-                    coord: ArrayIndices(vec![1, 1]),
-                    payload: ChunkPayload::Inline("bar2".into()),
-                },
+                (
+                    "foo/baz".into(),
+                    ChunkInfo {
+                        node: 2,
+                        coord: ArrayIndices(vec![0]),
+                        payload: ChunkPayload::Inline("baz1".into()),
+                    },
+                ),
+                (
+                    "foo/baz".into(),
+                    ChunkInfo {
+                        node: 2,
+                        coord: ArrayIndices(vec![1]),
+                        payload: ChunkPayload::Inline("baz2".into()),
+                    },
+                ),
+                (
+                    "foo/bar".into(),
+                    ChunkInfo {
+                        node: 1,
+                        coord: ArrayIndices(vec![1, 0]),
+                        payload: ChunkPayload::Inline("bar1".into()),
+                    },
+                ),
+                (
+                    "foo/bar".into(),
+                    ChunkInfo {
+                        node: 1,
+                        coord: ArrayIndices(vec![1, 1]),
+                        payload: ChunkPayload::Inline("bar2".into()),
+                    },
+                ),
             ]
             .into();
             assert_eq!(all_chunks, expected_chunks);

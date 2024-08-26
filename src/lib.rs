@@ -690,7 +690,7 @@ pub struct VirtualChunkRef {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkRef {
-    id: ObjectId, // FIXME: better type
+    id: ObjectId,
     offset: u64,
     length: u64,
 }
@@ -714,7 +714,6 @@ pub struct AttributesTable {
     pub batch: RecordBatch,
 }
 
-// FIXME: implement std::error::Error for these
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum AddNodeError {
     #[error("node already exists at `{0}`")]

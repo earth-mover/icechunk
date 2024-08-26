@@ -1,6 +1,7 @@
 use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
+use futures::StreamExt;
 use icechunk::{
     storage::{InMemoryStorage, MemCachingStorage},
     zarr::Store,
@@ -84,6 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer1.await?;
     writer2.await?;
     while (set.join_next().await).is_some() {}
+
+    let all_keys = store.read().await.list().await?.count().await;
+    println!("Found {all_keys} keys in the store: 100 chunks + 1 root group metadata + 1 array metadata");
 
     Ok(())
 }
