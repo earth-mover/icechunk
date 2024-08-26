@@ -9,10 +9,17 @@ use thiserror::Error;
 use tokio::spawn;
 
 use crate::{
-    AddNodeError, ArrayIndices, ArrayShape, ChunkKeyEncoding, ChunkOffset, ChunkShape,
-    Codec, DataType, Dataset, DeleteNodeError, DimensionNames, FillValue,
-    IcechunkFormatError, NodeData, Path, StorageTransformer, UpdateNodeError,
-    UserAttributes, UserAttributesStructure, ZarrArrayMetadata,
+    dataset::{
+        AddNodeError, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec,
+        DataType, DeleteNodeError, DimensionNames, FillValue, Path, StorageTransformer,
+        UpdateNodeError, UserAttributes, ZarrArrayMetadata,
+    },
+    format::{
+        structure::{NodeData, UserAttributesStructure}, // TODO: we shouldn't need these imports, too low level
+        ChunkOffset,
+        IcechunkFormatError,
+    },
+    Dataset,
 };
 
 pub struct Store {
@@ -25,7 +32,7 @@ type StoreResult<A> = Result<A, StoreError>;
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KeyNotFoundError {
     #[error("chunk cannot be find for key `{key}`")]
-    ChunkNotFound { key: String, path: Path, coords: ArrayIndices },
+    ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
     #[error("node not found at `{path}`")]
     NodeNotFound { path: Path },
 }
@@ -208,7 +215,7 @@ impl Store {
         &self,
         key: &str,
         path: Path,
-        coords: ArrayIndices,
+        coords: ChunkIndices,
     ) -> StoreResult<Bytes> {
         let chunk = self.dataset.get_chunk(&path, &coords).await;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
@@ -312,7 +319,7 @@ impl Store {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Metadata { node_path: Path },
-    Chunk { node_path: Path, coords: ArrayIndices },
+    Chunk { node_path: Path, coords: ChunkIndices },
 }
 
 impl Key {
@@ -325,14 +332,14 @@ impl Key {
             if key == "c" {
                 return Ok(Key::Chunk {
                     node_path: "/".into(),
-                    coords: ArrayIndices(vec![]),
+                    coords: ChunkIndices(vec![]),
                 });
             }
             if let Some((path, coords)) = key.rsplit_once(Key::CHUNK_COORD_INFIX) {
                 if coords.is_empty() {
                     Ok(Key::Chunk {
                         node_path: ["/", path].iter().collect(),
-                        coords: ArrayIndices(vec![]),
+                        coords: ChunkIndices(vec![]),
                     })
                 } else {
                     coords
@@ -343,7 +350,7 @@ impl Key {
                         .collect::<Result<Vec<_>, _>>()
                         .map(|coords| Key::Chunk {
                             node_path: ["/", path].iter().collect(),
-                            coords: ArrayIndices(coords),
+                            coords: ChunkIndices(coords),
                         })
                         .map_err(|_| StoreError::InvalidKey { key: key.to_string() })
                 }
@@ -637,29 +644,29 @@ mod tests {
         ));
         assert!(matches!(
             Key::parse("foo/c"),
-            Ok(Key::Chunk { node_path, coords }) if node_path.to_str() == Some("/foo") && coords == ArrayIndices(vec![])
+            Ok(Key::Chunk { node_path, coords }) if node_path.to_str() == Some("/foo") && coords == ChunkIndices(vec![])
         ));
         assert!(matches!(
             Key::parse("foo/bar/c"),
-            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/foo/bar") && coords == ArrayIndices(vec![])
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/foo/bar") && coords == ChunkIndices(vec![])
         ));
         assert!(matches!(
             Key::parse("foo/c/1/2/3"),
             Ok(Key::Chunk {
                 node_path,
                 coords,
-            }) if node_path.to_str() == Some("/foo") && coords == ArrayIndices(vec![1,2,3])
+            }) if node_path.to_str() == Some("/foo") && coords == ChunkIndices(vec![1,2,3])
         ));
         assert!(matches!(
             Key::parse("foo/bar/baz/c/1/2/3"),
             Ok(Key::Chunk {
                 node_path,
                 coords,
-            }) if node_path.to_str() == Some("/foo/bar/baz") && coords == ArrayIndices(vec![1,2,3])
+            }) if node_path.to_str() == Some("/foo/bar/baz") && coords == ChunkIndices(vec![1,2,3])
         ));
         assert!(matches!(
             Key::parse("c"),
-            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/") && coords == ArrayIndices(vec![])
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/") && coords == ChunkIndices(vec![])
         ));
     }
 
@@ -678,32 +685,32 @@ mod tests {
             Some("a/b/c/zarr.json".to_string())
         );
         assert_eq!(
-            Key::Chunk { node_path: "/".into(), coords: ArrayIndices(vec![]) }
+            Key::Chunk { node_path: "/".into(), coords: ChunkIndices(vec![]) }
                 .to_string(),
             Some("c".to_string())
         );
         assert_eq!(
-            Key::Chunk { node_path: "/".into(), coords: ArrayIndices(vec![0]) }
+            Key::Chunk { node_path: "/".into(), coords: ChunkIndices(vec![0]) }
                 .to_string(),
             Some("c/0".to_string())
         );
         assert_eq!(
-            Key::Chunk { node_path: "/".into(), coords: ArrayIndices(vec![1, 2]) }
+            Key::Chunk { node_path: "/".into(), coords: ChunkIndices(vec![1, 2]) }
                 .to_string(),
             Some("c/1/2".to_string())
         );
         assert_eq!(
-            Key::Chunk { node_path: "/a".into(), coords: ArrayIndices(vec![]) }
+            Key::Chunk { node_path: "/a".into(), coords: ChunkIndices(vec![]) }
                 .to_string(),
             Some("a/c".to_string())
         );
         assert_eq!(
-            Key::Chunk { node_path: "/a".into(), coords: ArrayIndices(vec![1]) }
+            Key::Chunk { node_path: "/a".into(), coords: ChunkIndices(vec![1]) }
                 .to_string(),
             Some("a/c/1".to_string())
         );
         assert_eq!(
-            Key::Chunk { node_path: "/a".into(), coords: ArrayIndices(vec![1, 2]) }
+            Key::Chunk { node_path: "/a".into(), coords: ChunkIndices(vec![1, 2]) }
                 .to_string(),
             Some("a/c/1/2".to_string())
         );
@@ -860,7 +867,7 @@ mod tests {
         assert!(matches!(
             store.get("array/c/0/1/0", &(None, None)).await,
             Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
-                if key == "array/c/0/1/0" && path.to_str() == Some("/array") && coords == ArrayIndices([0, 1, 0].to_vec())
+                if key == "array/c/0/1/0" && path.to_str() == Some("/array") && coords == ChunkIndices([0, 1, 0].to_vec())
         ));
         assert!(matches!(
             store.delete("array/foo").await,

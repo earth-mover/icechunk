@@ -5,11 +5,14 @@ use std::sync::Arc;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
-use crate::storage::InMemoryStorage;
-use crate::{
-    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, Dataset, DimensionNames, FillValue,
-    Path, StorageTransformer, ZarrArrayMetadata,
+use crate::dataset::{
+    ChunkKeyEncoding, ChunkShape, Codec, FillValue, StorageTransformer,
 };
+use crate::format::structure::ZarrArrayMetadata;
+use crate::format::Path;
+use crate::metadata::{ArrayShape, DimensionNames};
+use crate::storage::InMemoryStorage;
+use crate::Dataset;
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths

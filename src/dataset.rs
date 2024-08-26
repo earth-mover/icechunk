@@ -5,18 +5,66 @@ use std::{
     sync::Arc,
 };
 
+pub use crate::format::manifest::ChunkPayload;
+pub use crate::format::structure::ZarrArrayMetadata;
+pub use crate::format::{ChunkIndices, Path};
+pub use crate::metadata::{
+    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
+    DimensionNames, FillValue, StorageTransformer, UserAttributes,
+};
+
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Either;
 use thiserror::Error;
 
 use crate::{
-    manifest::mk_manifests_table, structure::mk_structure_table, AddNodeError,
-    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, ChunkRef, Dataset, DatasetConfig,
-    DeleteNodeError, Flags, GetNodeError, ManifestExtents, ManifestRef, NodeData, NodeId,
-    NodeStructure, ObjectId, Path, Storage, StorageError, TableRegion, UpdateNodeError,
-    UserAttributes, UserAttributesStructure, ZarrArrayMetadata,
+    format::{
+        manifest::{
+            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
+        },
+        structure::{
+            mk_structure_table, NodeData, NodeStructure, UserAttributesStructure,
+        },
+        Flags, NodeId, ObjectId, TableRegion,
+    },
+    Storage, StorageError,
 };
+
+#[derive(Clone, Debug)]
+pub struct DatasetConfig {
+    // Chunks smaller than this will be stored inline in the manifst
+    pub inline_threshold_bytes: u16,
+}
+
+impl Default for DatasetConfig {
+    fn default() -> Self {
+        Self { inline_threshold_bytes: 512 }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Dataset {
+    config: DatasetConfig,
+    storage: Arc<dyn Storage + Send + Sync>,
+    structure_id: Option<ObjectId>,
+    last_node_id: Option<NodeId>,
+    change_set: ChangeSet,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+struct ChangeSet {
+    new_groups: HashMap<Path, NodeId>,
+    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
+    updated_arrays: HashMap<Path, ZarrArrayMetadata>,
+    // These paths may point to Arrays or Groups,
+    // since both Groups and Arrays support UserAttributes
+    updated_attributes: HashMap<Path, Option<UserAttributes>>,
+    // FIXME: issue with too many inline chunks kept in mem
+    set_chunks: HashMap<Path, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashMap<Path, NodeId>,
+    deleted_arrays: HashMap<Path, NodeId>,
+}
 
 impl ChangeSet {
     fn add_group(&mut self, path: Path, node_id: NodeId) {
@@ -92,7 +140,7 @@ impl ChangeSet {
     fn set_chunk_ref(
         &mut self,
         path: Path,
-        coord: ArrayIndices,
+        coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) {
         // this implementation makes delete idempotent
@@ -108,7 +156,7 @@ impl ChangeSet {
     fn get_chunk_ref(
         &self,
         path: &Path,
-        coords: &ArrayIndices,
+        coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
         self.set_chunks.get(path).and_then(|h| h.get(coords))
     }
@@ -116,7 +164,7 @@ impl ChangeSet {
     fn array_chunks_iterator(
         &self,
         path: &Path,
-    ) -> impl Iterator<Item = (&ArrayIndices, &Option<ChunkPayload>)> {
+    ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
         match self.set_chunks.get(path) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
@@ -171,6 +219,41 @@ impl DatasetBuilder {
         Dataset::new(self.config.clone(), self.storage.clone(), self.structure_id.clone())
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum AddNodeError {
+    #[error("node already exists at `{0}`")]
+    AlreadyExists(Path),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DeleteNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("there is not an array at `{0}`")]
+    NotAnArray(Path),
+    #[error("there is not a group at `{0}`")]
+    NotAGroup(Path),
+}
+
+#[derive(Debug, Error)]
+pub enum UpdateNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("there is not an array at `{0}`")]
+    NotAnArray(Path),
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
+}
+
+#[derive(Debug, Error)]
+pub enum GetNodeError {
+    #[error("node not found at `{0}`")]
+    NotFound(Path),
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
+}
+
 /// FIXME: what do we want to do with implicit groups?
 ///
 impl Dataset {
@@ -300,7 +383,7 @@ impl Dataset {
     pub async fn set_chunk_ref(
         &mut self,
         path: Path,
-        coord: ArrayIndices,
+        coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> Result<(), UpdateNodeError> {
         match self.get_node(&path).await {
@@ -453,7 +536,7 @@ impl Dataset {
     pub async fn get_chunk_ref(
         &self,
         path: &Path,
-        coords: &ArrayIndices,
+        coords: &ChunkIndices,
     ) -> Option<ChunkPayload> {
         // FIXME: better error type
         let node = self.get_node(path).await.ok()?;
@@ -473,7 +556,7 @@ impl Dataset {
         }
     }
 
-    pub async fn get_chunk(&self, path: &Path, coords: &ArrayIndices) -> Option<Bytes> {
+    pub async fn get_chunk(&self, path: &Path, coords: &ChunkIndices) -> Option<Bytes> {
         match self.get_chunk_ref(path, coords).await? {
             ChunkPayload::Ref(ChunkRef { id, .. }) => {
                 // FIXME: handle error
@@ -489,7 +572,7 @@ impl Dataset {
     pub async fn set_chunk(
         &mut self,
         path: &Path,
-        coord: &ArrayIndices,
+        coord: &ChunkIndices,
         data: Bytes,
     ) -> Result<(), UpdateNodeError> {
         match self.get_array(path).await {
@@ -510,7 +593,7 @@ impl Dataset {
     async fn get_old_chunk(
         &self,
         manifests: &[ManifestRef],
-        coords: &ArrayIndices,
+        coords: &ChunkIndices,
     ) -> Option<ChunkPayload> {
         // FIXME: use manifest extents
         for manifest in manifests {
@@ -556,7 +639,7 @@ impl Dataset {
         match node.node_data {
             NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
             NodeData::Array(_, manifests) => {
-                let new_chunk_indices: Box<HashSet<&ArrayIndices>> = Box::new(
+                let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                     self.change_set
                         .array_chunks_iterator(&node.path)
                         .map(|(idx, _)| idx)
@@ -830,10 +913,16 @@ mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        manifest::mk_manifests_table, storage::InMemoryStorage, strategies::*,
-        structure::mk_structure_table, ChunkInfo, ChunkKeyEncoding, ChunkRef, ChunkShape,
-        Codec, DataType, FillValue, Flags, ManifestExtents, StorageTransformer,
-        TableRegion,
+        format::{
+            manifest::{mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents},
+            structure::mk_structure_table,
+            Flags, TableRegion,
+        },
+        metadata::{
+            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+        },
+        storage::InMemoryStorage,
+        strategies::*,
     };
 
     use super::*;
@@ -951,7 +1040,7 @@ mod tests {
         let array_id = 2;
         let chunk1 = ChunkInfo {
             node: array_id,
-            coord: ArrayIndices(vec![0, 0, 0]),
+            coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
                 offset: 0,
@@ -961,7 +1050,7 @@ mod tests {
 
         let chunk2 = ChunkInfo {
             node: array_id,
-            coord: ArrayIndices(vec![0, 0, 1]),
+            coord: ChunkIndices(vec![0, 0, 1]),
             payload: ChunkPayload::Inline("hello".into()),
         };
 
@@ -1097,16 +1186,16 @@ mod tests {
 
         ds.set_chunk(
             &new_array_path,
-            &ArrayIndices(vec![0]),
+            &ChunkIndices(vec![0]),
             Bytes::copy_from_slice(b"foo"),
         )
         .await?;
 
-        let chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0])).await;
+        let chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await;
         assert_eq!(chunk, Some(ChunkPayload::Inline("foo".into())));
 
         // retrieve a non initialized chunk of the new array
-        let non_chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![1])).await;
+        let non_chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await;
         assert_eq!(non_chunk, None);
 
         // update old array use attriutes and check them
@@ -1139,9 +1228,9 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        ds.set_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0]), data.clone()).await?;
+        ds.set_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), data.clone()).await?;
 
-        let chunk = ds.get_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
+        let chunk = ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0])).await;
         assert_eq!(chunk, Some(data));
 
         let path: Path = "/group/array2".into();
@@ -1183,27 +1272,27 @@ mod tests {
         change_set.add_array("foo/baz".into(), 2, zarr_meta);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk_ref("foo/bar".into(), ArrayIndices(vec![0, 1]), None);
+        change_set.set_chunk_ref("foo/bar".into(), ChunkIndices(vec![0, 1]), None);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
             "foo/bar".into(),
-            ArrayIndices(vec![1, 0]),
+            ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
         );
         change_set.set_chunk_ref(
             "foo/bar".into(),
-            ArrayIndices(vec![1, 1]),
+            ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
         );
         change_set.set_chunk_ref(
             "foo/baz".into(),
-            ArrayIndices(vec![0]),
+            ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
         );
         change_set.set_chunk_ref(
             "foo/baz".into(),
-            ArrayIndices(vec![1]),
+            ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
         );
 
@@ -1217,7 +1306,7 @@ mod tests {
                     "foo/baz".into(),
                     ChunkInfo {
                         node: 2,
-                        coord: ArrayIndices(vec![0]),
+                        coord: ChunkIndices(vec![0]),
                         payload: ChunkPayload::Inline("baz1".into()),
                     },
                 ),
@@ -1225,7 +1314,7 @@ mod tests {
                     "foo/baz".into(),
                     ChunkInfo {
                         node: 2,
-                        coord: ArrayIndices(vec![1]),
+                        coord: ChunkIndices(vec![1]),
                         payload: ChunkPayload::Inline("baz2".into()),
                     },
                 ),
@@ -1233,7 +1322,7 @@ mod tests {
                     "foo/bar".into(),
                     ChunkInfo {
                         node: 1,
-                        coord: ArrayIndices(vec![1, 0]),
+                        coord: ChunkIndices(vec![1, 0]),
                         payload: ChunkPayload::Inline("bar1".into()),
                     },
                 ),
@@ -1241,7 +1330,7 @@ mod tests {
                     "foo/bar".into(),
                     ChunkInfo {
                         node: 1,
-                        coord: ArrayIndices(vec![1, 1]),
+                        coord: ChunkIndices(vec![1, 1]),
                         payload: ChunkPayload::Inline("bar2".into()),
                     },
                 ),
@@ -1313,7 +1402,7 @@ mod tests {
         // we set a chunk in a new array
         ds.set_chunk_ref(
             new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
@@ -1347,14 +1436,14 @@ mod tests {
             }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
         ));
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline("hello".into()))
         );
 
         // we modify a chunk in an existing array
         ds.set_chunk_ref(
             new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("bye".into())),
         )
         .await?;
@@ -1362,23 +1451,23 @@ mod tests {
         // we add a new chunk in an existing array
         ds.set_chunk_ref(
             new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 1]),
+            ChunkIndices(vec![0, 0, 1]),
             Some(ChunkPayload::Inline("new chunk".into())),
         )
         .await?;
 
         let previous_structure_id = ds.flush().await?;
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
 
         // we delete a chunk
-        ds.set_chunk_ref(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None)
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
             .await?;
 
         let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
@@ -1396,11 +1485,11 @@ mod tests {
         let ds = Dataset::update(Arc::clone(&storage), structure_id).build();
 
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await,
             None
         );
         assert!(matches!(
@@ -1418,11 +1507,11 @@ mod tests {
         //test the previous version is still alive
         let ds = Dataset::update(Arc::clone(&storage), previous_structure_id).build();
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await,
             Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
 
@@ -1431,8 +1520,10 @@ mod tests {
 
     #[cfg(test)]
     mod state_machine_test {
+        use crate::format::structure::NodeData;
+        use crate::format::Path;
         use crate::storage::InMemoryStorage;
-        use crate::{NodeData, Path, ZarrArrayMetadata};
+        use crate::Dataset;
         use futures::Future;
         // use futures::Future;
         use proptest::prelude::*;
@@ -1446,9 +1537,9 @@ mod tests {
         use std::sync::Arc;
         use tokio::runtime::Runtime;
 
-        use crate::Dataset;
         use proptest::test_runner::Config;
 
+        use super::ZarrArrayMetadata;
         use super::{node_paths, zarr_array_metadata};
 
         #[derive(Clone, Debug)]

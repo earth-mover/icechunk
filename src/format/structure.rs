@@ -10,12 +10,69 @@ use arrow::{
 };
 use itertools::izip;
 
-use crate::{
-    ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName, FillValue, Flags,
-    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
-    Path, StorageTransformer, TableRegion, UserAttributes, UserAttributesRef,
-    UserAttributesStructure, ZarrArrayMetadata,
+use crate::metadata::{
+    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
+    DimensionNames, FillValue, StorageTransformer, UserAttributes,
 };
+
+use super::{
+    manifest::{ManifestExtents, ManifestRef},
+    Flags, NodeId, ObjectId, Path, TableOffset, TableRegion,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserAttributesRef {
+    pub object_id: ObjectId,
+    pub location: TableOffset,
+    pub flags: Flags,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserAttributesStructure {
+    Inline(UserAttributes),
+    Ref(UserAttributesRef),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum NodeType {
+    Group,
+    Array,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZarrArrayMetadata {
+    pub shape: ArrayShape,
+    pub data_type: DataType,
+    pub chunk_shape: ChunkShape,
+    pub chunk_key_encoding: ChunkKeyEncoding,
+    pub fill_value: FillValue,
+    pub codecs: Vec<Codec>,
+    pub storage_transformers: Option<Vec<StorageTransformer>>,
+    pub dimension_names: Option<DimensionNames>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeData {
+    Array(ZarrArrayMetadata, Vec<ManifestRef>),
+    Group,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeStructure {
+    pub id: NodeId,
+    pub path: Path,
+    pub user_attributes: Option<UserAttributesStructure>,
+    pub node_data: NodeData,
+}
+
+impl NodeStructure {
+    pub fn node_type(&self) -> NodeType {
+        match &self.node_data {
+            NodeData::Group => NodeType::Group,
+            NodeData::Array(_, _) => NodeType::Array,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct StructureTable {
@@ -663,9 +720,10 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
 
 #[cfg(test)]
 mod strategies {
-    use crate::FillValue;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
+
+    use crate::dataset::FillValue;
 
     pub(crate) fn fill_values_vec_strategy(
     ) -> impl Strategy<Value = Vec<Option<FillValue>>> {
@@ -676,8 +734,9 @@ mod strategies {
 
 #[cfg(test)]
 mod tests {
+    use crate::format::IcechunkFormatError;
+
     use super::*;
-    use crate::IcechunkFormatError;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::{

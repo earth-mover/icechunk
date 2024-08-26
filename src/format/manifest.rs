@@ -11,10 +11,46 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 
-use crate::{
-    ArrayIndices, ChunkInfo, ChunkPayload, ChunkRef, ObjectId, TableOffset, TableRegion,
-    VirtualChunkRef,
-};
+use super::{ChunkIndices, Flags, NodeId, ObjectId, TableOffset, TableRegion};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestExtents(pub Vec<ChunkIndices>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestRef {
+    pub object_id: ObjectId,
+    pub location: TableRegion,
+    pub flags: Flags,
+    pub extents: ManifestExtents,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VirtualChunkRef {
+    location: String, // FIXME: better type
+    offset: u64,
+    length: u64,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ChunkRef {
+    pub id: ObjectId,
+    pub offset: u64,
+    pub length: u64,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ChunkPayload {
+    Inline(Bytes), // FIXME: optimize copies
+    Virtual(VirtualChunkRef),
+    Ref(ChunkRef),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ChunkInfo {
+    pub node: NodeId,
+    pub coord: ChunkIndices,
+    pub payload: ChunkPayload,
+}
 
 #[derive(Debug, PartialEq)]
 pub struct ManifestsTable {
@@ -24,7 +60,7 @@ pub struct ManifestsTable {
 impl ManifestsTable {
     pub fn get_chunk_info(
         &self,
-        coords: &ArrayIndices,
+        coords: &ChunkIndices,
         region: &TableRegion,
     ) -> Option<ChunkInfo> {
         // FIXME: make this fast, currently it's a linear search
@@ -70,7 +106,7 @@ impl ManifestsTable {
         let idx = row as usize;
         let id = id_col.value(idx);
         let coords =
-            ArrayIndices::unchecked_try_from_slice(coords_col.value(idx)).ok()?;
+            ChunkIndices::unchecked_try_from_slice(coords_col.value(idx)).ok()?;
 
         if inline_col.is_valid(idx) {
             // we have an inline chunk
@@ -110,7 +146,7 @@ impl ManifestsTable {
 
     fn get_chunk_info_index(
         &self,
-        coords: &ArrayIndices,
+        coords: &ChunkIndices,
         TableRegion(from_row, to_row): &TableRegion,
     ) -> Option<TableOffset> {
         if *to_row as usize > self.batch.num_rows() || from_row > to_row {
@@ -132,13 +168,13 @@ impl ManifestsTable {
     }
 }
 
-impl ArrayIndices {
+impl ChunkIndices {
     // FIXME: better error type
     pub fn try_from_slice(rank: usize, slice: &[u8]) -> Result<Self, String> {
         if slice.len() != rank * 8 {
             Err(format!("Invalid slice length {}, expecting {}", slice.len(), rank))
         } else {
-            ArrayIndices::unchecked_try_from_slice(slice)
+            ChunkIndices::unchecked_try_from_slice(slice)
         }
     }
 
@@ -154,12 +190,12 @@ impl ArrayIndices {
                     .expect("Invalid slice size"),
             )
         });
-        Ok(ArrayIndices(res.collect()))
+        Ok(ChunkIndices(res.collect()))
     }
 }
 
-impl From<&ArrayIndices> for Vec<u8> {
-    fn from(ArrayIndices(ref value): &ArrayIndices) -> Self {
+impl From<&ChunkIndices> for Vec<u8> {
+    fn from(ChunkIndices(ref value): &ChunkIndices) -> Self {
         value.iter().flat_map(|c| c.to_be_bytes()).collect()
     }
 }
@@ -272,7 +308,7 @@ fn mk_extras_array<T: IntoIterator<Item = Option<()>>>(coll: T) -> StringArray {
     coll.into_iter().map(|_x| None as Option<String>).collect()
 }
 
-fn mk_coords_array<T: IntoIterator<Item = ArrayIndices>>(coll: T) -> BinaryArray {
+fn mk_coords_array<T: IntoIterator<Item = ChunkIndices>>(coll: T) -> BinaryArray {
     let mut builder = GenericBinaryBuilder::<i32>::new();
     for ref coords in coll {
         let vec: Vec<u8> = coords.into();
@@ -299,9 +335,9 @@ mod tests {
 
         #[test]
         fn coordinate_encoding_roundtrip(v: Vec<u64>) {
-            let arr = ArrayIndices(v);
+            let arr = ChunkIndices(v);
             let as_vec: Vec<u8> = (&arr).into();
-            let roundtrip = ArrayIndices::try_from_slice(arr.0.len(), as_vec.as_slice()).unwrap();
+            let roundtrip = ChunkIndices::try_from_slice(arr.0.len(), as_vec.as_slice()).unwrap();
             assert_eq!(arr, roundtrip);
         }
     }
@@ -310,7 +346,7 @@ mod tests {
     async fn test_get_chunk_info() {
         let c1a = ChunkInfo {
             node: 1,
-            coord: ArrayIndices(vec![0, 0, 0]),
+            coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
                 offset: 0,
@@ -319,7 +355,7 @@ mod tests {
         };
         let c2a = ChunkInfo {
             node: 1,
-            coord: ArrayIndices(vec![0, 0, 1]),
+            coord: ChunkIndices(vec![0, 0, 1]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
                 offset: 42,
@@ -328,7 +364,7 @@ mod tests {
         };
         let c3a = ChunkInfo {
             node: 1,
-            coord: ArrayIndices(vec![1, 0, 1]),
+            coord: ChunkIndices(vec![1, 0, 1]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
                 offset: 9999,
@@ -338,13 +374,13 @@ mod tests {
 
         let c1b = ChunkInfo {
             node: 2,
-            coord: ArrayIndices(vec![0, 0, 0]),
+            coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Inline("hello".into()),
         };
 
         let c1c = ChunkInfo {
             node: 2,
-            coord: ArrayIndices(vec![0, 0, 0]),
+            coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Virtual(VirtualChunkRef {
                 location: "s3://foo.bar".to_string(),
                 offset: 99,
@@ -360,35 +396,35 @@ mod tests {
             c1c.clone(),
         ]))
         .await;
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(1, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(1, 3));
         assert_eq!(res.as_ref(), None);
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(0, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(0, 3));
         assert_eq!(res.as_ref(), Some(&c1a));
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(0, 1));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(0, 1));
         assert_eq!(res.as_ref(), Some(&c1a));
 
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 1]), &TableRegion(2, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(2, 3));
         assert_eq!(res.as_ref(), None);
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 1]), &TableRegion(0, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(0, 3));
         assert_eq!(res.as_ref(), Some(&c2a));
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 1]), &TableRegion(0, 2));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(0, 2));
         assert_eq!(res.as_ref(), Some(&c2a));
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 1]), &TableRegion(1, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(1, 3));
         assert_eq!(res.as_ref(), Some(&c2a));
 
-        let res = table.get_chunk_info(&ArrayIndices(vec![1, 0, 1]), &TableRegion(4, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(4, 3));
         assert_eq!(res.as_ref(), None);
-        let res = table.get_chunk_info(&ArrayIndices(vec![1, 0, 1]), &TableRegion(0, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(0, 3));
         assert_eq!(res.as_ref(), Some(&c3a));
-        let res = table.get_chunk_info(&ArrayIndices(vec![1, 0, 1]), &TableRegion(1, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(1, 3));
         assert_eq!(res.as_ref(), Some(&c3a));
-        let res = table.get_chunk_info(&ArrayIndices(vec![1, 0, 1]), &TableRegion(2, 3));
+        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(2, 3));
         assert_eq!(res.as_ref(), Some(&c3a));
 
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(3, 4));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(3, 4));
         assert_eq!(res.as_ref(), Some(&c1b));
 
-        let res = table.get_chunk_info(&ArrayIndices(vec![0, 0, 0]), &TableRegion(4, 5));
+        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(4, 5));
         assert_eq!(res.as_ref(), Some(&c1c));
     }
 }
