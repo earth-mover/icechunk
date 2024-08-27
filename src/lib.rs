@@ -3,7 +3,7 @@
 //!   something can be async sometimes it needs to be async always. In our example: fetching from
 //!   storage.
 //! - There is a high level interface that knows about arrays, groups, user attributes, etc. This
-//! is the [`dataset::Dataset`] type.
+//!   is the [`dataset::Dataset`] type.
 //! - There is a low level interface that speaks zarr keys and values, and is used to provide the
 //!   zarr store that will be used from python. This is the [`zarr::Store`] type.
 //! - There is a translation language between low and high levels. When user writes to a zarr key,
