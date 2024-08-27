@@ -14,13 +14,12 @@ However, formally a store can be any valid Zarr hierarchy, from a single Array t
 Users of Icechunk SHOULD aim to scope their stores only to related arrays and groups that require consistent transactional updates.
 
 All the data and metadata for a store are stored in a directory in object storage or file storage.
-Optionally, an external _synchronization endpoint_ can be used to help coordinate transactional updates for storage systems which don't support atomic compare-and-swap operations.
 
 ## Goals
 
 The goals of the specification are as follows:
 
-1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to arrays will be commited via a single atomic operation and will not be partially visible. Readers will not acquire locks.
+1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to arrays will be committed via a single atomic operation and will not be partially visible. Readers will not acquire locks.
 2. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
 3. **Time travel** - Previous snapshots of a store remain accessible after new ones have been written. Reverting to an early snapshot is trivial and inexpensive.
 4. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
@@ -48,7 +47,7 @@ The storage system does is not required to support random-access writes. Once wr
 
 Icechunk uses a series of linked metadata files to describe the state of the store.
 
-- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file. The latest state file is always copied to `icechunk.json`.
+- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file. State files follow a deterministic sequential naming scheme.
 - The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifest files and [optionally] attribute files.
 - **Chunk Manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
@@ -59,8 +58,9 @@ The client then reads the structure file to determine the structure and hierarch
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
 When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file and state file.
-Finally, in an atomic compare-and-swap operation, it updates the `icechunk.json` file to complete the commit.
-Storage systems that don't support atomic compare-and-swap may use an external synchronization endpoint.
+Finally, in an atomic put-if-not-exists operation, it creates the next state file in the sequence.
+This operation may fail if a different client has already committed the next snapshot.
+In this case, the client may attempt to resolve the conflicts and retry the commit.
 
 
 ```mermaid
@@ -107,7 +107,6 @@ flowchart TD
 All data and metadata files are stored in a warehouse (typically an object store) using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, file, etc.)
-- `$ROOT/icechunk.json` copy of latest state file
 - `$ROOT/t/` state files
 - `$ROOT/s/` for the structure files
 - `$ROOT/a/` for attribute files
@@ -130,6 +129,7 @@ The state file is a JSON file with the following JSON schema:
 | id | YES | str UID | A unique identifier for the store |
 | generation | YES | int | An integer which must be incremented whenever the state file is updated |
 | store_root | YES | str | A URI which points to the root location of the store in object storage. | 
+| callback_url NO | str | An HTTP url which should receive the commit callback. |
 | snapshots | YES | array[snapshot] | A list of all of the snapshots. |
 | refs | NO | mapping[reference] | A mapping of references (string names) to snapshots |
 
@@ -150,6 +150,32 @@ References are a mapping of string names to snapshots
 | name | YES | str | Name of the reference|
 | snapshot-id | YES | str UID | What snaphot does it point to |
 | type | YES | "tag" / "branch" | Whether the reference is a tag or a branch | 
+
+#### State File Naming Convention
+
+The name of the state file is determined by the _generation_ parameter.
+The _generation_ starts at 0 and increases by 1 with every commit.
+The state file name is generated by
+- subtracting the generation from the integer `1099511627775`
+- encoding the resulting integer as a string using [Base 32 Crockford](https://www.crockford.com/base32.html)
+- left-padding the string with 0s if shorter than 8 characters
+- appending the suffix `.json`.
+This produces a deterministic sequence of state file names in which the latest generation always appears first
+when sorted lexicographically, facilitating easy lookup by listing the object store.
+
+For example, the first state file in a store is always named `ZZZZZZZZ.json`.
+The state file for generation 100 is `ZZZZZZWV.json`.
+The maximum number of commits allowed in an Icechunk store is consequently `1099511627775`,
+corresponding to the state file `00000000.json`.
+
+To provide consistent isolation between commits, only one client must be allowed to create a state file.
+This is possible on all object stores that support a "conditional put" operation in which a request to
+create a new object only succeeds if the object does not already exist.
+
+Once a new state file has been written, earlier state files can safely be removed.
+[TODO: this is not quite true.
+There is a potential concurrency bug if one client gets multiple generations ahead of another
+and then removes earlier state files. The other client (behind) will not see the intermediate state files and think its commit succeeded.]
 
 ### Structure Files
 
@@ -273,48 +299,39 @@ Chunk files can be:
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
 
-## Synchronization Endpoint
+## Commit Callbacks
 
-Some storage systems (notably AWS S3) do not support an atomic compare-and-swap operation.
-To support transactions in this scenario, Icechunk defines an external _synchronization endpoint_, a stateful JSON-based REST API supporting the following operations.
-
-[TODO: flesh out API specification]
-
-```yaml
-paths:
-  /{storeIdentifier}:
-    get:
-      summary: Retrieve the latest state file metadata for an Icechunk store
-      responses:
-        '200':
-          description: State file metadata.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                ...
-    post:
-      summary: Commit new state file metadata for an Icechunk store
-      ...
-```
-
-The synchronization endpoint must reject updates which are not compatible with the existing stored state.
-
-When using an external synchronization endpoint, following a successful commit, the client should replicate the same data to `icechunk.json`.
-
-[TODO: how do we prevent client from accidentally just committing to `icechunk.json` without posting to the synchronization endpoint? I think synchronization endpoint needs to go in `icechunk.json`.]
+Upon a successful commit, the Icechunk protocol includes an optional HTTP callback.
+The callback is an HTTP URL to which the client issues a POST command containing the contents
+of the committed state file.
+This mechanism allows for synchronization with external services, catalogs, etc.
 
 ## Algorithms
 
 ### Initialize New Store
 
+Initializing a new store is performed by writing the first state file, `t/ZZZZZZZZ.json`
+within the store root directory.
+This state file may contain a snapshot or the snapshot list may be empty.
+
 ### Write Snapshot
+
+1. Open a store at a specific generation and snapshot (see Read snapshot)
+1. [optional] Write new chunks
+1. [optional] Write new chunk manifests
+1. Write new structure files
+1. Attempt to write next state file
+   a. If successful, commit succeeded
+   b. If unsuccessful, attempt to reconcile and retry the commit
+1. [optional] On successful commit, post state file to callback URL.
 
 ### Read Snapshot
 
-### Expire Snapshots
+1. List the state file directory in alphabetical order and open the first file
+1. Use the specified shapshot or ref to fetch the structure file
+1. Fetch desired attributes and values from arrays
 
+### Expire Snapshots
 
 ## Appendices
 
