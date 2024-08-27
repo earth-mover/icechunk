@@ -83,7 +83,8 @@ impl ObjectStorage {
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?.build()?;
         // TODO: do we always have only one batch ever? Assert that
         let maybe_batch = builder.next().await;
-        Ok(maybe_batch.ok_or(StorageError::BadRecordBatchRead(path.to_string()))??)
+        Ok(maybe_batch
+            .ok_or(StorageError::BadRecordBatchRead(path.as_ref().into()))??)
     }
 
     async fn write_parquet(

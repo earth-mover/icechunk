@@ -53,7 +53,7 @@ impl Storage for InMemoryStorage {
     ) -> Result<Arc<StructureTable>, StorageError> {
         self.struct_files
             .read()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .get(id)
             .cloned()
             .ok_or(StorageError::NotFound(id.clone()))
@@ -65,7 +65,7 @@ impl Storage for InMemoryStorage {
     ) -> Result<Arc<AttributesTable>, StorageError> {
         self.attr_files
             .read()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .get(id)
             .cloned()
             .ok_or(StorageError::NotFound(id.clone()))
@@ -77,7 +77,7 @@ impl Storage for InMemoryStorage {
     ) -> Result<Arc<ManifestsTable>, StorageError> {
         self.man_files
             .read()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .get(id)
             .cloned()
             .ok_or(StorageError::NotFound(id.clone()))
@@ -90,7 +90,7 @@ impl Storage for InMemoryStorage {
     ) -> Result<(), StorageError> {
         self.struct_files
             .write()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .insert(id, Arc::clone(&table));
         Ok(())
     }
@@ -102,7 +102,7 @@ impl Storage for InMemoryStorage {
     ) -> Result<(), StorageError> {
         self.attr_files
             .write()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .insert(id, Arc::clone(&table));
         Ok(())
     }
@@ -114,7 +114,7 @@ impl Storage for InMemoryStorage {
     ) -> Result<(), StorageError> {
         self.man_files
             .write()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .insert(id, Arc::clone(&table));
         Ok(())
     }
@@ -128,7 +128,7 @@ impl Storage for InMemoryStorage {
         let chunk = self
             .chunk_files
             .read()
-            .or(Err(StorageError::Deadlock))?
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
             .get(id)
             .cloned()
             .ok_or(StorageError::NotFound(id.clone()))?;
@@ -144,7 +144,11 @@ impl Storage for InMemoryStorage {
         id: ObjectId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
-        self.chunk_files.write().or(Err(StorageError::Deadlock))?.insert(id, bytes);
+        self.chunk_files
+            .write()
+            .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
+            .insert(id, bytes);
+
         Ok(())
     }
 }
