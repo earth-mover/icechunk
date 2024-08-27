@@ -312,7 +312,7 @@ impl Dataset {
             .map(|node| self.change_set.update_array(node.path, metadata))
     }
 
-    pub async fn delete_array(&mut self, path: Path) -> Result<(), DatasetError> {
+    pub async fn delete_array(&mut self, path: Path) -> DatasetResult<()> {
         self.get_array(&path)
             .await
             .map(|node| self.change_set.delete_array(node.path, node.id))
