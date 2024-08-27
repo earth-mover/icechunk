@@ -10,9 +10,9 @@ use tokio::spawn;
 
 use crate::{
     dataset::{
-        AddNodeError, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec,
-        DataType, DeleteNodeError, DimensionNames, FillValue, Path, StorageTransformer,
-        UpdateNodeError, UserAttributes, ZarrArrayMetadata,
+        ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec, DataType,
+        DatasetError, DimensionNames, FillValue, Path, StorageTransformer,
+        UserAttributes, ZarrArrayMetadata,
     },
     format::{
         structure::{NodeData, UserAttributesStructure}, // TODO: we shouldn't need these imports, too low level
@@ -43,14 +43,10 @@ pub enum StoreError {
     InvalidKey { key: String },
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
-    #[error("cannot update object: `{0}`")]
-    CannotUpdate(#[from] UpdateNodeError),
-    #[error("cannot delete object: `{0}`")]
-    CannotDelete(#[from] DeleteNodeError),
+    #[error("unsuccessful dataset operation: `{0}`")]
+    CannotUpdate(#[from] DatasetError),
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] serde_json::Error),
-    #[error("add node error: `{0}`")]
-    AddNode(#[from] AddNodeError),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
@@ -217,7 +213,7 @@ impl Store {
         path: Path,
         coords: ChunkIndices,
     ) -> StoreResult<Bytes> {
-        let chunk = self.dataset.get_chunk(&path, &coords).await;
+        let chunk = self.dataset.get_chunk(&path, &coords).await?;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
             key: key.to_string(),
             path,
