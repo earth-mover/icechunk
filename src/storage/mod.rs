@@ -20,7 +20,7 @@ pub use object_store::ObjectStorage;
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, structure::StructureTable,
-    ChunkOffset, ObjectId, Path,
+    ChunkOffset, ObjectId,
 };
 
 /// Fetch and write the parquet files that represent the dataset in object store
@@ -40,10 +40,6 @@ pub enum StorageError {
     ParquetError(#[from] parquet_errors::ParquetError),
     #[error("error reading RecordBatch from parquet file {0}.")]
     BadRecordBatchRead(String),
-    #[error("i/o error: `{0:?}`")]
-    IOError(#[from] std::io::Error),
-    #[error("bad path: {0}")]
-    BadPath(Path),
 }
 
 #[async_trait]
