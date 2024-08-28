@@ -14,8 +14,8 @@ pub use crate::metadata::{
 };
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
-use itertools::Either;
+use futures::{Stream, StreamExt, TryStreamExt};
+use itertools::{Either, Itertools};
 use thiserror::Error;
 
 use crate::{
@@ -261,7 +261,7 @@ impl Dataset {
     pub async fn add_group(&mut self, path: Path) -> DatasetResult<()> {
         match self.get_node(&path).await {
             Err(DatasetError::NotFound { .. }) => {
-                let id = self.reserve_node_id().await;
+                let id = self.reserve_node_id().await?;
                 self.change_set.add_group(path.clone(), id);
                 Ok(())
             }
@@ -289,7 +289,7 @@ impl Dataset {
     ) -> DatasetResult<()> {
         match self.get_node(&path).await {
             Err(DatasetError::NotFound { .. }) => {
-                let id = self.reserve_node_id().await;
+                let id = self.reserve_node_id().await?;
                 self.change_set.add_array(path, id, metadata);
                 Ok(())
             }
@@ -345,26 +345,33 @@ impl Dataset {
             .map(|node| self.change_set.set_chunk_ref(node.path, coord, data))
     }
 
-    async fn compute_last_node_id(&self) -> NodeId {
-        // FIXME: errors
+    async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
         match &self.structure_id {
-            None => 0,
-            Some(id) => self
-                .storage
-                .fetch_structure(id)
-                .await
-                // FIXME: bubble up the error
-                .ok()
-                .and_then(|structure| structure.iter().max_by_key(|s| s.id))
-                .map_or(0, |node| node.id),
+            None => Ok(0),
+            Some(id) => {
+                let mut max_id = 0;
+                while let Some(maybe_node) =
+                    self.storage.fetch_structure(id).await?.iter().next()
+                {
+                    match maybe_node {
+                        Ok(node) => {
+                            max_id = std::cmp::max(max_id, node.id);
+                        }
+                        Err(err) => {
+                            Err(err)?;
+                        }
+                    }
+                }
+                Ok(max_id)
+            }
         }
     }
 
-    async fn reserve_node_id(&mut self) -> NodeId {
-        let last = self.last_node_id.unwrap_or(self.compute_last_node_id().await);
+    async fn reserve_node_id(&mut self) -> DatasetResult<NodeId> {
+        let last = self.last_node_id.unwrap_or(self.compute_last_node_id().await?);
         let new = last + 1;
         self.last_node_id = Some(new);
-        new
+        Ok(new)
     }
 
     // FIXME: add moves
@@ -573,25 +580,23 @@ impl Dataset {
         Ok(None)
     }
 
+    /// Warning: The presence of a single error may mean multiple missing items
     async fn updated_chunk_iterator(
         &self,
-    ) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
+    ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
         match self.structure_id.as_ref() {
-            None => futures::future::Either::Left(futures::stream::empty()),
+            None => Ok(futures::future::Either::Left(futures::stream::empty())),
             Some(structure_id) => {
-                // FIXME: error handling
-                let structure = self.storage.fetch_structure(structure_id).await.unwrap();
+                let structure = self.storage.fetch_structure(structure_id).await?;
                 let nodes = futures::stream::iter(structure.iter_arc());
-                futures::future::Either::Right(
-                    nodes
-                        .then(move |node| async move {
-                            let path = node.path.clone();
-                            self.node_chunk_iterator(node)
-                                .await
-                                .map(move |ci| (path.clone(), ci))
-                        })
-                        .flatten(),
-                )
+                let res = nodes.and_then(move |node| async move {
+                    let path = node.path.clone();
+                    Ok(self
+                        .node_chunk_iterator(node)
+                        .await
+                        .map_ok(move |ci| (path.clone(), ci)))
+                });
+                Ok(futures::future::Either::Right(res.try_flatten()))
             }
         }
     }
@@ -599,7 +604,7 @@ impl Dataset {
     async fn node_chunk_iterator(
         &self,
         node: NodeStructure,
-    ) -> impl Stream<Item = ChunkInfo> + '_ {
+    ) -> impl Stream<Item = DatasetResult<ChunkInfo>> + '_ {
         match node.node_data {
             NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
             NodeData::Array(_, manifests) => {
@@ -614,10 +619,12 @@ impl Dataset {
                     .change_set
                     .array_chunks_iterator(&node.path)
                     .filter_map(move |(idx, payload)| {
-                        payload.as_ref().map(|payload| ChunkInfo {
-                            node: node.id,
-                            coord: idx.clone(),
-                            payload: payload.clone(),
+                        payload.as_ref().map(|payload| {
+                            Ok(ChunkInfo {
+                                node: node.id,
+                                coord: idx.clone(),
+                                payload: payload.clone(),
+                            })
                         })
                     });
 
@@ -631,6 +638,7 @@ impl Dataset {
                                     let manifest = self
                                         .storage
                                         .fetch_manifests(&manifest_ref.object_id)
+                                        // FIXME: unwrap
                                         .await
                                         .unwrap();
 
@@ -639,7 +647,7 @@ impl Dataset {
                                             Some(manifest_ref.location.0),
                                             Some(manifest_ref.location.1),
                                         )
-                                        .filter(move |c| {
+                                        .filter_ok(move |c| {
                                             !new_chunk_indices.contains(&c.coord)
                                         });
 
@@ -647,6 +655,8 @@ impl Dataset {
                                         .update_existing_chunks(path.clone(), old_chunks);
                                     //FIXME: error handling
                                     futures::stream::iter(old_chunks)
+                                        // convert error types
+                                        .map_err(|e| e.into())
                                 }
                             })
                             .flatten(),
@@ -656,12 +666,12 @@ impl Dataset {
         }
     }
 
-    fn update_existing_chunks<'a>(
+    fn update_existing_chunks<'a, E>(
         &'a self,
         path: Path,
-        chunks: impl Iterator<Item = ChunkInfo> + 'a,
-    ) -> impl Iterator<Item = ChunkInfo> + 'a {
-        chunks.filter_map(move |chunk| {
+        chunks: impl Iterator<Item = Result<ChunkInfo, E>> + 'a,
+    ) -> impl Iterator<Item = Result<ChunkInfo, E>> + 'a {
+        chunks.filter_map_ok(move |chunk| {
             match self.change_set.get_chunk_ref(&path, &chunk.coord) {
                 None => Some(chunk),
                 Some(new_payload) => {
@@ -675,19 +685,21 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> impl Iterator<Item = NodeStructure> + 'a {
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
         match &self.structure_id {
-            None => Either::Left(iter::empty()),
-            Some(id) => Either::Right(
+            None => Ok(Either::Left(iter::empty())),
+            Some(id) => Ok(Either::Right(
                 self.storage
                     .fetch_structure(id)
-                    .await
-                    // FIXME: bubble up the error
-                    .unwrap()
+                    .await?
                     .iter_arc()
-                    .map(move |node| {
+                    .map(|maybe_node| match maybe_node {
+                        Ok(n) => Ok(n),
+                        Err(e) => Err(e.into()),
+                    })
+                    .map_ok(move |node| {
                         let region = manifest_tracker.and_then(|t| t.region(node.id));
                         let new_manifests = region.map(|r| {
                             if r.0 == r.1 {
@@ -703,7 +715,7 @@ impl Dataset {
                         });
                         self.update_existing_node(node, new_manifests)
                     }),
-            ),
+            )),
         }
     }
 
@@ -714,7 +726,7 @@ impl Dataset {
     ) -> impl Iterator<Item = NodeStructure> + 'a {
         // FIXME: unwrap
         self.change_set.new_nodes().map(move |path| {
-            let node = self.get_new_node(path).unwrap();
+            let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
             match node.node_data {
                 NodeData::Group => node,
                 NodeData::Array(meta, _no_manifests_yet) => {
@@ -747,10 +759,11 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> impl Iterator<Item = NodeStructure> + 'a {
-        self.updated_existing_nodes(manifest_id, manifest_tracker)
-            .await
-            .chain(self.new_nodes(manifest_id, manifest_tracker))
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + 'a> {
+        Ok(self
+            .updated_existing_nodes(manifest_id, manifest_tracker)
+            .await?
+            .chain(self.new_nodes(manifest_id, manifest_tracker).map(Ok)))
     }
 
     fn update_existing_node(
@@ -786,15 +799,19 @@ impl Dataset {
         }
     }
 
-    pub async fn list_nodes(&self) -> impl Iterator<Item = NodeStructure> + '_ {
+    pub async fn list_nodes(
+        &self,
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + '_> {
         self.updated_nodes(&ObjectId::FAKE, None).await
     }
 
-    pub async fn all_chunks(&self) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
-        let existing_array_chunks = self.updated_chunk_iterator().await;
+    pub async fn all_chunks(
+        &self,
+    ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
+        let existing_array_chunks = self.updated_chunk_iterator().await?;
         let new_array_chunks =
-            futures::stream::iter(self.change_set.new_arrays_chunk_iterator());
-        existing_array_chunks.chain(new_array_chunks)
+            futures::stream::iter(self.change_set.new_arrays_chunk_iterator().map(Ok));
+        Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
     /// After changes to the dasate have been made, this generates and writes to `Storage` the updated datastructures.
@@ -806,7 +823,7 @@ impl Dataset {
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
         let mut region_tracker = TableRegionTracker::default();
-        let all_chunks = self.all_chunks().await.map(|chunk| {
+        let all_chunks = self.all_chunks().await?.map(|chunk| {
             region_tracker.update(&chunk.1);
             chunk
         });

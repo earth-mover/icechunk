@@ -11,7 +11,10 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 
-use super::{ChunkIndices, Flags, NodeId, ObjectId, TableOffset, TableRegion};
+use super::{
+    BatchLike, ChunkIndices, Flags, IcechunkResult, NodeId, ObjectId, TableOffset,
+    TableRegion,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
@@ -57,6 +60,12 @@ pub struct ManifestsTable {
     pub batch: RecordBatch,
 }
 
+impl BatchLike for ManifestsTable {
+    fn get_batch(&self) -> &RecordBatch {
+        &self.batch
+    }
+}
+
 impl ManifestsTable {
     pub fn get_chunk_info(
         &self,
@@ -74,7 +83,7 @@ impl ManifestsTable {
         self: Arc<Self>,
         from: Option<TableOffset>,
         to: Option<TableOffset>,
-    ) -> impl Iterator<Item = ChunkInfo> {
+    ) -> impl Iterator<Item = IcechunkResult<ChunkInfo>> {
         let from = from.unwrap_or(0);
         let to = to.unwrap_or(self.batch.num_rows() as u32);
         // FIXME: unwrap

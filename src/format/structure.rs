@@ -101,20 +101,18 @@ impl StructureTable {
         self.build_node_structure(idx)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = NodeStructure> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeStructure>> + '_ {
         let max = self.batch.num_rows();
-        // FIXME: unwrap
-        (0..max).map(|idx| self.build_node_structure(idx).unwrap())
+        (0..max).map(|idx| self.build_node_structure(idx))
     }
 
     // FIXME: do we still need this method?
-    pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeStructure> {
+    pub fn iter_arc(
+        self: Arc<Self>,
+    ) -> impl Iterator<Item = IcechunkResult<NodeStructure>> {
         let max = self.batch.num_rows();
         // FIXME: unwrap
-        (0..max).map(move |idx| {
-            self.build_node_structure(idx)
-                .unwrap_or_else(|_| panic!("Cannot build NodeStructure at index {idx}"))
-        })
+        (0..max).map(move |idx| self.build_node_structure(idx))
     }
 
     fn build_zarr_array_metadata(&self, idx: usize) -> IcechunkResult<ZarrArrayMetadata> {
