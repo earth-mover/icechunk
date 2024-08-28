@@ -26,7 +26,7 @@ use crate::{
         structure::{
             mk_structure_table, NodeData, NodeStructure, UserAttributesStructure,
         },
-        Flags, NodeId, ObjectId, TableRegion,
+        Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
     },
     Storage, StorageError,
 };
@@ -211,6 +211,8 @@ impl DatasetBuilder {
 pub enum DatasetError {
     #[error("error contacting storage")]
     StorageError(#[from] StorageError),
+    #[error("error in icechunk file")]
+    FormatError(#[from] IcechunkFormatError),
     #[error("node not found at `{path}`: {message}")]
     NotFound { path: Path, message: String },
     #[error("there is not an array at `{node:?}`: {message}")]
@@ -423,7 +425,7 @@ impl Dataset {
             .get_user_attributes(path)
             .cloned()
             .map(|a| a.map(UserAttributesStructure::Inline));
-        let res = structure.get_node(path).ok_or(err())?;
+        let res = structure.get_node(path)?;
         let res = NodeStructure {
             user_attributes: session_atts.unwrap_or(res.user_attributes),
             ..res

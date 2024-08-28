@@ -60,12 +60,28 @@ pub struct TableRegion(pub TableOffset, pub TableOffset);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flags(); // FIXME: implement
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum IcechunkFormatError {
     #[error("error decoding fill_value from array")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
     #[error("error decoding fill_value from json")]
     FillValueParse { data_type: DataType, value: serde_json::Value },
-    #[error("null found decoding fill_value")]
-    NullFillValueError,
+    #[error("column not found: `{column}`")]
+    ColumnNotFound { column: String },
+    #[error("invalid column type: `{expected_column_type}` for column `{column_name}`")]
+    InvalidColumnType { column_name: String, expected_column_type: String },
+    #[error("invalid path: `{path:?}`")]
+    InvalidPath { path: Path },
+    #[error("node not found at `{path:?}`")]
+    NodeNotFound { path: Path },
+    #[error("unexpected null element at column `{column_name}` index `{index}`")]
+    NullElement { index: usize, column_name: String },
+    #[error("invalid node type `{node_type}` at index `{index}`")]
+    InvalidNodeType { index: usize, node_type: String },
+    #[error("invalid array metadata field `{field}` at index `{index}`: {message}")]
+    InvalidArrayMetadata { index: usize, field: String, message: String },
+    #[error("invalid array manifest field `{field}` at index `{index}`: {message}")]
+    InvalidArrayManifest { index: usize, field: String, message: String },
 }
+
+pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
