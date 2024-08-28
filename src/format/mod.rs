@@ -1,11 +1,13 @@
 use core::fmt;
 use std::path::PathBuf;
 
+use ::arrow::array::RecordBatch;
 use itertools::Itertools;
 use thiserror::Error;
 
 use crate::metadata::DataType;
 
+pub mod arrow;
 pub mod attributes;
 pub mod manifest;
 pub mod structure;
@@ -85,3 +87,7 @@ pub enum IcechunkFormatError {
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
+
+pub trait BatchLike {
+    fn get_batch(&self) -> &RecordBatch;
+}

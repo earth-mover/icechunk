@@ -16,9 +16,10 @@ use crate::metadata::{
 };
 
 use super::{
+    arrow::get_column,
     manifest::{ManifestExtents, ManifestRef},
-    Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId, Path, TableOffset,
-    TableRegion,
+    BatchLike, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId, Path,
+    TableOffset, TableRegion,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,141 +81,16 @@ pub struct StructureTable {
     pub batch: RecordBatch,
 }
 
-//TODO: move these helper classes to a support file
-struct ColumnIndex<'a, 'b> {
-    pub column: &'a ArrayRef,
-    pub name: &'b str,
-}
-
-impl<'a, 'b> ColumnIndex<'a, 'b> {
-    pub fn as_string(&self) -> IcechunkResult<&'a StringArray> {
-        self.column.as_string_opt().ok_or(IcechunkFormatError::InvalidColumnType {
-            column_name: self.name.to_string(),
-            expected_column_type: "string".to_string(),
-        })
-    }
-
-    pub fn as_u32(&self) -> IcechunkResult<&'a UInt32Array> {
-        self.column.as_primitive_opt().ok_or(IcechunkFormatError::InvalidColumnType {
-            column_name: self.name.to_string(),
-            expected_column_type: "u32".to_string(),
-        })
-    }
-
-    pub fn as_u8(&self) -> IcechunkResult<&'a UInt8Array> {
-        self.column.as_primitive_opt().ok_or(IcechunkFormatError::InvalidColumnType {
-            column_name: self.name.to_string(),
-            expected_column_type: "u8".to_string(),
-        })
-    }
-
-    pub fn as_list(&self) -> IcechunkResult<&'a ListArray> {
-        self.column.as_list_opt::<i32>().ok_or(IcechunkFormatError::InvalidColumnType {
-            column_name: self.name.to_string(),
-            expected_column_type: "list".to_string(),
-        })
-    }
-
-    pub fn as_struct(&self) -> IcechunkResult<&'a StructArray> {
-        self.column.as_struct_opt().ok_or(IcechunkFormatError::InvalidColumnType {
-            column_name: self.name.to_string(),
-            expected_column_type: "struct".to_string(),
-        })
-    }
-
-    pub fn as_binary(&self) -> IcechunkResult<&'a BinaryArray> {
-        self.column.as_binary_opt::<i32>().ok_or(IcechunkFormatError::InvalidColumnType {
-            column_name: self.name.to_string(),
-            expected_column_type: "binary".to_string(),
-        })
-    }
-
-    pub fn string_at(&self, idx: usize) -> IcechunkResult<&'a str> {
-        let array = self.as_string()?;
-        if array.is_valid(idx) {
-            Ok(array.value(idx))
-        } else {
-            Err(IcechunkFormatError::NullElement {
-                index: idx,
-                column_name: self.name.to_string(),
-            })
-        }
-    }
-
-    pub fn u32_at(&self, idx: usize) -> IcechunkResult<u32> {
-        let array = self.as_u32()?;
-        if array.is_valid(idx) {
-            Ok(array.value(idx))
-        } else {
-            Err(IcechunkFormatError::NullElement {
-                index: idx,
-                column_name: self.name.to_string(),
-            })
-        }
-    }
-
-    pub fn u8_at(&self, idx: usize) -> IcechunkResult<u8> {
-        let array = self.as_u8()?;
-        if array.is_valid(idx) {
-            Ok(array.value(idx))
-        } else {
-            Err(IcechunkFormatError::NullElement {
-                index: idx,
-                column_name: self.name.to_string(),
-            })
-        }
-    }
-
-    pub fn binary_at(&self, idx: usize) -> IcechunkResult<&'a [u8]> {
-        let array = self.as_binary()?;
-        if array.is_valid(idx) {
-            Ok(array.value(idx))
-        } else {
-            Err(IcechunkFormatError::NullElement {
-                index: idx,
-                column_name: self.name.to_string(),
-            })
-        }
-    }
-
-    pub fn list_at(&self, idx: usize) -> IcechunkResult<ArrayRef> {
-        let array = self.as_list()?;
-        if array.is_valid(idx) {
-            Ok(array.value(idx))
-        } else {
-            Err(IcechunkFormatError::NullElement {
-                index: idx,
-                column_name: self.name.to_string(),
-            })
-        }
-    }
-
-    pub fn list_at_opt(&self, idx: usize) -> IcechunkResult<Option<ArrayRef>> {
-        let array = self.as_list()?;
-        if array.is_valid(idx) {
-            Ok(Some(array.value(idx)))
-        } else {
-            Ok(None)
-        }
+impl BatchLike for StructureTable {
+    fn get_batch(&self) -> &RecordBatch {
+        &self.batch
     }
 }
 
 impl StructureTable {
-    fn get_column<'a, 'b: 'a>(
-        &'a self,
-        column_name: &'b str,
-    ) -> IcechunkResult<ColumnIndex> {
-        Ok(ColumnIndex {
-            column: self.batch.column_by_name(column_name).ok_or(
-                IcechunkFormatError::ColumnNotFound { column: column_name.to_string() },
-            )?,
-            name: column_name,
-        })
-    }
-
     pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeStructure> {
         // FIXME: optimize
-        let paths: &StringArray = self.get_column("path")?.as_string()?;
+        let paths: &StringArray = get_column(self, "path")?.as_string()?;
         let needle = path
             .to_str()
             .ok_or(IcechunkFormatError::InvalidPath { path: path.clone() })?;
@@ -222,7 +98,7 @@ impl StructureTable {
             .iter()
             .position(|s| s == Some(needle))
             .ok_or(IcechunkFormatError::NodeNotFound { path: path.clone() })?;
-        Ok(self.build_node_structure(idx)?)
+        self.build_node_structure(idx)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = NodeStructure> + '_ {
@@ -243,8 +119,7 @@ impl StructureTable {
 
     fn build_zarr_array_metadata(&self, idx: usize) -> IcechunkResult<ZarrArrayMetadata> {
         // TODO: split this huge function
-        let shape: Vec<u64> = self
-            .get_column("shape")?
+        let shape: Vec<u64> = get_column(self, "shape")?
             .list_at(idx)?
             .as_primitive_opt::<UInt64Type>()
             .ok_or(IcechunkFormatError::InvalidColumnType {
@@ -258,14 +133,16 @@ impl StructureTable {
                 field: "shape".to_string(),
                 message: "null dimensions sizes".to_string(),
             })?;
-        let data_type = DataType::try_from(self.get_column("data_type")?.string_at(idx)?)
-            .map_err(|err| IcechunkFormatError::InvalidArrayMetadata {
-                index: idx,
-                field: "data_type".to_string(),
-                message: err.to_string(),
-            })?;
+        let data_type = DataType::try_from(
+            get_column(self, "data_type")?.string_at(idx)?,
+        )
+        .map_err(|err| IcechunkFormatError::InvalidArrayMetadata {
+            index: idx,
+            field: "data_type".to_string(),
+            message: err.to_string(),
+        })?;
         let chunk_shape = ChunkShape(
-            self.get_column("chunk_shape")?
+            get_column(self, "chunk_shape")?
                 .list_at(idx)?
                 .as_primitive_opt::<UInt64Type>()
                 .ok_or(IcechunkFormatError::InvalidColumnType {
@@ -288,7 +165,7 @@ impl StructureTable {
                     message: "non-positive chunk sizes".to_string(),
                 })?,
         );
-        let key_encoding_u8 = self.get_column("chunk_key_encoding")?.u8_at(idx)?;
+        let key_encoding_u8 = get_column(self, "chunk_key_encoding")?.u8_at(idx)?;
         let chunk_key_encoding =
             std::convert::TryInto::<ChunkKeyEncoding>::try_into(key_encoding_u8)
                 .map_err(|err| IcechunkFormatError::InvalidArrayMetadata {
@@ -297,8 +174,7 @@ impl StructureTable {
                     message: err.to_string(),
                 })?;
 
-        let codecs = self
-            .get_column("codecs")?
+        let codecs = get_column(self, "codecs")?
             .list_at(idx)?
             .as_binary_opt::<i32>()
             .ok_or(IcechunkFormatError::InvalidColumnType {
@@ -318,7 +194,7 @@ impl StructureTable {
             })?;
 
         let storage_transformers =
-            match self.get_column("storage_transformers")?.list_at_opt(idx)? {
+            match get_column(self, "storage_transformers")?.list_at_opt(idx)? {
                 Some(tr_array) => Some(
                     tr_array
                         .as_binary_opt::<i32>()
@@ -342,7 +218,7 @@ impl StructureTable {
             };
 
         let dimension_names =
-            match self.get_column("dimension_names")?.list_at_opt(idx)? {
+            match get_column(self, "dimension_names")?.list_at_opt(idx)? {
                 Some(ds_array) => Some(
                     ds_array
                         .as_string_opt::<i32>()
@@ -357,7 +233,7 @@ impl StructureTable {
                 None => None,
             };
 
-        let encoded_fill_value = self.get_column("fill_value")?.binary_at(idx)?;
+        let encoded_fill_value = get_column(self, "fill_value")?.binary_at(idx)?;
         let fill_value =
             FillValue::from_data_type_and_value(&data_type, encoded_fill_value)?;
 
@@ -374,7 +250,7 @@ impl StructureTable {
     }
 
     fn build_manifest_refs(&self, idx: usize) -> IcechunkResult<Vec<ManifestRef>> {
-        let manifest_refs_array = self.get_column("manifest_references")?.as_struct()?;
+        let manifest_refs_array = get_column(self, "manifest_references")?.as_struct()?;
         if manifest_refs_array.is_valid(idx) {
             let refs = manifest_refs_array
                 .column_by_name("reference")
@@ -465,9 +341,9 @@ impl StructureTable {
     }
 
     fn build_node_structure(&self, idx: usize) -> IcechunkResult<NodeStructure> {
-        let node_type = self.get_column("type")?.string_at(idx)?;
-        let id = self.get_column("id")?.u32_at(idx)?;
-        let path = self.get_column("path")?.string_at(idx)?;
+        let node_type = get_column(self, "type")?.string_at(idx)?;
+        let id = get_column(self, "id")?.u32_at(idx)?;
+        let path = get_column(self, "path")?.string_at(idx)?;
         let user_attributes = self.build_user_attributes(idx);
         match node_type {
             "group" => Ok(NodeStructure {
