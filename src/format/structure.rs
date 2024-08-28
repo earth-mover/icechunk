@@ -637,9 +637,9 @@ where
 }
 
 // For testing only
-pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
-    coll: T,
-) -> StructureTable {
+pub fn mk_structure_table<E>(
+    coll: impl IntoIterator<Item = Result<NodeStructure, E>>,
+) -> Result<StructureTable, E> {
     let mut ids = Vec::new();
     let mut types = Vec::new();
     let mut paths = Vec::new();
@@ -657,6 +657,10 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let mut manifest_refs_vec = Vec::new();
     // FIXME: add user_attributes_flags
     for node in coll {
+        let node = match node {
+            Ok(node) => node,
+            Err(err) => return Err(err),
+        };
         ids.push(node.id);
         paths.push(node.path.to_string_lossy().into_owned());
         match node.user_attributes {
@@ -811,7 +815,7 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     ]));
     let batch =
         RecordBatch::try_new(schema, columns).expect("Error creating record batch");
-    StructureTable { batch }
+    Ok(StructureTable { batch })
 }
 
 #[cfg(test)]
@@ -837,11 +841,12 @@ mod tests {
     use proptest::prelude::*;
     use std::{
         collections::HashMap,
+        convert::Infallible,
         iter::{self, zip},
     };
 
     #[test]
-    fn test_get_node() {
+    fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![10u64, 20, 30],
             data_type: DataType::Float32,
@@ -949,7 +954,7 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = mk_structure_table(nodes);
+        let st = mk_structure_table::<Infallible>(nodes.into_iter().map(Ok))?;
         assert_eq!(
             st.get_node(&"/nonexistent".into()),
             Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })
@@ -1011,6 +1016,7 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),
         );
+        Ok(())
     }
 
     fn decode_fill_values_array(

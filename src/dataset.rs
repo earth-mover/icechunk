@@ -823,19 +823,20 @@ impl Dataset {
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
         let mut region_tracker = TableRegionTracker::default();
-        let all_chunks = self.all_chunks().await?.map(|chunk| {
+        let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
             region_tracker.update(&chunk.1);
             chunk
         });
         let new_manifest =
-            mk_manifests_table(all_chunks.map(|(_path, chunk)| chunk)).await;
+            mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await?;
         let new_manifest_id = ObjectId::random();
         self.storage
             .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
             .await?;
 
-        let all_nodes = self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await;
-        let new_structure = mk_structure_table(all_nodes);
+        let all_nodes =
+            self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await?;
+        let new_structure = mk_structure_table(all_nodes)?;
         let new_structure_id = ObjectId::random();
         self.storage
             .write_structure(new_structure_id.clone(), Arc::new(new_structure))
@@ -880,7 +881,7 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
 #[cfg(test)]
 mod tests {
 
-    use std::{error::Error, num::NonZeroU64, path::PathBuf};
+    use std::{convert::Infallible, error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
         format::{
@@ -1033,11 +1034,11 @@ mod tests {
         };
 
         let manifest = Arc::new(
-            mk_manifests_table(futures::stream::iter(vec![
-                chunk1.clone(),
-                chunk2.clone(),
+            mk_manifests_table::<Infallible>(futures::stream::iter(vec![
+                Ok(chunk1.clone()),
+                Ok(chunk2.clone()),
             ]))
-            .await,
+            .await?,
         );
         let manifest_id = ObjectId::random();
         storage.write_manifests(manifest_id.clone(), manifest).await?;
@@ -1071,23 +1072,23 @@ mod tests {
         };
         let array1_path: PathBuf = "/array1".to_string().into();
         let nodes = vec![
-            NodeStructure {
+            Ok(NodeStructure {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
-            },
-            NodeStructure {
+            }),
+            Ok(NodeStructure {
                 path: array1_path.clone(),
                 id: array_id,
                 user_attributes: Some(UserAttributesStructure::Inline(
                     UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
                 )),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
-            },
+            }),
         ];
 
-        let structure = Arc::new(mk_structure_table(nodes.clone()));
+        let structure = Arc::new(mk_structure_table::<Infallible>(nodes.clone())?);
         let structure_id = ObjectId::random();
         storage.write_structure(structure_id.clone(), structure).await?;
         let mut ds = Dataset::update(Arc::new(storage), structure_id)
@@ -1095,8 +1096,8 @@ mod tests {
             .build();
 
         // retrieve the old array node
-        let node = ds.get_node(&array1_path).await;
-        assert_eq!(nodes.get(1).unwrap(), node.as_ref().unwrap());
+        let node = ds.get_node(&array1_path).await?;
+        assert_eq!(nodes.get(1).unwrap().as_ref().unwrap(), &node);
 
         let group_name = "/tbd-group".to_string();
         ds.add_group(group_name.clone().into()).await?;

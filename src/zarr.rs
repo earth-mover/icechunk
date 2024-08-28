@@ -1,7 +1,7 @@
 use std::{collections::HashSet, iter, num::NonZeroU64, sync::Arc};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -63,7 +63,7 @@ impl Store {
     }
 
     pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.dataset.list_nodes().await.next().is_none();
+        let res = self.dataset.list_nodes().await?.next().is_none();
         Ok(res)
     }
 
@@ -166,7 +166,9 @@ impl Store {
         Ok(true)
     }
 
-    pub async fn list(&self) -> StoreResult<impl Stream<Item = String> + '_> {
+    pub async fn list(
+        &self,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + '_> {
         self.list_prefix("/").await
     }
 
@@ -174,7 +176,7 @@ impl Store {
         &'a self,
         prefix: &'a str,
         // TODO: item should probably be StoreResult<String>
-    ) -> StoreResult<impl Stream<Item = String> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         let meta = self.list_metadata_prefix(prefix).await?;
@@ -185,7 +187,7 @@ impl Store {
     pub async fn list_dir<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = String> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
@@ -194,17 +196,19 @@ impl Store {
 
         let idx = if prefix == "/" { 0 } else { prefix.len() };
 
-        let parents = self
+        let parents: HashSet<_> = self
             .list_prefix(prefix)
             .await?
-            .map(move |s| {
+            .map_ok(move |s| {
                 let rem = &s[idx..];
                 let parent = rem.split_once('/').map_or(rem, |(parent, _)| parent);
                 parent.to_string()
             })
-            .collect::<HashSet<_>>()
-            .await;
-        Ok(futures::stream::iter(parents))
+            .try_collect()
+            .await?;
+        // We tould return a Stream<Item = String> with this implementation, but the present
+        // signature is better if we change the impl
+        Ok(futures::stream::iter(parents.into_iter().map(Ok)))
     }
 
     async fn get_chunk(
@@ -274,18 +278,18 @@ impl Store {
     async fn list_metadata_prefix<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = String> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         if let Some(prefix) = prefix.strip_suffix('/') {
-            let nodes = futures::stream::iter(self.dataset.list_nodes().await);
+            let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
             // TODO: handle non-utf8?
-            Ok(nodes.filter_map(move |node| async move {
-                Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
+            Ok(nodes.map_err(|e| e.into()).try_filter_map(move |node| async move {
+                Ok(Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
                     if key.starts_with(prefix) {
                         Some(key)
                     } else {
                         None
                     }
-                })
+                }))
             }))
         } else {
             Err(StoreError::BadKeyPrefix(prefix.to_string()))
@@ -295,17 +299,21 @@ impl Store {
     async fn list_chunks_prefix<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = String> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         if let Some(prefix) = prefix.strip_suffix('/') {
-            let chunks = self.dataset.all_chunks().await;
-            Ok(chunks.filter_map(move |(path, chunk)| async move {
-                //FIXME: utf handling
-                Key::Chunk { node_path: path, coords: chunk.coord }.to_string().and_then(
-                    |key| if key.starts_with(prefix) { Some(key) } else { None },
-                )
-            }))
+            let chunks = self.dataset.all_chunks().await?;
+            Ok(chunks.map_err(|e| e.into()).try_filter_map(
+                move |(path, chunk)| async move {
+                    //FIXME: utf handling
+                    Ok(Key::Chunk { node_path: path, coords: chunk.coord }
+                        .to_string()
+                        .and_then(
+                            |key| if key.starts_with(prefix) { Some(key) } else { None },
+                        ))
+                },
+            ))
         } else {
             Err(StoreError::BadKeyPrefix(prefix.to_string()))
         }
@@ -609,7 +617,7 @@ mod tests {
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let version1 = keys(store, "/").await?;
-        let mut version2 = store.list().await?.collect::<Vec<_>>().await;
+        let mut version2 = store.list().await?.try_collect::<Vec<_>>().await?;
         version2.sort();
         assert_eq!(version1, version2);
         Ok(version1)
@@ -619,7 +627,7 @@ mod tests {
         store: &Store,
         prefix: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let mut res = store.list_prefix(prefix).await?.collect::<Vec<_>>().await;
+        let mut res = store.list_prefix(prefix).await?.try_collect::<Vec<_>>().await?;
         res.sort();
         Ok(res)
     }
@@ -1014,19 +1022,19 @@ mod tests {
             ]
         );
 
-        let mut dir = store.list_dir("/").await?.collect::<Vec<_>>().await;
+        let mut dir = store.list_dir("/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
 
-        let mut dir = store.list_dir("array/").await?.collect::<Vec<_>>().await;
+        let mut dir = store.list_dir("array/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
 
-        let mut dir = store.list_dir("array/c/").await?.collect::<Vec<_>>().await;
+        let mut dir = store.list_dir("array/c/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["0".to_string(), "1".to_string()]);
 
-        let mut dir = store.list_dir("array/c/1/").await?.collect::<Vec<_>>().await;
+        let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["1".to_string()]);
         Ok(())
