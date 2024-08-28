@@ -425,7 +425,15 @@ impl Dataset {
             .get_user_attributes(path)
             .cloned()
             .map(|a| a.map(UserAttributesStructure::Inline));
-        let res = structure.get_node(path)?;
+        let res = structure.get_node(path).map_err(|err| match err {
+            // A missing node here is not really a format error, so we need to
+            // generate the correct error for datasets
+            IcechunkFormatError::NodeNotFound { path } => DatasetError::NotFound {
+                path,
+                message: "existing node not found".to_string(),
+            },
+            err => DatasetError::FormatError(err),
+        })?;
         let res = NodeStructure {
             user_attributes: session_atts.unwrap_or(res.user_attributes),
             ..res
