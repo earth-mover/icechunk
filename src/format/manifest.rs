@@ -6,6 +6,7 @@ use arrow::{
         StringArray, UInt32Array, UInt64Array,
     },
     datatypes::{Field, Schema},
+    error::ArrowError,
 };
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -85,8 +86,7 @@ impl ManifestsTable {
     ) -> impl Iterator<Item = IcechunkResult<ChunkInfo>> {
         let from = from.unwrap_or(0);
         let to = to.unwrap_or(self.batch.num_rows() as u32);
-        // FIXME: unwrap
-        (from..to).map(move |idx| Ok(self.get_row(idx).unwrap()))
+        (from..to).map(move |idx| self.get_row(idx))
     }
 
     fn get_row(&self, row: TableOffset) -> IcechunkResult<ChunkInfo> {
@@ -211,9 +211,12 @@ impl From<&ChunkIndices> for Vec<u8> {
     }
 }
 
+// This is pretty awful, but Rust Try infrastructure is experimental
+pub type ManifestTableResult<E> = Result<ManifestsTable, Result<E, ArrowError>>;
+
 pub async fn mk_manifests_table<E>(
     chunks: impl Stream<Item = Result<ChunkInfo, E>>,
-) -> Result<ManifestsTable, E> {
+) -> ManifestTableResult<E> {
     let mut array_ids = Vec::new();
     let mut coords = Vec::new();
     let mut chunk_ids = Vec::new();
@@ -227,7 +230,7 @@ pub async fn mk_manifests_table<E>(
     while let Some(chunk) = chunks.next().await {
         let chunk = match chunk {
             Ok(chunk) => chunk,
-            Err(err) => return Err(err),
+            Err(err) => return Err(Ok(err)),
         };
         array_ids.push(chunk.node);
         coords.push(chunk.coord);
@@ -293,9 +296,8 @@ pub async fn mk_manifests_table<E>(
         Field::new("virtual_path", arrow::datatypes::DataType::Utf8, true),
         Field::new("extra", arrow::datatypes::DataType::Utf8, true),
     ]));
-    let batch =
-        RecordBatch::try_new(schema, columns).expect("Error creating record batch");
-    Ok(ManifestsTable { batch })
+    let batch = RecordBatch::try_new(schema, columns).map_err(Err)?;
+    ManifestTableResult::Ok(ManifestsTable { batch })
 }
 
 fn mk_offsets_array<T: IntoIterator<Item = Option<u64>>>(coll: T) -> UInt64Array {
@@ -417,7 +419,8 @@ mod tests {
             ])
             .map(Ok),
         )
-        .await?;
+        .await
+        .map_err(|e| format!("error creating manifest {e:?}"))?;
 
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(1, 3));
         assert_eq!(

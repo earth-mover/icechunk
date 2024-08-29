@@ -7,6 +7,7 @@ use arrow::{
         StringBuilder, StructArray, UInt32Array, UInt32Builder, UInt8Array,
     },
     datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type},
+    error::ArrowError,
 };
 use itertools::izip;
 
@@ -111,7 +112,6 @@ impl StructureTable {
         self: Arc<Self>,
     ) -> impl Iterator<Item = IcechunkResult<NodeStructure>> {
         let max = self.batch.num_rows();
-        // FIXME: unwrap
         (0..max).map(move |idx| self.build_node_structure(idx))
     }
 
@@ -487,7 +487,12 @@ where
     let mut b = ListBuilder::new(BinaryBuilder::new());
     for maybe_list in coll.into_iter() {
         let it = maybe_list.map(|codecs| {
-            codecs.into_iter().map(|codec| Some(serde_json::to_vec(&codec).unwrap()))
+            codecs.into_iter().map(|codec| {
+                Some(
+                    serde_json::to_vec(&codec)
+                        .expect("Invariant violation: Codecs are always serializable"),
+                )
+            })
         });
         b.append_option(it)
     }
@@ -507,7 +512,12 @@ where
     let mut b = ListBuilder::new(BinaryBuilder::new());
     for maybe_list in coll.into_iter() {
         let it = maybe_list.map(|codecs| {
-            codecs.into_iter().map(|tr| Some(serde_json::to_vec(&tr).unwrap()))
+            codecs.into_iter().map(|tr| {
+                Some(
+                    serde_json::to_vec(&tr)
+                        .expect("Invariant violation: Codecs are always serializable"),
+                )
+            })
         });
         b.append_option(it)
     }
@@ -542,7 +552,7 @@ fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
 ) -> FixedSizeBinaryArray {
     let iter = coll.into_iter().map(|oid| oid.map(|oid| oid.0));
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, ObjectId::SIZE as i32)
-        .expect("Bad ObjectId size")
+        .expect("Invariant violation: bad user attributes ObjectId size")
 }
 
 fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(
@@ -573,7 +583,7 @@ where
                     ref_array
                         .values()
                         .append_value(manifest.object_id.0)
-                        .expect("Error appending to manifest reference array");
+                        .expect("Invariant violation: bad manifest ObjectId size");
                     from_row_array.values().append_value(manifest.location.0);
                     to_row_array.values().append_value(manifest.location.1);
                 }
@@ -636,10 +646,13 @@ where
     ])
 }
 
+// This is pretty awful, but Rust Try infrastructure is experimental
+pub type StructureTableResult<E> = Result<StructureTable, Result<E, ArrowError>>;
+
 // For testing only
 pub fn mk_structure_table<E>(
     coll: impl IntoIterator<Item = Result<NodeStructure, E>>,
-) -> Result<StructureTable, E> {
+) -> StructureTableResult<E> {
     let mut ids = Vec::new();
     let mut types = Vec::new();
     let mut paths = Vec::new();
@@ -659,7 +672,7 @@ pub fn mk_structure_table<E>(
     for node in coll {
         let node = match node {
             Ok(node) => node,
-            Err(err) => return Err(err),
+            Err(err) => return Err(Ok(err)),
         };
         ids.push(node.id);
         paths.push(node.path.to_string_lossy().into_owned());
@@ -813,8 +826,7 @@ pub fn mk_structure_table<E>(
             true,
         ),
     ]));
-    let batch =
-        RecordBatch::try_new(schema, columns).expect("Error creating record batch");
+    let batch = RecordBatch::try_new(schema, columns).map_err(Err)?;
     Ok(StructureTable { batch })
 }
 
@@ -954,7 +966,7 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = mk_structure_table::<Infallible>(nodes.into_iter().map(Ok))?;
+        let st = mk_structure_table::<Infallible>(nodes.into_iter().map(Ok)).unwrap();
         assert_eq!(
             st.get_node(&"/nonexistent".into()),
             Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })

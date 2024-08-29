@@ -13,6 +13,7 @@ pub use crate::metadata::{
     DimensionNames, FillValue, StorageTransformer, UserAttributes,
 };
 
+use arrow::error::ArrowError;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::{Either, Itertools};
@@ -223,6 +224,8 @@ pub enum DatasetError {
     AlreadyExists { node: NodeStructure, message: String },
     #[error("no changes made to the dataset")]
     NoChangesToFlush,
+    #[error("Arrow format error `{0}`")]
+    ArrowError(#[from] ArrowError),
 }
 
 type DatasetResult<T> = Result<T, DatasetError>;
@@ -497,6 +500,8 @@ impl Dataset {
         coords: &ChunkIndices,
     ) -> DatasetResult<Option<ChunkPayload>> {
         let node = self.get_node(path).await?;
+        // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
+        // get_array should return the array data, not a node
         match node.node_data {
             NodeData::Group => Err(DatasetError::NotAnArray {
                 node,
@@ -830,7 +835,11 @@ impl Dataset {
             chunk
         });
         let new_manifest =
-            mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await?;
+            match mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await {
+                Ok(man) => man,
+                Err(Ok(e)) => Err(e)?,
+                Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
+            };
         let new_manifest_id = ObjectId::random();
         self.storage
             .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
@@ -838,7 +847,11 @@ impl Dataset {
 
         let all_nodes =
             self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await?;
-        let new_structure = mk_structure_table(all_nodes)?;
+        let new_structure = match mk_structure_table(all_nodes) {
+            Ok(str) => str,
+            Err(Ok(e)) => Err(e)?,
+            Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
+        };
         let new_structure_id = ObjectId::random();
         self.storage
             .write_structure(new_structure_id.clone(), Arc::new(new_structure))
@@ -1039,7 +1052,8 @@ mod tests {
                 Ok(chunk1.clone()),
                 Ok(chunk2.clone()),
             ]))
-            .await?,
+            .await
+            .unwrap(),
         );
         let manifest_id = ObjectId::random();
         storage.write_manifests(manifest_id.clone(), manifest).await?;
@@ -1089,7 +1103,8 @@ mod tests {
             }),
         ];
 
-        let structure = Arc::new(mk_structure_table::<Infallible>(nodes.clone())?);
+        let structure =
+            Arc::new(mk_structure_table::<Infallible>(nodes.clone()).unwrap());
         let structure_id = ObjectId::random();
         storage.write_structure(structure_id.clone(), structure).await?;
         let mut ds = Dataset::update(Arc::new(storage), structure_id)
