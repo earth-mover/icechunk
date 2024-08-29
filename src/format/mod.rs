@@ -1,5 +1,5 @@
 use core::fmt;
-use std::path::PathBuf;
+use std::{ops::Range, path::PathBuf};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
@@ -57,7 +57,43 @@ pub type ChunkLength = u64;
 pub type TableOffset = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableRegion(pub TableOffset, pub TableOffset);
+pub struct TableRegion(TableOffset, TableOffset);
+
+impl TableRegion {
+    pub fn new(start: TableOffset, end: TableOffset) -> Option<TableRegion> {
+        if start < end {
+            Some(TableRegion(start, end))
+        } else {
+            None
+        }
+    }
+
+    pub fn start(&self) -> TableOffset {
+        self.0
+    }
+
+    pub fn end(&self) -> TableOffset {
+        self.1
+    }
+
+    pub fn extend_right(&mut self, shift_by: TableOffset) {
+        self.1 += shift_by
+    }
+}
+
+impl TryFrom<Range<TableOffset>> for TableRegion {
+    type Error = &'static str;
+
+    fn try_from(value: Range<TableOffset>) -> Result<Self, Self::Error> {
+        Self::new(value.start, value.end).ok_or("invalid range")
+    }
+}
+
+impl From<TableRegion> for Range<TableOffset> {
+    fn from(value: TableRegion) -> Self {
+        Range { start: value.start(), end: value.end() }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flags(); // FIXME: implement
@@ -84,6 +120,10 @@ pub enum IcechunkFormatError {
     InvalidArrayMetadata { index: usize, field: String, message: String },
     #[error("invalid array manifest field `{field}` at index `{index}`: {message}")]
     InvalidArrayManifest { index: usize, field: String, message: String },
+    #[error("invalid manifest index `{index}` > `{max_index}`")]
+    InvalidManifestIndex { index: usize, max_index: usize },
+    #[error("chunk coordinates not found `{coords:?}`")]
+    ChunkCoordinatesNotFound { coords: ChunkIndices },
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;

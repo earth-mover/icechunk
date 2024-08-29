@@ -1,6 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, ListArray, StringArray, StructArray,
-    UInt32Array, UInt8Array,
+    Array, ArrayRef, AsArray, BinaryArray, FixedSizeBinaryArray, ListArray, StringArray,
+    StructArray, UInt32Array, UInt64Array, UInt8Array,
 };
 
 use super::{BatchLike, IcechunkFormatError, IcechunkResult};
@@ -38,6 +38,13 @@ impl<'a, 'b> ColumnIndex<'a, 'b> {
         })
     }
 
+    pub fn as_u64(&self) -> IcechunkResult<&'a UInt64Array> {
+        self.column.as_primitive_opt().ok_or(IcechunkFormatError::InvalidColumnType {
+            column_name: self.name.to_string(),
+            expected_column_type: "u64".to_string(),
+        })
+    }
+
     pub fn as_u8(&self) -> IcechunkResult<&'a UInt8Array> {
         self.column.as_primitive_opt().ok_or(IcechunkFormatError::InvalidColumnType {
             column_name: self.name.to_string(),
@@ -66,6 +73,15 @@ impl<'a, 'b> ColumnIndex<'a, 'b> {
         })
     }
 
+    pub fn as_fixed_size_binary(&self) -> IcechunkResult<&'a FixedSizeBinaryArray> {
+        self.column.as_fixed_size_binary_opt().ok_or(
+            IcechunkFormatError::InvalidColumnType {
+                column_name: self.name.to_string(),
+                expected_column_type: "fixed size binary".to_string(),
+            },
+        )
+    }
+
     pub fn string_at(&self, idx: usize) -> IcechunkResult<&'a str> {
         let array = self.as_string()?;
         if array.is_valid(idx) {
@@ -78,8 +94,29 @@ impl<'a, 'b> ColumnIndex<'a, 'b> {
         }
     }
 
+    pub fn string_at_opt(&self, idx: usize) -> IcechunkResult<Option<&'a str>> {
+        let array = self.as_string()?;
+        if array.is_valid(idx) {
+            Ok(Some(array.value(idx)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn u32_at(&self, idx: usize) -> IcechunkResult<u32> {
         let array = self.as_u32()?;
+        if array.is_valid(idx) {
+            Ok(array.value(idx))
+        } else {
+            Err(IcechunkFormatError::NullElement {
+                index: idx,
+                column_name: self.name.to_string(),
+            })
+        }
+    }
+
+    pub fn u64_at(&self, idx: usize) -> IcechunkResult<u64> {
+        let array = self.as_u64()?;
         if array.is_valid(idx) {
             Ok(array.value(idx))
         } else {
@@ -111,6 +148,27 @@ impl<'a, 'b> ColumnIndex<'a, 'b> {
                 index: idx,
                 column_name: self.name.to_string(),
             })
+        }
+    }
+
+    pub fn fixed_size_binary_at(&self, idx: usize) -> IcechunkResult<&'a [u8]> {
+        let array = self.as_fixed_size_binary()?;
+        if array.is_valid(idx) {
+            Ok(array.value(idx))
+        } else {
+            Err(IcechunkFormatError::NullElement {
+                index: idx,
+                column_name: self.name.to_string(),
+            })
+        }
+    }
+
+    pub fn binary_at_opt(&self, idx: usize) -> IcechunkResult<Option<&'a [u8]>> {
+        let array = self.as_binary()?;
+        if array.is_valid(idx) {
+            Ok(Some(array.value(idx)))
+        } else {
+            Ok(None)
         }
     }
 

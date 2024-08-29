@@ -568,11 +568,15 @@ impl Dataset {
         for manifest in manifests {
             let manifest_structure =
                 self.storage.fetch_manifests(&manifest.object_id).await?;
-            if let Some(payload) = manifest_structure
+            match manifest_structure
                 .get_chunk_info(coords, &manifest.location)
                 .map(|info| info.payload)
             {
-                return Ok(Some(payload));
+                Ok(payload) => {
+                    return Ok(Some(payload));
+                }
+                Err(IcechunkFormatError::ChunkCoordinatesNotFound { .. }) => {}
+                Err(err) => return Err(err.into()),
             }
         }
         Ok(None)
@@ -642,8 +646,8 @@ impl Dataset {
 
                                     let old_chunks = manifest
                                         .iter(
-                                            Some(manifest_ref.location.0),
-                                            Some(manifest_ref.location.1),
+                                            Some(manifest_ref.location.start()),
+                                            Some(manifest_ref.location.end()),
                                         )
                                         .filter_ok(move |c| {
                                             !new_chunk_indices.contains(&c.coord)
@@ -700,7 +704,7 @@ impl Dataset {
                     .map_ok(move |node| {
                         let region = manifest_tracker.and_then(|t| t.region(node.id));
                         let new_manifests = region.map(|r| {
-                            if r.0 == r.1 {
+                            if r.start() == r.end() {
                                 vec![]
                             } else {
                                 vec![ManifestRef {
@@ -730,7 +734,7 @@ impl Dataset {
                 NodeData::Array(meta, _no_manifests_yet) => {
                     let region = manifest_tracker.and_then(|t| t.region(node.id));
                     let new_manifests = region.map(|r| {
-                        if r.0 == r.1 {
+                        if r.start() == r.end() {
                             vec![]
                         } else {
                             vec![ManifestRef {
@@ -851,10 +855,9 @@ struct TableRegionTracker(HashMap<NodeId, TableRegion>, u32);
 
 impl TableRegionTracker {
     fn update(&mut self, chunk: &ChunkInfo) {
-        self.0
-            .entry(chunk.node)
-            .and_modify(|tr| tr.1 = self.1 + 1)
-            .or_insert(TableRegion(self.1, self.1 + 1));
+        self.0.entry(chunk.node).and_modify(|tr| tr.extend_right(1)).or_insert(
+            TableRegion::new(self.1, self.1 + 1).expect("bug in TableRegionTracker"),
+        );
         self.1 += 1;
     }
 
@@ -1064,7 +1067,7 @@ mod tests {
         };
         let manifest_ref = ManifestRef {
             object_id: manifest_id,
-            location: TableRegion(0, 2),
+            location: TableRegion::new(0, 2).unwrap(),
             flags: Flags(),
             extents: ManifestExtents(vec![]),
         };

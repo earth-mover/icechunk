@@ -2,18 +2,18 @@ use std::sync::Arc;
 
 use arrow::{
     array::{
-        Array, AsArray, BinaryArray, FixedSizeBinaryArray, GenericBinaryBuilder,
-        RecordBatch, StringArray, UInt32Array, UInt64Array,
+        Array, BinaryArray, FixedSizeBinaryArray, GenericBinaryBuilder, RecordBatch,
+        StringArray, UInt32Array, UInt64Array,
     },
-    datatypes::{Field, Schema, UInt32Type, UInt64Type},
+    datatypes::{Field, Schema},
 };
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 
 use super::{
-    BatchLike, ChunkIndices, Flags, IcechunkResult, NodeId, ObjectId, TableOffset,
-    TableRegion,
+    arrow::get_column, BatchLike, ChunkIndices, Flags, IcechunkFormatError,
+    IcechunkResult, NodeId, ObjectId, TableOffset, TableRegion,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,9 +71,8 @@ impl ManifestsTable {
         &self,
         coords: &ChunkIndices,
         region: &TableRegion,
-    ) -> Option<ChunkInfo> {
+    ) -> IcechunkResult<ChunkInfo> {
         // FIXME: make this fast, currently it's a linear search
-        // FIXME: return error type
         let idx = self.get_chunk_info_index(coords, region)?;
         self.get_row(idx)
     }
@@ -90,49 +89,46 @@ impl ManifestsTable {
         (from..to).map(move |idx| Ok(self.get_row(idx).unwrap()))
     }
 
-    fn get_row(&self, row: TableOffset) -> Option<ChunkInfo> {
+    fn get_row(&self, row: TableOffset) -> IcechunkResult<ChunkInfo> {
         if row as usize >= self.batch.num_rows() {
-            return None;
+            return Err(IcechunkFormatError::InvalidManifestIndex {
+                index: row as usize,
+                max_index: self.batch.num_rows() - 1,
+            });
         }
 
-        let id_col =
-            self.batch.column_by_name("array_id")?.as_primitive_opt::<UInt32Type>()?;
-        let coords_col = self.batch.column_by_name("coords")?.as_binary_opt::<i32>()?;
-        let offset_col =
-            self.batch.column_by_name("offset")?.as_primitive_opt::<UInt64Type>()?;
-        let length_col =
-            self.batch.column_by_name("length")?.as_primitive_opt::<UInt64Type>()?;
-        let inline_col =
-            self.batch.column_by_name("inline_data")?.as_binary_opt::<i32>()?;
-        let chunk_id_col =
-            self.batch.column_by_name("chunk_id")?.as_fixed_size_binary_opt()?;
-        let virtual_path_col =
-            self.batch.column_by_name("virtual_path")?.as_string_opt::<i32>()?;
-        // FIXME: do something with extras
-        let _extra_col = self.batch.column_by_name("extra")?.as_string_opt::<i32>()?;
+        let idx = row as usize;
+        // TODO: do something with extras
+        let _extra_col = get_column(self, "extra")?.string_at_opt(idx)?;
 
         // These arrays cannot contain null values, we don't need to check using `is_null`
-        let idx = row as usize;
-        let id = id_col.value(idx);
+        let id = get_column(self, "array_id")?.u32_at(idx)?;
+        let coords = get_column(self, "coords")?.binary_at(idx)?;
+        // FIXME: once we define    how we want to encode coordinates we'll see if we need to
+        // persist the rank of the array somewhere, for now, we fake it and we don't check
         let coords =
-            ChunkIndices::unchecked_try_from_slice(coords_col.value(idx)).ok()?;
+            ChunkIndices::try_from_slice(999_999_999, coords).map_err(|msg| {
+                IcechunkFormatError::InvalidArrayManifest {
+                    index: idx,
+                    field: "coords".to_string(),
+                    message: msg.to_string(),
+                }
+            })?;
 
-        if inline_col.is_valid(idx) {
+        let inline_data = get_column(self, "inline_data")?.binary_at_opt(idx)?;
+        if let Some(inline_data) = inline_data {
             // we have an inline chunk
-            let data = Bytes::copy_from_slice(inline_col.value(idx));
-            Some(ChunkInfo {
-                node: id,
-                coord: coords,
-                payload: ChunkPayload::Inline(data),
-            })
+            let data = Bytes::copy_from_slice(inline_data);
+            Ok(ChunkInfo { node: id, coord: coords, payload: ChunkPayload::Inline(data) })
         } else {
-            let offset = offset_col.value(idx);
-            let length = length_col.value(idx);
+            let offset = get_column(self, "offset")?.u64_at(idx)?;
+            let length = get_column(self, "length")?.u64_at(idx)?;
 
-            if virtual_path_col.is_valid(idx) {
+            let virtual_path = get_column(self, "virtual_path")?.string_at_opt(idx)?;
+            if let Some(virtual_path) = virtual_path {
                 // we have a virtual chunk
-                let location = virtual_path_col.value(idx).to_string();
-                Some(ChunkInfo {
+                let location = virtual_path.to_string();
+                Ok(ChunkInfo {
                     node: id,
                     coord: coords,
                     payload: ChunkPayload::Virtual(VirtualChunkRef {
@@ -143,8 +139,15 @@ impl ManifestsTable {
                 })
             } else {
                 // we have a materialized chunk
-                let chunk_id = chunk_id_col.value(idx).try_into().ok()?;
-                Some(ChunkInfo {
+                let chunk_id = get_column(self, "chunk_id")?
+                    .fixed_size_binary_at(idx)?
+                    .try_into()
+                    .map_err(|_| IcechunkFormatError::InvalidArrayManifest {
+                        index: idx,
+                        field: "chunk_id".to_string(),
+                        message: "invalid object id".to_string(),
+                    })?;
+                Ok(ChunkInfo {
                     node: id,
                     coord: coords,
                     payload: ChunkPayload::Ref(ChunkRef { id: chunk_id, offset, length }),
@@ -157,49 +160,48 @@ impl ManifestsTable {
         &self,
         coords: &ChunkIndices,
         TableRegion(from_row, to_row): &TableRegion,
-    ) -> Option<TableOffset> {
+    ) -> IcechunkResult<TableOffset> {
         if *to_row as usize > self.batch.num_rows() || from_row > to_row {
-            return None;
+            return Err(IcechunkFormatError::InvalidManifestIndex {
+                index: *to_row as usize,
+                max_index: self.batch.num_rows() - 1,
+            });
         }
-        let arrray = self
-            .batch
-            .column_by_name("coords")?
-            .as_binary_opt::<i32>()?
+
+        let arrray = get_column(self, "coords")?
+            .as_binary()?
             .slice(*from_row as usize, (to_row - from_row) as usize);
         let binary_coord: Vec<u8> = coords.into();
         let binary_coord = binary_coord.as_slice();
-        let position: TableOffset = arrray
-            .iter()
-            .position(|coord| coord == Some(binary_coord))?
-            .try_into()
-            .ok()?;
-        Some(position + from_row)
+        let position: usize =
+            arrray.iter().position(|coord| coord == Some(binary_coord)).ok_or(
+                IcechunkFormatError::ChunkCoordinatesNotFound { coords: coords.clone() },
+            )?;
+        let position_u32: u32 = position.try_into().map_err(|_| {
+            IcechunkFormatError::InvalidArrayManifest {
+                index: position,
+                field: "coords".to_string(),
+                message: "index out of range".to_string(),
+            }
+        })?;
+        Ok(position_u32 + from_row)
     }
 }
 
 impl ChunkIndices {
-    // FIXME: better error type
-    pub fn try_from_slice(rank: usize, slice: &[u8]) -> Result<Self, String> {
-        if slice.len() != rank * 8 {
-            Err(format!("Invalid slice length {}, expecting {}", slice.len(), rank))
-        } else {
-            ChunkIndices::unchecked_try_from_slice(slice)
-        }
-    }
-
-    pub fn unchecked_try_from_slice(slice: &[u8]) -> Result<Self, String> {
-        let chunked = slice.iter().chunks(8);
-        let res = chunked.into_iter().map(|chunk| {
-            u64::from_be_bytes(
-                chunk
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .as_slice()
-                    .try_into()
-                    .expect("Invalid slice size"),
-            )
-        });
-        Ok(ChunkIndices(res.collect()))
+    pub fn try_from_slice(_rank: usize, slice: &[u8]) -> Result<Self, &'static str> {
+        let chunked = slice.chunks(8);
+        let res: Vec<_> = chunked
+            .map(TryInto::<&[u8; 8]>::try_into)
+            .try_collect()
+            .map_err(|_| "error parsing chunk indices, invalid slice length")?;
+        // FIXME: reenable this check, if needed, once we have the definitive coords encoding
+        //if res.len() != rank {
+        //    return Err("error parsing chunk indices, invalid slice length");
+        //}
+        Ok(ChunkIndices(
+            res.into_iter().map(|slice| u64::from_be_bytes(*slice)).collect(),
+        ))
     }
 }
 
@@ -418,35 +420,43 @@ mod tests {
         .await?;
 
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(1, 3));
-        assert_eq!(res.as_ref(), None);
+        assert_eq!(
+            res.as_ref(),
+            Err(&IcechunkFormatError::ChunkCoordinatesNotFound {
+                coords: ChunkIndices(vec![0, 0, 0])
+            })
+        );
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(0, 3));
-        assert_eq!(res.as_ref(), Some(&c1a));
+        assert_eq!(res.as_ref(), Ok(&c1a));
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(0, 1));
-        assert_eq!(res.as_ref(), Some(&c1a));
+        assert_eq!(res.as_ref(), Ok(&c1a));
 
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(2, 3));
-        assert_eq!(res.as_ref(), None);
+        assert_eq!(
+            res.as_ref(),
+            Err(&IcechunkFormatError::ChunkCoordinatesNotFound {
+                coords: ChunkIndices(vec![0, 0, 1])
+            })
+        );
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(0, 3));
-        assert_eq!(res.as_ref(), Some(&c2a));
+        assert_eq!(res.as_ref(), Ok(&c2a));
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(0, 2));
-        assert_eq!(res.as_ref(), Some(&c2a));
+        assert_eq!(res.as_ref(), Ok(&c2a));
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(1, 3));
-        assert_eq!(res.as_ref(), Some(&c2a));
+        assert_eq!(res.as_ref(), Ok(&c2a));
 
-        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(4, 3));
-        assert_eq!(res.as_ref(), None);
         let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(0, 3));
-        assert_eq!(res.as_ref(), Some(&c3a));
+        assert_eq!(res.as_ref(), Ok(&c3a));
         let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(1, 3));
-        assert_eq!(res.as_ref(), Some(&c3a));
+        assert_eq!(res.as_ref(), Ok(&c3a));
         let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(2, 3));
-        assert_eq!(res.as_ref(), Some(&c3a));
+        assert_eq!(res.as_ref(), Ok(&c3a));
 
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(3, 4));
-        assert_eq!(res.as_ref(), Some(&c1b));
+        assert_eq!(res.as_ref(), Ok(&c1b));
 
         let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(4, 5));
-        assert_eq!(res.as_ref(), Some(&c1c));
+        assert_eq!(res.as_ref(), Ok(&c1c));
         Ok(())
     }
 }
