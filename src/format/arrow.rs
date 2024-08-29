@@ -5,13 +5,12 @@ use arrow::array::{
 
 use super::{BatchLike, IcechunkFormatError, IcechunkResult};
 
-//TODO: move these helper classes to a support file
 pub struct ColumnIndex<'a, 'b> {
     pub column: &'a ArrayRef,
     pub name: &'b str,
 }
 
-pub fn get_column<'a, 'b /*: 'a*/>(
+pub fn get_column<'a, 'b>(
     batch: &'a impl BatchLike,
     column_name: &'b str,
 ) -> IcechunkResult<ColumnIndex<'a, 'b>> {

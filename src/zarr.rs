@@ -51,6 +51,8 @@ pub enum StoreError {
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
     BadKeyPrefix(String),
+    #[error("unknown store error: `{0}`")]
+    Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl Store {
@@ -94,9 +96,9 @@ impl Store {
         }
         let mut outputs = Vec::with_capacity(tasks.len());
         for task in tasks {
-            outputs.push(task.await.unwrap());
+            outputs.push(task.await);
         }
-        Ok(outputs)
+        outputs.into_iter().try_collect().map_err(|e| StoreError::Unknown(Box::new(e)))
     }
 
     // TODO: prototype argument
@@ -468,7 +470,9 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
             dimension_names,
         } = value;
         {
-            let fill_value = serde_json::to_value(fill_value).unwrap();
+            #[allow(clippy::expect_used)]
+            let fill_value = serde_json::to_value(fill_value)
+                .expect("Fill values are always serializable");
             ZarrArrayMetadataSerialzer {
                 shape,
                 data_type,
@@ -498,6 +502,7 @@ impl ArrayMetadata {
     fn to_bytes(&self) -> Bytes {
         Bytes::from_iter(
             // We can unpack because it comes from controlled datastructures that can be serialized
+            #[allow(clippy::expect_used)]
             serde_json::to_vec(self).expect("bug in ArrayMetadata serialization"),
         )
     }
@@ -511,6 +516,7 @@ impl GroupMetadata {
     fn to_bytes(&self) -> Bytes {
         Bytes::from_iter(
             // We can unpack because it comes from controlled datastructures that can be serialized
+            #[allow(clippy::expect_used)]
             serde_json::to_vec(self).expect("bug in GroupMetadata serialization"),
         )
     }
@@ -606,6 +612,7 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use std::borrow::BorrowMut;

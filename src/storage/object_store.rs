@@ -202,6 +202,7 @@ impl Storage for ObjectStorage {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::env::temp_dir;
     use std::sync::Arc;

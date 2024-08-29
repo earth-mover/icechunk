@@ -52,6 +52,7 @@ impl UserAttributes {
 
     pub fn to_bytes(&self) -> Bytes {
         // We can unwrap because a Value is always valid json
+        #[allow(clippy::expect_used)]
         serde_json::to_vec(&self.parsed)
             .expect("Bug in UserAttributes serialization")
             .into()

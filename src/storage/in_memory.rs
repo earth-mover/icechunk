@@ -35,6 +35,7 @@ impl InMemoryStorage {
 
     /// Intended for tests
     pub fn chunk_ids(&self) -> HashSet<ObjectId> {
+        #[allow(clippy::unwrap_used)] // this implementation is used exclusively for tests
         self.chunk_files.read().unwrap().keys().cloned().collect()
     }
 }

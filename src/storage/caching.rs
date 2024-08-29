@@ -59,6 +59,9 @@ impl MemCachingStorage {
         approx_max_memory_bytes: u64,
     ) -> Self {
         let cache = Cache::with_options(
+            // build only fails if estimated_items_capacity or
+            // weight_capacity are not set
+            #[allow(clippy::expect_used)]
             OptionsBuilder::new()
                 // TODO: estimate this capacity
                 .estimated_items_capacity(0)
@@ -79,15 +82,19 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<StructureTable>, StorageError> {
-        match self.cache.get_value_or_guard_async(&CacheKey::Structure(id.clone())).await
-        {
+        let key = CacheKey::Structure(id.clone());
+        match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Structure(table)) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_structure(id).await?;
                 let _fail_is_ok = guard.insert(CacheValue::Structure(Arc::clone(&table)));
                 Ok(table)
             }
-            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+            Ok(_) => {
+                debug_assert!(false, "Logic bug in MemCachingStorage");
+                self.cache.remove(&key);
+                self.fetch_structure(id).await
+            }
         }
     }
 
@@ -95,8 +102,8 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
-        match self.cache.get_value_or_guard_async(&CacheKey::Structure(id.clone())).await
-        {
+        let key = CacheKey::Structure(id.clone());
+        match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Attributes(table)) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_attributes(id).await?;
@@ -104,7 +111,11 @@ impl Storage for MemCachingStorage {
                     guard.insert(CacheValue::Attributes(Arc::clone(&table)));
                 Ok(table)
             }
-            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+            Ok(_) => {
+                debug_assert!(false, "Logic bug in MemCachingStorage");
+                self.cache.remove(&key);
+                self.fetch_attributes(id).await
+            }
         }
     }
 
@@ -112,15 +123,19 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
-        match self.cache.get_value_or_guard_async(&CacheKey::Structure(id.clone())).await
-        {
+        let key = CacheKey::Structure(id.clone());
+        match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Manifest(table)) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_manifests(id).await?;
                 let _fail_is_ok = guard.insert(CacheValue::Manifest(Arc::clone(&table)));
                 Ok(table)
             }
-            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+            Ok(_) => {
+                debug_assert!(false, "Logic bug in MemCachingStorage");
+                self.cache.remove(&key);
+                self.fetch_manifests(id).await
+            }
         }
     }
 
@@ -129,18 +144,19 @@ impl Storage for MemCachingStorage {
         id: &ObjectId,
         range: &Option<Range<ChunkOffset>>,
     ) -> Result<Bytes, StorageError> {
-        match self
-            .cache
-            .get_value_or_guard_async(&CacheKey::Chunk(id.clone(), range.clone()))
-            .await
-        {
+        let key = CacheKey::Chunk(id.clone(), range.clone());
+        match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Chunk(table)) => Ok(table),
             Err(guard) => {
                 let bytes = self.backend.fetch_chunk(id, range).await?;
                 let _fail_is_ok = guard.insert(CacheValue::Chunk(bytes.clone()));
                 Ok(bytes)
             }
-            Ok(_) => panic!("Logic bug in MemCachingStorage"),
+            Ok(_) => {
+                debug_assert!(false, "Logic bug in MemCachingStorage");
+                self.cache.remove(&key);
+                self.fetch_chunk(id, range).await
+            }
         }
     }
 
@@ -183,6 +199,7 @@ impl Storage for MemCachingStorage {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
     use std::sync::Arc;
 

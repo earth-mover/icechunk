@@ -1,3 +1,4 @@
+#![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{

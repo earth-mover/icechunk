@@ -32,3 +32,8 @@ debug = true
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 proptest-state-machine = "0.3.0"
+
+[lints.clippy]
+expect_used = "warn"
+unwrap_used = "warn"
+panic = "warn"

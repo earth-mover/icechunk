@@ -340,11 +340,13 @@ fn mk_chunk_ids_array<T: IntoIterator<Item = Option<ObjectId>>>(
     coll: T,
 ) -> FixedSizeBinaryArray {
     let iter = coll.into_iter().map(|oid| oid.map(|oid| oid.0));
+    #[allow(clippy::expect_used)] // we are feeding objects of known and fixed size
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, ObjectId::SIZE as i32)
         .expect("Bad ObjectId size")
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::convert::Infallible;
 

@@ -60,12 +60,18 @@ pub type TableOffset = u32;
 pub struct TableRegion(TableOffset, TableOffset);
 
 impl TableRegion {
-    pub fn new(start: TableOffset, end: TableOffset) -> Option<TableRegion> {
+    pub fn new(start: TableOffset, end: TableOffset) -> Option<Self> {
         if start < end {
-            Some(TableRegion(start, end))
+            Some(Self(start, end))
         } else {
             None
         }
+    }
+
+    /// Create a TableRegion of size 1
+    pub fn singleton(start: TableOffset) -> Self {
+        #[allow(clippy::expect_used)] // this implementation is used exclusively for tests
+        Self::new(start, start + 1).expect("bug in TableRegion::singleton")
     }
 
     pub fn start(&self) -> TableOffset {

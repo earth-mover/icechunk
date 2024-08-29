@@ -58,7 +58,11 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
                 .into_iter()
                 .map(|size| {
                     (1u64..=size)
-                        .prop_map(|chunk_size| NonZeroU64::new(chunk_size).unwrap())
+                        .prop_map(|chunk_size| {
+                            #[allow(clippy::expect_used)] // no zeroes in the range above
+                            NonZeroU64::new(chunk_size)
+                                .expect("logic bug no zeros allowed")
+                        })
                         .boxed()
                 })
                 .collect();

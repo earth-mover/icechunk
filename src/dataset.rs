@@ -15,7 +15,7 @@ pub use crate::metadata::{
 
 use arrow::error::ArrowError;
 use bytes::Bytes;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::{Either, Itertools};
 use thiserror::Error;
 
@@ -608,6 +608,7 @@ impl Dataset {
         }
     }
 
+    /// Warning: The presence of a single error may mean multiple missing items
     async fn node_chunk_iterator(
         &self,
         node: NodeStructure,
@@ -645,25 +646,36 @@ impl Dataset {
                                     let manifest = self
                                         .storage
                                         .fetch_manifests(&manifest_ref.object_id)
-                                        // FIXME: unwrap
-                                        .await
-                                        .unwrap();
+                                        .await;
+                                    match manifest {
+                                        Ok(manifest) => {
+                                            let old_chunks = manifest
+                                                .iter(
+                                                    Some(manifest_ref.location.start()),
+                                                    Some(manifest_ref.location.end()),
+                                                )
+                                                .filter_ok(move |c| {
+                                                    !new_chunk_indices.contains(&c.coord)
+                                                });
 
-                                    let old_chunks = manifest
-                                        .iter(
-                                            Some(manifest_ref.location.start()),
-                                            Some(manifest_ref.location.end()),
-                                        )
-                                        .filter_ok(move |c| {
-                                            !new_chunk_indices.contains(&c.coord)
-                                        });
-
-                                    let old_chunks = self
-                                        .update_existing_chunks(path.clone(), old_chunks);
-                                    //FIXME: error handling
-                                    futures::stream::iter(old_chunks)
-                                        // convert error types
-                                        .map_err(|e| e.into())
+                                            let old_chunks = self.update_existing_chunks(
+                                                path.clone(),
+                                                old_chunks,
+                                            );
+                                            futures::future::Either::Left(
+                                                futures::stream::iter(old_chunks)
+                                                    // convert error types
+                                                    .map_err(|e| e.into()),
+                                            )
+                                        }
+                                        // if we cannot even fetch the manifest, we generate a
+                                        // single error value.
+                                        Err(err) => futures::future::Either::Right(
+                                            futures::stream::once(ready(Err(
+                                                DatasetError::StorageError(err),
+                                            ))),
+                                        ),
+                                    }
                                 }
                             })
                             .flatten(),
@@ -731,8 +743,10 @@ impl Dataset {
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> impl Iterator<Item = NodeStructure> + 'a {
-        // FIXME: unwrap
         self.change_set.new_nodes().map(move |path| {
+            // we should be able to create the full node because we
+            // know it's a new node
+            #[allow(clippy::expect_used)]
             let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
             match node.node_data {
                 NodeData::Group => node,
@@ -868,9 +882,10 @@ struct TableRegionTracker(HashMap<NodeId, TableRegion>, u32);
 
 impl TableRegionTracker {
     fn update(&mut self, chunk: &ChunkInfo) {
-        self.0.entry(chunk.node).and_modify(|tr| tr.extend_right(1)).or_insert(
-            TableRegion::new(self.1, self.1 + 1).expect("bug in TableRegionTracker"),
-        );
+        self.0
+            .entry(chunk.node)
+            .and_modify(|tr| tr.extend_right(1))
+            .or_insert(TableRegion::singleton(self.1));
         self.1 += 1;
     }
 
@@ -893,6 +908,7 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use std::{convert::Infallible, error::Error, num::NonZeroU64, path::PathBuf};

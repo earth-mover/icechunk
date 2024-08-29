@@ -489,6 +489,7 @@ where
         let it = maybe_list.map(|codecs| {
             codecs.into_iter().map(|codec| {
                 Some(
+                    #[allow(clippy::expect_used)]
                     serde_json::to_vec(&codec)
                         .expect("Invariant violation: Codecs are always serializable"),
                 )
@@ -514,6 +515,7 @@ where
         let it = maybe_list.map(|codecs| {
             codecs.into_iter().map(|tr| {
                 Some(
+                    #[allow(clippy::expect_used)]
                     serde_json::to_vec(&tr)
                         .expect("Invariant violation: Codecs are always serializable"),
                 )
@@ -551,6 +553,7 @@ fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
     coll: T,
 ) -> FixedSizeBinaryArray {
     let iter = coll.into_iter().map(|oid| oid.map(|oid| oid.0));
+    #[allow(clippy::expect_used)]
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, ObjectId::SIZE as i32)
         .expect("Invariant violation: bad user attributes ObjectId size")
 }
@@ -580,6 +583,7 @@ where
             }
             Some(manifests) => {
                 for manifest in manifests {
+                    #[allow(clippy::expect_used)]
                     ref_array
                         .values()
                         .append_value(manifest.object_id.0)
@@ -845,6 +849,7 @@ mod strategies {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::format::IcechunkFormatError;
 
