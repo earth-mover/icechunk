@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use test_strategy::Arbitrary;
 
 use arrow::{
     array::{
@@ -24,14 +25,14 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkRef {
     pub id: ObjectId,
     pub offset: u64,

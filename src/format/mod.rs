@@ -9,12 +9,13 @@ use crate::metadata::DataType;
 pub mod attributes;
 pub mod manifest;
 pub mod structure;
+use test_strategy::Arbitrary;
 
 pub type Path = PathBuf;
 
 /// The id of a file in object store
 /// FIXME: should this be passed by ref everywhere?
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectId(pub [u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
