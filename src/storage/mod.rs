@@ -23,29 +23,26 @@ use crate::format::{
     ChunkOffset, ObjectId, Path,
 };
 
-/// Fetch and write the parquet files that represent the dataset in object store
-///
-/// Different implementation can cache the files differently, or not at all.
-/// Implementations are free to assume files are never overwritten.
-
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("object not found `{0:?}`")]
     NotFound(ObjectId),
-    #[error("synchronization error on the Storage instance")]
-    Deadlock,
     #[error("error contacting object store {0}")]
     ObjectStore(#[from] ::object_store::Error),
-    #[error("error reading or writing to/from parquet files: {0}")]
+    #[error("parquet file error: {0}")]
     ParquetError(#[from] parquet_errors::ParquetError),
-    #[error("error reading RecordBatch from parquet file {0}.")]
-    BadRecordBatchRead(String),
-    #[error("i/o error: `{0:?}`")]
-    IOError(#[from] std::io::Error),
-    #[error("bad path: {0}")]
-    BadPath(Path),
+    #[error("error parsing RecordBatch from parquet file {0}.")]
+    BadRecordBatchRead(Path),
+    #[error("generic storage error: {0}")]
+    OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),
+    #[error("unknown storage error: {0}")]
+    Other(String),
 }
 
+/// Fetch and write the parquet files that represent the dataset in object store
+///
+/// Different implementation can cache the files differently, or not at all.
+/// Implementations are free to assume files are never overwritten.
 #[async_trait]
 pub trait Storage: fmt::Debug {
     async fn fetch_structure(

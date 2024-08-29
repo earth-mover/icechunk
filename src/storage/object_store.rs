@@ -34,13 +34,10 @@ impl ObjectStorage {
     pub fn new_in_memory_store() -> ObjectStorage {
         ObjectStorage { store: Arc::new(InMemory::new()), prefix: "".into() }
     }
-    pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, StorageError> {
+    pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
         create_dir_all(prefix.as_path())?;
-        let prefix = prefix.to_str().ok_or(StorageError::BadPath(prefix.to_owned()))?;
-        Ok(ObjectStorage {
-            store: Arc::new(LocalFileSystem::new()),
-            prefix: prefix.to_owned().to_string(),
-        })
+        let prefix = prefix.display().to_string();
+        Ok(ObjectStorage { store: Arc::new(LocalFileSystem::new()), prefix })
     }
     pub fn new_s3_store_from_env(
         bucket_name: impl Into<String>,
@@ -86,7 +83,8 @@ impl ObjectStorage {
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?.build()?;
         // TODO: do we always have only one batch ever? Assert that
         let maybe_batch = builder.next().await;
-        Ok(maybe_batch.ok_or(StorageError::BadRecordBatchRead(path.to_string()))??)
+        Ok(maybe_batch
+            .ok_or(StorageError::BadRecordBatchRead(path.as_ref().into()))??)
     }
 
     async fn write_parquet(
