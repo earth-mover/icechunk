@@ -350,9 +350,7 @@ impl Dataset {
             None => Ok(0),
             Some(id) => {
                 let mut max_id = 0;
-                while let Some(maybe_node) =
-                    self.storage.fetch_structure(id).await?.iter().next()
-                {
+                for maybe_node in self.storage.fetch_structure(id).await?.iter() {
                     match maybe_node {
                         Ok(node) => {
                             max_id = std::cmp::max(max_id, node.id);
