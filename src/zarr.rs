@@ -1,4 +1,13 @@
-use std::{collections::HashSet, iter, num::NonZeroU64, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    iter,
+    num::NonZeroU64,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -6,7 +15,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, skip_serializing_none, TryFromInto};
 use thiserror::Error;
-use tokio::spawn;
 
 use crate::{
     dataset::{
@@ -49,16 +57,18 @@ pub enum VersionInfo {
 }
 
 #[skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DatasetConfig {
     pub previous_version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoreConfig {
     storage: StorageConfig,
     dataset: DatasetConfig,
+    get_partial_values_concurrency: Option<u16>,
 }
 
 pub type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
@@ -67,6 +77,7 @@ pub type StoreResult<A> = Result<A, StoreError>;
 #[derive(Debug, Clone)]
 pub struct Store {
     dataset: Dataset,
+    get_partial_values_concurrency: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -91,6 +102,8 @@ pub enum StoreError {
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
     BadKeyPrefix(String),
+    #[error("error during parallel execution of get_partial_values")]
+    PartialValuesPanic,
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -99,7 +112,7 @@ impl Store {
     pub fn from_config(config: &StoreConfig) -> Result<Self, String> {
         let storage = mk_storage(&config.storage)?;
         let dataset = mk_dataset(&config.dataset, storage)?;
-        Ok(Self::new(dataset))
+        Ok(Self::new(dataset, config.get_partial_values_concurrency))
     }
 
     pub fn from_json_config(json: &[u8]) -> Result<Self, String> {
@@ -108,8 +121,11 @@ impl Store {
         Self::from_config(&config)
     }
 
-    pub fn new(dataset: Dataset) -> Self {
-        Store { dataset }
+    pub fn new(dataset: Dataset, get_partial_values_concurrency: Option<u16>) -> Self {
+        Store {
+            dataset,
+            get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
+        }
     }
 
     pub fn dataset(self) -> Dataset {
@@ -135,22 +151,65 @@ impl Store {
         }
     }
 
-    // TODO: prototype argument
+    /// Get all the requested keys concurrently.
+    ///
+    /// Returns a vector of the results, in the same order as the keys passed. Errors retrieving
+    /// individual keys will be flagged in the inner [`StoreResult`].
+    ///
+    /// The outer [`StoreResult`] is used to flag a global failure and it could be [`StoreError::PartialValuesPanic`].
+    ///
+    /// Currently this function is using concurrency but not parallelism. To limit the number of
+    /// concurrent tasks use the Store config value `get_partial_values_concurrency`.
     pub async fn get_partial_values(
-        // We need an Arc here because otherwise we cannot spawn concurrent tasks
-        self: Arc<Self>,
+        &self,
         key_ranges: impl IntoIterator<Item = (String, ByteRange)>,
     ) -> StoreResult<Vec<StoreResult<Bytes>>> {
-        let mut tasks = Vec::new();
-        for (key, range) in key_ranges {
-            let this = Arc::clone(&self);
-            tasks.push(spawn(async move { this.get(&key, &range).await }));
-        }
-        let mut outputs = Vec::with_capacity(tasks.len());
-        for task in tasks {
-            outputs.push(task.await);
-        }
-        outputs.into_iter().try_collect().map_err(|e| StoreError::Unknown(Box::new(e)))
+        // TODO: prototype argument
+        //
+        // There is a challenges implementing this function: async rust is not well prepared to
+        // do scoped tasks. We want to spawn parallel tasks for each key_range, but spawn requires
+        // a `'static` `Future`. Since the `Future` needs `&self`, it cannot be `'static`. One
+        // solution would be to wrap `self` in an Arc, but that makes client code much more
+        // complicated.
+        //
+        // This [excellent post](https://without.boats/blog/the-scoped-task-trilemma/) explains why something like this is not currently achievable:
+        // [Here](https://github.com/tokio-rs/tokio/issues/3162) is a a tokio thread explaining this cannot be done with current Rust.
+        //
+        // The compromise we found is using [`Stream::for_each_concurrent`]. This achieves the
+        // borrowing and the concurrency but not the parallelism. So all the concurrent tasks will
+        // execute on the same thread. This is not as bad as it sounds, since most of this will be
+        // IO bound.
+
+        let stream = futures::stream::iter(key_ranges);
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let num_keys = AtomicUsize::new(0);
+        stream
+            .for_each_concurrent(
+                self.get_partial_values_concurrency as usize,
+                |(key, range)| {
+                    let index = num_keys.fetch_add(1, Ordering::Release);
+                    let results = Arc::clone(&results);
+                    async move {
+                        let value = self.get(&key, &range).await;
+                        if let Ok(mut results) = results.lock() {
+                            if index >= results.len() {
+                                results.resize_with(index + 1, || None);
+                            }
+                            results[index] = Some(value);
+                        }
+                    }
+                },
+            )
+            .await;
+
+        let results = Arc::into_inner(results)
+            .ok_or(StoreError::PartialValuesPanic)?
+            .into_inner()
+            .map_err(|_| StoreError::PartialValuesPanic)?;
+
+        debug_assert!(results.len() == num_keys.into_inner());
+        let res: Option<Vec<_>> = results.into_iter().collect();
+        res.ok_or(StoreError::PartialValuesPanic)
     }
 
     // TODO: prototype argument
@@ -814,7 +873,7 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
 
         assert!(matches!(
             store.get("zarr.json", &(None, None)).await,
@@ -858,7 +917,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -895,7 +954,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
 
         store
             .set(
@@ -924,7 +983,7 @@ mod tests {
         let oid = ds.flush().await?;
 
         let ds = Dataset::update(storage, oid).build();
-        let store = Store::new(ds);
+        let store = Store::new(ds, None);
         assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
         assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
 
@@ -937,7 +996,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
 
         store
             .set(
@@ -975,7 +1034,7 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
 
         assert!(
             matches!(store.list_prefix("").await, Err(StoreError::BadKeyPrefix(p)) if p.is_empty())
@@ -1051,7 +1110,7 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
 
         store
             .borrow_mut()
@@ -1085,7 +1144,7 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds);
+        let mut store = Store::new(ds, None);
 
         store
             .borrow_mut()
@@ -1130,6 +1189,66 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+        let ds = Dataset::create(Arc::clone(&storage)).build();
+        let mut store = Store::new(ds, None);
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[20],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x"]}"#);
+        store.set("array/zarr.json", zarr_meta).await?;
+
+        let key_vals: Vec<_> = (0i32..20)
+            .map(|idx| {
+                (
+                    format!("array/c/{idx}"),
+                    Bytes::copy_from_slice(idx.to_be_bytes().to_owned().as_slice()),
+                )
+            })
+            .collect();
+
+        for (key, value) in key_vals.iter() {
+            store.set(key.as_str(), value.clone()).await?;
+        }
+
+        let key_ranges =
+            key_vals.iter().map(|(k, _)| (k.clone(), (None::<u64>, None::<u64>)));
+
+        assert_eq!(
+            key_vals.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+            store
+                .get_partial_values(key_ranges)
+                .await?
+                .into_iter()
+                .map(|v| v.unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        // let's try in reverse order
+        let key_ranges =
+            key_vals.iter().rev().map(|(k, _)| (k.clone(), (None::<u64>, None::<u64>)));
+
+        assert_eq!(
+            key_vals.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+            store
+                .get_partial_values(key_ranges)
+                .await?
+                .into_iter()
+                .map(|v| v.unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
@@ -1145,18 +1264,21 @@ mod tests {
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
                 ]))),
             },
+            get_partial_values_concurrency: Some(100),
         };
 
         let json = r#"
-            {"storage":
-                {"type": "cached",
-                 "approx_max_memory_bytes":1000000,
-                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
+            {"storage": {
+                "type": "cached",
+                "approx_max_memory_bytes":1000000,
+                "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
                 "previous_version": {"structure_id":"000102030405060708090a0b0c0d0e0f"},
                 "inline_chunk_threshold_bytes":128
-             }}
+             },
+             "get_partial_values_concurrency": 100
+            }
         "#;
         assert_eq!(expected, serde_json::from_str(json)?);
 
@@ -1177,6 +1299,7 @@ mod tests {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
                 },
+                get_partial_values_concurrency: None,
                 ..expected.clone()
             },
             serde_json::from_str(json)?
@@ -1197,6 +1320,7 @@ mod tests {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
                 },
+                get_partial_values_concurrency: None,
                 ..expected.clone()
             },
             serde_json::from_str(json)?
@@ -1214,6 +1338,7 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                 },
                 storage: StorageConfig::InMemory,
+                get_partial_values_concurrency: None,
             },
             serde_json::from_str(json)?
         );
