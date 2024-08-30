@@ -33,5 +33,8 @@ format-nix *args='':
 check-deps *args='':
   cargo deny --all-features check {{args}}
 
+run-all-examples:
+  for example in examples/*.rs; do cargo run --example "$(basename "${example%.rs}")"; done
+
 # run all checks that CI actions will run
-pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects": (compile-tests "--locked") build (format "--check") lint test check-deps
+pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects": (compile-tests "--locked") build (format "--check") lint test run-all-examples check-deps

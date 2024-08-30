@@ -2,19 +2,25 @@ use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use icechunk::{
-    storage::{InMemoryStorage, MemCachingStorage},
-    Dataset, Storage, Store,
-};
+use icechunk::Store;
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(MemCachingStorage::new(storage, 100_000_000));
-    let ds = Dataset::create(Arc::clone(&storage)).build();
-    let store = Arc::new(RwLock::new(Store::new(ds)));
+    let store_config_json = br#"
+        {"storage":
+            {"type": "cached",
+                "approx_max_memory_bytes":100000000,
+                "backend":{"type": "in_memory"}
+            },
+            "dataset": {
+                "previous_version": null,
+                "inline_chunk_threshold_bytes":128
+            }}
+    "#;
+
+    let store = Store::from_json_config(store_config_json)?;
+    let store = Arc::new(RwLock::new(store));
 
     store
         .write()
