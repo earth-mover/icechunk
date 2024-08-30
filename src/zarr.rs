@@ -1,4 +1,4 @@
-use std::{collections::HashSet, iter, num::NonZeroU64, sync::Arc};
+use std::{collections::HashSet, iter, num::NonZeroU64, path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -19,15 +19,56 @@ use crate::{
         ChunkOffset,
         IcechunkFormatError,
     },
-    Dataset,
+    Dataset, Storage,
 };
 
+pub use crate::format::ObjectId;
+pub use crate::format::SnapshotId;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StorageConfig {
+    #[serde(rename = "in_memory")]
+    InMemory,
+
+    #[serde(rename = "local_filesystem")]
+    LocalFileSystem { root: PathBuf },
+
+    #[serde(rename = "cached")]
+    Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VersionInfo {
+    #[serde(rename = "empty")]
+    Empty,
+
+    #[serde(rename = "structure_id")]
+    StructureId(ObjectId),
+
+    #[serde(rename = "snapshot_id")]
+    SnapshotId(SnapshotId), //TODO: unimplemented yet
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatasetConfig {
+    pub previous_version: VersionInfo,
+
+    pub inline_chunk_threshold_bytes: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoreConfig {
+    storage: StorageConfig,
+    dataset: DatasetConfig,
+}
+
+pub type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
+pub type StoreResult<A> = Result<A, StoreError>;
+
+#[derive(Debug, Clone)]
 pub struct Store {
     dataset: Dataset,
 }
-
-type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
-type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KeyNotFoundError {
@@ -56,6 +97,18 @@ pub enum StoreError {
 }
 
 impl Store {
+    pub fn from_config(config: &StoreConfig) -> Result<Self, String> {
+        let storage = mk_storage(&config.storage)?;
+        let dataset = mk_dataset(&config.dataset, storage)?;
+        Ok(Self::new(dataset))
+    }
+
+    pub fn from_json_config(json: &[u8]) -> Result<Self, String> {
+        let config: StoreConfig =
+            serde_json::from_slice(json).map_err(|e| e.to_string())?;
+        Self::from_config(&config)
+    }
+
     pub fn new(dataset: Dataset) -> Self {
         Store { dataset }
     }
@@ -320,6 +373,17 @@ impl Store {
             Err(StoreError::BadKeyPrefix(prefix.to_string()))
         }
     }
+}
+
+fn mk_dataset(
+    _dataset: &DatasetConfig,
+    _storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<Dataset, String> {
+    todo!()
+}
+
+fn mk_storage(_config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+    todo!()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1044,6 +1108,40 @@ mod tests {
         let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["1".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
+        let expected = StoreConfig {
+            storage: StorageConfig::Cached {
+                approx_max_memory_bytes: 1_000_000,
+                backend: Box::new(StorageConfig::LocalFileSystem {
+                    root: "/tmp/test".into(),
+                }),
+            },
+            dataset: DatasetConfig {
+                inline_chunk_threshold_bytes: Some(128),
+                previous_version: VersionInfo::StructureId(ObjectId([
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                ])),
+            },
+        };
+
+        let json = r#"
+            {"storage":
+                {"cached":{
+                    "approx_max_memory_bytes":1000000,
+                    "backend":{"local_filesystem":{"root":"/tmp/test"}}
+                }},
+             "dataset": {
+                "previous_version":{"structure_id":"000102030405060708090a0b0c0d0e0f"},
+                "inline_chunk_threshold_bytes":128
+            }}
+        "#;
+        //let json = serde_json::to_string(&value)?;
+        let config: StoreConfig = serde_json::from_str(json)?;
+        assert_eq!(expected, config);
         Ok(())
     }
 }

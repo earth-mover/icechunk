@@ -3,6 +3,8 @@ use std::{ops::Range, path::PathBuf};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use thiserror::Error;
 
 use crate::metadata::DataType;
@@ -14,19 +16,36 @@ pub mod structure;
 
 pub type Path = PathBuf;
 
+#[serde_as]
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SnapshotId(#[serde_as(as = "serde_with::hex::Hex")] pub [u8; 16]); // FIXME: this doesn't need to be this big
+
+impl fmt::Debug for SnapshotId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:02x}", self.0.iter().format(""))
+    }
+}
+
+impl SnapshotId {
+    pub fn random() -> Self {
+        Self(rand::random())
+    }
+}
+
 /// The id of a file in object store
-/// FIXME: should this be passed by ref everywhere?
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectId(pub [u8; 16]); // FIXME: this doesn't need to be this big
+// FIXME: should this be passed by ref everywhere?
+#[serde_as]
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ObjectId(#[serde_as(as = "serde_with::hex::Hex")] pub [u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
     const SIZE: usize = 16;
 
-    pub fn random() -> ObjectId {
-        ObjectId(rand::random())
+    pub fn random() -> Self {
+        Self(rand::random())
     }
 
-    pub const FAKE: ObjectId = ObjectId([0; 16]);
+    pub const FAKE: Self = Self([0; 16]);
 }
 
 impl fmt::Debug for ObjectId {
@@ -136,4 +155,45 @@ pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
 pub trait BatchLike {
     fn get_batch(&self) -> &RecordBatch;
+}
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_snapshot_id_serialization() {
+        let sid = SnapshotId([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(
+            serde_json::to_string(&sid).unwrap(),
+            r#""000102030405060708090a0b0c0d0e0f""#
+        );
+        let sid = SnapshotId::random();
+        assert_eq!(
+            serde_json::from_slice::<SnapshotId>(
+                serde_json::to_vec(&sid).unwrap().as_slice()
+            )
+            .unwrap(),
+            sid,
+        );
+    }
+
+    #[test]
+    fn test_object_id_serialization() {
+        let sid = ObjectId([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(
+            serde_json::to_string(&sid).unwrap(),
+            r#""000102030405060708090a0b0c0d0e0f""#
+        );
+        let sid = ObjectId::random();
+        assert_eq!(
+            serde_json::from_slice::<ObjectId>(
+                serde_json::to_vec(&sid).unwrap().as_slice()
+            )
+            .unwrap(),
+            sid,
+        );
+    }
 }
