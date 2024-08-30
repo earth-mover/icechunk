@@ -18,23 +18,29 @@ pub struct LoggingStorage {
     fetch_log: Mutex<Vec<(String, ObjectId)>>,
 }
 
+#[cfg(test)]
 impl LoggingStorage {
     pub fn new(backend: Arc<dyn Storage + Send + Sync>) -> Self {
         Self { backend, fetch_log: Mutex::new(Vec::new()) }
     }
 
+    #[allow(clippy::expect_used)] // this implementation is intended for tests only
     pub fn fetch_operations(&self) -> Vec<(String, ObjectId)> {
-        self.fetch_log.lock().unwrap().clone()
+        self.fetch_log.lock().expect("poison lock").clone()
     }
 }
 
 #[async_trait]
+#[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
     async fn fetch_structure(
         &self,
         id: &ObjectId,
     ) -> Result<Arc<StructureTable>, StorageError> {
-        self.fetch_log.lock().unwrap().push(("fetch_structure".to_string(), id.clone()));
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_structure".to_string(), id.clone()));
         self.backend.fetch_structure(id).await
     }
 
@@ -42,7 +48,10 @@ impl Storage for LoggingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
-        self.fetch_log.lock().unwrap().push(("fetch_attributes".to_string(), id.clone()));
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_attributes".to_string(), id.clone()));
         self.backend.fetch_attributes(id).await
     }
 
@@ -50,7 +59,10 @@ impl Storage for LoggingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
-        self.fetch_log.lock().unwrap().push(("fetch_manifests".to_string(), id.clone()));
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_manifests".to_string(), id.clone()));
         self.backend.fetch_manifests(id).await
     }
 
@@ -59,7 +71,10 @@ impl Storage for LoggingStorage {
         id: &ObjectId,
         range: &Option<Range<ChunkOffset>>,
     ) -> Result<Bytes, StorageError> {
-        self.fetch_log.lock().unwrap().push(("fetch_chunk".to_string(), id.clone()));
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_chunk".to_string(), id.clone()));
         self.backend.fetch_chunk(id, range).await
     }
 

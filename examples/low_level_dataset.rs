@@ -1,3 +1,4 @@
+#![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{
@@ -6,6 +7,7 @@ use icechunk::{
         FillValue, Path, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     storage::{InMemoryStorage, MemCachingStorage},
+    zarr::StoreError,
     Dataset, Storage,
 };
 use itertools::Itertools;
@@ -50,7 +52,7 @@ ds.add_group("/group2".into()).await?;
     ds.add_group("/group2".into()).await?;
 
     println!();
-    print_nodes(&ds).await;
+    print_nodes(&ds).await?;
 
     println!(
         r#"
@@ -128,7 +130,7 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
     let array1_path: Path = "/group1/array1".into();
     ds.add_array(array1_path.clone(), zarr_meta1).await?;
     println!();
-    print_nodes(&ds).await;
+    print_nodes(&ds).await?;
 
     println!();
     println!();
@@ -145,7 +147,7 @@ ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?
         Some(UserAttributes::try_new(br#"{"n":42}"#).unwrap()),
     )
     .await?;
-    print_nodes(&ds).await;
+    print_nodes(&ds).await?;
 
     println!("## Committing");
     let v1_id = ds.flush().await?;
@@ -215,7 +217,7 @@ let mut ds = Dataset::update(Arc::clone(&storage), ObjectId.from("{v2_id:?}"));
  "#
     );
 
-    print_nodes(&ds).await;
+    print_nodes(&ds).await?;
 
     println!("## Adding a new inline chunk");
     ds.set_chunk_ref(
@@ -267,7 +269,7 @@ let ds = Dataset::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
  "#
     );
 
-    print_nodes(&ds).await;
+    print_nodes(&ds).await?;
 
     let chunk = ds.get_chunk_ref(&array1_path, &ChunkIndices(vec![0])).await.unwrap();
     println!("Reading the old chunk: {chunk:?}");
@@ -278,11 +280,12 @@ let ds = Dataset::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
     Ok(())
 }
 
-async fn print_nodes(ds: &Dataset) {
+async fn print_nodes(ds: &Dataset) -> Result<(), StoreError> {
     println!("### List of nodes");
     let rows = ds
         .list_nodes()
-        .await
+        .await?
+        .map(|r| r.unwrap())
         .sorted_by_key(|n| n.path.clone())
         .map(|node| {
             format!(
@@ -295,4 +298,5 @@ async fn print_nodes(ds: &Dataset) {
         .format("");
 
     println!("{}", rows);
+    Ok(())
 }
