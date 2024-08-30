@@ -1,10 +1,10 @@
-use std::{collections::HashSet, iter, num::NonZeroU64, sync::Arc};
+use std::{collections::HashSet, iter, num::NonZeroU64, path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, TryFromInto};
+use serde_with::{serde_as, skip_serializing_none, TryFromInto};
 use thiserror::Error;
 use tokio::spawn;
 
@@ -19,15 +19,55 @@ use crate::{
         ChunkOffset,
         IcechunkFormatError,
     },
-    Dataset,
+    storage::InMemoryStorage,
+    Dataset, MemCachingStorage, ObjectStorage, Storage,
 };
 
+pub use crate::format::ObjectId;
+pub use crate::format::SnapshotId;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum StorageConfig {
+    #[serde(rename = "in_memory")]
+    InMemory,
+
+    #[serde(rename = "local_filesystem")]
+    LocalFileSystem { root: PathBuf },
+
+    #[serde(rename = "cached")]
+    Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VersionInfo {
+    #[serde(rename = "structure_id")]
+    StructureId(ObjectId),
+
+    #[serde(rename = "snapshot_id")]
+    SnapshotId(SnapshotId), //TODO: unimplemented yet
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatasetConfig {
+    pub previous_version: Option<VersionInfo>,
+    pub inline_chunk_threshold_bytes: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoreConfig {
+    storage: StorageConfig,
+    dataset: DatasetConfig,
+}
+
+pub type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
+pub type StoreResult<A> = Result<A, StoreError>;
+
+#[derive(Debug, Clone)]
 pub struct Store {
     dataset: Dataset,
 }
-
-type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
-type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KeyNotFoundError {
@@ -56,6 +96,18 @@ pub enum StoreError {
 }
 
 impl Store {
+    pub fn from_config(config: &StoreConfig) -> Result<Self, String> {
+        let storage = mk_storage(&config.storage)?;
+        let dataset = mk_dataset(&config.dataset, storage)?;
+        Ok(Self::new(dataset))
+    }
+
+    pub fn from_json_config(json: &[u8]) -> Result<Self, String> {
+        let config: StoreConfig =
+            serde_json::from_slice(json).map_err(|e| e.to_string())?;
+        Self::from_config(&config)
+    }
+
     pub fn new(dataset: Dataset) -> Self {
         Store { dataset }
     }
@@ -177,7 +229,6 @@ impl Store {
     pub async fn list_prefix<'a>(
         &'a self,
         prefix: &'a str,
-        // TODO: item should probably be StoreResult<String>
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -318,6 +369,38 @@ impl Store {
             ))
         } else {
             Err(StoreError::BadKeyPrefix(prefix.to_string()))
+        }
+    }
+}
+
+fn mk_dataset(
+    dataset: &DatasetConfig,
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<Dataset, String> {
+    let mut builder = match &dataset.previous_version {
+        None => Dataset::create(storage),
+        Some(VersionInfo::StructureId(sid)) => Dataset::update(storage, sid.clone()),
+        Some(VersionInfo::SnapshotId(_sid)) => todo!(), // FIXME: implement once we have a statefile
+    };
+    if let Some(thr) = dataset.inline_chunk_threshold_bytes {
+        builder.with_inline_threshold_bytes(thr);
+    }
+    // TODO: add error checking, does the previous version exist?
+    Ok(builder.build())
+}
+
+fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+    match config {
+        StorageConfig::InMemory => Ok(Arc::new(InMemoryStorage::new())),
+        StorageConfig::LocalFileSystem { root } => {
+            let storage = ObjectStorage::new_local_store(root)
+                .map_err(|e| format!("Error creating storage: {}", e))?;
+            Ok(Arc::new(storage))
+        }
+        StorageConfig::Cached { approx_max_memory_bytes, backend } => {
+            let backend = mk_storage(backend)?;
+            let storage = MemCachingStorage::new(backend, *approx_max_memory_bytes);
+            Ok(Arc::new(storage))
         }
     }
 }
@@ -1044,6 +1127,96 @@ mod tests {
         let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["1".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
+        let expected = StoreConfig {
+            storage: StorageConfig::Cached {
+                approx_max_memory_bytes: 1_000_000,
+                backend: Box::new(StorageConfig::LocalFileSystem {
+                    root: "/tmp/test".into(),
+                }),
+            },
+            dataset: DatasetConfig {
+                inline_chunk_threshold_bytes: Some(128),
+                previous_version: Some(VersionInfo::StructureId(ObjectId([
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                ]))),
+            },
+        };
+
+        let json = r#"
+            {"storage":
+                {"type": "cached",
+                 "approx_max_memory_bytes":1000000,
+                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
+                },
+             "dataset": {
+                "previous_version": {"structure_id":"000102030405060708090a0b0c0d0e0f"},
+                "inline_chunk_threshold_bytes":128
+             }}
+        "#;
+        assert_eq!(expected, serde_json::from_str(json)?);
+
+        let json = r#"
+            {"storage":
+                {"type": "cached",
+                 "approx_max_memory_bytes":1000000,
+                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
+                },
+             "dataset": {
+                "previous_version": null,
+                "inline_chunk_threshold_bytes": null
+             }}
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                ..expected.clone()
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":
+                {"type": "cached",
+                 "approx_max_memory_bytes":1000000,
+                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
+                },
+             "dataset": {}
+            }
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                ..expected.clone()
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":{"type": "in_memory"},
+             "dataset": {}
+            }
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                storage: StorageConfig::InMemory,
+            },
+            serde_json::from_str(json)?
+        );
         Ok(())
     }
 }
