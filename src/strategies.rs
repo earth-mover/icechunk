@@ -5,11 +5,14 @@ use std::sync::Arc;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
-use crate::storage::InMemoryStorage;
-use crate::{
-    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, Dataset, DimensionNames, FillValue,
-    Path, StorageTransformer, ZarrArrayMetadata,
+use crate::dataset::{
+    ChunkKeyEncoding, ChunkShape, Codec, FillValue, StorageTransformer,
 };
+use crate::format::structure::ZarrArrayMetadata;
+use crate::format::Path;
+use crate::metadata::{ArrayShape, DimensionNames};
+use crate::storage::InMemoryStorage;
+use crate::Dataset;
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
@@ -55,7 +58,11 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
                 .into_iter()
                 .map(|size| {
                     (1u64..=size)
-                        .prop_map(|chunk_size| NonZeroU64::new(chunk_size).unwrap())
+                        .prop_map(|chunk_size| {
+                            #[allow(clippy::expect_used)] // no zeroes in the range above
+                            NonZeroU64::new(chunk_size)
+                                .expect("logic bug no zeros allowed")
+                        })
                         .boxed()
                 })
                 .collect();

@@ -6,132 +6,236 @@ use arrow::{
         FixedSizeBinaryBuilder, ListArray, ListBuilder, RecordBatch, StringArray,
         StringBuilder, StructArray, UInt32Array, UInt32Builder, UInt8Array,
     },
-    datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type, UInt8Type},
+    datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type},
+    error::ArrowError,
 };
 use itertools::izip;
 
-use crate::{
-    ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName, FillValue, Flags,
-    ManifestExtents, ManifestRef, NodeData, NodeId, NodeStructure, NodeType, ObjectId,
-    Path, StorageTransformer, TableRegion, UserAttributes, UserAttributesRef,
-    UserAttributesStructure, ZarrArrayMetadata,
+use crate::metadata::{
+    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
+    DimensionNames, FillValue, StorageTransformer, UserAttributes,
 };
+
+use super::{
+    arrow::get_column,
+    manifest::{ManifestExtents, ManifestRef},
+    BatchLike, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId, Path,
+    TableOffset, TableRegion,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserAttributesRef {
+    pub object_id: ObjectId,
+    pub location: TableOffset,
+    pub flags: Flags,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserAttributesStructure {
+    Inline(UserAttributes),
+    Ref(UserAttributesRef),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum NodeType {
+    Group,
+    Array,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZarrArrayMetadata {
+    pub shape: ArrayShape,
+    pub data_type: DataType,
+    pub chunk_shape: ChunkShape,
+    pub chunk_key_encoding: ChunkKeyEncoding,
+    pub fill_value: FillValue,
+    pub codecs: Vec<Codec>,
+    pub storage_transformers: Option<Vec<StorageTransformer>>,
+    pub dimension_names: Option<DimensionNames>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeData {
+    Array(ZarrArrayMetadata, Vec<ManifestRef>),
+    Group,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeStructure {
+    pub id: NodeId,
+    pub path: Path,
+    pub user_attributes: Option<UserAttributesStructure>,
+    pub node_data: NodeData,
+}
+
+impl NodeStructure {
+    pub fn node_type(&self) -> NodeType {
+        match &self.node_data {
+            NodeData::Group => NodeType::Group,
+            NodeData::Array(_, _) => NodeType::Array,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct StructureTable {
     pub batch: RecordBatch,
 }
 
+impl BatchLike for StructureTable {
+    fn get_batch(&self) -> &RecordBatch {
+        &self.batch
+    }
+}
+
 impl StructureTable {
-    pub fn get_node(&self, path: &Path) -> Option<NodeStructure> {
+    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeStructure> {
         // FIXME: optimize
-        let paths: &StringArray = self.batch.column_by_name("path")?.as_string_opt()?;
-        let needle = path.to_str();
-        let idx = paths.iter().position(|s| s == needle);
-        idx.and_then(|idx| self.build_node_structure(idx))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = NodeStructure> + '_ {
-        let max = self.batch.num_rows();
-        // FIXME: unwrap
-        (0..max).map(|idx| self.build_node_structure(idx).unwrap())
-    }
-
-    pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeStructure> {
-        let max = self.batch.num_rows();
-        // FIXME: unwrap
-        (0..max).map(move |idx| {
-            self.build_node_structure(idx)
-                .unwrap_or_else(|| panic!("Cannot build NodeStructure at index {idx}"))
-        })
-    }
-
-    // FIXME: there should be a failure reason here, so return a Result
-    fn build_zarr_array_metadata(&self, idx: usize) -> Option<ZarrArrayMetadata> {
-        // FIXME: all of this should check for nulls in the columns and fail
-        let shape = self
-            .batch
-            .column_by_name("shape")?
-            .as_list_opt::<i32>()?
-            .value(idx)
-            .as_primitive_opt::<UInt64Type>()?
+        let paths: &StringArray = get_column(self, "path")?.as_string()?;
+        let needle = path
+            .to_str()
+            .ok_or(IcechunkFormatError::InvalidPath { path: path.clone() })?;
+        let idx = paths
             .iter()
-            .flatten()
-            .collect();
+            .position(|s| s == Some(needle))
+            .ok_or(IcechunkFormatError::NodeNotFound { path: path.clone() })?;
+        self.build_node_structure(idx)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeStructure>> + '_ {
+        let max = self.batch.num_rows();
+        (0..max).map(|idx| self.build_node_structure(idx))
+    }
+
+    // FIXME: do we still need this method?
+    pub fn iter_arc(
+        self: Arc<Self>,
+    ) -> impl Iterator<Item = IcechunkResult<NodeStructure>> {
+        let max = self.batch.num_rows();
+        (0..max).map(move |idx| self.build_node_structure(idx))
+    }
+
+    fn build_zarr_array_metadata(&self, idx: usize) -> IcechunkResult<ZarrArrayMetadata> {
+        // TODO: split this huge function
+        let shape: Vec<u64> = get_column(self, "shape")?
+            .list_at(idx)?
+            .as_primitive_opt::<UInt64Type>()
+            .ok_or(IcechunkFormatError::InvalidColumnType {
+                column_name: "shape".to_string(),
+                expected_column_type: "list of u64".to_string(),
+            })?
+            .iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or(IcechunkFormatError::InvalidArrayMetadata {
+                index: idx,
+                field: "shape".to_string(),
+                message: "null dimensions sizes".to_string(),
+            })?;
         let data_type = DataType::try_from(
-            self.batch.column_by_name("data_type")?.as_string_opt::<i32>()?.value(idx),
+            get_column(self, "data_type")?.string_at(idx)?,
         )
-        .ok()?;
+        .map_err(|err| IcechunkFormatError::InvalidArrayMetadata {
+            index: idx,
+            field: "data_type".to_string(),
+            message: err.to_string(),
+        })?;
         let chunk_shape = ChunkShape(
-            self.batch
-                .column_by_name("chunk_shape")?
-                .as_list_opt::<i32>()?
-                .value(idx)
-                .as_primitive_opt::<UInt64Type>()?
+            get_column(self, "chunk_shape")?
+                .list_at(idx)?
+                .as_primitive_opt::<UInt64Type>()
+                .ok_or(IcechunkFormatError::InvalidColumnType {
+                    column_name: "chunk_shape".to_string(),
+                    expected_column_type: "list of u64".to_string(),
+                })?
                 .iter()
-                .filter_map(|x| x.and_then(NonZeroU64::new))
-                .collect(),
+                .collect::<Option<Vec<_>>>()
+                .ok_or(IcechunkFormatError::InvalidArrayMetadata {
+                    index: idx,
+                    field: "chunk_shape".to_string(),
+                    message: "null chunk sizes".to_string(),
+                })?
+                .iter()
+                .map(|u64| NonZeroU64::new(*u64))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(IcechunkFormatError::InvalidArrayMetadata {
+                    index: idx,
+                    field: "chunk_shape".to_string(),
+                    message: "non-positive chunk sizes".to_string(),
+                })?,
         );
-        let key_encoding_u8 = self
-            .batch
-            .column_by_name("chunk_key_encoding")?
-            .as_primitive_opt::<UInt8Type>()?
-            .value(idx);
+        let key_encoding_u8 = get_column(self, "chunk_key_encoding")?.u8_at(idx)?;
+        let chunk_key_encoding =
+            std::convert::TryInto::<ChunkKeyEncoding>::try_into(key_encoding_u8)
+                .map_err(|err| IcechunkFormatError::InvalidArrayMetadata {
+                    index: idx,
+                    field: "chunk_key_encoding".to_string(),
+                    message: err.to_string(),
+                })?;
 
-        let chunk_key_encoding = key_encoding_u8.try_into().ok()?;
-
-        let codecs = self
-            .batch
-            .column_by_name("codecs")?
-            .as_list_opt::<i32>()?
-            .value(idx)
-            .as_binary_opt::<i32>()?
+        let codecs = get_column(self, "codecs")?
+            .list_at(idx)?
+            .as_binary_opt::<i32>()
+            .ok_or(IcechunkFormatError::InvalidColumnType {
+                column_name: "codecs".to_string(),
+                expected_column_type: "list of binary".to_string(),
+            })?
             .iter()
             // FIXME: handle parse error
-            .filter_map(|maybe_json| {
+            .map(|maybe_json| {
                 maybe_json.and_then(|json| serde_json::from_slice(json).ok())
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()
+            .ok_or(IcechunkFormatError::InvalidArrayMetadata {
+                index: idx,
+                field: "codecs".to_string(),
+                message: "null or unparseable codec".to_string(),
+            })?;
 
         let storage_transformers =
-            self.batch.column_by_name("storage_transformers")?.as_list_opt::<i32>()?;
+            match get_column(self, "storage_transformers")?.list_at_opt(idx)? {
+                Some(tr_array) => Some(
+                    tr_array
+                        .as_binary_opt::<i32>()
+                        .ok_or(IcechunkFormatError::InvalidColumnType {
+                            column_name: "storage_transformers".to_string(),
+                            expected_column_type: "list of binary".to_string(),
+                        })?
+                        .iter()
+                        .map(|maybe_json| {
+                            maybe_json.and_then(|json| serde_json::from_slice(json).ok())
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or(IcechunkFormatError::InvalidArrayMetadata {
+                            index: idx,
+                            field: "storage_transformers".to_string(),
+                            message: "null or unparseable transformer".to_string(),
+                        })?,
+                ),
 
-        let storage_transformers = if storage_transformers.is_null(idx) {
-            None
-        } else {
-            Some(
-                storage_transformers
-                    .value(idx)
-                    .as_binary_opt::<i32>()?
-                    .iter()
-                    .filter_map(|maybe_json| {
-                        maybe_json.and_then(|json| serde_json::from_slice(json).ok())
-                    })
-                    .collect(),
-            )
-        };
+                None => None,
+            };
 
         let dimension_names =
-            self.batch.column_by_name("dimension_names")?.as_list_opt::<i32>()?;
-        let dimension_names = if dimension_names.is_null(idx) {
-            None
-        } else {
-            Some(
-                dimension_names
-                    .value(idx)
-                    .as_string_opt::<i32>()?
-                    .iter()
-                    .map(|x| x.map(|x| x.to_string()))
-                    .collect(),
-            )
-        };
+            match get_column(self, "dimension_names")?.list_at_opt(idx)? {
+                Some(ds_array) => Some(
+                    ds_array
+                        .as_string_opt::<i32>()
+                        .ok_or(IcechunkFormatError::InvalidColumnType {
+                            column_name: "dimension_names".to_string(),
+                            expected_column_type: "list of string".to_string(),
+                        })?
+                        .iter()
+                        .map(|s| s.map(|s| s.to_string()))
+                        .collect::<Vec<_>>(),
+                ),
+                None => None,
+            };
 
-        let encoded_fill_value =
-            self.batch.column_by_name("fill_value")?.as_binary_opt::<i32>()?.value(idx);
+        let encoded_fill_value = get_column(self, "fill_value")?.binary_at(idx)?;
         let fill_value =
-            FillValue::from_data_type_and_value(&data_type, encoded_fill_value).ok()?;
+            FillValue::from_data_type_and_value(&data_type, encoded_fill_value)?;
 
-        Some(ZarrArrayMetadata {
+        Ok(ZarrArrayMetadata {
             shape,
             data_type,
             chunk_shape,
@@ -143,64 +247,110 @@ impl StructureTable {
         })
     }
 
-    // FIXME: there should be a failure reason here, so return a Result
-    fn build_manifest_refs(&self, idx: usize) -> Option<Vec<ManifestRef>> {
-        let manifest_refs_array =
-            self.batch.column_by_name("manifest_references")?.as_struct_opt()?;
+    fn build_manifest_refs(&self, idx: usize) -> IcechunkResult<Vec<ManifestRef>> {
+        let manifest_refs_array = get_column(self, "manifest_references")?.as_struct()?;
         if manifest_refs_array.is_valid(idx) {
             let refs = manifest_refs_array
-                .column_by_name("reference")?
-                .as_list_opt::<i32>()?
+                .column_by_name("reference")
+                .ok_or(IcechunkFormatError::ColumnNotFound {
+                    column: "manifest_references.reference".to_string(),
+                })?
+                .as_list_opt::<i32>()
+                .ok_or(IcechunkFormatError::InvalidColumnType {
+                    column_name: "manifest_references.reference".to_string(),
+                    expected_column_type: "list of fixed size binary".to_string(),
+                })?
+                // TODO: is ok to consider it empty if null
                 .value(idx);
-            let refs = refs.as_fixed_size_binary_opt()?;
+            let refs = refs.as_fixed_size_binary_opt().ok_or(
+                IcechunkFormatError::InvalidColumnType {
+                    column_name: format!("manifest_references.reference[{idx}]"),
+                    expected_column_type: "fixed size binary".to_string(),
+                },
+            )?;
 
             let row_from = manifest_refs_array
-                .column_by_name("start_row")?
-                .as_list_opt::<i32>()?
+                .column_by_name("start_row")
+                .ok_or(IcechunkFormatError::ColumnNotFound {
+                    column: "manifest_references.start_row".to_string(),
+                })?
+                .as_list_opt::<i32>()
+                .ok_or(IcechunkFormatError::InvalidColumnType {
+                    column_name: "manifest_references.start_row".to_string(),
+                    expected_column_type: "list of u32".to_string(),
+                })?
+                // TODO: is ok to consider it empty if null
                 .value(idx);
-            let row_from = row_from.as_primitive_opt::<UInt32Type>()?;
+            let row_from = row_from.as_primitive_opt::<UInt32Type>().ok_or(
+                IcechunkFormatError::InvalidColumnType {
+                    column_name: format!("manifest_references.start_row[{idx}]"),
+                    expected_column_type: "u32".to_string(),
+                },
+            )?;
 
             let row_to = manifest_refs_array
-                .column_by_name("end_row")?
-                .as_list_opt::<i32>()?
+                .column_by_name("end_row")
+                .ok_or(IcechunkFormatError::ColumnNotFound {
+                    column: "manifest_references.end_row".to_string(),
+                })?
+                .as_list_opt::<i32>()
+                .ok_or(IcechunkFormatError::InvalidColumnType {
+                    column_name: "manifest_references.end_row".to_string(),
+                    expected_column_type: "list of u32".to_string(),
+                })?
+                // TODO: is ok to consider it empty if null
                 .value(idx);
-            let row_to = row_to.as_primitive_opt::<UInt32Type>()?;
+            let row_to = row_to.as_primitive_opt::<UInt32Type>().ok_or(
+                IcechunkFormatError::InvalidColumnType {
+                    column_name: format!("manifest_references.end_row[{idx}]"),
+                    expected_column_type: "u32".to_string(),
+                },
+            )?;
 
             // FIXME: add extents and flags
 
-            let it = izip!(refs.iter(), row_from.iter(), row_to.iter())
-                .filter_map(|(r, f, t)| Some((r?.try_into().ok()?, f?, t?)));
+            let it = izip!(refs.iter(), row_from.iter(), row_to.iter()).map(
+                |(r, f, t)| match (r.and_then(|r| r.try_into().ok()), f, t) {
+                    (Some(r), Some(f), Some(t)) => Some((r, f, t)),
+                    _ => None,
+                },
+            );
             let res = it
+                .collect::<Option<Vec<_>>>()
+                .ok_or(IcechunkFormatError::InvalidArrayManifest {
+                    index: idx,
+                    field: "manifest_references".to_string(),
+                    message: "null or incorrect reference".to_string(),
+                })?
+                .iter()
                 .map(|(r, f, t)| ManifestRef {
-                    object_id: ObjectId(r),
-                    location: TableRegion(f, t),
+                    object_id: ObjectId(*r),
+                    location: TableRegion(*f, *t),
                     // FIXME: flags
                     flags: Flags(),
                     // FIXME: extents
                     extents: ManifestExtents(vec![]),
                 })
                 .collect();
-            Some(res)
+            Ok(res)
         } else {
-            None
+            Ok(vec![])
         }
     }
 
-    fn build_node_structure(&self, idx: usize) -> Option<NodeStructure> {
-        let node_type =
-            self.batch.column_by_name("type")?.as_string_opt::<i32>()?.value(idx);
-        let id =
-            self.batch.column_by_name("id")?.as_primitive_opt::<UInt32Type>()?.value(idx);
-        let path = self.batch.column_by_name("path")?.as_string_opt::<i32>()?.value(idx);
+    fn build_node_structure(&self, idx: usize) -> IcechunkResult<NodeStructure> {
+        let node_type = get_column(self, "type")?.string_at(idx)?;
+        let id = get_column(self, "id")?.u32_at(idx)?;
+        let path = get_column(self, "path")?.string_at(idx)?;
         let user_attributes = self.build_user_attributes(idx);
         match node_type {
-            "group" => Some(NodeStructure {
+            "group" => Ok(NodeStructure {
                 path: path.into(),
                 id,
                 user_attributes,
                 node_data: NodeData::Group,
             }),
-            "array" => Some(NodeStructure {
+            "array" => Ok(NodeStructure {
                 path: path.into(),
                 id,
                 user_attributes,
@@ -209,7 +359,10 @@ impl StructureTable {
                     self.build_manifest_refs(idx)?,
                 ),
             }),
-            _ => None,
+            _ => Err(IcechunkFormatError::InvalidNodeType {
+                index: idx,
+                node_type: node_type.to_string(),
+            }),
         }
     }
 
@@ -334,7 +487,13 @@ where
     let mut b = ListBuilder::new(BinaryBuilder::new());
     for maybe_list in coll.into_iter() {
         let it = maybe_list.map(|codecs| {
-            codecs.into_iter().map(|codec| Some(serde_json::to_vec(&codec).unwrap()))
+            codecs.into_iter().map(|codec| {
+                Some(
+                    #[allow(clippy::expect_used)]
+                    serde_json::to_vec(&codec)
+                        .expect("Invariant violation: Codecs are always serializable"),
+                )
+            })
         });
         b.append_option(it)
     }
@@ -354,7 +513,13 @@ where
     let mut b = ListBuilder::new(BinaryBuilder::new());
     for maybe_list in coll.into_iter() {
         let it = maybe_list.map(|codecs| {
-            codecs.into_iter().map(|tr| Some(serde_json::to_vec(&tr).unwrap()))
+            codecs.into_iter().map(|tr| {
+                Some(
+                    #[allow(clippy::expect_used)]
+                    serde_json::to_vec(&tr)
+                        .expect("Invariant violation: Codecs are always serializable"),
+                )
+            })
         });
         b.append_option(it)
     }
@@ -388,8 +553,9 @@ fn mk_user_attributes_ref_array<T: IntoIterator<Item = Option<ObjectId>>>(
     coll: T,
 ) -> FixedSizeBinaryArray {
     let iter = coll.into_iter().map(|oid| oid.map(|oid| oid.0));
+    #[allow(clippy::expect_used)]
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, ObjectId::SIZE as i32)
-        .expect("Bad ObjectId size")
+        .expect("Invariant violation: bad user attributes ObjectId size")
 }
 
 fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(
@@ -417,10 +583,11 @@ where
             }
             Some(manifests) => {
                 for manifest in manifests {
+                    #[allow(clippy::expect_used)]
                     ref_array
                         .values()
                         .append_value(manifest.object_id.0)
-                        .expect("Error appending to manifest reference array");
+                        .expect("Invariant violation: bad manifest ObjectId size");
                     from_row_array.values().append_value(manifest.location.0);
                     to_row_array.values().append_value(manifest.location.1);
                 }
@@ -483,10 +650,13 @@ where
     ])
 }
 
+// This is pretty awful, but Rust Try infrastructure is experimental
+pub type StructureTableResult<E> = Result<StructureTable, Result<E, ArrowError>>;
+
 // For testing only
-pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
-    coll: T,
-) -> StructureTable {
+pub fn mk_structure_table<E>(
+    coll: impl IntoIterator<Item = Result<NodeStructure, E>>,
+) -> StructureTableResult<E> {
     let mut ids = Vec::new();
     let mut types = Vec::new();
     let mut paths = Vec::new();
@@ -504,6 +674,10 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
     let mut manifest_refs_vec = Vec::new();
     // FIXME: add user_attributes_flags
     for node in coll {
+        let node = match node {
+            Ok(node) => node,
+            Err(err) => return Err(Ok(err)),
+        };
         ids.push(node.id);
         paths.push(node.path.to_string_lossy().into_owned());
         match node.user_attributes {
@@ -656,16 +830,16 @@ pub fn mk_structure_table<T: IntoIterator<Item = NodeStructure>>(
             true,
         ),
     ]));
-    let batch =
-        RecordBatch::try_new(schema, columns).expect("Error creating record batch");
-    StructureTable { batch }
+    let batch = RecordBatch::try_new(schema, columns).map_err(Err)?;
+    Ok(StructureTable { batch })
 }
 
 #[cfg(test)]
 mod strategies {
-    use crate::FillValue;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
+
+    use crate::dataset::FillValue;
 
     pub(crate) fn fill_values_vec_strategy(
     ) -> impl Strategy<Value = Vec<Option<FillValue>>> {
@@ -675,18 +849,21 @@ mod strategies {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use crate::format::IcechunkFormatError;
+
     use super::*;
-    use crate::IcechunkFormatError;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::{
         collections::HashMap,
+        convert::Infallible,
         iter::{self, zip},
     };
 
     #[test]
-    fn test_get_node() {
+    fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![10u64, 20, 30],
             data_type: DataType::Float32,
@@ -794,13 +971,16 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = mk_structure_table(nodes);
-        assert_eq!(st.get_node(&"/nonexistent".into()), None);
+        let st = mk_structure_table::<Infallible>(nodes.into_iter().map(Ok)).unwrap();
+        assert_eq!(
+            st.get_node(&"/nonexistent".into()),
+            Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })
+        );
 
         let node = st.get_node(&"/b/c".into());
         assert_eq!(
             node,
-            Some(NodeStructure {
+            Ok(NodeStructure {
                 path: "/b/c".into(),
                 id: 4,
                 user_attributes: Some(UserAttributesStructure::Inline(
@@ -812,7 +992,7 @@ mod tests {
         let node = st.get_node(&"/".into());
         assert_eq!(
             node,
-            Some(NodeStructure {
+            Ok(NodeStructure {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
@@ -822,7 +1002,7 @@ mod tests {
         let node = st.get_node(&"/b/array1".into());
         assert_eq!(
             node,
-            Some(NodeStructure {
+            Ok(NodeStructure {
                 path: "/b/array1".into(),
                 id: 5,
                 user_attributes: Some(UserAttributesStructure::Ref(UserAttributesRef {
@@ -836,7 +1016,7 @@ mod tests {
         let node = st.get_node(&"/array2".into());
         assert_eq!(
             node,
-            Some(NodeStructure {
+            Ok(NodeStructure {
                 path: "/array2".into(),
                 id: 6,
                 user_attributes: None,
@@ -846,25 +1026,29 @@ mod tests {
         let node = st.get_node(&"/b/array3".into());
         assert_eq!(
             node,
-            Some(NodeStructure {
+            Ok(NodeStructure {
                 path: "/b/array3".into(),
                 id: 7,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),
         );
+        Ok(())
     }
 
     fn decode_fill_values_array(
         dtypes: Vec<Option<DataType>>,
         array: BinaryArray,
-    ) -> Result<Vec<Option<FillValue>>, IcechunkFormatError> {
+    ) -> IcechunkResult<Vec<Option<FillValue>>> {
         zip(dtypes, array.iter())
             .map(|(dt, value)| {
                 dt.map(|dt| {
                     FillValue::from_data_type_and_value(
                         &dt,
-                        value.ok_or(IcechunkFormatError::NullFillValueError)?,
+                        value.ok_or(IcechunkFormatError::NullElement {
+                            index: 0,
+                            column_name: "unknown".to_string(),
+                        })?,
                     )
                 })
             })

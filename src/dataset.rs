@@ -5,18 +5,67 @@ use std::{
     sync::Arc,
 };
 
+pub use crate::format::manifest::ChunkPayload;
+pub use crate::format::structure::ZarrArrayMetadata;
+pub use crate::format::{ChunkIndices, Path};
+pub use crate::metadata::{
+    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
+    DimensionNames, FillValue, StorageTransformer, UserAttributes,
+};
+
+use arrow::error::ArrowError;
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
-use itertools::Either;
+use futures::{future::ready, Stream, StreamExt, TryStreamExt};
+use itertools::{Either, Itertools};
 use thiserror::Error;
 
 use crate::{
-    manifest::mk_manifests_table, structure::mk_structure_table, AddNodeError,
-    ArrayIndices, ChangeSet, ChunkInfo, ChunkPayload, ChunkRef, Dataset, DatasetConfig,
-    DeleteNodeError, Flags, GetNodeError, ManifestExtents, ManifestRef, NodeData, NodeId,
-    NodeStructure, ObjectId, Path, Storage, StorageError, TableRegion, UpdateNodeError,
-    UserAttributes, UserAttributesStructure, ZarrArrayMetadata,
+    format::{
+        manifest::{
+            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
+        },
+        structure::{
+            mk_structure_table, NodeData, NodeStructure, UserAttributesStructure,
+        },
+        Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
+    },
+    Storage, StorageError,
 };
+
+#[derive(Clone, Debug)]
+pub struct DatasetConfig {
+    // Chunks smaller than this will be stored inline in the manifst
+    pub inline_threshold_bytes: u16,
+}
+
+impl Default for DatasetConfig {
+    fn default() -> Self {
+        Self { inline_threshold_bytes: 512 }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Dataset {
+    config: DatasetConfig,
+    storage: Arc<dyn Storage + Send + Sync>,
+    structure_id: Option<ObjectId>,
+    last_node_id: Option<NodeId>,
+    change_set: ChangeSet,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+struct ChangeSet {
+    new_groups: HashMap<Path, NodeId>,
+    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
+    updated_arrays: HashMap<Path, ZarrArrayMetadata>,
+    // These paths may point to Arrays or Groups,
+    // since both Groups and Arrays support UserAttributes
+    updated_attributes: HashMap<Path, Option<UserAttributes>>,
+    // FIXME: issue with too many inline chunks kept in mem
+    set_chunks: HashMap<Path, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashMap<Path, NodeId>,
+    deleted_arrays: HashMap<Path, NodeId>,
+}
 
 impl ChangeSet {
     fn add_group(&mut self, path: Path, node_id: NodeId) {
@@ -27,31 +76,23 @@ impl ChangeSet {
         self.new_groups.get(path)
     }
 
-    fn delete_group(
-        &mut self,
-        path: Path,
-        node_id: NodeId,
-    ) -> Result<(), DeleteNodeError> {
+    fn delete_group(&mut self, path: Path, node_id: NodeId) {
         let was_new = self.new_groups.remove(&path).is_some();
         self.updated_attributes.remove(&path);
         if !was_new {
             self.deleted_groups.insert(path, node_id);
         }
-        Ok(())
     }
 
     fn add_array(&mut self, path: Path, node_id: NodeId, metadata: ZarrArrayMetadata) {
         self.new_arrays.insert(path, (node_id, metadata));
     }
 
-    fn get_array(
-        &self,
-        path: &Path,
-    ) -> Result<&(NodeId, ZarrArrayMetadata), GetNodeError> {
+    fn get_array(&self, path: &Path) -> Option<&(NodeId, ZarrArrayMetadata)> {
         if self.deleted_arrays.contains_key(path) {
-            Err(GetNodeError::NotFound(path.clone()))
+            None
         } else {
-            self.new_arrays.get(path).ok_or(GetNodeError::NotFound(path.clone()))
+            self.new_arrays.get(path)
         }
     }
 
@@ -60,11 +101,7 @@ impl ChangeSet {
         self.updated_arrays.insert(path, metadata);
     }
 
-    fn delete_array(
-        &mut self,
-        path: Path,
-        node_id: NodeId,
-    ) -> Result<(), DeleteNodeError> {
+    fn delete_array(&mut self, path: Path, node_id: NodeId) {
         // if deleting a new array created in this session, just remove the entry
         // from new_arrays
         let was_new = self.new_arrays.remove(&path).is_some();
@@ -74,7 +111,6 @@ impl ChangeSet {
         if !was_new {
             self.deleted_arrays.insert(path, node_id);
         }
-        Ok(())
     }
 
     fn get_updated_zarr_metadata(&self, path: &Path) -> Option<&ZarrArrayMetadata> {
@@ -92,7 +128,7 @@ impl ChangeSet {
     fn set_chunk_ref(
         &mut self,
         path: Path,
-        coord: ArrayIndices,
+        coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) {
         // this implementation makes delete idempotent
@@ -108,7 +144,7 @@ impl ChangeSet {
     fn get_chunk_ref(
         &self,
         path: &Path,
-        coords: &ArrayIndices,
+        coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
         self.set_chunks.get(path).and_then(|h| h.get(coords))
     }
@@ -116,7 +152,7 @@ impl ChangeSet {
     fn array_chunks_iterator(
         &self,
         path: &Path,
-    ) -> impl Iterator<Item = (&ArrayIndices, &Option<ChunkPayload>)> {
+    ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
         match self.set_chunks.get(path) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
@@ -171,6 +207,29 @@ impl DatasetBuilder {
         Dataset::new(self.config.clone(), self.storage.clone(), self.structure_id.clone())
     }
 }
+
+#[derive(Debug, Error)]
+pub enum DatasetError {
+    #[error("error contacting storage")]
+    StorageError(#[from] StorageError),
+    #[error("error in icechunk file")]
+    FormatError(#[from] IcechunkFormatError),
+    #[error("node not found at `{path}`: {message}")]
+    NotFound { path: Path, message: String },
+    #[error("there is not an array at `{node:?}`: {message}")]
+    NotAnArray { node: NodeStructure, message: String },
+    #[error("there is not a group at `{node:?}`: {message}")]
+    NotAGroup { node: NodeStructure, message: String },
+    #[error("node already exists at `{node:?}`: {message}")]
+    AlreadyExists { node: NodeStructure, message: String },
+    #[error("no changes made to the dataset")]
+    NoChangesToFlush,
+    #[error("Arrow format error `{0}`")]
+    ArrowError(#[from] ArrowError),
+}
+
+type DatasetResult<T> = Result<T, DatasetError>;
+
 /// FIXME: what do we want to do with implicit groups?
 ///
 impl Dataset {
@@ -202,29 +261,25 @@ impl Dataset {
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_group(&mut self, path: Path) -> Result<(), AddNodeError> {
-        if self.get_node(&path).await.is_err() {
-            let id = self.reserve_node_id().await;
-            self.change_set.add_group(path.clone(), id);
-            Ok(())
-        } else {
-            Err(AddNodeError::AlreadyExists(path))
+    pub async fn add_group(&mut self, path: Path) -> DatasetResult<()> {
+        match self.get_node(&path).await {
+            Err(DatasetError::NotFound { .. }) => {
+                let id = self.reserve_node_id().await?;
+                self.change_set.add_group(path.clone(), id);
+                Ok(())
+            }
+            Ok(node) => Err(DatasetError::AlreadyExists {
+                node,
+                message: "trying to add group".to_string(),
+            }),
+            Err(err) => Err(err),
         }
     }
 
-    pub async fn delete_group(&mut self, path: Path) -> Result<(), DeleteNodeError> {
-        let node = self
-            .get_node(&path)
+    pub async fn delete_group(&mut self, path: Path) -> DatasetResult<()> {
+        self.get_group(&path)
             .await
-            .map_err(|_| DeleteNodeError::NotFound(path.clone()))?;
-
-        match node.node_data {
-            NodeData::Group => {
-                self.change_set.delete_group(path, node.id)?;
-                Ok(())
-            }
-            NodeData::Array(_, _) => Err(DeleteNodeError::NotAGroup(path)),
-        }
+            .map(|node| self.change_set.delete_group(node.path, node.id))
     }
 
     /// Add an array to the store.
@@ -234,13 +289,18 @@ impl Dataset {
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
-    ) -> Result<(), AddNodeError> {
-        if self.get_node(&path).await.is_err() {
-            let id = self.reserve_node_id().await;
-            self.change_set.add_array(path, id, metadata);
-            Ok(())
-        } else {
-            Err(AddNodeError::AlreadyExists(path))
+    ) -> DatasetResult<()> {
+        match self.get_node(&path).await {
+            Err(DatasetError::NotFound { .. }) => {
+                let id = self.reserve_node_id().await?;
+                self.change_set.add_array(path, id, metadata);
+                Ok(())
+            }
+            Ok(node) => Err(DatasetError::AlreadyExists {
+                node,
+                message: "trying to add array".to_string(),
+            }),
+            Err(err) => Err(err),
         }
     }
 
@@ -251,34 +311,16 @@ impl Dataset {
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
-    ) -> Result<(), UpdateNodeError> {
-        match self
-            .get_node(&path)
+    ) -> DatasetResult<()> {
+        self.get_array(&path)
             .await
-            .map_err(|_| UpdateNodeError::NotFound(path.clone()))?
-        {
-            NodeStructure { node_data: NodeData::Array(..), .. } => {
-                self.change_set.update_array(path, metadata);
-                Ok(())
-            }
-            _ => Err(UpdateNodeError::NotAnArray(path)),
-        }
+            .map(|node| self.change_set.update_array(node.path, metadata))
     }
 
-    pub async fn delete_array(&mut self, path: Path) -> Result<(), DeleteNodeError> {
-        // TODO: add a cheaper `get_node_id_and_type`?
-        let node = self
-            .get_node(&path)
+    pub async fn delete_array(&mut self, path: Path) -> DatasetResult<()> {
+        self.get_array(&path)
             .await
-            .map_err(|_| DeleteNodeError::NotFound(path.clone()))?;
-
-        match node.node_data {
-            NodeData::Array(_, _) => {
-                self.change_set.delete_array(path, node.id)?;
-                Ok(())
-            }
-            NodeData::Group => Err(DeleteNodeError::NotAnArray(path)),
-        }
+            .map(|node| self.change_set.delete_array(node.path, node.id))
     }
 
     /// Record the write or delete of user attributes to array or group
@@ -286,10 +328,8 @@ impl Dataset {
         &mut self,
         path: Path,
         atts: Option<UserAttributes>,
-    ) -> Result<(), UpdateNodeError> {
-        self.get_node(&path)
-            .await
-            .map_err(|_| UpdateNodeError::NotFound(path.clone()))?;
+    ) -> DatasetResult<()> {
+        self.get_node(&path).await?;
         self.change_set.update_user_attributes(path, atts);
         Ok(())
     }
@@ -300,86 +340,92 @@ impl Dataset {
     pub async fn set_chunk_ref(
         &mut self,
         path: Path,
-        coord: ArrayIndices,
+        coord: ChunkIndices,
         data: Option<ChunkPayload>,
-    ) -> Result<(), UpdateNodeError> {
-        match self.get_node(&path).await {
-            Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => {
-                self.change_set.set_chunk_ref(path, coord, data);
-                Ok(())
-            }
-            Err(GetNodeError::NotFound(path)) => Err(UpdateNodeError::NotFound(path)),
-            _ => Err(UpdateNodeError::NotAnArray(path)),
-        }
+    ) -> DatasetResult<()> {
+        self.get_array(&path)
+            .await
+            .map(|node| self.change_set.set_chunk_ref(node.path, coord, data))
     }
 
-    async fn compute_last_node_id(&self) -> NodeId {
-        // FIXME: errors
+    async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
         match &self.structure_id {
-            None => 0,
-            Some(id) => self
-                .storage
-                .fetch_structure(id)
-                .await
-                // FIXME: bubble up the error
-                .ok()
-                .and_then(|structure| structure.iter().max_by_key(|s| s.id))
-                .map_or(0, |node| node.id),
+            None => Ok(0),
+            Some(id) => {
+                let mut max_id = 0;
+                for maybe_node in self.storage.fetch_structure(id).await?.iter() {
+                    match maybe_node {
+                        Ok(node) => {
+                            max_id = std::cmp::max(max_id, node.id);
+                        }
+                        Err(err) => {
+                            Err(err)?;
+                        }
+                    }
+                }
+                Ok(max_id)
+            }
         }
     }
 
-    async fn reserve_node_id(&mut self) -> NodeId {
-        let last = self.last_node_id.unwrap_or(self.compute_last_node_id().await);
+    async fn reserve_node_id(&mut self) -> DatasetResult<NodeId> {
+        let last = self.last_node_id.unwrap_or(self.compute_last_node_id().await?);
         let new = last + 1;
         self.last_node_id = Some(new);
-        new
+        Ok(new)
     }
 
-    // FIXME: add list, moves
+    // FIXME: add moves
 
-    pub async fn get_node(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+    pub async fn get_node(&self, path: &Path) -> DatasetResult<NodeStructure> {
         // We need to look for nodes in self.change_set and the structure file
-        let new_node = self.get_new_node(path);
-        if new_node.is_err() {
-            if self.change_set.deleted_groups.contains_key(path)
-                || self.change_set.deleted_arrays.contains_key(path)
-            {
-                Err(GetNodeError::NotFound(path.clone()))
-            } else {
-                self.get_existing_node(path).await
+        match self.get_new_node(path) {
+            Some(node) => Ok(node),
+            None => {
+                if self.change_set.deleted_groups.contains_key(path)
+                    || self.change_set.deleted_arrays.contains_key(path)
+                {
+                    Err(DatasetError::NotFound {
+                        path: path.clone(),
+                        message: "getting node".to_string(),
+                    })
+                } else {
+                    self.get_existing_node(path).await
+                }
             }
-        } else {
-            new_node
         }
     }
 
-    pub async fn get_array(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+    pub async fn get_array(&self, path: &Path) -> DatasetResult<NodeStructure> {
         match self.get_node(path).await {
             res @ Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => res,
-            Ok(NodeStructure { node_data: NodeData::Group, .. }) => {
-                Err(GetNodeError::NotFound(path.clone()))
-            }
+            Ok(node @ NodeStructure { .. }) => Err(DatasetError::NotAnArray {
+                node,
+                message: "getting an array".to_string(),
+            }),
             other => other,
         }
     }
 
-    pub async fn get_group(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
+    pub async fn get_group(&self, path: &Path) -> DatasetResult<NodeStructure> {
         match self.get_node(path).await {
             res @ Ok(NodeStructure { node_data: NodeData::Group, .. }) => res,
-            Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => {
-                Err(GetNodeError::NotFound(path.clone()))
-            }
+            Ok(node @ NodeStructure { .. }) => Err(DatasetError::NotAGroup {
+                node,
+                message: "getting a group".to_string(),
+            }),
             other => other,
         }
     }
 
-    async fn get_existing_node(
-        &self,
-        path: &Path,
-    ) -> Result<NodeStructure, GetNodeError> {
+    async fn get_existing_node(&self, path: &Path) -> DatasetResult<NodeStructure> {
         // An existing node is one that is present in a structure file on storage
-        let structure_id =
-            self.structure_id.as_ref().ok_or(GetNodeError::NotFound(path.clone()))?;
+        let err = || DatasetError::NotFound {
+            path: path.clone(),
+            message: "getting existing node".to_string(),
+        };
+
+        let structure_id = self.structure_id.as_ref().ok_or(err())?;
         let structure = self.storage.fetch_structure(structure_id).await?;
 
         let session_atts = self
@@ -387,7 +433,15 @@ impl Dataset {
             .get_user_attributes(path)
             .cloned()
             .map(|a| a.map(UserAttributesStructure::Inline));
-        let res = structure.get_node(path).ok_or(GetNodeError::NotFound(path.clone()))?;
+        let res = structure.get_node(path).map_err(|err| match err {
+            // A missing node here is not really a format error, so we need to
+            // generate the correct error for datasets
+            IcechunkFormatError::NodeNotFound { path } => DatasetError::NotFound {
+                path,
+                message: "existing node not found".to_string(),
+            },
+            err => DatasetError::FormatError(err),
+        })?;
         let res = NodeStructure {
             user_attributes: session_atts.unwrap_or(res.user_attributes),
             ..res
@@ -408,57 +462,51 @@ impl Dataset {
         }
     }
 
-    fn get_new_node(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
-        self.get_new_array(path).or_else(|_| self.get_new_group(path))
+    fn get_new_node(&self, path: &Path) -> Option<NodeStructure> {
+        self.get_new_array(path).or(self.get_new_group(path))
     }
 
-    fn get_new_array(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
-        self.change_set
-            .get_array(path)
-            .ok()
-            .map(|(id, meta)| {
-                let meta = self
-                    .change_set
-                    .get_updated_zarr_metadata(path)
-                    .unwrap_or(meta)
-                    .clone();
-                let atts = self.change_set.get_user_attributes(path).cloned();
-                NodeStructure {
-                    id: *id,
-                    path: path.clone(),
-                    user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
-                    // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
-                    // fetched for those arrays
-                    node_data: NodeData::Array(meta.clone(), vec![]),
-                }
-            })
-            .ok_or(GetNodeError::NotFound(path.clone()))
+    fn get_new_array(&self, path: &Path) -> Option<NodeStructure> {
+        self.change_set.get_array(path).map(|(id, meta)| {
+            let meta =
+                self.change_set.get_updated_zarr_metadata(path).unwrap_or(meta).clone();
+            let atts = self.change_set.get_user_attributes(path).cloned();
+            NodeStructure {
+                id: *id,
+                path: path.clone(),
+                user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
+                // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
+                // fetched for those arrays
+                node_data: NodeData::Array(meta.clone(), vec![]),
+            }
+        })
     }
 
-    fn get_new_group(&self, path: &Path) -> Result<NodeStructure, GetNodeError> {
-        self.change_set
-            .get_group(path)
-            .map(|id| {
-                let atts = self.change_set.get_user_attributes(path).cloned();
-                NodeStructure {
-                    id: *id,
-                    path: path.clone(),
-                    user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
-                    node_data: NodeData::Group,
-                }
-            })
-            .ok_or(GetNodeError::NotFound(path.clone()))
+    fn get_new_group(&self, path: &Path) -> Option<NodeStructure> {
+        self.change_set.get_group(path).map(|id| {
+            let atts = self.change_set.get_user_attributes(path).cloned();
+            NodeStructure {
+                id: *id,
+                path: path.clone(),
+                user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
+                node_data: NodeData::Group,
+            }
+        })
     }
 
     pub async fn get_chunk_ref(
         &self,
         path: &Path,
-        coords: &ArrayIndices,
-    ) -> Option<ChunkPayload> {
-        // FIXME: better error type
-        let node = self.get_node(path).await.ok()?;
+        coords: &ChunkIndices,
+    ) -> DatasetResult<Option<ChunkPayload>> {
+        let node = self.get_node(path).await?;
+        // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
+        // get_array should return the array data, not a node
         match node.node_data {
-            NodeData::Group => None,
+            NodeData::Group => Err(DatasetError::NotAnArray {
+                node,
+                message: "getting chunk reference".to_string(),
+            }),
             NodeData::Array(_, manifests) => {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
@@ -467,31 +515,37 @@ impl Dataset {
                 // user made in the current session
                 // If session_chunk == None, user hasn't modified the chunk in this session and we
                 // need to fallback to fetching the manifests
-                session_chunk
-                    .unwrap_or(self.get_old_chunk(manifests.as_slice(), coords).await)
+                match session_chunk {
+                    Some(res) => Ok(res),
+                    None => self.get_old_chunk(manifests.as_slice(), coords).await,
+                }
             }
         }
     }
 
-    pub async fn get_chunk(&self, path: &Path, coords: &ArrayIndices) -> Option<Bytes> {
+    pub async fn get_chunk(
+        &self,
+        path: &Path,
+        coords: &ChunkIndices,
+    ) -> DatasetResult<Option<Bytes>> {
         match self.get_chunk_ref(path, coords).await? {
-            ChunkPayload::Ref(ChunkRef { id, .. }) => {
-                // FIXME: handle error
+            Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
                 // TODO: we don't have a way to distinguish if we want to pass a range or not
-                self.storage.fetch_chunk(&id, &None).await.ok()
+                Ok(self.storage.fetch_chunk(&id, &None).await.map(Some)?)
             }
-            ChunkPayload::Inline(bytes) => Some(bytes),
+            Some(ChunkPayload::Inline(bytes)) => Ok(Some(bytes)),
             //FIXME: implement virtual fetch
-            ChunkPayload::Virtual(_) => todo!(),
+            Some(ChunkPayload::Virtual(_)) => todo!(),
+            None => Ok(None),
         }
     }
 
     pub async fn set_chunk(
         &mut self,
         path: &Path,
-        coord: &ArrayIndices,
+        coord: &ChunkIndices,
         data: Bytes,
-    ) -> Result<(), UpdateNodeError> {
+    ) -> DatasetResult<()> {
         match self.get_array(path).await {
             Ok(_) => {
                 let payload = if data.len() > self.config.inline_threshold_bytes as usize
@@ -503,60 +557,66 @@ impl Dataset {
                 self.change_set.set_chunk_ref(path.clone(), coord.clone(), Some(payload));
                 Ok(())
             }
-            Err(_) => Err(UpdateNodeError::NotFound(path.clone())),
+            Err(_) => Err(DatasetError::NotFound {
+                path: path.clone(),
+                message: "setting chunk".to_string(),
+            }),
         }
     }
 
     async fn get_old_chunk(
         &self,
         manifests: &[ManifestRef],
-        coords: &ArrayIndices,
-    ) -> Option<ChunkPayload> {
+        coords: &ChunkIndices,
+    ) -> DatasetResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
         for manifest in manifests {
             let manifest_structure =
-                self.storage.fetch_manifests(&manifest.object_id).await.ok()?;
-            if let Some(payload) = manifest_structure
+                self.storage.fetch_manifests(&manifest.object_id).await?;
+            match manifest_structure
                 .get_chunk_info(coords, &manifest.location)
                 .map(|info| info.payload)
             {
-                return Some(payload);
+                Ok(payload) => {
+                    return Ok(Some(payload));
+                }
+                Err(IcechunkFormatError::ChunkCoordinatesNotFound { .. }) => {}
+                Err(err) => return Err(err.into()),
             }
         }
-        None
+        Ok(None)
     }
 
+    /// Warning: The presence of a single error may mean multiple missing items
     async fn updated_chunk_iterator(
         &self,
-    ) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
+    ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
         match self.structure_id.as_ref() {
-            None => futures::future::Either::Left(futures::stream::empty()),
+            None => Ok(futures::future::Either::Left(futures::stream::empty())),
             Some(structure_id) => {
-                // FIXME: error handling
-                let structure = self.storage.fetch_structure(structure_id).await.unwrap();
+                let structure = self.storage.fetch_structure(structure_id).await?;
                 let nodes = futures::stream::iter(structure.iter_arc());
-                futures::future::Either::Right(
-                    nodes
-                        .then(move |node| async move {
-                            let path = node.path.clone();
-                            self.node_chunk_iterator(node)
-                                .await
-                                .map(move |ci| (path.clone(), ci))
-                        })
-                        .flatten(),
-                )
+                let res = nodes.and_then(move |node| async move {
+                    let path = node.path.clone();
+                    Ok(self
+                        .node_chunk_iterator(node)
+                        .await
+                        .map_ok(move |ci| (path.clone(), ci)))
+                });
+                Ok(futures::future::Either::Right(res.try_flatten()))
             }
         }
     }
 
+    /// Warning: The presence of a single error may mean multiple missing items
     async fn node_chunk_iterator(
         &self,
         node: NodeStructure,
-    ) -> impl Stream<Item = ChunkInfo> + '_ {
+    ) -> impl Stream<Item = DatasetResult<ChunkInfo>> + '_ {
         match node.node_data {
             NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
             NodeData::Array(_, manifests) => {
-                let new_chunk_indices: Box<HashSet<&ArrayIndices>> = Box::new(
+                let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                     self.change_set
                         .array_chunks_iterator(&node.path)
                         .map(|(idx, _)| idx)
@@ -567,10 +627,12 @@ impl Dataset {
                     .change_set
                     .array_chunks_iterator(&node.path)
                     .filter_map(move |(idx, payload)| {
-                        payload.as_ref().map(|payload| ChunkInfo {
-                            node: node.id,
-                            coord: idx.clone(),
-                            payload: payload.clone(),
+                        payload.as_ref().map(|payload| {
+                            Ok(ChunkInfo {
+                                node: node.id,
+                                coord: idx.clone(),
+                                payload: payload.clone(),
+                            })
                         })
                     });
 
@@ -584,22 +646,36 @@ impl Dataset {
                                     let manifest = self
                                         .storage
                                         .fetch_manifests(&manifest_ref.object_id)
-                                        .await
-                                        .unwrap();
+                                        .await;
+                                    match manifest {
+                                        Ok(manifest) => {
+                                            let old_chunks = manifest
+                                                .iter(
+                                                    Some(manifest_ref.location.start()),
+                                                    Some(manifest_ref.location.end()),
+                                                )
+                                                .filter_ok(move |c| {
+                                                    !new_chunk_indices.contains(&c.coord)
+                                                });
 
-                                    let old_chunks = manifest
-                                        .iter(
-                                            Some(manifest_ref.location.0),
-                                            Some(manifest_ref.location.1),
-                                        )
-                                        .filter(move |c| {
-                                            !new_chunk_indices.contains(&c.coord)
-                                        });
-
-                                    let old_chunks = self
-                                        .update_existing_chunks(path.clone(), old_chunks);
-                                    //FIXME: error handling
-                                    futures::stream::iter(old_chunks)
+                                            let old_chunks = self.update_existing_chunks(
+                                                path.clone(),
+                                                old_chunks,
+                                            );
+                                            futures::future::Either::Left(
+                                                futures::stream::iter(old_chunks)
+                                                    // convert error types
+                                                    .map_err(|e| e.into()),
+                                            )
+                                        }
+                                        // if we cannot even fetch the manifest, we generate a
+                                        // single error value.
+                                        Err(err) => futures::future::Either::Right(
+                                            futures::stream::once(ready(Err(
+                                                DatasetError::StorageError(err),
+                                            ))),
+                                        ),
+                                    }
                                 }
                             })
                             .flatten(),
@@ -609,12 +685,12 @@ impl Dataset {
         }
     }
 
-    fn update_existing_chunks<'a>(
+    fn update_existing_chunks<'a, E>(
         &'a self,
         path: Path,
-        chunks: impl Iterator<Item = ChunkInfo> + 'a,
-    ) -> impl Iterator<Item = ChunkInfo> + 'a {
-        chunks.filter_map(move |chunk| {
+        chunks: impl Iterator<Item = Result<ChunkInfo, E>> + 'a,
+    ) -> impl Iterator<Item = Result<ChunkInfo, E>> + 'a {
+        chunks.filter_map_ok(move |chunk| {
             match self.change_set.get_chunk_ref(&path, &chunk.coord) {
                 None => Some(chunk),
                 Some(new_payload) => {
@@ -628,22 +704,24 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> impl Iterator<Item = NodeStructure> + 'a {
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
         match &self.structure_id {
-            None => Either::Left(iter::empty()),
-            Some(id) => Either::Right(
+            None => Ok(Either::Left(iter::empty())),
+            Some(id) => Ok(Either::Right(
                 self.storage
                     .fetch_structure(id)
-                    .await
-                    // FIXME: bubble up the error
-                    .unwrap()
+                    .await?
                     .iter_arc()
-                    .map(move |node| {
+                    .map(|maybe_node| match maybe_node {
+                        Ok(n) => Ok(n),
+                        Err(e) => Err(e.into()),
+                    })
+                    .map_ok(move |node| {
                         let region = manifest_tracker.and_then(|t| t.region(node.id));
                         let new_manifests = region.map(|r| {
-                            if r.0 == r.1 {
+                            if r.start() == r.end() {
                                 vec![]
                             } else {
                                 vec![ManifestRef {
@@ -656,7 +734,7 @@ impl Dataset {
                         });
                         self.update_existing_node(node, new_manifests)
                     }),
-            ),
+            )),
         }
     }
 
@@ -665,15 +743,17 @@ impl Dataset {
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> impl Iterator<Item = NodeStructure> + 'a {
-        // FIXME: unwrap
         self.change_set.new_nodes().map(move |path| {
-            let node = self.get_new_node(path).unwrap();
+            // we should be able to create the full node because we
+            // know it's a new node
+            #[allow(clippy::expect_used)]
+            let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
             match node.node_data {
                 NodeData::Group => node,
                 NodeData::Array(meta, _no_manifests_yet) => {
                     let region = manifest_tracker.and_then(|t| t.region(node.id));
                     let new_manifests = region.map(|r| {
-                        if r.0 == r.1 {
+                        if r.start() == r.end() {
                             vec![]
                         } else {
                             vec![ManifestRef {
@@ -700,10 +780,11 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> impl Iterator<Item = NodeStructure> + 'a {
-        self.updated_existing_nodes(manifest_id, manifest_tracker)
-            .await
-            .chain(self.new_nodes(manifest_id, manifest_tracker))
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + 'a> {
+        Ok(self
+            .updated_existing_nodes(manifest_id, manifest_tracker)
+            .await?
+            .chain(self.new_nodes(manifest_id, manifest_tracker).map(Ok)))
     }
 
     fn update_existing_node(
@@ -739,15 +820,19 @@ impl Dataset {
         }
     }
 
-    pub async fn list_nodes(&self) -> impl Iterator<Item = NodeStructure> + '_ {
+    pub async fn list_nodes(
+        &self,
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + '_> {
         self.updated_nodes(&ObjectId::FAKE, None).await
     }
 
-    pub async fn all_chunks(&self) -> impl Stream<Item = (PathBuf, ChunkInfo)> + '_ {
-        let existing_array_chunks = self.updated_chunk_iterator().await;
+    pub async fn all_chunks(
+        &self,
+    ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
+        let existing_array_chunks = self.updated_chunk_iterator().await?;
         let new_array_chunks =
-            futures::stream::iter(self.change_set.new_arrays_chunk_iterator());
-        existing_array_chunks.chain(new_array_chunks)
+            futures::stream::iter(self.change_set.new_arrays_chunk_iterator().map(Ok));
+        Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
     /// After changes to the dasate have been made, this generates and writes to `Storage` the updated datastructures.
@@ -757,21 +842,30 @@ impl Dataset {
     ///
     /// Returns the `ObjectId` of the new structure file. It's the callers responsibility to commit
     /// this id change.
-    pub async fn flush(&mut self) -> Result<ObjectId, FlushError> {
+    pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
         let mut region_tracker = TableRegionTracker::default();
-        let all_chunks = self.all_chunks().await.map(|chunk| {
+        let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
             region_tracker.update(&chunk.1);
             chunk
         });
         let new_manifest =
-            mk_manifests_table(all_chunks.map(|(_path, chunk)| chunk)).await;
+            match mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await {
+                Ok(man) => man,
+                Err(Ok(e)) => Err(e)?,
+                Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
+            };
         let new_manifest_id = ObjectId::random();
         self.storage
             .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
             .await?;
 
-        let all_nodes = self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await;
-        let new_structure = mk_structure_table(all_nodes);
+        let all_nodes =
+            self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await?;
+        let new_structure = match mk_structure_table(all_nodes) {
+            Ok(str) => str,
+            Err(Ok(e)) => Err(e)?,
+            Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
+        };
         let new_structure_id = ObjectId::random();
         self.storage
             .write_structure(new_structure_id.clone(), Arc::new(new_structure))
@@ -790,8 +884,8 @@ impl TableRegionTracker {
     fn update(&mut self, chunk: &ChunkInfo) {
         self.0
             .entry(chunk.node)
-            .and_modify(|tr| tr.1 = self.1 + 1)
-            .or_insert(TableRegion(self.1, self.1 + 1));
+            .and_modify(|tr| tr.extend_right(1))
+            .or_insert(TableRegion::singleton(self.1));
         self.1 += 1;
     }
 
@@ -800,23 +894,12 @@ impl TableRegionTracker {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum FlushError {
-    #[error("no changes made to the dataset")]
-    NoChangesToFlush,
-    #[error("error contacting storage")]
-    StorageError(#[from] StorageError),
-}
-
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
-) -> Result<ChunkPayload, UpdateNodeError> {
+) -> DatasetResult<ChunkPayload> {
     let new_id = ObjectId::random();
-    storage
-        .write_chunk(new_id.clone(), data.clone())
-        .await
-        .map_err(UpdateNodeError::StorageError)?;
+    storage.write_chunk(new_id.clone(), data.clone()).await?;
     Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
 }
 
@@ -825,15 +908,22 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::{error::Error, num::NonZeroU64, path::PathBuf};
+    use std::{convert::Infallible, error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        manifest::mk_manifests_table, storage::InMemoryStorage, strategies::*,
-        structure::mk_structure_table, ChunkInfo, ChunkKeyEncoding, ChunkRef, ChunkShape,
-        Codec, DataType, FillValue, Flags, ManifestExtents, StorageTransformer,
-        TableRegion,
+        format::{
+            manifest::{mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents},
+            structure::mk_structure_table,
+            Flags, TableRegion,
+        },
+        metadata::{
+            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+        },
+        storage::InMemoryStorage,
+        strategies::*,
     };
 
     use super::*;
@@ -861,19 +951,21 @@ mod tests {
         prop_assert_eq!(node.unwrap(), dataset.get_node(&path).await.unwrap());
 
         // adding an existing group fails
-        prop_assert_eq!(
+        let matches = matches!(
             dataset.add_group(path.clone()).await.unwrap_err(),
-            AddNodeError::AlreadyExists(path.clone())
+            DatasetError::AlreadyExists{node, ..} if node.path == path
         );
+        prop_assert!(matches);
 
         // deleting the added group must succeed
         prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
 
         // deleting twice must fail
-        prop_assert_eq!(
+        let matches = matches!(
             dataset.delete_group(path.clone()).await.unwrap_err(),
-            DeleteNodeError::NotFound(path.clone())
+            DatasetError::NotFound{path: reported_path, ..} if reported_path == path
         );
+        prop_assert!(matches);
 
         // getting a deleted group must fail
         prop_assert!(dataset.get_node(&path).await.is_err());
@@ -901,10 +993,11 @@ mod tests {
         prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
 
         // deleting twice must fail
-        prop_assert_eq!(
+        let matches = matches!(
             dataset.delete_array(path.clone()).await.unwrap_err(),
-            DeleteNodeError::NotFound(path.clone())
+            DatasetError::NotFound{path: reported_path, ..} if reported_path == path
         );
+        prop_assert!(matches);
 
         // adding again must succeed
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
@@ -921,26 +1014,31 @@ mod tests {
     ) {
         // adding a group at an existing array node must fail
         prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
-        prop_assert_eq!(
+        let matches = matches!(
             dataset.add_group(path.clone()).await.unwrap_err(),
-            AddNodeError::AlreadyExists(path.clone())
+            DatasetError::AlreadyExists{node, ..} if node.path == path
         );
-        prop_assert_eq!(
+        prop_assert!(matches);
+
+        let matches = matches!(
             dataset.delete_group(path.clone()).await.unwrap_err(),
-            DeleteNodeError::NotAGroup(path.clone())
+            DatasetError::NotAGroup{node, ..} if node.path == path
         );
+        prop_assert!(matches);
         prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
 
         // adding an array at an existing group node must fail
         prop_assert!(dataset.add_group(path.clone()).await.is_ok());
-        prop_assert_eq!(
+        let matches = matches!(
             dataset.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
-            AddNodeError::AlreadyExists(path.clone())
+            DatasetError::AlreadyExists{node, ..} if node.path == path
         );
-        prop_assert_eq!(
+        prop_assert!(matches);
+        let matches = matches!(
             dataset.delete_array(path.clone()).await.unwrap_err(),
-            DeleteNodeError::NotAnArray(path.clone())
+            DatasetError::NotAnArray{node, ..} if node.path == path
         );
+        prop_assert!(matches);
         prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
     }
 
@@ -951,7 +1049,7 @@ mod tests {
         let array_id = 2;
         let chunk1 = ChunkInfo {
             node: array_id,
-            coord: ArrayIndices(vec![0, 0, 0]),
+            coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
                 offset: 0,
@@ -961,16 +1059,17 @@ mod tests {
 
         let chunk2 = ChunkInfo {
             node: array_id,
-            coord: ArrayIndices(vec![0, 0, 1]),
+            coord: ChunkIndices(vec![0, 0, 1]),
             payload: ChunkPayload::Inline("hello".into()),
         };
 
         let manifest = Arc::new(
-            mk_manifests_table(futures::stream::iter(vec![
-                chunk1.clone(),
-                chunk2.clone(),
+            mk_manifests_table::<Infallible>(futures::stream::iter(vec![
+                Ok(chunk1.clone()),
+                Ok(chunk2.clone()),
             ]))
-            .await,
+            .await
+            .unwrap(),
         );
         let manifest_id = ObjectId::random();
         storage.write_manifests(manifest_id.clone(), manifest).await?;
@@ -998,29 +1097,30 @@ mod tests {
         };
         let manifest_ref = ManifestRef {
             object_id: manifest_id,
-            location: TableRegion(0, 2),
+            location: TableRegion::new(0, 2).unwrap(),
             flags: Flags(),
             extents: ManifestExtents(vec![]),
         };
         let array1_path: PathBuf = "/array1".to_string().into();
         let nodes = vec![
-            NodeStructure {
+            Ok(NodeStructure {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
-            },
-            NodeStructure {
+            }),
+            Ok(NodeStructure {
                 path: array1_path.clone(),
                 id: array_id,
                 user_attributes: Some(UserAttributesStructure::Inline(
                     UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
                 )),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
-            },
+            }),
         ];
 
-        let structure = Arc::new(mk_structure_table(nodes.clone()));
+        let structure =
+            Arc::new(mk_structure_table::<Infallible>(nodes.clone()).unwrap());
         let structure_id = ObjectId::random();
         storage.write_structure(structure_id.clone(), structure).await?;
         let mut ds = Dataset::update(Arc::new(storage), structure_id)
@@ -1028,8 +1128,8 @@ mod tests {
             .build();
 
         // retrieve the old array node
-        let node = ds.get_node(&array1_path).await;
-        assert_eq!(nodes.get(1).unwrap(), node.as_ref().unwrap());
+        let node = ds.get_node(&array1_path).await?;
+        assert_eq!(nodes.get(1).unwrap().as_ref().unwrap(), &node);
 
         let group_name = "/tbd-group".to_string();
         ds.add_group(group_name.clone().into()).await?;
@@ -1097,16 +1197,16 @@ mod tests {
 
         ds.set_chunk(
             &new_array_path,
-            &ArrayIndices(vec![0]),
+            &ChunkIndices(vec![0]),
             Bytes::copy_from_slice(b"foo"),
         )
         .await?;
 
-        let chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0])).await;
+        let chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
         assert_eq!(chunk, Some(ChunkPayload::Inline("foo".into())));
 
         // retrieve a non initialized chunk of the new array
-        let non_chunk = ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![1])).await;
+        let non_chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
         assert_eq!(non_chunk, None);
 
         // update old array use attriutes and check them
@@ -1139,9 +1239,9 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        ds.set_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0]), data.clone()).await?;
+        ds.set_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), data.clone()).await?;
 
-        let chunk = ds.get_chunk(&array1_path, &ArrayIndices(vec![0, 0, 0])).await;
+        let chunk = ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0])).await?;
         assert_eq!(chunk, Some(data));
 
         let path: Path = "/group/array2".into();
@@ -1183,27 +1283,27 @@ mod tests {
         change_set.add_array("foo/baz".into(), 2, zarr_meta);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk_ref("foo/bar".into(), ArrayIndices(vec![0, 1]), None);
+        change_set.set_chunk_ref("foo/bar".into(), ChunkIndices(vec![0, 1]), None);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
             "foo/bar".into(),
-            ArrayIndices(vec![1, 0]),
+            ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
         );
         change_set.set_chunk_ref(
             "foo/bar".into(),
-            ArrayIndices(vec![1, 1]),
+            ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
         );
         change_set.set_chunk_ref(
             "foo/baz".into(),
-            ArrayIndices(vec![0]),
+            ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
         );
         change_set.set_chunk_ref(
             "foo/baz".into(),
-            ArrayIndices(vec![1]),
+            ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
         );
 
@@ -1217,7 +1317,7 @@ mod tests {
                     "foo/baz".into(),
                     ChunkInfo {
                         node: 2,
-                        coord: ArrayIndices(vec![0]),
+                        coord: ChunkIndices(vec![0]),
                         payload: ChunkPayload::Inline("baz1".into()),
                     },
                 ),
@@ -1225,7 +1325,7 @@ mod tests {
                     "foo/baz".into(),
                     ChunkInfo {
                         node: 2,
-                        coord: ArrayIndices(vec![1]),
+                        coord: ChunkIndices(vec![1]),
                         payload: ChunkPayload::Inline("baz2".into()),
                     },
                 ),
@@ -1233,7 +1333,7 @@ mod tests {
                     "foo/bar".into(),
                     ChunkInfo {
                         node: 1,
-                        coord: ArrayIndices(vec![1, 0]),
+                        coord: ChunkIndices(vec![1, 0]),
                         payload: ChunkPayload::Inline("bar1".into()),
                     },
                 ),
@@ -1241,7 +1341,7 @@ mod tests {
                     "foo/bar".into(),
                     ChunkInfo {
                         node: 1,
-                        coord: ArrayIndices(vec![1, 1]),
+                        coord: ChunkIndices(vec![1, 1]),
                         payload: ChunkPayload::Inline("bar2".into()),
                     },
                 ),
@@ -1313,7 +1413,7 @@ mod tests {
         // we set a chunk in a new array
         ds.set_chunk_ref(
             new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
@@ -1347,14 +1447,14 @@ mod tests {
             }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
         ));
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("hello".into()))
         );
 
         // we modify a chunk in an existing array
         ds.set_chunk_ref(
             new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![0, 0, 0]),
             Some(ChunkPayload::Inline("bye".into())),
         )
         .await?;
@@ -1362,23 +1462,23 @@ mod tests {
         // we add a new chunk in an existing array
         ds.set_chunk_ref(
             new_array_path.clone(),
-            ArrayIndices(vec![0, 0, 1]),
+            ChunkIndices(vec![0, 0, 1]),
             Some(ChunkPayload::Inline("new chunk".into())),
         )
         .await?;
 
         let previous_structure_id = ds.flush().await?;
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
 
         // we delete a chunk
-        ds.set_chunk_ref(new_array_path.clone(), ArrayIndices(vec![0, 0, 1]), None)
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
             .await?;
 
         let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
@@ -1396,11 +1496,11 @@ mod tests {
         let ds = Dataset::update(Arc::clone(&storage), structure_id).build();
 
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             None
         );
         assert!(matches!(
@@ -1418,11 +1518,11 @@ mod tests {
         //test the previous version is still alive
         let ds = Dataset::update(Arc::clone(&storage), previous_structure_id).build();
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 0])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
         );
         assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ArrayIndices(vec![0, 0, 1])).await,
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
 
@@ -1431,8 +1531,10 @@ mod tests {
 
     #[cfg(test)]
     mod state_machine_test {
+        use crate::format::structure::NodeData;
+        use crate::format::Path;
         use crate::storage::InMemoryStorage;
-        use crate::{NodeData, Path, ZarrArrayMetadata};
+        use crate::Dataset;
         use futures::Future;
         // use futures::Future;
         use proptest::prelude::*;
@@ -1446,9 +1548,9 @@ mod tests {
         use std::sync::Arc;
         use tokio::runtime::Runtime;
 
-        use crate::Dataset;
         use proptest::test_runner::Config;
 
+        use super::ZarrArrayMetadata;
         use super::{node_paths, zarr_array_metadata};
 
         #[derive(Clone, Debug)]
