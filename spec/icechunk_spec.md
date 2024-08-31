@@ -129,7 +129,6 @@ The state file is a JSON file with the following JSON schema:
 | id | YES | str UID | A unique identifier for the store |
 | generation | YES | int | An integer which must be incremented whenever the state file is updated |
 | store_root | YES | str | A URI which points to the root location of the store in object storage. | 
-| callback_url NO | str | An HTTP url which should receive the commit callback. |
 | snapshots | YES | array[snapshot] | A list of all of the snapshots. |
 | refs | NO | mapping[reference] | A mapping of references (string names) to snapshots |
 
@@ -171,11 +170,6 @@ corresponding to the state file `00000000.json`.
 To provide consistent isolation between commits, only one client must be allowed to create a state file.
 This is possible on all object stores that support a "conditional put" operation in which a request to
 create a new object only succeeds if the object does not already exist.
-
-Once a new state file has been written, earlier state files can safely be removed.
-[TODO: this is not quite true.
-There is a potential concurrency bug if one client gets multiple generations ahead of another
-and then removes earlier state files. The other client (behind) will not see the intermediate state files and think its commit succeeded.]
 
 ### Structure Files
 
@@ -298,13 +292,6 @@ Chunk files can be:
 - Other file types (e.g. NetCDF, HDF5) which contain Zarr-compatible chunks
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
-
-## Commit Callbacks
-
-Upon a successful commit, the Icechunk protocol includes an optional HTTP callback.
-The callback is an HTTP URL to which the client issues a POST command containing the contents
-of the committed state file.
-This mechanism allows for synchronization with external services, catalogs, etc.
 
 ## Algorithms
 
