@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "icechunk"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+dependencies = [
+    "zarr==3.0.0a1"
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "icechunk._icechunk_python"
+python-source = "python"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

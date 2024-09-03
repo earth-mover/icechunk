@@ -281,14 +281,14 @@ impl Store {
 
     pub async fn list(
         &self,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + '_> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + '_ + Send> {
         self.list_prefix("/").await
     }
 
     pub async fn list_prefix<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         let meta = self.list_metadata_prefix(prefix).await?;
@@ -299,7 +299,7 @@ impl Store {
     pub async fn list_dir<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
