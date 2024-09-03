@@ -7,10 +7,12 @@ use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::StreamExt;
 use object_store::{
-    buffered::BufWriter, local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, ObjectStore
+    buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
+    path::Path as ObjectPath, ObjectStore,
 };
 use parquet::arrow::{
-    async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder
+    async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
+    AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
 };
 
 use crate::format::{
@@ -94,7 +96,10 @@ impl ObjectStorage {
     ) -> Result<(), StorageError> {
         // defaults are concurrency=8, buffer capacity=10MB
         // TODO: allow configuring these
-        let writer = ParquetObjectWriter::from_buf_writer(BufWriter::new(Arc::clone(&self.store), path.clone()));
+        let writer = ParquetObjectWriter::from_buf_writer(BufWriter::new(
+            Arc::clone(&self.store),
+            path.clone(),
+        ));
         let mut writer = AsyncArrowWriter::try_new(writer, batch.schema(), None)?;
         writer.write(batch).await?;
         writer.close().await?;
