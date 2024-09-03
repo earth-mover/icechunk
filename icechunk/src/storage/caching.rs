@@ -2,6 +2,7 @@ use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use quick_cache::{
     sync::{Cache, DefaultLifecycle},
     DefaultHashBuilder, OptionsBuilder, Weighter,
@@ -12,7 +13,7 @@ use crate::format::{
     ChunkOffset, ObjectId,
 };
 
-use super::{Storage, StorageError};
+use super::{Storage, StorageError, StorageResult};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum CacheKey {
@@ -196,6 +197,22 @@ impl Storage for MemCachingStorage {
         self.cache.insert(CacheKey::Chunk(id, None), CacheValue::Chunk(bytes));
         Ok(())
     }
+
+    async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
+        self.backend.get_ref(ref_key).await
+    }
+
+    async fn ref_names(&self) -> StorageResult<Vec<String>> {
+        self.backend.ref_names().await
+    }
+
+    async fn write_ref(&self, ref_key: &str, bytes: Bytes) -> StorageResult<()> {
+        self.backend.write_ref(ref_key, bytes).await
+    }
+
+    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+        self.backend.ref_versions(ref_name).await
+    }
 }
 
 #[cfg(test)]
@@ -210,7 +227,7 @@ mod test {
     use itertools::Itertools;
 
     use super::*;
-    use crate::storage::{in_memory::InMemoryStorage, logging::LoggingStorage, Storage};
+    use crate::storage::{logging::LoggingStorage, ObjectStorage, Storage};
 
     fn make_record_batch(data: Vec<i32>) -> RecordBatch {
         let id_array = Int32Array::from(data);
@@ -221,7 +238,8 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_caches() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+        let backend: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store());
 
         let pre_existing_id = ObjectId::random();
         let pre_exiting_table =
@@ -268,7 +286,8 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+        let backend: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store());
 
         let id1 = ObjectId::random();
         let table1 = Arc::new(SnapshotTable { batch: make_record_batch(vec![1, 2, 3]) });
@@ -284,8 +303,8 @@ mod test {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let caching = MemCachingStorage::new(
             Arc::clone(&logging_c),
-            // the cache can only fit 2 tables
-            2 * table1.batch.get_array_memory_size() as u64,
+            // the cache can only fit 2 tables. TODO: This number was manually tuned
+            300,
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2

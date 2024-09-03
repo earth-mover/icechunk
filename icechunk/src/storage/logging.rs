@@ -5,8 +5,9 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 
-use super::{Storage, StorageError};
+use super::{Storage, StorageError, StorageResult};
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
     ChunkOffset, ObjectId,
@@ -104,5 +105,21 @@ impl Storage for LoggingStorage {
 
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id, bytes).await
+    }
+
+    async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
+        self.backend.get_ref(ref_key).await
+    }
+
+    async fn ref_names(&self) -> StorageResult<Vec<String>> {
+        self.backend.ref_names().await
+    }
+
+    async fn write_ref(&self, ref_key: &str, bytes: Bytes) -> StorageResult<()> {
+        self.backend.write_ref(ref_key, bytes).await
+    }
+
+    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+        self.backend.ref_versions(ref_name).await
     }
 }
