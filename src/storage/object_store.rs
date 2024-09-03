@@ -7,10 +7,12 @@ use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::StreamExt;
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, ObjectStore,
+    buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
+    path::Path as ObjectPath, ObjectStore,
 };
 use parquet::arrow::{
-    async_reader::ParquetObjectReader, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
+    async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
+    AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
 };
 
 use crate::format::{
@@ -92,14 +94,15 @@ impl ObjectStorage {
         path: &ObjectPath,
         batch: &RecordBatch,
     ) -> Result<(), StorageError> {
-        let mut buffer = Vec::new();
-        let mut writer = AsyncArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
+        // defaults are concurrency=8, buffer capacity=10MB
+        // TODO: allow configuring these
+        let writer = ParquetObjectWriter::from_buf_writer(BufWriter::new(
+            Arc::clone(&self.store),
+            path.clone(),
+        ));
+        let mut writer = AsyncArrowWriter::try_new(writer, batch.schema(), None)?;
         writer.write(batch).await?;
         writer.close().await?;
-
-        // TODO: find object_store streaming interface
-        let payload = object_store::PutPayload::from(buffer);
-        self.store.put(path, payload).await?;
         Ok(())
     }
 }
@@ -238,8 +241,8 @@ mod tests {
         for store in [
             ObjectStorage::new_in_memory_store(),
             // FIXME: figure out local and minio tests on CI
-            // ObjectStorage::new_local_store(&prefix.into()).unwrap(),
-            // ObjectStorage::new_s3_store_from_env("testbucket".to_string()).unwrap(),
+            // ObjectStorage::new_local_store(&prefix.clone().into()).unwrap(),
+            // ObjectStorage::new_s3_store_from_env("testbucket".to_string(), prefix.clone()).unwrap(),
             // ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
             //     .unwrap(),
         ] {
