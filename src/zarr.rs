@@ -473,7 +473,7 @@ enum Key {
 impl Key {
     const ROOT_KEY: &'static str = "zarr.json";
     const METADATA_SUFFIX: &'static str = "/zarr.json";
-    const CHUNK_COORD_INFIX: &'static str = "/c";
+    const CHUNK_COORD_PREFIX: &'static str = "c";
 
     fn parse(key: &str) -> Result<Self, StoreError> {
         fn parse_chunk(key: &str) -> Result<Key, StoreError> {
@@ -483,7 +483,8 @@ impl Key {
                     coords: ChunkIndices(vec![]),
                 });
             }
-            if let Some((path, coords)) = key.rsplit_once(Key::CHUNK_COORD_INFIX) {
+            if let Some((path, coords)) = key.rsplit_once(Key::CHUNK_COORD_PREFIX) {
+                let path = path.strip_suffix('/').unwrap_or(path);
                 if coords.is_empty() {
                     Ok(Key::Chunk {
                         node_path: ["/", path].iter().collect(),
@@ -820,6 +821,10 @@ mod tests {
         assert!(matches!(
             Key::parse("c"),
             Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/") && coords == ChunkIndices(vec![])
+        ));
+        assert!(matches!(
+            Key::parse("c/0/0"),
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/") && coords == ChunkIndices(vec![0,0])
         ));
     }
 
