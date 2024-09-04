@@ -31,7 +31,7 @@ pub struct UserAttributesRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UserAttributesStructure {
+pub enum UserAttributesSnapshot {
     Inline(UserAttributes),
     Ref(UserAttributesRef),
 }
@@ -61,14 +61,14 @@ pub enum NodeData {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct NodeStructure {
+pub struct NodeSnapshot {
     pub id: NodeId,
     pub path: Path,
-    pub user_attributes: Option<UserAttributesStructure>,
+    pub user_attributes: Option<UserAttributesSnapshot>,
     pub node_data: NodeData,
 }
 
-impl NodeStructure {
+impl NodeSnapshot {
     pub fn node_type(&self) -> NodeType {
         match &self.node_data {
             NodeData::Group => NodeType::Group,
@@ -78,18 +78,18 @@ impl NodeStructure {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct StructureTable {
+pub struct SnapshotTable {
     pub batch: RecordBatch,
 }
 
-impl BatchLike for StructureTable {
+impl BatchLike for SnapshotTable {
     fn get_batch(&self) -> &RecordBatch {
         &self.batch
     }
 }
 
-impl StructureTable {
-    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeStructure> {
+impl SnapshotTable {
+    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
         // FIXME: optimize
         let paths: &StringArray = get_column(self, "path")?.as_string()?;
         let needle = path
@@ -99,20 +99,20 @@ impl StructureTable {
             .iter()
             .position(|s| s == Some(needle))
             .ok_or(IcechunkFormatError::NodeNotFound { path: path.clone() })?;
-        self.build_node_structure(idx)
+        self.build_node_snapshot(idx)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeStructure>> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + '_ {
         let max = self.batch.num_rows();
-        (0..max).map(|idx| self.build_node_structure(idx))
+        (0..max).map(|idx| self.build_node_snapshot(idx))
     }
 
     // FIXME: do we still need this method?
     pub fn iter_arc(
         self: Arc<Self>,
-    ) -> impl Iterator<Item = IcechunkResult<NodeStructure>> {
+    ) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> {
         let max = self.batch.num_rows();
-        (0..max).map(move |idx| self.build_node_structure(idx))
+        (0..max).map(move |idx| self.build_node_snapshot(idx))
     }
 
     fn build_zarr_array_metadata(&self, idx: usize) -> IcechunkResult<ZarrArrayMetadata> {
@@ -338,19 +338,19 @@ impl StructureTable {
         }
     }
 
-    fn build_node_structure(&self, idx: usize) -> IcechunkResult<NodeStructure> {
+    fn build_node_snapshot(&self, idx: usize) -> IcechunkResult<NodeSnapshot> {
         let node_type = get_column(self, "type")?.string_at(idx)?;
         let id = get_column(self, "id")?.u32_at(idx)?;
         let path = get_column(self, "path")?.string_at(idx)?;
         let user_attributes = self.build_user_attributes(idx);
         match node_type {
-            "group" => Ok(NodeStructure {
+            "group" => Ok(NodeSnapshot {
                 path: path.into(),
                 id,
                 user_attributes,
                 node_data: NodeData::Group,
             }),
-            "array" => Ok(NodeStructure {
+            "array" => Ok(NodeSnapshot {
                 path: path.into(),
                 id,
                 user_attributes,
@@ -366,19 +366,19 @@ impl StructureTable {
         }
     }
 
-    fn build_user_attributes(&self, idx: usize) -> Option<UserAttributesStructure> {
+    fn build_user_attributes(&self, idx: usize) -> Option<UserAttributesSnapshot> {
         let inline =
             self.batch.column_by_name("user_attributes")?.as_binary_opt::<i32>()?;
         if inline.is_valid(idx) {
             // FIXME: error handling
             UserAttributes::try_new(inline.value(idx))
                 .ok()
-                .map(UserAttributesStructure::Inline)
+                .map(UserAttributesSnapshot::Inline)
         } else {
             self.build_user_attributes_ref(idx)
         }
     }
-    fn build_user_attributes_ref(&self, idx: usize) -> Option<UserAttributesStructure> {
+    fn build_user_attributes_ref(&self, idx: usize) -> Option<UserAttributesSnapshot> {
         let atts_ref = self
             .batch
             .column_by_name("user_attributes_ref")?
@@ -393,7 +393,7 @@ impl StructureTable {
             let location = atts_row.value(idx);
             // FIXME: flags
             let flags = Flags();
-            Some(UserAttributesStructure::Ref(UserAttributesRef {
+            Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                 object_id,
                 location,
                 flags,
@@ -651,12 +651,12 @@ where
 }
 
 // This is pretty awful, but Rust Try infrastructure is experimental
-pub type StructureTableResult<E> = Result<StructureTable, Result<E, ArrowError>>;
+pub type SnapshotTableResult<E> = Result<SnapshotTable, Result<E, ArrowError>>;
 
 // For testing only
-pub fn mk_structure_table<E>(
-    coll: impl IntoIterator<Item = Result<NodeStructure, E>>,
-) -> StructureTableResult<E> {
+pub fn mk_snapshot_table<E>(
+    coll: impl IntoIterator<Item = Result<NodeSnapshot, E>>,
+) -> SnapshotTableResult<E> {
     let mut ids = Vec::new();
     let mut types = Vec::new();
     let mut paths = Vec::new();
@@ -681,12 +681,12 @@ pub fn mk_structure_table<E>(
         ids.push(node.id);
         paths.push(node.path.to_string_lossy().into_owned());
         match node.user_attributes {
-            Some(UserAttributesStructure::Inline(atts)) => {
+            Some(UserAttributesSnapshot::Inline(atts)) => {
                 user_attributes_ref.push(None);
                 user_attributes_row.push(None);
                 user_attributes_vec.push(Some(atts));
             }
-            Some(UserAttributesStructure::Ref(UserAttributesRef {
+            Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                 object_id,
                 location,
                 flags: _flags,
@@ -831,7 +831,7 @@ pub fn mk_structure_table<E>(
         ),
     ]));
     let batch = RecordBatch::try_new(schema, columns).map_err(Err)?;
-    Ok(StructureTable { batch })
+    Ok(SnapshotTable { batch })
 }
 
 #[cfg(test)]
@@ -919,36 +919,36 @@ mod tests {
 
         let oid = ObjectId::random();
         let nodes = vec![
-            NodeStructure {
+            NodeSnapshot {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
-            NodeStructure {
+            NodeSnapshot {
                 path: "/a".into(),
                 id: 2,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
-            NodeStructure {
+            NodeSnapshot {
                 path: "/b".into(),
                 id: 3,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
-            NodeStructure {
+            NodeSnapshot {
                 path: "/b/c".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline(
+                user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
                 node_data: NodeData::Group,
             },
-            NodeStructure {
+            NodeSnapshot {
                 path: "/b/array1".into(),
                 id: 5,
-                user_attributes: Some(UserAttributesStructure::Ref(UserAttributesRef {
+                user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid.clone(),
                     location: 42,
                     flags: Flags(),
@@ -958,20 +958,20 @@ mod tests {
                     vec![man_ref1.clone(), man_ref2.clone()],
                 ),
             },
-            NodeStructure {
+            NodeSnapshot {
                 path: "/array2".into(),
                 id: 6,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             },
-            NodeStructure {
+            NodeSnapshot {
                 path: "/b/array3".into(),
                 id: 7,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = mk_structure_table::<Infallible>(nodes.into_iter().map(Ok)).unwrap();
+        let st = mk_snapshot_table::<Infallible>(nodes.into_iter().map(Ok)).unwrap();
         assert_eq!(
             st.get_node(&"/nonexistent".into()),
             Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })
@@ -980,10 +980,10 @@ mod tests {
         let node = st.get_node(&"/b/c".into());
         assert_eq!(
             node,
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: "/b/c".into(),
                 id: 4,
-                user_attributes: Some(UserAttributesStructure::Inline(
+                user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
                 node_data: NodeData::Group,
@@ -992,7 +992,7 @@ mod tests {
         let node = st.get_node(&"/".into());
         assert_eq!(
             node,
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
@@ -1002,10 +1002,10 @@ mod tests {
         let node = st.get_node(&"/b/array1".into());
         assert_eq!(
             node,
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: "/b/array1".into(),
                 id: 5,
-                user_attributes: Some(UserAttributesStructure::Ref(UserAttributesRef {
+                user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid,
                     location: 42,
                     flags: Flags(),
@@ -1016,7 +1016,7 @@ mod tests {
         let node = st.get_node(&"/array2".into());
         assert_eq!(
             node,
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: "/array2".into(),
                 id: 6,
                 user_attributes: None,
@@ -1026,7 +1026,7 @@ mod tests {
         let node = st.get_node(&"/b/array3".into());
         assert_eq!(
             node,
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: "/b/array3".into(),
                 id: 7,
                 user_attributes: None,

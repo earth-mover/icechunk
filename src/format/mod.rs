@@ -12,7 +12,7 @@ use crate::metadata::DataType;
 pub mod arrow;
 pub mod attributes;
 pub mod manifest;
-pub mod structure;
+pub mod snapshot;
 
 pub type Path = PathBuf;
 

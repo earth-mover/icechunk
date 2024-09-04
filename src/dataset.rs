@@ -5,12 +5,12 @@ use std::{
     sync::Arc,
 };
 
-pub use crate::format::manifest::ChunkPayload;
-pub use crate::format::structure::ZarrArrayMetadata;
-pub use crate::format::{ChunkIndices, Path};
-pub use crate::metadata::{
-    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
-    DimensionNames, FillValue, StorageTransformer, UserAttributes,
+pub use crate::{
+    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
+    metadata::{
+        ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
+        DimensionNames, FillValue, StorageTransformer, UserAttributes,
+    },
 };
 
 use arrow::error::ArrowError;
@@ -24,9 +24,7 @@ use crate::{
         manifest::{
             mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
         },
-        structure::{
-            mk_structure_table, NodeData, NodeStructure, UserAttributesStructure,
-        },
+        snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
         Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
     },
     Storage, StorageError,
@@ -48,7 +46,7 @@ impl Default for DatasetConfig {
 pub struct Dataset {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-    structure_id: Option<ObjectId>,
+    snapshot_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
 }
@@ -187,15 +185,15 @@ impl ChangeSet {
 pub struct DatasetBuilder {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-    structure_id: Option<ObjectId>,
+    snapshot_id: Option<ObjectId>,
 }
 
 impl DatasetBuilder {
     fn new(
         storage: Arc<dyn Storage + Send + Sync>,
-        structure_id: Option<ObjectId>,
+        snapshot_id: Option<ObjectId>,
     ) -> Self {
-        Self { config: DatasetConfig::default(), structure_id, storage }
+        Self { config: DatasetConfig::default(), snapshot_id, storage }
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
@@ -204,7 +202,7 @@ impl DatasetBuilder {
     }
 
     pub fn build(&self) -> Dataset {
-        Dataset::new(self.config.clone(), self.storage.clone(), self.structure_id.clone())
+        Dataset::new(self.config.clone(), self.storage.clone(), self.snapshot_id.clone())
     }
 }
 
@@ -217,11 +215,11 @@ pub enum DatasetError {
     #[error("node not found at `{path}`: {message}")]
     NotFound { path: Path, message: String },
     #[error("there is not an array at `{node:?}`: {message}")]
-    NotAnArray { node: NodeStructure, message: String },
+    NotAnArray { node: NodeSnapshot, message: String },
     #[error("there is not a group at `{node:?}`: {message}")]
-    NotAGroup { node: NodeStructure, message: String },
+    NotAGroup { node: NodeSnapshot, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
-    AlreadyExists { node: NodeStructure, message: String },
+    AlreadyExists { node: NodeSnapshot, message: String },
     #[error("no changes made to the dataset")]
     NoChangesToFlush,
     #[error("Arrow format error `{0}`")]
@@ -239,18 +237,18 @@ impl Dataset {
 
     pub fn update(
         storage: Arc<dyn Storage + Send + Sync>,
-        previous_version_structure_id: ObjectId,
+        previous_version_snapshot_id: ObjectId,
     ) -> DatasetBuilder {
-        DatasetBuilder::new(storage, Some(previous_version_structure_id))
+        DatasetBuilder::new(storage, Some(previous_version_snapshot_id))
     }
 
     fn new(
         config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-        previous_version_structure_id: Option<ObjectId>,
+        previous_version_snapshot_id: Option<ObjectId>,
     ) -> Self {
         Dataset {
-            structure_id: previous_version_structure_id,
+            snapshot_id: previous_version_snapshot_id,
             config,
             storage,
             last_node_id: None,
@@ -349,11 +347,11 @@ impl Dataset {
     }
 
     async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
-        match &self.structure_id {
+        match &self.snapshot_id {
             None => Ok(0),
             Some(id) => {
                 let mut max_id = 0;
-                for maybe_node in self.storage.fetch_structure(id).await?.iter() {
+                for maybe_node in self.storage.fetch_snapshot(id).await?.iter() {
                     match maybe_node {
                         Ok(node) => {
                             max_id = std::cmp::max(max_id, node.id);
@@ -377,8 +375,8 @@ impl Dataset {
 
     // FIXME: add moves
 
-    pub async fn get_node(&self, path: &Path) -> DatasetResult<NodeStructure> {
-        // We need to look for nodes in self.change_set and the structure file
+    pub async fn get_node(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
+        // We need to look for nodes in self.change_set and the snapshot file
         match self.get_new_node(path) {
             Some(node) => Ok(node),
             None => {
@@ -396,10 +394,10 @@ impl Dataset {
         }
     }
 
-    pub async fn get_array(&self, path: &Path) -> DatasetResult<NodeStructure> {
+    pub async fn get_array(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
         match self.get_node(path).await {
-            res @ Ok(NodeStructure { node_data: NodeData::Array(..), .. }) => res,
-            Ok(node @ NodeStructure { .. }) => Err(DatasetError::NotAnArray {
+            res @ Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => res,
+            Ok(node @ NodeSnapshot { .. }) => Err(DatasetError::NotAnArray {
                 node,
                 message: "getting an array".to_string(),
             }),
@@ -407,10 +405,10 @@ impl Dataset {
         }
     }
 
-    pub async fn get_group(&self, path: &Path) -> DatasetResult<NodeStructure> {
+    pub async fn get_group(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
         match self.get_node(path).await {
-            res @ Ok(NodeStructure { node_data: NodeData::Group, .. }) => res,
-            Ok(node @ NodeStructure { .. }) => Err(DatasetError::NotAGroup {
+            res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
+            Ok(node @ NodeSnapshot { .. }) => Err(DatasetError::NotAGroup {
                 node,
                 message: "getting a group".to_string(),
             }),
@@ -418,22 +416,22 @@ impl Dataset {
         }
     }
 
-    async fn get_existing_node(&self, path: &Path) -> DatasetResult<NodeStructure> {
-        // An existing node is one that is present in a structure file on storage
+    async fn get_existing_node(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
+        // An existing node is one that is present in a Snapshot file on storage
         let err = || DatasetError::NotFound {
             path: path.clone(),
             message: "getting existing node".to_string(),
         };
 
-        let structure_id = self.structure_id.as_ref().ok_or(err())?;
-        let structure = self.storage.fetch_structure(structure_id).await?;
+        let snapshot_id = self.snapshot_id.as_ref().ok_or(err())?;
+        let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
 
         let session_atts = self
             .change_set
             .get_user_attributes(path)
             .cloned()
-            .map(|a| a.map(UserAttributesStructure::Inline));
-        let res = structure.get_node(path).map_err(|err| match err {
+            .map(|a| a.map(UserAttributesSnapshot::Inline));
+        let res = snapshot.get_node(path).map_err(|err| match err {
             // A missing node here is not really a format error, so we need to
             // generate the correct error for datasets
             IcechunkFormatError::NodeNotFound { path } => DatasetError::NotFound {
@@ -442,7 +440,7 @@ impl Dataset {
             },
             err => DatasetError::FormatError(err),
         })?;
-        let res = NodeStructure {
+        let res = NodeSnapshot {
             user_attributes: session_atts.unwrap_or(res.user_attributes),
             ..res
         };
@@ -450,7 +448,7 @@ impl Dataset {
             self.change_set.get_updated_zarr_metadata(path).cloned()
         {
             if let NodeData::Array(_, manifests) = res.node_data {
-                Ok(NodeStructure {
+                Ok(NodeSnapshot {
                     node_data: NodeData::Array(session_meta, manifests),
                     ..res
                 })
@@ -462,19 +460,19 @@ impl Dataset {
         }
     }
 
-    fn get_new_node(&self, path: &Path) -> Option<NodeStructure> {
+    fn get_new_node(&self, path: &Path) -> Option<NodeSnapshot> {
         self.get_new_array(path).or(self.get_new_group(path))
     }
 
-    fn get_new_array(&self, path: &Path) -> Option<NodeStructure> {
+    fn get_new_array(&self, path: &Path) -> Option<NodeSnapshot> {
         self.change_set.get_array(path).map(|(id, meta)| {
             let meta =
                 self.change_set.get_updated_zarr_metadata(path).unwrap_or(meta).clone();
             let atts = self.change_set.get_user_attributes(path).cloned();
-            NodeStructure {
+            NodeSnapshot {
                 id: *id,
                 path: path.clone(),
-                user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
+                user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
                 // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
                 // fetched for those arrays
                 node_data: NodeData::Array(meta.clone(), vec![]),
@@ -482,13 +480,13 @@ impl Dataset {
         })
     }
 
-    fn get_new_group(&self, path: &Path) -> Option<NodeStructure> {
+    fn get_new_group(&self, path: &Path) -> Option<NodeSnapshot> {
         self.change_set.get_group(path).map(|id| {
             let atts = self.change_set.get_user_attributes(path).cloned();
-            NodeStructure {
+            NodeSnapshot {
                 id: *id,
                 path: path.clone(),
-                user_attributes: atts.flatten().map(UserAttributesStructure::Inline),
+                user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
                 node_data: NodeData::Group,
             }
         })
@@ -591,11 +589,11 @@ impl Dataset {
     async fn updated_chunk_iterator(
         &self,
     ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
-        match self.structure_id.as_ref() {
+        match self.snapshot_id.as_ref() {
             None => Ok(futures::future::Either::Left(futures::stream::empty())),
-            Some(structure_id) => {
-                let structure = self.storage.fetch_structure(structure_id).await?;
-                let nodes = futures::stream::iter(structure.iter_arc());
+            Some(snapshot_id) => {
+                let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
+                let nodes = futures::stream::iter(snapshot.iter_arc());
                 let res = nodes.and_then(move |node| async move {
                     let path = node.path.clone();
                     Ok(self
@@ -611,7 +609,7 @@ impl Dataset {
     /// Warning: The presence of a single error may mean multiple missing items
     async fn node_chunk_iterator(
         &self,
-        node: NodeStructure,
+        node: NodeSnapshot,
     ) -> impl Stream<Item = DatasetResult<ChunkInfo>> + '_ {
         match node.node_data {
             NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
@@ -704,14 +702,14 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + 'a> {
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
-        match &self.structure_id {
+        match &self.snapshot_id {
             None => Ok(Either::Left(iter::empty())),
             Some(id) => Ok(Either::Right(
                 self.storage
-                    .fetch_structure(id)
+                    .fetch_snapshot(id)
                     .await?
                     .iter_arc()
                     .map(|maybe_node| match maybe_node {
@@ -742,7 +740,7 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> impl Iterator<Item = NodeStructure> + 'a {
+    ) -> impl Iterator<Item = NodeSnapshot> + 'a {
         self.change_set.new_nodes().map(move |path| {
             // we should be able to create the full node because we
             // know it's a new node
@@ -764,7 +762,7 @@ impl Dataset {
                             }]
                         }
                     });
-                    NodeStructure {
+                    NodeSnapshot {
                         node_data: NodeData::Array(
                             meta,
                             new_manifests.unwrap_or_default(),
@@ -780,7 +778,7 @@ impl Dataset {
         &'a self,
         manifest_id: &'a ObjectId,
         manifest_tracker: Option<&'a TableRegionTracker>,
-    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + 'a> {
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
         Ok(self
             .updated_existing_nodes(manifest_id, manifest_tracker)
             .await?
@@ -789,17 +787,17 @@ impl Dataset {
 
     fn update_existing_node(
         &self,
-        node: NodeStructure,
+        node: NodeSnapshot,
         new_manifests: Option<Vec<ManifestRef>>,
-    ) -> NodeStructure {
+    ) -> NodeSnapshot {
         let session_atts = self
             .change_set
             .get_user_attributes(&node.path)
             .cloned()
-            .map(|a| a.map(UserAttributesStructure::Inline));
+            .map(|a| a.map(UserAttributesSnapshot::Inline));
         let new_atts = session_atts.unwrap_or(node.user_attributes);
         match node.node_data {
-            NodeData::Group => NodeStructure { user_attributes: new_atts, ..node },
+            NodeData::Group => NodeSnapshot { user_attributes: new_atts, ..node },
             NodeData::Array(old_zarr_meta, _) => {
                 let new_zarr_meta = self
                     .change_set
@@ -807,7 +805,7 @@ impl Dataset {
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 
-                NodeStructure {
+                NodeSnapshot {
                     // FIXME: bad option type, change
                     node_data: NodeData::Array(
                         new_zarr_meta,
@@ -822,7 +820,7 @@ impl Dataset {
 
     pub async fn list_nodes(
         &self,
-    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeStructure>> + '_> {
+    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + '_> {
         self.updated_nodes(&ObjectId::FAKE, None).await
     }
 
@@ -840,7 +838,7 @@ impl Dataset {
     /// After calling this, changes are reset and the [Dataset] can continue to be used for further
     /// changes.
     ///
-    /// Returns the `ObjectId` of the new structure file. It's the callers responsibility to commit
+    /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
         let mut region_tracker = TableRegionTracker::default();
@@ -861,19 +859,19 @@ impl Dataset {
 
         let all_nodes =
             self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await?;
-        let new_structure = match mk_structure_table(all_nodes) {
+        let new_snapshot = match mk_snapshot_table(all_nodes) {
             Ok(str) => str,
             Err(Ok(e)) => Err(e)?,
             Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
         };
-        let new_structure_id = ObjectId::random();
+        let new_snapshot_id = ObjectId::random();
         self.storage
-            .write_structure(new_structure_id.clone(), Arc::new(new_structure))
+            .write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot))
             .await?;
 
-        self.structure_id = Some(new_structure_id.clone());
+        self.snapshot_id = Some(new_snapshot_id.clone());
         self.change_set = ChangeSet::default();
-        Ok(new_structure_id)
+        Ok(new_snapshot_id)
     }
 }
 
@@ -916,7 +914,7 @@ mod tests {
     use crate::{
         format::{
             manifest::{mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents},
-            structure::mk_structure_table,
+            snapshot::mk_snapshot_table,
             Flags, TableRegion,
         },
         metadata::{
@@ -1103,27 +1101,26 @@ mod tests {
         };
         let array1_path: PathBuf = "/array1".to_string().into();
         let nodes = vec![
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
             }),
-            Ok(NodeStructure {
+            Ok(NodeSnapshot {
                 path: array1_path.clone(),
                 id: array_id,
-                user_attributes: Some(UserAttributesStructure::Inline(
+                user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
                 )),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
             }),
         ];
 
-        let structure =
-            Arc::new(mk_structure_table::<Infallible>(nodes.clone()).unwrap());
-        let structure_id = ObjectId::random();
-        storage.write_structure(structure_id.clone(), structure).await?;
-        let mut ds = Dataset::update(Arc::new(storage), structure_id)
+        let snapshot = Arc::new(mk_snapshot_table::<Infallible>(nodes.clone()).unwrap());
+        let snapshot_id = ObjectId::random();
+        storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
+        let mut ds = Dataset::update(Arc::new(storage), snapshot_id)
             .with_inline_threshold_bytes(512)
             .build();
 
@@ -1168,7 +1165,7 @@ mod tests {
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
             node.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 path: new_array_path.clone(),
                 id: 6,
                 user_attributes: None,
@@ -1185,10 +1182,10 @@ mod tests {
         let node = ds.get_node(&new_array_path).await;
         assert_eq!(
             node.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 path: "/group/array2".into(),
                 id: 6,
-                user_attributes: Some(UserAttributesStructure::Inline(
+                user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"n":42}"#).unwrap()
                 )),
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
@@ -1218,7 +1215,7 @@ mod tests {
         let node = ds.get_node(&array1_path).await.unwrap();
         assert_eq!(
             node.user_attributes,
-            Some(UserAttributesStructure::Inline(
+            Some(UserAttributesSnapshot::Inline(
                 UserAttributes::try_new(br#"{"updated": true}"#).unwrap()
             ))
         );
@@ -1227,7 +1224,7 @@ mod tests {
         let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
         ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
         let node = ds.get_node(&array1_path).await;
-        if let Ok(NodeStructure {
+        if let Ok(NodeSnapshot {
             node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
             ..
         }) = node
@@ -1358,12 +1355,12 @@ mod tests {
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let structure_id = ds.flush().await?;
+        let snapshot_id = ds.flush().await?;
 
-        assert_eq!(Some(structure_id), ds.structure_id);
+        assert_eq!(Some(snapshot_id), ds.snapshot_id);
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 1,
                 path: "/".into(),
                 user_attributes: None,
@@ -1371,10 +1368,10 @@ mod tests {
             })
         );
         ds.add_group("/group".into()).await?;
-        let _structure_id = ds.flush().await?;
+        let _snapshot_id = ds.flush().await?;
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 1,
                 path: "/".into(),
                 user_attributes: None,
@@ -1383,7 +1380,7 @@ mod tests {
         );
         assert_eq!(
             ds.get_node(&"/group".into()).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 2,
                 path: "/group".into(),
                 user_attributes: None,
@@ -1408,7 +1405,7 @@ mod tests {
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
         // wo commit to test the case of a chunkless array
-        let _structure_id = ds.flush().await?;
+        let _snapshot_id = ds.flush().await?;
 
         // we set a chunk in a new array
         ds.set_chunk_ref(
@@ -1418,10 +1415,10 @@ mod tests {
         )
         .await?;
 
-        let _structure_id = ds.flush().await?;
+        let _snapshot_id = ds.flush().await?;
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 1,
                 path: "/".into(),
                 user_attributes: None,
@@ -1430,7 +1427,7 @@ mod tests {
         );
         assert_eq!(
             ds.get_node(&"/group".into()).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 2,
                 path: "/group".into(),
                 user_attributes: None,
@@ -1439,7 +1436,7 @@ mod tests {
         );
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 3,
                 path,
                 user_attributes: None,
@@ -1467,7 +1464,7 @@ mod tests {
         )
         .await?;
 
-        let previous_structure_id = ds.flush().await?;
+        let previous_snapshot_id = ds.flush().await?;
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1492,8 +1489,8 @@ mod tests {
         )
         .await?;
 
-        let structure_id = ds.flush().await?;
-        let ds = Dataset::update(Arc::clone(&storage), structure_id).build();
+        let snapshot_id = ds.flush().await?;
+        let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
 
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
@@ -1505,18 +1502,18 @@ mod tests {
         );
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
-            Some(NodeStructure {
+            Some(NodeSnapshot {
                 id: 3,
                 path,
                 user_attributes: Some(atts),
                 node_data: NodeData::Array(meta, manifests)
             }) if path == new_array_path && meta == new_meta.clone() &&
                     manifests.len() == 1 &&
-                    atts == UserAttributesStructure::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
+                    atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
         ));
 
         //test the previous version is still alive
-        let ds = Dataset::update(Arc::clone(&storage), previous_structure_id).build();
+        let ds = Dataset::update(Arc::clone(&storage), previous_snapshot_id).build();
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1531,7 +1528,7 @@ mod tests {
 
     #[cfg(test)]
     mod state_machine_test {
-        use crate::format::structure::NodeData;
+        use crate::format::snapshot::NodeData;
         use crate::format::Path;
         use crate::storage::InMemoryStorage;
         use crate::Dataset;

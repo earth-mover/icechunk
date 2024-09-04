@@ -8,7 +8,7 @@ use proptest::{collection::vec, option, strategy::Strategy};
 use crate::dataset::{
     ChunkKeyEncoding, ChunkShape, Codec, FillValue, StorageTransformer,
 };
-use crate::format::structure::ZarrArrayMetadata;
+use crate::format::snapshot::ZarrArrayMetadata;
 use crate::format::Path;
 use crate::metadata::{ArrayShape, DimensionNames};
 use crate::storage::InMemoryStorage;

@@ -8,7 +8,7 @@ use bytes::Bytes;
 
 use super::{Storage, StorageError};
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, structure::StructureTable,
+    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
     ChunkOffset, ObjectId,
 };
 
@@ -33,15 +33,15 @@ impl LoggingStorage {
 #[async_trait]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
-    async fn fetch_structure(
+    async fn fetch_snapshot(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<StructureTable>, StorageError> {
+    ) -> Result<Arc<SnapshotTable>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_structure".to_string(), id.clone()));
-        self.backend.fetch_structure(id).await
+            .push(("fetch_snapshot".to_string(), id.clone()));
+        self.backend.fetch_snapshot(id).await
     }
 
     async fn fetch_attributes(
@@ -78,12 +78,12 @@ impl Storage for LoggingStorage {
         self.backend.fetch_chunk(id, range).await
     }
 
-    async fn write_structure(
+    async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<StructureTable>,
+        table: Arc<SnapshotTable>,
     ) -> Result<(), StorageError> {
-        self.backend.write_structure(id, table).await
+        self.backend.write_snapshot(id, table).await
     }
 
     async fn write_attributes(
