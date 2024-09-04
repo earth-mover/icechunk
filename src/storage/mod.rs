@@ -19,7 +19,7 @@ pub use in_memory::InMemoryStorage;
 pub use object_store::ObjectStorage;
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, structure::StructureTable,
+    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
     ChunkOffset, ObjectId, Path,
 };
 
@@ -45,10 +45,10 @@ pub enum StorageError {
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 pub trait Storage: fmt::Debug {
-    async fn fetch_structure(
+    async fn fetch_snapshot(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<StructureTable>, StorageError>; // FIXME: format flags
+    ) -> Result<Arc<SnapshotTable>, StorageError>; // FIXME: format flags
     async fn fetch_attributes(
         &self,
         id: &ObjectId,
@@ -63,10 +63,10 @@ pub trait Storage: fmt::Debug {
         range: &Option<Range<ChunkOffset>>,
     ) -> Result<Bytes, StorageError>; // FIXME: format flags
 
-    async fn write_structure(
+    async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<StructureTable>,
+        table: Arc<SnapshotTable>,
     ) -> Result<(), StorageError>;
     async fn write_attributes(
         &self,

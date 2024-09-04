@@ -23,7 +23,7 @@ use crate::{
         UserAttributes, ZarrArrayMetadata,
     },
     format::{
-        structure::{NodeData, UserAttributesStructure}, // TODO: we shouldn't need these imports, too low level
+        snapshot::{NodeData, UserAttributesSnapshot}, // TODO: we shouldn't need these imports, too low level
         ChunkOffset,
         IcechunkFormatError,
     },
@@ -49,11 +49,9 @@ pub enum StorageConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VersionInfo {
-    #[serde(rename = "structure_id")]
-    StructureId(ObjectId),
-
     #[serde(rename = "snapshot_id")]
-    SnapshotId(SnapshotId), //TODO: unimplemented yet
+    SnapshotId(ObjectId),
+    // FIXME: other forms of versioning
 }
 
 #[skip_serializing_none]
@@ -343,9 +341,9 @@ impl Store {
         })?;
         let user_attributes = match node.user_attributes {
             None => None,
-            Some(UserAttributesStructure::Inline(atts)) => Some(atts),
+            Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
             // FIXME: implement
-            Some(UserAttributesStructure::Ref(_)) => todo!(),
+            Some(UserAttributesSnapshot::Ref(_)) => todo!(),
         };
         match node.node_data {
             NodeData::Group => Ok(GroupMetadata::new(user_attributes).to_bytes()),
@@ -438,8 +436,7 @@ fn mk_dataset(
 ) -> Result<Dataset, String> {
     let mut builder = match &dataset.previous_version {
         None => Dataset::create(storage),
-        Some(VersionInfo::StructureId(sid)) => Dataset::update(storage, sid.clone()),
-        Some(VersionInfo::SnapshotId(_sid)) => todo!(), // FIXME: implement once we have a statefile
+        Some(VersionInfo::SnapshotId(sid)) => Dataset::update(storage, sid.clone()),
     };
     if let Some(thr) = dataset.inline_chunk_threshold_bytes {
         builder.with_inline_threshold_bytes(thr);
@@ -1265,7 +1262,7 @@ mod tests {
             },
             dataset: DatasetConfig {
                 inline_chunk_threshold_bytes: Some(128),
-                previous_version: Some(VersionInfo::StructureId(ObjectId([
+                previous_version: Some(VersionInfo::SnapshotId(ObjectId([
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
                 ]))),
             },
@@ -1279,7 +1276,7 @@ mod tests {
                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
-                "previous_version": {"structure_id":"000102030405060708090a0b0c0d0e0f"},
+                "previous_version": {"snapshot_id":"000102030405060708090a0b0c0d0e0f"},
                 "inline_chunk_threshold_bytes":128
              },
              "get_partial_values_concurrency": 100

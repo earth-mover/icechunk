@@ -16,13 +16,13 @@ use parquet::arrow::{
 };
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, structure::StructureTable,
+    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
     ChunkOffset, ObjectId, Path,
 };
 
 use super::{Storage, StorageError};
 
-const STRUCTURE_PREFIX: &str = "s/";
+const SNAPSHOT_PREFIX: &str = "s/";
 const MANIFEST_PREFIX: &str = "m/";
 // const ATTRIBUTES_PREFIX: &str = "a/";
 const CHUNK_PREFIX: &str = "c/";
@@ -114,13 +114,13 @@ impl fmt::Debug for ObjectStorage {
 }
 #[async_trait]
 impl Storage for ObjectStorage {
-    async fn fetch_structure(
+    async fn fetch_snapshot(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<StructureTable>, StorageError> {
-        let path = self.get_path(STRUCTURE_PREFIX, id);
+    ) -> Result<Arc<SnapshotTable>, StorageError> {
+        let path = self.get_path(SNAPSHOT_PREFIX, id);
         let batch = self.read_parquet(&path).await?;
-        Ok(Arc::new(StructureTable { batch }))
+        Ok(Arc::new(SnapshotTable { batch }))
     }
 
     async fn fetch_attributes(
@@ -139,12 +139,12 @@ impl Storage for ObjectStorage {
         Ok(Arc::new(ManifestsTable { batch }))
     }
 
-    async fn write_structure(
+    async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<StructureTable>,
+        table: Arc<SnapshotTable>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(STRUCTURE_PREFIX, &id);
+        let path = self.get_path(SNAPSHOT_PREFIX, &id);
         self.write_parquet(&path, &table.batch).await?;
         Ok(())
     }

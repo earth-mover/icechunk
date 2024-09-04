@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, structure::StructureTable,
+    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
     ChunkOffset, ObjectId,
 };
 
@@ -17,7 +17,7 @@ use super::{Storage, StorageError};
 
 #[derive(Default)]
 pub struct InMemoryStorage {
-    struct_files: Arc<RwLock<HashMap<ObjectId, Arc<StructureTable>>>>,
+    struct_files: Arc<RwLock<HashMap<ObjectId, Arc<SnapshotTable>>>>,
     attr_files: Arc<RwLock<HashMap<ObjectId, Arc<AttributesTable>>>>,
     man_files: Arc<RwLock<HashMap<ObjectId, Arc<ManifestsTable>>>>,
     chunk_files: Arc<RwLock<HashMap<ObjectId, Bytes>>>,
@@ -48,10 +48,10 @@ impl fmt::Debug for InMemoryStorage {
 
 #[async_trait]
 impl Storage for InMemoryStorage {
-    async fn fetch_structure(
+    async fn fetch_snapshot(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<StructureTable>, StorageError> {
+    ) -> Result<Arc<SnapshotTable>, StorageError> {
         self.struct_files
             .read()
             .or(Err(StorageError::Other("in-memory storage deadlock".to_string())))?
@@ -84,10 +84,10 @@ impl Storage for InMemoryStorage {
             .ok_or(StorageError::NotFound(id.clone()))
     }
 
-    async fn write_structure(
+    async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<StructureTable>,
+        table: Arc<SnapshotTable>,
     ) -> Result<(), StorageError> {
         self.struct_files
             .write()
