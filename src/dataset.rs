@@ -66,7 +66,7 @@ impl ChunkTracker {
         todo!()
     }
 
-    pub fn compute_bboxes(&self) {
+    pub fn compute_bboxes(&self, current: Vec<ManifestExtents>) {
         // FIXME: iterate through payloads, construct a bbox, potentially optimize it,
         //        and set self.bboxes
         // TODO: will need to handle deleted chunks by looking at payloads.
@@ -883,9 +883,12 @@ impl Dataset {
         // (4) write each manifest when it is completed.
         // (5) write updated structure file
         // TODO: figure out how to add to arrow.
+        //
+        // TODO: pluck existing bboxes from latest snapshot
+        let existing_bboxes: Vec<ManifestExtents> = todo!();
         for (_path, tracker) in self.change_set.set_chunks.iter() {
             // Warning: this is one loop over all chunks to create consolidated bboxes
-            tracker.compute_bboxes();
+            tracker.compute_bboxes(existing_bboxes);
         }
 
         // TODO: there is one ManifestTable per bbox. To construct these:
