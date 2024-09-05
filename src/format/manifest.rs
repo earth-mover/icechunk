@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{iter::zip, sync::Arc};
 
 use arrow::{
     array::{
@@ -17,7 +17,7 @@ use super::{
     IcechunkResult, NodeId, ObjectId, TableOffset, TableRegion,
 };
 
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Hash, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
 
 impl ManifestExtents {
@@ -60,9 +60,29 @@ pub enum ChunkPayload {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkInfo {
+    pub extent: ManifestExtents,
     pub node: NodeId,
     pub coord: ChunkIndices,
     pub payload: ChunkPayload,
+}
+
+impl ChunkInfo {
+    pub fn get_relative_coord(&self) -> IcechunkResult<ChunkIndices> {
+        let ManifestExtents(vec) = &self.extent;
+        let ChunkIndices(origin) = vec[0].clone();
+        let ChunkIndices(coord) = self.coord.clone();
+
+        if origin.len() != coord.len() {
+            Err(IcechunkFormatError::InvalidExtentAndCoord {
+                extents: self.extent.clone(),
+                coords: self.coord.clone(),
+            })
+        } else {
+            Ok(ChunkIndices(
+                zip(coord.iter(), origin.iter()).map(|(s, o)| s - o).collect(),
+            ))
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -79,26 +99,32 @@ impl BatchLike for ManifestsTable {
 impl ManifestsTable {
     pub fn get_chunk_info(
         &self,
+        extent: &ManifestExtents,
         coords: &ChunkIndices,
         region: &TableRegion,
     ) -> IcechunkResult<ChunkInfo> {
         // FIXME: make this fast, currently it's a linear search
         let idx = self.get_chunk_info_index(coords, region)?;
-        self.get_row(idx)
+        self.get_row(extent, idx)
     }
 
     pub fn iter(
         // FIXME: I need an arc here to be able to implement node_chunk_iterator in dataset.rs
         self: Arc<Self>,
+        extent: ManifestExtents,
         from: Option<TableOffset>,
         to: Option<TableOffset>,
-    ) -> impl Iterator<Item = IcechunkResult<(ManifestExtents, ChunkInfo)>> {
+    ) -> impl Iterator<Item = IcechunkResult<ChunkInfo>> {
         let from = from.unwrap_or(0);
         let to = to.unwrap_or(self.batch.num_rows() as u32);
-        (from..to).map(move |idx| self.get_row(idx))
+        (from..to).map(move |idx| self.get_row(&extent, idx))
     }
 
-    fn get_row(&self, row: TableOffset) -> IcechunkResult<(ManifestExtents, ChunkInfo)> {
+    fn get_row(
+        &self,
+        extent: &ManifestExtents,
+        row: TableOffset,
+    ) -> IcechunkResult<ChunkInfo> {
         if row as usize >= self.batch.num_rows() {
             return Err(IcechunkFormatError::InvalidManifestIndex {
                 index: row as usize,
@@ -113,22 +139,26 @@ impl ManifestsTable {
         // These arrays cannot contain null values, we don't need to check using `is_null`
         let id = get_column(self, "array_id")?.u32_at(idx)?;
         let coords = get_column(self, "coords")?.binary_at(idx)?;
-        // FIXME: once we define    how we want to encode coordinates we'll see if we need to
+        // FIXME: once we define how we want to encode coordinates we'll see if we need to
         // persist the rank of the array somewhere, for now, we fake it and we don't check
-        let coords =
-            ChunkIndices::try_from_slice(999_999_999, coords).map_err(|msg| {
-                IcechunkFormatError::InvalidArrayManifest {
-                    index: idx,
-                    field: "coords".to_string(),
-                    message: msg.to_string(),
-                }
-            })?;
+        let coords = ChunkIndices::try_from_slice(extent, coords).map_err(|msg| {
+            IcechunkFormatError::InvalidArrayManifest {
+                index: idx,
+                field: "coords".to_string(),
+                message: msg.to_string(),
+            }
+        })?;
 
         let inline_data = get_column(self, "inline_data")?.binary_at_opt(idx)?;
         if let Some(inline_data) = inline_data {
             // we have an inline chunk
             let data = Bytes::copy_from_slice(inline_data);
-            Ok(ChunkInfo { node: id, coord: coords, payload: ChunkPayload::Inline(data) })
+            Ok(ChunkInfo {
+                extent: extent.clone(),
+                node: id,
+                coord: coords,
+                payload: ChunkPayload::Inline(data),
+            })
         } else {
             let offset = get_column(self, "offset")?.u64_at(idx)?;
             let length = get_column(self, "length")?.u64_at(idx)?;
@@ -138,6 +168,7 @@ impl ManifestsTable {
                 // we have a virtual chunk
                 let location = virtual_path.to_string();
                 Ok(ChunkInfo {
+                    extent: extent.clone(),
                     node: id,
                     coord: coords,
                     payload: ChunkPayload::Virtual(VirtualChunkRef {
@@ -157,6 +188,7 @@ impl ManifestsTable {
                         message: "invalid object id".to_string(),
                     })?;
                 Ok(ChunkInfo {
+                    extent: extent.clone(),
                     node: id,
                     coord: coords,
                     payload: ChunkPayload::Ref(ChunkRef { id: chunk_id, offset, length }),
@@ -198,7 +230,10 @@ impl ManifestsTable {
 }
 
 impl ChunkIndices {
-    pub fn try_from_slice(_rank: usize, slice: &[u8]) -> Result<Self, &'static str> {
+    pub fn try_from_slice(
+        _extent: &ManifestExtents,
+        slice: &[u8],
+    ) -> Result<Self, &'static str> {
         let chunked = slice.chunks(8);
         let res: Vec<_> = chunked
             .map(TryInto::<&[u8; 8]>::try_into)
@@ -242,7 +277,10 @@ pub async fn mk_manifests_table<E>(
             Err(err) => return Err(Ok(err)),
         };
         array_ids.push(chunk.node);
-        coords.push(chunk.coord);
+        coords.push(match chunk.get_relative_coord() {
+            Ok(coords) => coords,
+            Err(_err) => todo!(),
+        });
         // FIXME:
         extras.push(None);
 
@@ -272,6 +310,7 @@ pub async fn mk_manifests_table<E>(
     }
 
     let array_ids = mk_array_ids_array(array_ids);
+    // FIXME: mk_coords_array(coords, array)
     let coords = mk_coords_array(coords);
     let offsets = mk_offsets_array(offsets);
     let lengths = mk_lengths_array(lengths);
@@ -368,15 +407,22 @@ mod tests {
         #[test]
         fn coordinate_encoding_roundtrip(v: Vec<u64>) {
             let arr = ChunkIndices(v);
+            let extent = ManifestExtents(vec![arr.clone(), arr.clone()]);
             let as_vec: Vec<u8> = (&arr).into();
-            let roundtrip = ChunkIndices::try_from_slice(arr.0.len(), as_vec.as_slice()).unwrap();
+            let roundtrip = ChunkIndices::try_from_slice(&extent, as_vec.as_slice()).unwrap();
             assert_eq!(arr, roundtrip);
         }
     }
 
     #[tokio::test]
     async fn test_get_chunk_info() -> Result<(), Box<dyn std::error::Error>> {
+        let extent = ManifestExtents(vec![
+            ChunkIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![1, 1, 1]),
+        ]);
+
         let c1a = ChunkInfo {
+            extent: extent.clone(),
             node: 1,
             coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Ref(ChunkRef {
@@ -386,6 +432,7 @@ mod tests {
             }),
         };
         let c2a = ChunkInfo {
+            extent: extent.clone(),
             node: 1,
             coord: ChunkIndices(vec![0, 0, 1]),
             payload: ChunkPayload::Ref(ChunkRef {
@@ -395,6 +442,7 @@ mod tests {
             }),
         };
         let c3a = ChunkInfo {
+            extent: extent.clone(),
             node: 1,
             coord: ChunkIndices(vec![1, 0, 1]),
             payload: ChunkPayload::Ref(ChunkRef {
@@ -405,12 +453,14 @@ mod tests {
         };
 
         let c1b = ChunkInfo {
+            extent: extent.clone(),
             node: 2,
             coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Inline("hello".into()),
         };
 
         let c1c = ChunkInfo {
+            extent: extent.clone(),
             node: 2,
             coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Virtual(VirtualChunkRef {
@@ -433,43 +483,91 @@ mod tests {
         .await
         .map_err(|e| format!("error creating manifest {e:?}"))?;
 
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(1, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 0]),
+            &TableRegion(1, 3),
+        );
         assert_eq!(
             res.as_ref(),
             Err(&IcechunkFormatError::ChunkCoordinatesNotFound {
                 coords: ChunkIndices(vec![0, 0, 0])
             })
         );
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(0, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 0]),
+            &TableRegion(0, 3),
+        );
         assert_eq!(res.as_ref(), Ok(&c1a));
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(0, 1));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 0]),
+            &TableRegion(0, 1),
+        );
         assert_eq!(res.as_ref(), Ok(&c1a));
 
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(2, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 1]),
+            &TableRegion(2, 3),
+        );
         assert_eq!(
             res.as_ref(),
             Err(&IcechunkFormatError::ChunkCoordinatesNotFound {
                 coords: ChunkIndices(vec![0, 0, 1])
             })
         );
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(0, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 1]),
+            &TableRegion(0, 3),
+        );
         assert_eq!(res.as_ref(), Ok(&c2a));
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(0, 2));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 1]),
+            &TableRegion(0, 2),
+        );
         assert_eq!(res.as_ref(), Ok(&c2a));
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 1]), &TableRegion(1, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 1]),
+            &TableRegion(1, 3),
+        );
         assert_eq!(res.as_ref(), Ok(&c2a));
 
-        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(0, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![1, 0, 1]),
+            &TableRegion(0, 3),
+        );
         assert_eq!(res.as_ref(), Ok(&c3a));
-        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(1, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![1, 0, 1]),
+            &TableRegion(1, 3),
+        );
         assert_eq!(res.as_ref(), Ok(&c3a));
-        let res = table.get_chunk_info(&ChunkIndices(vec![1, 0, 1]), &TableRegion(2, 3));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![1, 0, 1]),
+            &TableRegion(2, 3),
+        );
         assert_eq!(res.as_ref(), Ok(&c3a));
 
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(3, 4));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 0]),
+            &TableRegion(3, 4),
+        );
         assert_eq!(res.as_ref(), Ok(&c1b));
 
-        let res = table.get_chunk_info(&ChunkIndices(vec![0, 0, 0]), &TableRegion(4, 5));
+        let res = table.get_chunk_info(
+            &extent,
+            &ChunkIndices(vec![0, 0, 0]),
+            &TableRegion(4, 5),
+        );
         assert_eq!(res.as_ref(), Ok(&c1c));
         Ok(())
     }

@@ -459,7 +459,7 @@ where
         .map(|opt| opt.map(|p| p.0.iter().map(|n| Some(n.get())).collect::<Vec<_>>()));
     let res = ListArray::from_iter_primitive::<UInt64Type, _, _>(iter);
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt64, false));
+    let field = Arc::new(Field::new("item", ArrowDataType::UInt64, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -501,7 +501,7 @@ where
 
     // I don't know how to create non nullabe list arrays directly
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::Binary, false));
+    let field = Arc::new(Field::new("item", ArrowDataType::Binary, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -527,7 +527,7 @@ where
 
     // I don't know how to create non nullabe list arrays directly
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::Binary, false));
+    let field = Arc::new(Field::new("item", ArrowDataType::Binary, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -602,21 +602,21 @@ where
     let from_row_array = from_row_array.finish();
     let to_row_array = to_row_array.finish();
 
-    // I don't know how to create non nullabe list arrays directly
+    // I don't know how to create non nullable list arrays directly
     let (_, offsets, values, nulls) = ref_array.into_parts();
     let field = Arc::new(Field::new(
         "item",
-        arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+        ArrowDataType::FixedSizeBinary(ObjectId::SIZE as i32),
         false,
     ));
     let ref_array = ListArray::new(field, offsets, values, nulls);
 
     let (_, offsets, values, nulls) = from_row_array.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
+    let field = Arc::new(Field::new("item", ArrowDataType::UInt32, false));
     let from_row_array = ListArray::new(field, offsets, values, nulls);
 
     let (_, offsets, values, nulls) = to_row_array.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
+    let field = Arc::new(Field::new("item", ArrowDataType::UInt32, false));
     let to_row_array = ListArray::new(field, offsets, values, nulls);
 
     StructArray::from(vec![
@@ -625,7 +625,7 @@ where
                 "reference",
                 Field::new(
                     "item",
-                    arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                    ArrowDataType::FixedSizeBinary(ObjectId::SIZE as i32),
                     false,
                 ),
                 true,
@@ -635,7 +635,7 @@ where
         (
             Arc::new(Field::new_list(
                 "start_row",
-                Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                Field::new("item", ArrowDataType::UInt32, false),
                 true,
             )),
             Arc::new(from_row_array) as ArrayRef,
@@ -643,7 +643,7 @@ where
         (
             Arc::new(Field::new_list(
                 "end_row",
-                Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                Field::new("item", ArrowDataType::UInt32, false),
                 true,
             )),
             Arc::new(to_row_array) as ArrayRef,
@@ -765,15 +765,11 @@ pub fn mk_snapshot_table<E>(
         Arc::new(manifest_refs),
     ];
     let schema = Arc::new(Schema::new(vec![
-        Field::new("id", arrow::datatypes::DataType::UInt32, false),
-        Field::new("type", arrow::datatypes::DataType::Utf8, false),
-        Field::new("path", arrow::datatypes::DataType::Utf8, false),
-        Field::new_list(
-            "shape",
-            Field::new("item", arrow::datatypes::DataType::UInt64, false),
-            true,
-        ),
-        Field::new("data_type", arrow::datatypes::DataType::Utf8, true),
+        Field::new("id", ArrowDataType::UInt32, false),
+        Field::new("type", ArrowDataType::Utf8, false),
+        Field::new("path", ArrowDataType::Utf8, false),
+        Field::new_list("shape", Field::new("item", ArrowDataType::UInt64, false), true),
+        Field::new("data_type", ArrowDataType::Utf8, true),
         Field::new_list(
             "chunk_shape",
             Field::new("item", arrow::datatypes::DataType::UInt64, false),
@@ -788,43 +784,41 @@ pub fn mk_snapshot_table<E>(
         ),
         Field::new_list(
             "storage_transformers",
-            Field::new("item", arrow::datatypes::DataType::Binary, false),
+            Field::new("item", ArrowDataType::Binary, false),
             true,
         ),
         Field::new_list(
             "dimension_names",
-            Field::new("item", arrow::datatypes::DataType::Utf8, true),
+            Field::new("item", ArrowDataType::Utf8, true),
             true,
         ),
-        Field::new("user_attributes", arrow::datatypes::DataType::Binary, true),
+        Field::new("user_attributes", ArrowDataType::Binary, true),
         Field::new(
             "user_attributes_ref",
-            arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+            ArrowDataType::FixedSizeBinary(ObjectId::SIZE as i32),
             true,
         ),
-        Field::new("user_attributes_row", arrow::datatypes::DataType::UInt32, true),
+        Field::new("user_attributes_row", ArrowDataType::UInt32, true),
         Field::new(
             "manifest_references",
-            arrow::datatypes::DataType::Struct(Fields::from(vec![
+            ArrowDataType::Struct(Fields::from(vec![
                 Field::new_list(
                     "reference",
                     Field::new(
                         "item",
-                        arrow::datatypes::DataType::FixedSizeBinary(
-                            ObjectId::SIZE as i32,
-                        ),
+                        ArrowDataType::FixedSizeBinary(ObjectId::SIZE as i32),
                         false,
                     ),
                     true,
                 ),
                 Field::new_list(
                     "start_row",
-                    Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                    Field::new("item", ArrowDataType::UInt32, false),
                     true,
                 ),
                 Field::new_list(
                     "end_row",
-                    Field::new("item", arrow::datatypes::DataType::UInt32, false),
+                    Field::new("item", ArrowDataType::UInt32, false),
                     true,
                 ),
             ])),

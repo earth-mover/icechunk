@@ -1,6 +1,7 @@
 use std::{
+    cmp,
     collections::{BTreeMap, HashMap, HashSet},
-    iter,
+    iter::{self, zip},
     path::PathBuf,
     sync::Arc,
 };
@@ -16,13 +17,13 @@ pub use crate::{
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
-use itertools::{Either, Itertools};
+use itertools::{multiunzip, Either, Itertools, MultiUnzip};
 use thiserror::Error;
 
 use crate::{
     format::{
         manifest::{
-            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef, ManifestsTable,
+            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
         },
         snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
         Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
@@ -54,23 +55,67 @@ pub struct Dataset {
 #[derive(Clone, Debug, PartialEq, Default)]
 struct ChunkTracker {
     // Vec since we might split a large sparse extent in to multiple smaller dense extents
-    // Option since it is only intentionally populated by calling compute_bboxes
-    bboxes: Option<Vec<ManifestExtents>>,
+    // Option since it is only intentionally populated by calling compute_extents
+    extents: Option<Vec<ManifestExtents>>,
     // BTreeMap to insert, and iterate through, in sorted order
     payloads: BTreeMap<ChunkIndices, Option<ChunkPayload>>,
 }
 
 impl ChunkTracker {
-    pub fn iter(&self) -> impl Iterator<Item=(&ManifestExtents, &ChunkIndices, &Option<ChunkPayload>)> {
-        // FIXME: returns each chunk along with the associated extent
-        todo!()
+    fn get_extents(&self, _coord: &ChunkIndices) -> ManifestExtents {
+        let extents =
+            self.extents.as_ref().expect("Extents should have been computed already.");
+        if extents.len() > 1 {
+            panic!()
+        }
+        extents[0].clone()
     }
 
-    pub fn compute_bboxes(&self, current: Vec<ManifestExtents>) {
-        // FIXME: iterate through payloads, construct a bbox, potentially optimize it,
-        //        and set self.bboxes
+    fn iter(
+        &self,
+    ) -> impl Iterator<Item = (ManifestExtents, &ChunkIndices, &Option<ChunkPayload>)>
+    {
+        self.payloads
+            .iter()
+            .map(|(coord, payload)| (self.get_extents(coord), coord, payload))
+    }
+
+    fn compute_extents(&mut self, current: Option<&Vec<ManifestExtents>>) {
+        // FIXME: iterate through payloads, construct a extents, potentially optimize it,
+        //        and set self.extents
         // TODO: will need to handle deleted chunks by looking at payloads.
-        todo!();
+        let mut maxes = Vec::new();
+        let mut mins = Vec::new();
+
+        let mut keys_iter = self.payloads.keys();
+        let first_key = keys_iter.next().cloned();
+        match first_key {
+            Some(ChunkIndices(coord)) => {
+                for elem in coord {
+                    maxes.push(elem);
+                    mins.push(elem);
+                }
+                for ChunkIndices(vec) in keys_iter {
+                    for (idx, elem) in vec.iter().enumerate() {
+                        if elem < &mins[idx] {
+                            mins[idx] = elem.clone();
+                        } else if elem > &maxes[idx] {
+                            maxes[idx] = elem.clone();
+                        }
+                    }
+                }
+                self.extents = Some(vec![ManifestExtents(vec![
+                    ChunkIndices(mins),
+                    ChunkIndices(maxes),
+                ])]);
+                // TODO: merge with current here
+                if current.is_some() {
+                    panic!()
+                }
+                // TODO: any possible bbox optimizations
+            }
+            None => self.extents = current.cloned(),
+        }
     }
 }
 
@@ -160,10 +205,9 @@ impl ChangeSet {
                 h.payloads.insert(coord.clone(), data.clone());
             })
             .or_insert(ChunkTracker {
-                bboxes: None,
+                extents: None,
                 payloads: BTreeMap::from([(coord, data)]),
-            }
-            );
+            });
     }
 
     fn get_chunk_ref(
@@ -177,7 +221,8 @@ impl ChangeSet {
     fn array_chunks_iterator(
         &self,
         path: &Path,
-    ) -> impl Iterator<Item = (&ManifestExtents, &ChunkIndices, &Option<ChunkPayload>)> {
+    ) -> impl Iterator<Item = (ManifestExtents, &ChunkIndices, &Option<ChunkPayload>)>
+    {
         match self.set_chunks.get(path) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
@@ -186,14 +231,14 @@ impl ChangeSet {
 
     fn new_arrays_chunk_iterator(
         &self,
-    ) -> impl Iterator<Item = (PathBuf, ManifestExtents, ChunkInfo)> + '_ {
+    ) -> impl Iterator<Item = (PathBuf, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
             self.array_chunks_iterator(path).filter_map(|(extent, coords, payload)| {
                 payload.as_ref().map(|p| {
                     (
                         path.clone(),
-                        extent.clone(),
                         ChunkInfo {
+                            extent: extent.clone(),
                             node: *node_id,
                             coord: coords.clone(),
                             payload: p.clone(),
@@ -206,6 +251,13 @@ impl ChangeSet {
 
     fn new_nodes(&self) -> impl Iterator<Item = &Path> {
         self.new_groups.keys().chain(self.new_arrays.keys())
+    }
+
+    fn update_extents(&mut self, existing: Option<&Vec<ManifestExtents>>) {
+        for (_path, tracker) in self.set_chunks.iter_mut() {
+            // Warning: this is one loop over all chunks to create consolidated extents
+            tracker.compute_extents(existing);
+        }
     }
 }
 
@@ -600,7 +652,7 @@ impl Dataset {
             let manifest_structure =
                 self.storage.fetch_manifests(&manifest.object_id).await?;
             match manifest_structure
-                .get_chunk_info(coords, &manifest.location)
+                .get_chunk_info(&manifest.extents, coords, &manifest.location)
                 .map(|info| info.payload)
             {
                 Ok(payload) => {
@@ -652,9 +704,10 @@ impl Dataset {
                 let new_chunks = self
                     .change_set
                     .array_chunks_iterator(&node.path)
-                    .filter_map(move |(_, idx, payload)| {
+                    .filter_map(move |(extent, idx, payload)| {
                         payload.as_ref().map(|payload| {
                             Ok(ChunkInfo {
+                                extent: extent.clone(),
                                 node: node.id,
                                 coord: idx.clone(),
                                 payload: payload.clone(),
@@ -677,6 +730,7 @@ impl Dataset {
                                         Ok(manifest) => {
                                             let old_chunks = manifest
                                                 .iter(
+                                                    manifest_ref.extents,
                                                     Some(manifest_ref.location.start()),
                                                     Some(manifest_ref.location.end()),
                                                 )
@@ -879,30 +933,27 @@ impl Dataset {
         // (1) Choose a number-of-rows threshold for splitting manifests
         // (2) maintain bounding box in the changeset
         // (3) iterate over all chunk coordinates in that bounding box and look them up in `self`
-        // (3) build each bbox's manifest sequentially, encode coordinate relative to bounding box
+        // (3) build each extents's manifest sequentially, encode coordinate relative to bounding box
         // (4) write each manifest when it is completed.
         // (5) write updated structure file
         // TODO: figure out how to add to arrow.
         //
-        // TODO: pluck existing bboxes from latest snapshot
-        let existing_bboxes: Vec<ManifestExtents> = todo!();
-        for (_path, tracker) in self.change_set.set_chunks.iter() {
-            // Warning: this is one loop over all chunks to create consolidated bboxes
-            tracker.compute_bboxes(existing_bboxes);
-        }
+        // TODO: pluck existing extents from latest snapshot
+        let existing_extents: Option<&Vec<ManifestExtents>> = None;
+        self.change_set.update_extents(existing_extents);
 
-        // TODO: there is one ManifestTable per bbox. To construct these:
+        // TODO: there is one ManifestTable per extents. To construct these:
         // 1. we could iterate through chunks (which will come out in sorted order),
         // 2. build up all the Vecs needed for all the ManifestTables.
         // 3. And then construct the arrow structure, write to disk.
-        // In theory we could optimize by having ChunkTracker.iter() return chunks sorted by bbox.
+        // In theory we could optimize by having ChunkTracker.iter() return chunks sorted by extents.
         // that way we can construct and flush one manifest at a time.
         let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
             region_tracker.update(&chunk.1);
             chunk
         });
         let new_manifest =
-            // encode w.r.t bbox in mk_manifests_table
+            // encode w.r.t extents in mk_manifests_table
             match mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await {
                 Ok(man) => man,
                 Err(Ok(e)) => Err(e)?,
@@ -1101,10 +1152,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
         let storage = InMemoryStorage::new();
-
+        let extent = ManifestExtents(vec![
+            ChunkIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![0, 0, 1]),
+        ]);
         let array_id = 2;
         let chunk1 = ChunkInfo {
             node: array_id,
+            extent: extent.clone(),
             coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
@@ -1114,6 +1169,7 @@ mod tests {
         };
 
         let chunk2 = ChunkInfo {
+            extent: extent.clone(),
             node: array_id,
             coord: ChunkIndices(vec![0, 0, 1]),
             payload: ChunkPayload::Inline("hello".into()),
@@ -1155,7 +1211,7 @@ mod tests {
             object_id: manifest_id,
             location: TableRegion::new(0, 2).unwrap(),
             flags: Flags(),
-            extents: ManifestExtents(vec![]),
+            extents: extent,
         };
         let array1_path: PathBuf = "/array1".to_string().into();
         let nodes = vec![
@@ -1339,6 +1395,8 @@ mod tests {
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref("foo/bar".into(), ChunkIndices(vec![0, 1]), None);
+        change_set.update_extents(None);
+
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
@@ -1362,6 +1420,8 @@ mod tests {
             Some(ChunkPayload::Inline("baz2".into())),
         );
 
+        change_set.update_extents(None);
+
         {
             let all_chunks: Vec<_> = change_set
                 .new_arrays_chunk_iterator()
@@ -1371,6 +1431,10 @@ mod tests {
                 (
                     "foo/baz".into(),
                     ChunkInfo {
+                        extent: ManifestExtents(vec![
+                            ChunkIndices(vec![0]),
+                            ChunkIndices(vec![1]),
+                        ]),
                         node: 2,
                         coord: ChunkIndices(vec![0]),
                         payload: ChunkPayload::Inline("baz1".into()),
@@ -1379,6 +1443,10 @@ mod tests {
                 (
                     "foo/baz".into(),
                     ChunkInfo {
+                        extent: ManifestExtents(vec![
+                            ChunkIndices(vec![0]),
+                            ChunkIndices(vec![1]),
+                        ]),
                         node: 2,
                         coord: ChunkIndices(vec![1]),
                         payload: ChunkPayload::Inline("baz2".into()),
@@ -1387,6 +1455,10 @@ mod tests {
                 (
                     "foo/bar".into(),
                     ChunkInfo {
+                        extent: ManifestExtents(vec![
+                            ChunkIndices(vec![0, 0]),
+                            ChunkIndices(vec![1, 1]),
+                        ]),
                         node: 1,
                         coord: ChunkIndices(vec![1, 0]),
                         payload: ChunkPayload::Inline("bar1".into()),
@@ -1395,6 +1467,10 @@ mod tests {
                 (
                     "foo/bar".into(),
                     ChunkInfo {
+                        extent: ManifestExtents(vec![
+                            ChunkIndices(vec![0, 0]),
+                            ChunkIndices(vec![1, 1]),
+                        ]),
                         node: 1,
                         coord: ChunkIndices(vec![1, 1]),
                         payload: ChunkPayload::Inline("bar2".into()),
