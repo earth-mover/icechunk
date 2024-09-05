@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     iter,
     path::PathBuf,
     sync::Arc,
@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::{
     format::{
         manifest::{
-            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
+            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef, ManifestsTable,
         },
         snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
         Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
@@ -52,6 +52,29 @@ pub struct Dataset {
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
+struct ChunkTracker {
+    // Vec since we might split a large sparse extent in to multiple smaller dense extents
+    // Option since it is only intentionally populated by calling compute_bboxes
+    bboxes: Option<Vec<ManifestExtents>>,
+    // BTreeMap to insert, and iterate through, in sorted order
+    payloads: BTreeMap<ChunkIndices, Option<ChunkPayload>>,
+}
+
+impl ChunkTracker {
+    pub fn iter(&self) -> impl Iterator<Item=(&ManifestExtents, &ChunkIndices, &Option<ChunkPayload>)> {
+        // FIXME: returns each chunk along with the associated extent
+        todo!()
+    }
+
+    pub fn compute_bboxes(&self) {
+        // FIXME: iterate through payloads, construct a bbox, potentially optimize it,
+        //        and set self.bboxes
+        // TODO: will need to handle deleted chunks by looking at payloads.
+        todo!();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
 struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
@@ -60,7 +83,7 @@ struct ChangeSet {
     // since both Groups and Arrays support UserAttributes
     updated_attributes: HashMap<Path, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<Path, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    set_chunks: HashMap<Path, ChunkTracker>,
     deleted_groups: HashMap<Path, NodeId>,
     deleted_arrays: HashMap<Path, NodeId>,
 }
@@ -134,9 +157,13 @@ impl ChangeSet {
         self.set_chunks
             .entry(path)
             .and_modify(|h| {
-                h.insert(coord.clone(), data.clone());
+                h.payloads.insert(coord.clone(), data.clone());
             })
-            .or_insert(HashMap::from([(coord, data)]));
+            .or_insert(ChunkTracker {
+                bboxes: None,
+                payloads: BTreeMap::from([(coord, data)]),
+            }
+            );
     }
 
     fn get_chunk_ref(
@@ -144,13 +171,13 @@ impl ChangeSet {
         path: &Path,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.set_chunks.get(path).and_then(|h| h.get(coords))
+        self.set_chunks.get(path).and_then(|h| h.payloads.get(coords))
     }
 
     fn array_chunks_iterator(
         &self,
         path: &Path,
-    ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
+    ) -> impl Iterator<Item = (&ManifestExtents, &ChunkIndices, &Option<ChunkPayload>)> {
         match self.set_chunks.get(path) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
@@ -159,12 +186,13 @@ impl ChangeSet {
 
     fn new_arrays_chunk_iterator(
         &self,
-    ) -> impl Iterator<Item = (PathBuf, ChunkInfo)> + '_ {
+    ) -> impl Iterator<Item = (PathBuf, ManifestExtents, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.array_chunks_iterator(path).filter_map(|(coords, payload)| {
+            self.array_chunks_iterator(path).filter_map(|(extent, coords, payload)| {
                 payload.as_ref().map(|p| {
                     (
                         path.clone(),
+                        extent.clone(),
                         ChunkInfo {
                             node: *node_id,
                             coord: coords.clone(),
@@ -617,14 +645,14 @@ impl Dataset {
                 let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                     self.change_set
                         .array_chunks_iterator(&node.path)
-                        .map(|(idx, _)| idx)
+                        .map(|(_, idx, _)| idx)
                         .collect(),
                 );
 
                 let new_chunks = self
                     .change_set
                     .array_chunks_iterator(&node.path)
-                    .filter_map(move |(idx, payload)| {
+                    .filter_map(move |(_, idx, payload)| {
                         payload.as_ref().map(|payload| {
                             Ok(ChunkInfo {
                                 node: node.id,
@@ -833,7 +861,7 @@ impl Dataset {
         Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
-    /// After changes to the dasate have been made, this generates and writes to `Storage` the updated datastructures.
+    /// After changes to the dataset have been made, this generates and writes to `Storage` the updated datastructures.
     ///
     /// After calling this, changes are reset and the [Dataset] can continue to be used for further
     /// changes.
@@ -841,12 +869,37 @@ impl Dataset {
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
+        // TODO: modify to take a Vec<ChangeSet> for distributed writers
         let mut region_tracker = TableRegionTracker::default();
+        // ideal case:
+        //  - original version + new changeset => new extents, update extent as new chunks are added
+        //  - whichever info is tracked, should be in the manifest. i.e. manifest ~ old changeset
+        //  - deleting chunks
+        // TODO:
+        // (1) Choose a number-of-rows threshold for splitting manifests
+        // (2) maintain bounding box in the changeset
+        // (3) iterate over all chunk coordinates in that bounding box and look them up in `self`
+        // (3) build each bbox's manifest sequentially, encode coordinate relative to bounding box
+        // (4) write each manifest when it is completed.
+        // (5) write updated structure file
+        // TODO: figure out how to add to arrow.
+        for (_path, tracker) in self.change_set.set_chunks.iter() {
+            // Warning: this is one loop over all chunks to create consolidated bboxes
+            tracker.compute_bboxes();
+        }
+
+        // TODO: there is one ManifestTable per bbox. To construct these:
+        // 1. we could iterate through chunks (which will come out in sorted order),
+        // 2. build up all the Vecs needed for all the ManifestTables.
+        // 3. And then construct the arrow structure, write to disk.
+        // In theory we could optimize by having ChunkTracker.iter() return chunks sorted by bbox.
+        // that way we can construct and flush one manifest at a time.
         let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
             region_tracker.update(&chunk.1);
             chunk
         });
         let new_manifest =
+            // encode w.r.t bbox in mk_manifests_table
             match mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await {
                 Ok(man) => man,
                 Err(Ok(e)) => Err(e)?,
@@ -875,6 +928,8 @@ impl Dataset {
     }
 }
 
+// TableRegion refers to the row sequence in the manifest file
+// occupied by the node
 #[derive(Debug, Clone, Default)]
 struct TableRegionTracker(HashMap<NodeId, TableRegion>, u32);
 

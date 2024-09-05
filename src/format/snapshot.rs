@@ -590,6 +590,7 @@ where
                         .expect("Invariant violation: bad manifest ObjectId size");
                     from_row_array.values().append_value(manifest.location.0);
                     to_row_array.values().append_value(manifest.location.1);
+                    // TODO: handle extents here
                 }
                 ref_array.append(true);
                 from_row_array.append(true);

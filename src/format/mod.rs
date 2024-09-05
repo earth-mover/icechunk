@@ -75,6 +75,8 @@ pub type ChunkLength = u64;
 
 pub type TableOffset = u32;
 
+// start and end row occupied in the structure file
+// by a particular node
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableRegion(TableOffset, TableOffset);
 

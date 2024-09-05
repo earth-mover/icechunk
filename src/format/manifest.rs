@@ -17,8 +17,17 @@ use super::{
     IcechunkResult, NodeId, ObjectId, TableOffset, TableRegion,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
+
+impl ManifestExtents {
+    pub fn update(&self, _other: ManifestExtents) {
+        todo!();
+    }
+    pub fn from_coord(_coord: ChunkIndices) -> ManifestExtents {
+        todo!();
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestRef {
@@ -83,13 +92,13 @@ impl ManifestsTable {
         self: Arc<Self>,
         from: Option<TableOffset>,
         to: Option<TableOffset>,
-    ) -> impl Iterator<Item = IcechunkResult<ChunkInfo>> {
+    ) -> impl Iterator<Item = IcechunkResult<(ManifestExtents, ChunkInfo)>> {
         let from = from.unwrap_or(0);
         let to = to.unwrap_or(self.batch.num_rows() as u32);
         (from..to).map(move |idx| self.get_row(idx))
     }
 
-    fn get_row(&self, row: TableOffset) -> IcechunkResult<ChunkInfo> {
+    fn get_row(&self, row: TableOffset) -> IcechunkResult<(ManifestExtents, ChunkInfo)> {
         if row as usize >= self.batch.num_rows() {
             return Err(IcechunkFormatError::InvalidManifestIndex {
                 index: row as usize,
