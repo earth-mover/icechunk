@@ -79,18 +79,20 @@ def merge_bboxes(
         stride = max(max_manifest_rows // n, 1)
 
     print(f"{split_axis=}, {stride=}")
+    print(f"{mins=}, {maxs=}")
 
-    # breakpoints along each axis
+    # breakpoints along each axis, includes +1 to get the last element (yuck)
     breaks = (
         # stride of 1 for axes to the left
-        tuple(tuple(range(size + 1)) for size in chunk_grid_shape[:split_axis])
-        # use `stride` for split_axis
+        tuple(tuple(range(mins[axis], maxs[axis] + 2)) for axis in range(split_axis))
         + (
-            tuple(range(0, chunk_grid_shape[split_axis], stride))
-            + (chunk_grid_shape[split_axis],),
+            # use `stride` for split_axis
+            tuple(range(mins[split_axis], maxs[split_axis] + 1, stride))
+            # add the last element
+            + (maxs[split_axis] + 1,),
         )
-        # all axes to the right are fully included
-        + tuple((0, nrows[axis]) for axis in range(split_axis + 1, ndim))
+        # all axes to the right are fully included, no stride
+        + tuple((mins[axis], maxs[axis] + 1) for axis in range(split_axis + 1, ndim))
     )
     print(f"{breaks=}")
 
@@ -113,7 +115,7 @@ def merge_bboxes(
                 is_empty = True
                 continue
         if not is_empty:
-            out_bboxes.append(bbox_slicers)
+            out_bboxes.append(cast("Bbox", bbox_slicers))
     return out_bboxes
 
 
@@ -132,9 +134,8 @@ def test_bbox():
         (slice(1, 2), slice(0, 2), slice(0, 3)),
         (slice(1, 2), slice(4, 5), slice(0, 3)),
     )
-    assert (
-        tuple(merge_bboxes(bboxes, chunk_grid_shape, max_manifest_rows=6)) == expected
-    )
+    actual = tuple(merge_bboxes(bboxes, chunk_grid_shape, max_manifest_rows=6))
+    assert actual == expected
 
 
 @given(data=st.data(), chunk_grid_shape=chunk_grid_shapes)
@@ -189,7 +190,9 @@ def test_bbox_splitting(data, shape):
     # set max_manifest_rows == 1, get a one bbox per coord
     bbox_1 = tuple(slice(0, size) for size in shape)
     coords = tuple(product(*tuple(range(size) for size in shape)))
-    assert merge_bboxes((bbox_1,), shape, max_manifest_rows=1) == list(coords_to_bboxes(coords))
+    assert merge_bboxes((bbox_1,), shape, max_manifest_rows=1) == list(
+        coords_to_bboxes(coords)
+    )
 
 
 @st.composite
@@ -215,4 +218,6 @@ def bbox_from_shape(draw, shapes=chunk_grid_shapes):
 def test_bbox_idempotent(data, shape):
     # a single bbox is unmodified
     bbox = data.draw(bbox_from_shape(shapes=st.just(shape)))
-    assert merge_bboxes((bbox,), shape, max_manifest_rows=math.prod(shape) + 1) == [bbox]
+    assert merge_bboxes((bbox,), shape, max_manifest_rows=math.prod(shape) + 1) == [
+        bbox
+    ]
