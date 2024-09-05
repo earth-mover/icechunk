@@ -1,6 +1,33 @@
 # Prototype code for bbox merging
 
-from typing import Generator, Iterable, NewType, cast
+# Some notes:
+# 1. We can treat a single chunk coordinate (0, 0, 0) as the Bbox (slice(0,1), slice(0,1), slice(0,1)).
+#    With this in mind,
+#    (a) computing the bbox for a group of chunks is the same as computing the
+#        bbox for a group of bboxes.
+#    (b) "a group of bboxes" might result from distributed writers, or an old bbox and new "update" bbox.
+# 2. Optimizing the bounding box to be "tight" around populated chunks is hard to do without either
+#    sorting the chunks, and/or processing a large number of them at once.
+#    - Optimizing is especially hard when folding an iterator of BBoxes, or in `ChangeSet.set_chunk_ref`. For example,
+#      consider the following chunks written in order: [(slice(0, 1),), (slice(1e5, 1e5+1),),  (slice(1, 2),)]
+#      assuming that chunk 1e5 is so far away that we don't want to merge its Bbox with that of chunk 0.
+#      Ideally we would like to merge to [(slice(0, 2),), slice(1e5, 1e5+1)]. For this we'd need to cluster or sort
+#      so that nearby chunks are together and merge those.
+#      In effect this is at least one full pass through all chunk coordinates in a ChangeSet.
+# 3. One option would be to for
+#     (a) ChangeSet to maintain a sorted list of chunk coordinates as chunks are written.
+#         - we want to do this anyway to write sorted references to enable binary searching in the future, if needed.
+#     (b) Call `ChangeSet.compute_bbox` when we are ready to flush; distributed writers can call this
+#         before sending ChangeSets back to the coordinator.
+#     (c) Merge old bboxes and new "update" bboxes together.
+#     (d) Then iterate over bbox and generate the snapshot file, and manifest file entries.
+# 4. Still need to derisk writing a manifest file with a given bbox and NULL entries.
+# 5. Deleting chunks that are in a previous snapshot isn't handled yet.
+#    - to do this we'd need to know which chunks are missing in the latest snapshot,
+#    - combine with deleted chunks in this changeset
+#    - then determine bounding box -- another pass through all chunk coordinates.
+
+from typing import Generator, Iterable, NewType, cast, Iterator
 import math
 import operator
 from itertools import accumulate, product
@@ -14,10 +41,15 @@ Coord = NewType("Coord", tuple[int, ...])
 chunk_grid_shapes = npst.array_shapes(max_side=10)
 
 
+# TODO: instead consider a present: list[Bbox] state
+# and an update: Bbox
+# that returns list[Bbox]
 def merge_bboxes(
-    bboxes: Iterable[Bbox], chunk_grid_shape: tuple[int, ...], max_manifest_rows: int
+    bboxes: tuple[Bbox], chunk_grid_shape: tuple[int, ...], max_manifest_rows: int
 ) -> list[Bbox]:
     """
+    Merges a sequence of bboxes together.
+
     Parameters
     ----------
     bboxes : Iterable[tuple[slice, ...]]
@@ -31,46 +63,71 @@ def merge_bboxes(
     -------
     tuple[slice, ...]
     """
-
     # This algorithm runs from left to right. This decision follows from the decision
     # to ravel the coordinates in C-order.
     # It determines the "split_axis" threshold defined as
     #    - axes to the right of this axis are preserved whole.
     #    - axes to the left of this axis are split with size 1
     # TODO: A possibly more optimal approach is to sort the axes in order of sparsity,
-    # (sparsity defined as bbox-extent / num-chunks-along-axis)
-    # run this algorithm, and then permute back to the correct axes order.
+    #       (sparsity defined as bbox-extent / num-chunks-along-axis)
+    #       run this algorithm, and then permute back to the correct axes order.
     ndim = len(chunk_grid_shape)
 
+    # Determine the unique indexes along each axis present in each bbox
     # This assumes the bbox is densely populated, which isn't great
     # but conveniently generalizes to treating a single coordinate
-    # location as a single element bbox
+    # location as a single element bbox,
     uniques: list[set[int]] = list(set() for _ in range(ndim))
+    # number of rows occupied by each bbox
+    nrows: list[int] = []
     for bbox in bboxes:
+        n = 1
         for axis, size in zip(range(ndim), chunk_grid_shape):
-            uniques[axis].update(range(*bbox[axis].indices(size)))
+            indices = range(*bbox[axis].indices(size))
+            n *= len(indices)
+            uniques[axis].update(indices)
+        nrows.append(n)
 
-    # Dense manifest case, number of rows is max-min + 1
-    # TODO: use a more efficient minmax function
+    # Figure out the min/max bounding box.
+    # TODO: use the more efficient minmax function in rust,
+    # and parse the bboxes directly
     mins = []
     maxs = []
     for uniq in uniques:
         mins.append(min(uniq))
         maxs.append(max(uniq))
-    nrows = tuple(max - min + 1 for min, max in zip(mins, maxs))
+    # Dense manifest case, number of elements along each axis is max-min + 1
+    numel = tuple(max - min + 1 for min, max in zip(mins, maxs))
+    nrows_all = math.prod(numel)
 
-    cumprod = tuple(reversed(tuple(accumulate(reversed(nrows), func=operator.mul))))
+    # At this point, we basically have the "easy" min/max bounding box.
+    # The rest is being clever about splitting this bounding box in to multiple bboxes
+    # using max_manifest_rows, and potentially trimming empty bboxes.
+    # -----------------------------------------------------------------
+
+    # If the rows required to store coordinates using the min/max bounding box
+    # is greater than (arbitrary factor) x rows requires to store each bounding box separately,
+    # then we don't merge them.
+    # FIXME: This is not robust to chunks coming in unsorted.
+    # Example: for these bboxes [(slice(0, 1),), (slice(1e5, 1e5+1),), (slice(1, 2),)]
+    # we'll never merge (slice(1,2),) with (slice(0,1),) without some kind of clustering,
+    # and the merging
+    # if sum(nrows) / nrows_all < 0.3:
+    #    return list(bboxes)
+
+    # First determine how many chunks are present in every axis to the right of a given axis
+    cumprod = tuple(reversed(tuple(accumulate(reversed(numel), func=operator.mul))))
     print(f"{cumprod=}")
 
-    # This is the "split_axis" threshold, every axis to the left
-    # and this one will be split to construct multiple bboxes
+    # Now calculate the "split_axis"
+    #   - every axis to the left, and this one, will be split to construct multiple bboxes
+    #   - every axis to the right is preserved whole
     # `stride` is use to split `split_axis`,
     # axes to the left are split with stride=1
     # TODO: clean up this if/else
     if max_manifest_rows > cumprod[0]:
         split_axis = 0
-        stride = nrows[split_axis]
-        # stride = cumprod[0]
+        stride = numel[split_axis]
     else:
         for split_axis, n in enumerate(cumprod):
             if n < max_manifest_rows:
@@ -81,18 +138,23 @@ def merge_bboxes(
     print(f"{split_axis=}, {stride=}")
     print(f"{mins=}, {maxs=}")
 
-    # breakpoints along each axis, includes +1 to get the last element (yuck)
-    breaks = (
-        # stride of 1 for axes to the left
-        tuple(tuple(range(mins[axis], maxs[axis] + 2)) for axis in range(split_axis))
-        + (
-            # use `stride` for split_axis
-            tuple(range(mins[split_axis], maxs[split_axis] + 1, stride))
-            # add the last element
-            + (maxs[split_axis] + 1,),
-        )
+    # Calculate breakpoints along each axis that divide the min/max bounding box appropriately
+    strides = (
+        # Use stride of `1` for axes to the left
+        (1,) * split_axis
+        # and `stride` for split_axis.
+        + (stride,)
         # all axes to the right are fully included, no stride
-        + tuple((mins[axis], maxs[axis] + 1) for axis in range(split_axis + 1, ndim))
+        + (None,) * (ndim - split_axis - 1)
+    )
+    breaks = tuple(
+        (
+            # Add 1 to the last element +1 so that a slice object constructed later will include the last element.
+            tuple(range(mins[axis], maxs[axis] + 1, stride or maxs[axis] + 1))
+            # add the last element explicitly
+            + (maxs[axis] + 1,)
+        )
+        for axis, stride in zip(range(ndim), strides)
     )
     print(f"{breaks=}")
 
@@ -103,7 +165,8 @@ def merge_bboxes(
     )
     print(f"{slicers=}")
 
-    # TODO: consider deleting here.
+    # TODO: consider deleting this, or implementing as a future optimization
+    # Now we go through every possible bbox and ask if it is populated.
     out_bboxes: list[Bbox] = []
     for bbox_slicers in product(*slicers):
         is_empty = False
@@ -119,12 +182,24 @@ def merge_bboxes(
     return out_bboxes
 
 
+def fold_bboxes(
+    bbox_iter: Iterator[Bbox], chunk_grid_shape: tuple[int, ...], max_manifest_rows: int
+) -> list[Bbox]:
+    "Runs a fold right on an iterator of BBoxes."
+    state = [next(bbox_iter)]
+    for next_bbox in bbox_iter:
+        print(state)
+        state = merge_bboxes([*state, next_bbox], chunk_grid_shape, max_manifest_rows)
+    return state
+
+
 def coords_to_bboxes(coords: tuple[Coord, ...]) -> Generator[Bbox, None, None]:
     return (cast("Bbox", tuple(slice(i, i + 1) for i in coord)) for coord in coords)
 
 
 def test_bbox():
     chunk_grid_shape = (5, 5, 5)
+    # TODO: scramble the order on these
     chunkidxs = ((0, 1), (0, 4), (0, 1, 2))
     coords = tuple(product(*chunkidxs))
     bboxes = coords_to_bboxes(coords)
@@ -134,7 +209,7 @@ def test_bbox():
         (slice(1, 2), slice(0, 2), slice(0, 3)),
         (slice(1, 2), slice(4, 5), slice(0, 3)),
     )
-    actual = tuple(merge_bboxes(bboxes, chunk_grid_shape, max_manifest_rows=6))
+    actual = tuple(fold_bboxes(bboxes, chunk_grid_shape, max_manifest_rows=6))
     assert actual == expected
 
 
