@@ -2,6 +2,7 @@
 name = "icechunk-python"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -11,7 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 bytes = "1.7.1"
 futures = "0.3.30"
-icechunk = { path = "../", version = "0.1.0" }
+icechunk = { path = "../icechunk", version = "0.1.0" }
 pyo3 = { version = "0.21", features = ["extension-module", "experimental-async"] }
 pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
 tokio = "1.40"
