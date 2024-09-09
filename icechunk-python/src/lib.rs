@@ -23,10 +23,11 @@ struct IcechunkStore {
 #[pymethods]
 impl IcechunkStore {
     #[new]
-    pub async fn from_json(json: String) -> PyResult<Self> {
-        let store = Store::from_json_config(json.as_bytes())
-            .await
-            .map_err(|e| PyValueError::new_err(e))?;
+    pub fn from_json(json: String) -> PyResult<Self> {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let store = rt
+            .block_on(Store::from_json_config(json.as_bytes()))
+            .map_err(PyValueError::new_err)?;
         Ok(Self { store })
     }
 
