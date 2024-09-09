@@ -27,6 +27,7 @@ use crate::{
         ChunkOffset,
         IcechunkFormatError,
     },
+    refs::BranchVersion,
     Dataset, MemCachingStorage, ObjectStorage, Storage,
 };
 
@@ -50,7 +51,10 @@ pub enum StorageConfig {
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
     SnapshotId(ObjectId),
-    // FIXME: other forms of versioning
+    #[serde(rename = "tag_ref")]
+    TagRef(String),
+    #[serde(rename = "branch_tip_ref")]
+    BranchTipRef(String),
 }
 
 #[skip_serializing_none]
@@ -106,16 +110,16 @@ pub enum StoreError {
 }
 
 impl Store {
-    pub fn from_config(config: &StoreConfig) -> Result<Self, String> {
+    pub async fn from_config(config: &StoreConfig) -> Result<Self, String> {
         let storage = mk_storage(&config.storage)?;
-        let dataset = mk_dataset(&config.dataset, storage)?;
+        let dataset = mk_dataset(&config.dataset, storage).await?;
         Ok(Self::new(dataset, config.get_partial_values_concurrency))
     }
 
-    pub fn from_json_config(json: &[u8]) -> Result<Self, String> {
+    pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
         let config: StoreConfig =
             serde_json::from_slice(json).map_err(|e| e.to_string())?;
-        Self::from_config(&config)
+        Self::from_config(&config).await
     }
 
     pub fn new(dataset: Dataset, get_partial_values_concurrency: Option<u16>) -> Self {
@@ -123,6 +127,14 @@ impl Store {
             dataset,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
         }
+    }
+
+    pub async fn commit(
+        &mut self,
+        update_branch_name: &str,
+        message: &str,
+    ) -> Result<(ObjectId, BranchVersion), DatasetError> {
+        self.dataset.commit(update_branch_name, message).await
     }
 
     pub fn dataset(self) -> Dataset {
@@ -429,13 +441,21 @@ impl Store {
     }
 }
 
-fn mk_dataset(
+async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<Dataset, String> {
     let mut builder = match &dataset.previous_version {
         None => Dataset::create(storage),
         Some(VersionInfo::SnapshotId(sid)) => Dataset::update(storage, sid.clone()),
+        Some(VersionInfo::TagRef(tag)) => Dataset::from_tag(storage, tag)
+            .await
+            .map_err(|err| format!("Error fetching tag: {err}"))?,
+        Some(VersionInfo::BranchTipRef(branch)) => {
+            Dataset::from_branch_tip(storage, branch)
+                .await
+                .map_err(|err| format!("Error fetching branch: {err}"))?
+        }
     };
     if let Some(thr) = dataset.inline_chunk_threshold_bytes {
         builder.with_inline_threshold_bytes(thr);

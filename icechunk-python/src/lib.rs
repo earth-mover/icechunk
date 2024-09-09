@@ -23,8 +23,9 @@ struct IcechunkStore {
 #[pymethods]
 impl IcechunkStore {
     #[new]
-    pub fn from_json(json: String) -> PyResult<Self> {
+    pub async fn from_json(json: String) -> PyResult<Self> {
         let store = Store::from_json_config(json.as_bytes())
+            .await
             .map_err(|e| PyValueError::new_err(e))?;
         Ok(Self { store })
     }
