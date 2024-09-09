@@ -920,7 +920,7 @@ mod tests {
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
-        storage::InMemoryStorage,
+        storage::ObjectStorage,
         strategies::*,
     };
 
@@ -1042,7 +1042,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage = InMemoryStorage::new();
+        let storage = ObjectStorage::new_in_memory_store();
 
         let array_id = 2;
         let chunk1 = ChunkInfo {
@@ -1350,7 +1350,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store());
         let mut ds = Dataset::create(Arc::clone(&storage)).build();
 
         // add a new array and retrieve its node
@@ -1530,8 +1531,8 @@ mod tests {
     mod state_machine_test {
         use crate::format::snapshot::NodeData;
         use crate::format::Path;
-        use crate::storage::InMemoryStorage;
         use crate::Dataset;
+        use crate::ObjectStorage;
         use futures::Future;
         // use futures::Future;
         use proptest::prelude::*;
@@ -1701,7 +1702,7 @@ mod tests {
             fn init_test(
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
-                let storage = InMemoryStorage::new();
+                let storage = ObjectStorage::new_in_memory_store();
                 TestDataset {
                     dataset: Dataset::create(Arc::new(storage)).build(),
                     runtime: Runtime::new().unwrap(),

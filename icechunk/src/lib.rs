@@ -20,6 +20,7 @@
 pub mod dataset;
 pub mod format;
 pub mod metadata;
+pub mod refs;
 pub mod storage;
 pub mod strategies;
 pub mod zarr;
