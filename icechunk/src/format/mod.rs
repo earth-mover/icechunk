@@ -28,50 +28,6 @@ fn hex_string_to_bytes(hex_string: &str) -> Result<Vec<u8>, ParseIntError> {
         .collect::<Result<Vec<_>, _>>()
 }
 
-#[serde_as]
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct SnapshotId(#[serde_as(as = "serde_with::hex::Hex")] pub [u8; 16]); // FIXME: this doesn't need to be this big
-
-impl fmt::Debug for SnapshotId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02x}", self.0.iter().format(""))
-    }
-}
-
-impl SnapshotId {
-    pub fn random() -> Self {
-        Self(rand::random())
-    }
-}
-
-impl TryFrom<&[u8]> for SnapshotId {
-    type Error = &'static str;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let buf = value.try_into();
-        buf.map(SnapshotId).map_err(|_| "Invalid SnapshotId buffer length")
-    }
-}
-
-impl TryFrom<&str> for SnapshotId {
-    type Error = &'static str;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let bytes =
-            hex_string_to_bytes(value).map_err(|_| "Invalid SnapshotId string")?;
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl From<&SnapshotId> for String {
-    fn from(value: &SnapshotId) -> Self {
-        value.0.iter().fold(String::new(), |mut output, b| {
-            let _ = write!(output, "{b:02x}");
-            output
-        })
-    }
-}
-
 /// The id of a file in object store
 // FIXME: should this be passed by ref everywhere?
 #[serde_as]
@@ -220,28 +176,6 @@ pub trait BatchLike {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn test_snapshot_id_serialization() {
-        let sid = SnapshotId([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-        assert_eq!(
-            serde_json::to_string(&sid).unwrap(),
-            r#""000102030405060708090a0b0c0d0e0f""#
-        );
-        assert_eq!(String::from(&sid), "000102030405060708090a0b0c0d0e0f");
-        assert_eq!(
-            sid,
-            SnapshotId::try_from("000102030405060708090a0b0c0d0e0f").unwrap()
-        );
-        let sid = SnapshotId::random();
-        assert_eq!(
-            serde_json::from_slice::<SnapshotId>(
-                serde_json::to_vec(&sid).unwrap().as_slice()
-            )
-            .unwrap(),
-            sid,
-        );
-    }
 
     #[test]
     fn test_object_id_serialization() {

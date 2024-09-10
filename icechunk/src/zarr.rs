@@ -32,7 +32,6 @@ use crate::{
 };
 
 pub use crate::format::ObjectId;
-pub use crate::format::SnapshotId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
