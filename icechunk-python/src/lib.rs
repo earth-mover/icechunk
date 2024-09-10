@@ -37,7 +37,7 @@ async fn pyicechunk_store_from_json_config(json: String) -> PyResult<PyIcechunkS
 
 #[pymethods]
 impl PyIcechunkStore {
-    pub async fn checkout_ref(
+    pub async fn checkout_snapshot(
         &mut self,
         snapshot_id: String,
     ) -> PyIcechunkStoreResult<()> {
@@ -126,7 +126,7 @@ impl PyIcechunkStore {
         key: String,
         value: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.store.clone();
+        let store = Arc::clone(&self.store);
 
         // Most of our async functions use structured coroutines so they can be called directly from
         // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
@@ -169,7 +169,7 @@ impl PyIcechunkStore {
         let keys =
             key_start_values.iter().map(|(key, _, _)| key.clone()).collect::<Vec<_>>();
 
-        let store = self.store.clone();
+        let store = Arc::clone(&self.store);
 
         // Most of our async functions use structured coroutines so they can be called directly from
         // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
