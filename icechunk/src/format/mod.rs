@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{ops::Range, path::PathBuf};
+use std::{fmt::Debug, num::ParseIntError, ops::Range, path::PathBuf};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
@@ -15,6 +15,13 @@ pub mod manifest;
 pub mod snapshot;
 
 pub type Path = PathBuf;
+
+fn hex_string_to_bytes(hex_string: &str) -> Result<Vec<u8>, ParseIntError> {
+    (0..hex_string.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex_string[i..i + 2], 16))
+        .collect::<Result<Vec<_>, _>>()
+}
 
 #[serde_as]
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -32,17 +39,28 @@ impl SnapshotId {
     }
 }
 
+impl TryFrom<&[u8]> for SnapshotId {
+    type Error = &'static str;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let buf = value.try_into();
+        buf.map(SnapshotId).map_err(|_| "Invalid SnapshotId buffer length")
+    }
+}
+
 impl TryFrom<&str> for SnapshotId {
     type Error = &'static str;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        serde_json::from_str(value).map_err(|_| "Invalid SnapshotId string")
+        let bytes = hex_string_to_bytes(value)
+            .map_err(|_| "Invalid SnapshotId string")?;
+        Self::try_from(bytes.as_slice())
     }
 }
 
 impl From<&SnapshotId> for String {
     fn from(value: &SnapshotId) -> Self {
-        serde_json::to_string(value).expect("SnapshotId serialization failed")
+        value.0.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
 
@@ -81,13 +99,15 @@ impl TryFrom<&str> for ObjectId {
     type Error = &'static str;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        serde_json::from_str(value).map_err(|_| "Invalid ObjectId string")
+        let bytes = hex_string_to_bytes(value)
+            .map_err(|_| "Invalid ObjectId string")?;
+        Self::try_from(bytes.as_slice())
     }
 }
 
 impl From<&ObjectId> for String {
     fn from(value: &ObjectId) -> Self {
-        serde_json::to_string(value).expect("ObjectId serialization failed")
+        value.0.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
 
@@ -198,8 +218,11 @@ mod tests {
             serde_json::to_string(&sid).unwrap(),
             r#""000102030405060708090a0b0c0d0e0f""#
         );
-        assert_eq!(String::from(&sid), r#""000102030405060708090a0b0c0d0e0f""#);
-        assert_eq!(sid, SnapshotId::try_from(r#""000102030405060708090a0b0c0d0e0f""#).unwrap());
+        assert_eq!(String::from(&sid), "000102030405060708090a0b0c0d0e0f");
+        assert_eq!(
+            sid,
+            SnapshotId::try_from("000102030405060708090a0b0c0d0e0f").unwrap()
+        );
         let sid = SnapshotId::random();
         assert_eq!(
             serde_json::from_slice::<SnapshotId>(
@@ -217,8 +240,8 @@ mod tests {
             serde_json::to_string(&sid).unwrap(),
             r#""000102030405060708090a0b0c0d0e0f""#
         );
-        assert_eq!(String::from(&sid), r#""000102030405060708090a0b0c0d0e0f""#);
-        assert_eq!(sid, ObjectId::try_from(r#""000102030405060708090a0b0c0d0e0f""#).unwrap());
+        assert_eq!(String::from(&sid), "000102030405060708090a0b0c0d0e0f");
+        assert_eq!(sid, ObjectId::try_from("000102030405060708090a0b0c0d0e0f").unwrap());
         let sid = ObjectId::random();
         assert_eq!(
             serde_json::from_slice::<ObjectId>(
@@ -227,6 +250,5 @@ mod tests {
             .unwrap(),
             sid,
         );
-
     }
 }
