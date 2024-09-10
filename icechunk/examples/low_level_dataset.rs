@@ -6,7 +6,7 @@ use icechunk::{
         ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
         FillValue, Path, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
-    storage::{InMemoryStorage, MemCachingStorage},
+    storage::{MemCachingStorage, ObjectStorage},
     zarr::StoreError,
     Dataset, Storage,
 };
@@ -27,7 +27,8 @@ let mut ds = Dataset::create(Arc::clone(&storage));
 "#,
     );
 
-    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(ObjectStorage::new_in_memory_store());
     let mut ds = Dataset::create(Arc::new(MemCachingStorage::new(
         Arc::clone(&storage),
         100_000_000,

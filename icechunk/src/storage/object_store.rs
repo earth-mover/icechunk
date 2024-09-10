@@ -1,14 +1,14 @@
 use core::fmt;
-use std::{fs::create_dir_all, sync::Arc};
+use std::{fs::create_dir_all, future::ready, sync::Arc};
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
     buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, ObjectStore,
+    path::Path as ObjectPath, ObjectStore, PutMode, PutOptions, PutPayload,
 };
 use parquet::arrow::{
     async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
@@ -20,12 +20,13 @@ use crate::format::{
     ChunkOffset, ObjectId, Path,
 };
 
-use super::{Storage, StorageError};
+use super::{Storage, StorageError, StorageResult};
 
 const SNAPSHOT_PREFIX: &str = "s/";
 const MANIFEST_PREFIX: &str = "m/";
 // const ATTRIBUTES_PREFIX: &str = "a/";
 const CHUNK_PREFIX: &str = "c/";
+const REF_PREFIX: &str = "r";
 
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
@@ -39,7 +40,8 @@ impl ObjectStorage {
     pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
         create_dir_all(prefix.as_path())?;
         let prefix = prefix.display().to_string();
-        Ok(ObjectStorage { store: Arc::new(LocalFileSystem::new()), prefix })
+        let store = Arc::new(LocalFileSystem::new_with_prefix(prefix.clone())?);
+        Ok(ObjectStorage { store, prefix: "".to_string() })
     }
     pub fn new_s3_store_from_env(
         bucket_name: impl Into<String>,
@@ -104,6 +106,16 @@ impl ObjectStorage {
         writer.write(batch).await?;
         writer.close().await?;
         Ok(())
+    }
+
+    fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
+        path.prefix_match(&ObjectPath::from(format!("{}/{}", self.prefix, prefix)))
+            .map(|it| it.collect())
+    }
+
+    fn ref_key(&self, ref_key: &str) -> ObjectPath {
+        // ObjectPath knows how to deal with empty path parts: bar//foo
+        ObjectPath::from(format!("{}/{}/{}", self.prefix.as_str(), REF_PREFIX, ref_key))
     }
 }
 
@@ -201,6 +213,68 @@ impl Storage for ObjectStorage {
         write.write(&bytes);
         write.finish().await?;
         Ok(())
+    }
+
+    async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
+        let key = self.ref_key(ref_key);
+        match self.store.get(&key).await {
+            Ok(res) => Ok(res.bytes().await?),
+            Err(object_store::Error::NotFound { .. }) => {
+                Err(StorageError::RefNotFound(key.to_string()))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn ref_names(&self) -> StorageResult<Vec<String>> {
+        // FIXME: i don't think object_store's implementation of list_with_delimiter is any good
+        // we need to test if it even works beyond 1k refs
+        let prefix = self.ref_key("");
+        let ref_prefix = ObjectPath::from(REF_PREFIX);
+
+        Ok(self
+            .store
+            .list_with_delimiter(Some(prefix).as_ref())
+            .await?
+            .common_prefixes
+            .iter()
+            .filter_map(|path| {
+                self.drop_prefix(&ref_prefix, path).map(|path| path.to_string())
+            })
+            .collect())
+    }
+
+    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+        let prefix = self.ref_key(ref_name);
+        self.store
+            .list(Some(prefix.clone()).as_ref())
+            .map_err(|e| e.into())
+            .and_then(move |meta| {
+                ready(
+                    self.drop_prefix(&prefix, &meta.location)
+                        .map(|path| path.to_string())
+                        .ok_or(StorageError::Other(
+                            "Bug in ref prefix logic".to_string(),
+                        )),
+                )
+            })
+            .boxed()
+    }
+
+    async fn write_ref(&self, ref_key: &str, bytes: Bytes) -> StorageResult<()> {
+        let key = self.ref_key(ref_key);
+        let opts = PutOptions { mode: PutMode::Create, ..PutOptions::default() };
+
+        self.store
+            .put_opts(&key, PutPayload::from_bytes(bytes), opts)
+            .await
+            .map_err(|e| match e {
+                object_store::Error::AlreadyExists { path, .. } => {
+                    StorageError::RefAlreadyExists(path)
+                }
+                _ => e.into(),
+            })
+            .map(|_| ())
     }
 }
 

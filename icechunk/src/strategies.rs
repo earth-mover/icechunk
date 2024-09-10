@@ -11,8 +11,7 @@ use crate::dataset::{
 use crate::format::snapshot::ZarrArrayMetadata;
 use crate::format::Path;
 use crate::metadata::{ArrayShape, DimensionNames};
-use crate::storage::InMemoryStorage;
-use crate::Dataset;
+use crate::{Dataset, ObjectStorage};
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
@@ -21,7 +20,7 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 
 pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
     // FIXME: add storages strategy
-    let storage = InMemoryStorage::new();
+    let storage = ObjectStorage::new_in_memory_store();
     let dataset = Dataset::create(Arc::new(storage)).build();
     prop_oneof![Just(dataset)]
 }
