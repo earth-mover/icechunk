@@ -71,7 +71,7 @@ impl Ref {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct BranchVersion(u64);
+pub struct BranchVersion(pub u64);
 
 impl BranchVersion {
     fn decode(version: &str) -> RefResult<Self> {
@@ -126,7 +126,7 @@ fn branch_key(branch_name: &str, version_id: &str) -> RefResult<String> {
 }
 
 pub async fn create_tag(
-    storage: &dyn Storage,
+    storage: &(dyn Storage + Send + Sync),
     name: &str,
     snapshot: ObjectId,
     timestamp: DateTime<Utc>,
@@ -148,7 +148,7 @@ pub async fn create_tag(
 
 #[async_recursion(?Send)]
 pub async fn update_branch(
-    storage: &dyn Storage,
+    storage: &(dyn Storage + Send + Sync),
     name: &str,
     snapshot: ObjectId,
     parent_snapshot: Option<&ObjectId>,
@@ -197,13 +197,13 @@ pub async fn update_branch(
     }
 }
 
-pub async fn list_refs(storage: &dyn Storage) -> RefResult<Vec<Ref>> {
+pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<Ref>> {
     let all = storage.ref_names().await?;
     all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()
 }
 
 pub async fn branch_history<'a, 'b>(
-    storage: &'a dyn Storage,
+    storage: &'a (dyn Storage + Send + Sync),
     branch: &'b str,
 ) -> RefResult<impl Stream<Item = RefResult<BranchVersion>> + 'a> {
     let key = branch_root(branch)?;
@@ -217,7 +217,7 @@ pub async fn branch_history<'a, 'b>(
 }
 
 pub async fn last_branch_version(
-    storage: &dyn Storage,
+    storage: &(dyn Storage + Send + Sync),
     branch: &str,
 ) -> RefResult<BranchVersion> {
     // TODO! optimize
@@ -225,7 +225,10 @@ pub async fn last_branch_version(
     all.try_next().await?.ok_or(RefError::RefNotFound(branch.to_string()))
 }
 
-pub async fn fetch_tag(storage: &dyn Storage, name: &str) -> RefResult<RefData> {
+pub async fn fetch_tag(
+    storage: &(dyn Storage + Send + Sync),
+    name: &str,
+) -> RefResult<RefData> {
     let path = tag_key(name)?;
     match storage.get_ref(path.as_str()).await {
         Ok(data) => Ok(serde_json::from_slice(data.as_ref())?),
@@ -237,7 +240,7 @@ pub async fn fetch_tag(storage: &dyn Storage, name: &str) -> RefResult<RefData> 
 }
 
 pub async fn fetch_branch(
-    storage: &dyn Storage,
+    storage: &(dyn Storage + Send + Sync),
     name: &str,
     version: &BranchVersion,
 ) -> RefResult<RefData> {
@@ -246,12 +249,23 @@ pub async fn fetch_branch(
     Ok(serde_json::from_slice(data.as_ref())?)
 }
 
-pub async fn fetch_ref(storage: &dyn Storage, ref_name: &str) -> RefResult<RefData> {
+pub async fn fetch_branch_tip(
+    storage: &(dyn Storage + Send + Sync),
+    name: &str,
+) -> RefResult<RefData> {
+    let version = last_branch_version(storage, name).await?;
+    fetch_branch(storage, name, &version).await
+}
+
+pub async fn fetch_ref(
+    storage: &(dyn Storage + Send + Sync),
+    ref_name: &str,
+) -> RefResult<(Ref, RefData)> {
     match fetch_tag(storage, ref_name).await {
-        Ok(from_ref) => Ok(from_ref),
+        Ok(from_ref) => Ok((Ref::Tag(ref_name.to_string()), from_ref)),
         Err(RefError::RefNotFound(_)) => {
-            let version = last_branch_version(storage, ref_name).await?;
-            fetch_branch(storage, ref_name, &version).await
+            let data = fetch_branch_tip(storage, ref_name).await?;
+            Ok((Ref::Branch(ref_name.to_string()), data))
         }
         Err(err) => Err(err),
     }
@@ -302,7 +316,7 @@ mod tests {
 
         assert_eq!(
             fetch_tag(&storage, "tag1").await?,
-            fetch_ref(&storage, "tag1").await?
+            fetch_ref(&storage, "tag1").await?.1
         );
 
         let res = fetch_tag(&storage, "tag2").await?;
@@ -312,7 +326,7 @@ mod tests {
 
         assert_eq!(
             fetch_tag(&storage, "tag2").await?,
-            fetch_ref(&storage, "tag2").await?
+            fetch_ref(&storage, "tag2").await?.1
         );
 
         assert_eq!(
@@ -368,7 +382,7 @@ mod tests {
         );
         assert_eq!(
             fetch_branch(&storage, "branch1", &BranchVersion(0)).await?,
-            fetch_ref(&storage, "branch1").await?
+            fetch_ref(&storage, "branch1").await?.1
         );
 
         assert_eq!(
@@ -408,7 +422,7 @@ mod tests {
 
         assert_eq!(
             fetch_branch(&storage, "branch1", &BranchVersion(1)).await?,
-            fetch_ref(&storage, "branch1").await?
+            fetch_ref(&storage, "branch1").await?.1
         );
 
         let sid = ObjectId::random();
@@ -447,16 +461,19 @@ mod tests {
 
         assert_eq!(
             fetch_branch(&storage, "branch1", &BranchVersion(2)).await?,
-            fetch_ref(&storage, "branch1").await?
+            fetch_ref(&storage, "branch1").await?.1
         );
 
         assert_eq!(
             fetch_ref(&storage, "branch1").await?,
-            RefData {
-                snapshot: sid.clone(),
-                timestamp: time,
-                properties: properties.clone()
-            }
+            (
+                Ref::Branch("branch1".to_string()),
+                RefData {
+                    snapshot: sid.clone(),
+                    timestamp: time,
+                    properties: properties.clone()
+                }
+            )
         );
 
         Ok(())

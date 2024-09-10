@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }}
     "#;
 
-    let store = Store::from_json_config(store_config_json)?;
+    let store = Store::from_json_config(store_config_json).await?;
     let store = Arc::new(RwLock::new(store));
 
     store
