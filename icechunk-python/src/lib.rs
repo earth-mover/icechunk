@@ -20,17 +20,21 @@ struct IcechunkStore {
     store: Store,
 }
 
-#[pymethods]
 impl IcechunkStore {
-    #[new]
-    pub fn from_json(json: String) -> PyResult<Self> {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-        let store = rt
-            .block_on(Store::from_json_config(json.as_bytes()))
-            .map_err(PyValueError::new_err)?;
+    async fn from_json_config(json: &[u8]) -> Result<Self, String> {
+        let store = Store::from_json_config(json).await?;
         Ok(Self { store })
     }
+}
 
+#[pyfunction]
+async fn icechunk_store_from_json_config(json: String) -> PyResult<IcechunkStore> {
+    let json = json.as_bytes();
+    IcechunkStore::from_json_config(json).await.map_err(PyValueError::new_err)
+}
+
+#[pymethods]
+impl IcechunkStore {
     pub async fn empty(&self) -> IcechunkStoreResult<bool> {
         let is_empty = self.store.empty().await?;
         Ok(is_empty)
@@ -182,5 +186,6 @@ fn pin_extend_stream<'a>(
 #[pymodule]
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<IcechunkStore>()?;
+    m.add_function(wrap_pyfunction!(icechunk_store_from_json_config, m)?)?;
     Ok(())
 }
