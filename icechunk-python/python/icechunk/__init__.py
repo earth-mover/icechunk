@@ -24,6 +24,13 @@ class IcechunkStore(Store, SyncMixin):
         store = await pyicechunk_store_from_json_config(config_str)
         return IcechunkStore(store=store, mode=mode, *args, **kwargs)
     
+    async def checkout(self, snapshot_id: str) -> None:
+        '''Checkout a snapshot by its id.
+        
+        TODO: Support branches and tags.
+        '''
+        return await self._store.checkout_ref(snapshot_id)
+
     async def commit(self, update_branch_name: str, message: str) -> str:
         return await self._store.commit(update_branch_name, message)
 

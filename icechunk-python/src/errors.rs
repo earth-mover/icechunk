@@ -38,4 +38,10 @@ impl From<String> for PyIcechunkStoreError {
     }
 }
 
+impl From<&str> for PyIcechunkStoreError {
+    fn from(other: &str) -> Self {
+        Self(PyValueError::new_err(other.to_owned()))
+    }
+}
+
 pub type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;

@@ -11,6 +11,7 @@ use ::icechunk::{
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
+use icechunk::zarr::{ObjectId, VersionInfo};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use streams::PyAsyncStringGenerator;
 use tokio::sync::{Mutex, RwLock};
@@ -36,6 +37,17 @@ async fn pyicechunk_store_from_json_config(json: String) -> PyResult<PyIcechunkS
 
 #[pymethods]
 impl PyIcechunkStore {
+    pub async fn checkout_ref(
+        &mut self,
+        snapshot_id: String,
+    ) -> PyIcechunkStoreResult<()> {
+        let snapshot_id = ObjectId::try_from(snapshot_id.as_str())
+            .map_err(|_| PyIcechunkStoreError::from("Invalid SnapshotId"))?;
+        let mut store = self.store.write().await;
+        store.checkout(VersionInfo::SnapshotId(snapshot_id)).await?;
+        Ok(())
+    }
+
     pub async fn commit(
         &mut self,
         update_branch_name: String,
