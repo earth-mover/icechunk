@@ -41,8 +41,9 @@ impl PyIcechunkStore {
         &mut self,
         snapshot_id: String,
     ) -> PyIcechunkStoreResult<()> {
-        let snapshot_id = ObjectId::try_from(snapshot_id.as_str())
-            .map_err(|_| PyIcechunkStoreError::from("Invalid SnapshotId"))?;
+        let snapshot_id = ObjectId::try_from(snapshot_id.as_str()).map_err(|_| {
+            PyIcechunkStoreError::UnkownError("Invalid SnapshotId".to_owned())
+        })?;
         let mut store = self.store.write().await;
         store.checkout(VersionInfo::SnapshotId(snapshot_id)).await?;
         Ok(())
