@@ -225,7 +225,10 @@ pub async fn last_branch_version(
     all.try_next().await?.ok_or(RefError::RefNotFound(branch.to_string()))
 }
 
-pub async fn fetch_tag(storage: &(dyn Storage + Send + Sync), name: &str) -> RefResult<RefData> {
+pub async fn fetch_tag(
+    storage: &(dyn Storage + Send + Sync),
+    name: &str,
+) -> RefResult<RefData> {
     let path = tag_key(name)?;
     match storage.get_ref(path.as_str()).await {
         Ok(data) => Ok(serde_json::from_slice(data.as_ref())?),
@@ -246,7 +249,10 @@ pub async fn fetch_branch(
     Ok(serde_json::from_slice(data.as_ref())?)
 }
 
-pub async fn fetch_branch_tip(storage: &(dyn Storage + Send + Sync), name: &str) -> RefResult<RefData> {
+pub async fn fetch_branch_tip(
+    storage: &(dyn Storage + Send + Sync),
+    name: &str,
+) -> RefResult<RefData> {
     let version = last_branch_version(storage, name).await?;
     fetch_branch(storage, name, &version).await
 }

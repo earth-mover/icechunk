@@ -19,7 +19,6 @@ use tokio::sync::Mutex;
 struct IcechunkStore {
     store: Store,
 }
-    
 
 impl IcechunkStore {
     async fn from_json_config(json: &[u8]) -> Result<Self, String> {
