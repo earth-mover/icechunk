@@ -32,6 +32,20 @@ impl SnapshotId {
     }
 }
 
+impl TryFrom<&str> for SnapshotId {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        serde_json::from_str(value).map_err(|_| "Invalid SnapshotId string")
+    }
+}
+
+impl From<&SnapshotId> for String {
+    fn from(value: &SnapshotId) -> Self {
+        serde_json::to_string(value).expect("SnapshotId serialization failed")
+    }
+}
+
 /// The id of a file in object store
 // FIXME: should this be passed by ref everywhere?
 #[serde_as]
@@ -60,6 +74,20 @@ impl TryFrom<&[u8]> for ObjectId {
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let buf = value.try_into();
         buf.map(ObjectId).map_err(|_| "Invalid ObjectId buffer length")
+    }
+}
+
+impl TryFrom<&str> for ObjectId {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        serde_json::from_str(value).map_err(|_| "Invalid ObjectId string")
+    }
+}
+
+impl From<&ObjectId> for String {
+    fn from(value: &ObjectId) -> Self {
+        serde_json::to_string(value).expect("ObjectId serialization failed")
     }
 }
 
@@ -170,6 +198,8 @@ mod tests {
             serde_json::to_string(&sid).unwrap(),
             r#""000102030405060708090a0b0c0d0e0f""#
         );
+        assert_eq!(String::from(&sid), r#""000102030405060708090a0b0c0d0e0f""#);
+        assert_eq!(sid, SnapshotId::try_from(r#""000102030405060708090a0b0c0d0e0f""#).unwrap());
         let sid = SnapshotId::random();
         assert_eq!(
             serde_json::from_slice::<SnapshotId>(
@@ -187,6 +217,8 @@ mod tests {
             serde_json::to_string(&sid).unwrap(),
             r#""000102030405060708090a0b0c0d0e0f""#
         );
+        assert_eq!(String::from(&sid), r#""000102030405060708090a0b0c0d0e0f""#);
+        assert_eq!(sid, ObjectId::try_from(r#""000102030405060708090a0b0c0d0e0f""#).unwrap());
         let sid = ObjectId::random();
         assert_eq!(
             serde_json::from_slice::<ObjectId>(
@@ -195,5 +227,6 @@ mod tests {
             .unwrap(),
             sid,
         );
+
     }
 }

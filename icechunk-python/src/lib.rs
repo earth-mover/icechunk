@@ -11,7 +11,6 @@ use ::icechunk::{
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
-use icechunk::{format::IcechunkResult, refs::BranchVersion};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use streams::PyAsyncStringGenerator;
 use tokio::sync::{Mutex, RwLock};
@@ -41,7 +40,7 @@ impl PyIcechunkStore {
         &mut self,
         update_branch_name: String,
         message: String,
-    ) -> PyIcechunkStoreResult<u64> {
+    ) -> PyIcechunkStoreResult<String> {
         // let store = self.store.clone();
 
         // // Most of our async functions use structured coroutines so they can be called directly from
@@ -59,9 +58,9 @@ impl PyIcechunkStore {
         //     Ok(())
         // });
 
-        let result =
+        let (oid, _version) =
             self.store.write().await.commit(&update_branch_name, &message).await?;
-        Ok(result.1 .0)
+        Ok(String::from(&oid))
     }
 
     pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {

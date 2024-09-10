@@ -23,6 +23,9 @@ class IcechunkStore(Store, SyncMixin):
         config_str = json.dumps(config)
         store = await pyicechunk_store_from_json_config(config_str)
         return IcechunkStore(store=store, mode=mode, *args, **kwargs)
+    
+    async def commit(self, update_branch_name: str, message: str) -> str:
+        return await self._store.commit(update_branch_name, message)
 
     async def empty(self) -> bool:
         return await self._store.empty()
