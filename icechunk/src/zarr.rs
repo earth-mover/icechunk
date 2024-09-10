@@ -138,6 +138,21 @@ impl Store {
         }
     }
 
+    pub async fn checkout(&mut self, version: VersionInfo) -> Result<(), DatasetError> {
+        let storage = self.dataset.storage().clone();
+        let dataset = match version {
+            VersionInfo::SnapshotId(sid) => Dataset::update(storage, sid),
+            VersionInfo::TagRef(tag) => Dataset::from_tag(storage, &tag).await?,
+            VersionInfo::BranchTipRef(branch) => {
+                Dataset::from_branch_tip(storage, &branch).await?
+            }
+        }
+        .build();
+
+        self.dataset = dataset;
+        Ok(())
+    }
+
     pub async fn commit(
         &mut self,
         update_branch_name: &str,
@@ -1312,6 +1327,42 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store());
+        let ds = Dataset::create(Arc::clone(&storage)).build();
+        let mut store = Store::new(ds, None);
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+
+        let (snapshot_id, _version) =
+            store.commit("main", "initial commit").await.unwrap();
+
+        let new_data = Bytes::copy_from_slice(b"world");
+        store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
+        let (new_snapshot_id, _version) = store.commit("main", "update").await.unwrap();
+
+        store.checkout(VersionInfo::SnapshotId(snapshot_id)).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
+
+        store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), new_data);
+
+        Ok(())
+    }
+
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
@@ -1405,6 +1456,60 @@ mod tests {
             },
             serde_json::from_str(json)?
         );
+
+        let json = r#"
+            {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
+             "dataset": {}
+            }
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                storage: StorageConfig::S3FileSystem {
+                    bucket: String::from("test"),
+                    prefix: String::from("root"),
+                    access_key_id: None,
+                    secret_access_key: None,
+                    endpoint: None
+                },
+                get_partial_values_concurrency: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+        {"storage":{
+             "type": "s3", 
+             "bucket":"test", 
+             "prefix":"root", 
+             "access_key_id":"my-key", 
+             "secret_access_key":"my-secret-key", 
+             "endpoint": "http://localhost:9000"
+         },
+         "dataset": {}
+        }
+    "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                storage: StorageConfig::S3FileSystem {
+                    bucket: String::from("test"),
+                    prefix: String::from("root"),
+                    access_key_id: Some(String::from("my-key")),
+                    secret_access_key: Some(String::from("my-secret-key")),
+                    endpoint: Some(String::from("http://localhost:9000"))
+                },
+                get_partial_values_concurrency: None,
+            },
+            serde_json::from_str(json)?
+        );
+
         Ok(())
     }
 }
