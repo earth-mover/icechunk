@@ -9,21 +9,18 @@ use ::icechunk::{
     Store,
 };
 use bytes::Bytes;
-use errors::{IcechunkStoreError, IcechunkStoreResult};
+use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
-use streams::AsyncStringGenerator;
-use tokio::{
-    runtime::Runtime,
-    sync::{Mutex, RwLock},
-};
+use streams::PyAsyncStringGenerator;
+use tokio::sync::{Mutex, RwLock};
 
 #[pyclass]
-struct IcechunkStore {
+struct PyIcechunkStore {
     store: Arc<RwLock<Store>>,
 }
 
-impl IcechunkStore {
+impl PyIcechunkStore {
     async fn from_json_config(json: &[u8]) -> Result<Self, String> {
         let store = Store::from_json_config(json).await?;
         let store = Arc::new(RwLock::new(store));
@@ -32,19 +29,19 @@ impl IcechunkStore {
 }
 
 #[pyfunction]
-async fn icechunk_store_from_json_config(json: String) -> PyResult<IcechunkStore> {
+async fn pyicechunk_store_from_json_config(json: String) -> PyResult<PyIcechunkStore> {
     let json = json.as_bytes();
-    IcechunkStore::from_json_config(json).await.map_err(PyValueError::new_err)
+    PyIcechunkStore::from_json_config(json).await.map_err(PyValueError::new_err)
 }
 
 #[pymethods]
-impl IcechunkStore {
-    pub async fn empty(&self) -> IcechunkStoreResult<bool> {
+impl PyIcechunkStore {
+    pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {
         let is_empty = self.store.read().await.empty().await?;
         Ok(is_empty)
     }
 
-    pub async fn clear(&mut self) -> IcechunkStoreResult<()> {
+    pub async fn clear(&mut self) -> PyIcechunkStoreResult<()> {
         self.store.write().await.clear().await?;
         Ok(())
     }
@@ -53,7 +50,7 @@ impl IcechunkStore {
         &self,
         key: String,
         byte_range: Option<ByteRange>,
-    ) -> IcechunkStoreResult<PyObject> {
+    ) -> PyIcechunkStoreResult<PyObject> {
         let byte_range = byte_range.unwrap_or((None, None));
         let data = self.store.read().await.get(&key, &byte_range).await?;
         let pybytes = Python::with_gil(|py| {
@@ -66,7 +63,7 @@ impl IcechunkStore {
     pub async fn get_partial_values(
         &self,
         key_ranges: Vec<(String, ByteRange)>,
-    ) -> IcechunkStoreResult<Vec<Option<PyObject>>> {
+    ) -> PyIcechunkStoreResult<Vec<Option<PyObject>>> {
         let iter = key_ranges.into_iter();
         let result = self
             .store
@@ -91,12 +88,12 @@ impl IcechunkStore {
         Ok(result)
     }
 
-    pub async fn exists<'a>(&self, key: String) -> IcechunkStoreResult<bool> {
+    pub async fn exists<'a>(&self, key: String) -> PyIcechunkStoreResult<bool> {
         let exists = self.store.read().await.exists(&key).await?;
         Ok(exists)
     }
 
-    pub fn supports_writes(&self) -> IcechunkStoreResult<bool> {
+    pub fn supports_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_writes = self.store.blocking_read().supports_writes()?;
         Ok(supports_writes)
     }
@@ -109,28 +106,28 @@ impl IcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.store.clone();
 
-        // Most pyo3 functions are structured coroutinesm so they can be called directly from 
-        // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn 
-        // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active 
+        // Most pyo3 functions are structured coroutinesm so they can be called directly from
+        // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
+        // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
         // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
-        // In the future this will hopefully not be necessary, 
+        // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let mut store = store.write().await;
             let result = store
                 .set(&key, Bytes::from(value))
                 .await
-                .map_err(IcechunkStoreError::from)?;
+                .map_err(PyIcechunkStoreError::from)?;
             Ok(result)
         })
     }
 
-    pub async fn delete(&mut self, key: String) -> IcechunkStoreResult<()> {
+    pub async fn delete(&mut self, key: String) -> PyIcechunkStoreResult<()> {
         self.store.write().await.delete(&key).await?;
         Ok(())
     }
 
-    pub fn supports_partial_writes(&self) -> IcechunkStoreResult<bool> {
+    pub fn supports_partial_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_partial_writes =
             self.store.blocking_read().supports_partial_writes()?;
         Ok(supports_partial_writes)
@@ -152,11 +149,11 @@ impl IcechunkStore {
 
         let store = self.store.clone();
 
-        // Most pyo3 functions are structured coroutinesm so they can be called directly from 
-        // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn 
-        // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active 
+        // Most pyo3 functions are structured coroutinesm so they can be called directly from
+        // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
+        // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
         // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
-        // In the future this will hopefully not be necessary, 
+        // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let mut store = store.write().await;
@@ -170,41 +167,41 @@ impl IcechunkStore {
             let result = store
                 .set_partial_values(mapped_to_bytes)
                 .await
-                .map_err(IcechunkStoreError::from)?;
+                .map_err(PyIcechunkStoreError::from)?;
             Ok(result)
         })
     }
 
-    pub fn supports_listing(&self) -> IcechunkStoreResult<bool> {
+    pub fn supports_listing(&self) -> PyIcechunkStoreResult<bool> {
         let supports_listing = self.store.blocking_read().supports_listing()?;
         Ok(supports_listing)
     }
 
-    pub async fn list(&self) -> IcechunkStoreResult<AsyncStringGenerator> {
+    pub async fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
         let store = self.store.read().await;
         let list = store.list().await?;
         let prepared_list = pin_extend_stream(list);
-        Ok(AsyncStringGenerator::new(prepared_list))
+        Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
     pub async fn list_prefix(
         &self,
         prefix: String,
-    ) -> IcechunkStoreResult<AsyncStringGenerator> {
+    ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
         let store = self.store.read().await;
         let list = store.list_prefix(&prefix).await?;
         let prepared_list = pin_extend_stream(list);
-        Ok(AsyncStringGenerator::new(prepared_list))
+        Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
     pub async fn list_dir(
         &self,
         prefix: String,
-    ) -> IcechunkStoreResult<AsyncStringGenerator> {
+    ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
         let store = self.store.read().await;
         let list = store.list_dir(&prefix).await?;
         let prepared_list = pin_extend_stream(list);
-        Ok(AsyncStringGenerator::new(prepared_list))
+        Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 }
 
@@ -231,7 +228,7 @@ fn pin_extend_stream<'a>(
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<IcechunkStore>()?;
-    m.add_function(wrap_pyfunction!(icechunk_store_from_json_config, m)?)?;
+    m.add_class::<PyIcechunkStore>()?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
     Ok(())
 }
