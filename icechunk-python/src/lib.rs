@@ -11,6 +11,7 @@ use ::icechunk::{
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
+use icechunk::{format::IcechunkResult, refs::BranchVersion};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use streams::PyAsyncStringGenerator;
 use tokio::sync::{Mutex, RwLock};
@@ -36,6 +37,33 @@ async fn pyicechunk_store_from_json_config(json: String) -> PyResult<PyIcechunkS
 
 #[pymethods]
 impl PyIcechunkStore {
+    pub async fn commit(
+        &mut self,
+        update_branch_name: String,
+        message: String,
+    ) -> PyIcechunkStoreResult<u64> {
+        // let store = self.store.clone();
+
+        // // Most of our async functions use structured coroutines so they can be called directly from
+        // // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
+        // // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
+        // // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
+        // // In the future this will hopefully not be necessary,
+        // // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
+        // let future = pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        //     let mut writable_store = store.write().await;
+        //     let result = writable_store
+        //         .commit(update_branch_name, message)
+        //         .await
+        //         .map_err(PyIcechunkStoreError::from)?;
+        //     Ok(())
+        // });
+
+        let result =
+            self.store.write().await.commit(&update_branch_name, &message).await?;
+        Ok(result.1 .0)
+    }
+
     pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {
         let is_empty = self.store.read().await.empty().await?;
         Ok(is_empty)
@@ -106,15 +134,15 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.store.clone();
 
-        // Most pyo3 functions are structured coroutinesm so they can be called directly from
+        // Most of our async functions use structured coroutines so they can be called directly from
         // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
         // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
         // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
         // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut store = store.write().await;
-            let result = store
+            let mut writeable_store = store.write().await;
+            let result = writeable_store
                 .set(&key, Bytes::from(value))
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -149,14 +177,14 @@ impl PyIcechunkStore {
 
         let store = self.store.clone();
 
-        // Most pyo3 functions are structured coroutinesm so they can be called directly from
+        // Most of our async functions use structured coroutines so they can be called directly from
         // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
         // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
         // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
         // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut store = store.write().await;
+            let mut writeable_store = store.write().await;
 
             let mapped_to_bytes = key_start_values.into_iter().enumerate().map(
                 |(i, (_key, offset, value))| {
@@ -164,7 +192,7 @@ impl PyIcechunkStore {
                 },
             );
 
-            let result = store
+            let result = writeable_store
                 .set_partial_values(mapped_to_bytes)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
