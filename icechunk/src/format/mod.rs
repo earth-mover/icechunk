@@ -52,8 +52,8 @@ impl TryFrom<&str> for SnapshotId {
     type Error = &'static str;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let bytes = hex_string_to_bytes(value)
-            .map_err(|_| "Invalid SnapshotId string")?;
+        let bytes =
+            hex_string_to_bytes(value).map_err(|_| "Invalid SnapshotId string")?;
         Self::try_from(bytes.as_slice())
     }
 }
@@ -99,8 +99,7 @@ impl TryFrom<&str> for ObjectId {
     type Error = &'static str;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let bytes = hex_string_to_bytes(value)
-            .map_err(|_| "Invalid ObjectId string")?;
+        let bytes = hex_string_to_bytes(value).map_err(|_| "Invalid ObjectId string")?;
         Self::try_from(bytes.as_slice())
     }
 }
