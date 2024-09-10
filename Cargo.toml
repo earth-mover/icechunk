@@ -1,7 +1,14 @@
 [workspace]
-members = [
-    "icechunk",
-    "icechunk-python"
-]
+members = ["icechunk", "icechunk-python"]
 default-members = ["icechunk"]
 resolver = "2"
+
+[workspace.lints.clippy]
+expect_used = "warn"
+unwrap_used = "warn"
+panic = "warn"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
