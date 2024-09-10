@@ -1,5 +1,10 @@
 use core::fmt;
-use std::{fmt::Debug, num::ParseIntError, ops::Range, path::PathBuf};
+use std::{
+    fmt::{Debug, Write},
+    num::ParseIntError,
+    ops::Range,
+    path::PathBuf,
+};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
@@ -60,7 +65,10 @@ impl TryFrom<&str> for SnapshotId {
 
 impl From<&SnapshotId> for String {
     fn from(value: &SnapshotId) -> Self {
-        value.0.iter().map(|b| format!("{:02x}", b)).collect()
+        value.0.iter().fold(String::new(), |mut output, b| {
+            let _ = write!(output, "{b:02x}");
+            output
+        })
     }
 }
 
@@ -106,7 +114,10 @@ impl TryFrom<&str> for ObjectId {
 
 impl From<&ObjectId> for String {
     fn from(value: &ObjectId) -> Self {
-        value.0.iter().map(|b| format!("{:02x}", b)).collect()
+        value.0.iter().fold(String::new(), |mut output, b| {
+            let _ = write!(output, "{b:02x}");
+            output
+        })
     }
 }
 
