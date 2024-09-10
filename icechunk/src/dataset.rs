@@ -860,7 +860,7 @@ impl Dataset {
         Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
-    /// After changes to the dasate have been made, this generates and writes to `Storage` the updated datastructures.
+    /// After changes to the dataset have been made, this generates and writes to `Storage` the updated datastructures.
     ///
     /// After calling this, changes are reset and the [Dataset] can continue to be used for further
     /// changes.

@@ -43,6 +43,15 @@ pub enum StorageConfig {
     #[serde(rename = "local_filesystem")]
     LocalFileSystem { root: PathBuf },
 
+    #[serde(rename = "s3")]
+    S3FileSystem {
+        bucket: String,
+        prefix: String,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+        endpoint: Option<String>,
+    },
+
     #[serde(rename = "cached")]
     Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
 }
@@ -469,7 +478,30 @@ fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, 
         StorageConfig::InMemory => Ok(Arc::new(ObjectStorage::new_in_memory_store())),
         StorageConfig::LocalFileSystem { root } => {
             let storage = ObjectStorage::new_local_store(root)
-                .map_err(|e| format!("Error creating storage: {}", e))?;
+                .map_err(|e| format!("Error creating storage: {e}"))?;
+            Ok(Arc::new(storage))
+        }
+        StorageConfig::S3FileSystem {
+            bucket,
+            prefix,
+            access_key_id,
+            secret_access_key,
+            endpoint,
+        } => {
+            let storage = if let (Some(access_key_id), Some(secret_access_key)) =
+                (access_key_id, secret_access_key)
+            {
+                ObjectStorage::new_s3_store_with_config(
+                    bucket,
+                    prefix,
+                    access_key_id,
+                    secret_access_key,
+                    endpoint.clone(),
+                )
+            } else {
+                ObjectStorage::new_s3_store_from_env(bucket, prefix)
+            }
+            .map_err(|e| format!("Error creating storage: {e}"))?;
             Ok(Arc::new(storage))
         }
         StorageConfig::Cached { approx_max_memory_bytes, backend } => {

@@ -43,6 +43,7 @@ impl ObjectStorage {
         let store = Arc::new(LocalFileSystem::new_with_prefix(prefix.clone())?);
         Ok(ObjectStorage { store, prefix: "".to_string() })
     }
+
     pub fn new_s3_store_from_env(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
@@ -56,16 +57,23 @@ impl ObjectStorage {
     pub fn new_s3_store_with_config(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+        endpoint: Option<impl Into<String>>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
-        let store = AmazonS3Builder::new()
-            // FIXME: Generalize the auth config
-            .with_access_key_id("minio123")
-            .with_secret_access_key("minio123")
-            .with_endpoint("http://localhost:9000")
-            .with_allow_http(true)
-            .with_bucket_name(bucket_name.into())
-            .build()?;
+        let builder = AmazonS3Builder::new()
+            .with_access_key_id(access_key_id)
+            .with_secret_access_key(secret_access_key);
+
+        let builder = if let Some(endpoint) = endpoint {
+            // TODO: Check if HTTP is allowed always or based on endpoint
+            builder.with_endpoint(endpoint).with_allow_http(true)
+        } else {
+            builder
+        };
+
+        let store = builder.with_bucket_name(bucket_name.into()).build()?;
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 

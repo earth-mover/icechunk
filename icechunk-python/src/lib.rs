@@ -41,23 +41,6 @@ impl PyIcechunkStore {
         update_branch_name: String,
         message: String,
     ) -> PyIcechunkStoreResult<String> {
-        // let store = self.store.clone();
-
-        // // Most of our async functions use structured coroutines so they can be called directly from
-        // // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
-        // // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
-        // // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
-        // // In the future this will hopefully not be necessary,
-        // // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
-        // let future = pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        //     let mut writable_store = store.write().await;
-        //     let result = writable_store
-        //         .commit(update_branch_name, message)
-        //         .await
-        //         .map_err(PyIcechunkStoreError::from)?;
-        //     Ok(())
-        // });
-
         let (oid, _version) =
             self.store.write().await.commit(&update_branch_name, &message).await?;
         Ok(String::from(&oid))
