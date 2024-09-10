@@ -1,6 +1,6 @@
 # module
 import json
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Self
 from ._icechunk_python import IcechunkStore as RustIcechunkStore, icechunk_store_from_json_config
 
 from zarr.abc.store import Store
@@ -19,10 +19,10 @@ class IcechunkStore(Store, SyncMixin):
         self._store = store
 
     @staticmethod
-    async def from_json(config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any) -> Any:
+    async def from_json(config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any) -> Self:
         config_str = json.dumps(config)
         store = await icechunk_store_from_json_config(config_str)
-        return IcechunkStore(store, mode, *args, **kwargs)
+        return IcechunkStore(store=store, mode=mode, *args, **kwargs)
 
     async def empty(self) -> bool:
         return await self._store.empty()
