@@ -43,7 +43,7 @@ pub enum StorageConfig {
     LocalFileSystem { root: PathBuf },
 
     #[serde(rename = "s3")]
-    S3FileSystem {
+    S3ObjectStore {
         bucket: String,
         prefix: String,
         access_key_id: Option<String>,
@@ -495,7 +495,7 @@ fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, 
                 .map_err(|e| format!("Error creating storage: {e}"))?;
             Ok(Arc::new(storage))
         }
-        StorageConfig::S3FileSystem {
+        StorageConfig::S3ObjectStore {
             bucket,
             prefix,
             access_key_id,
@@ -1467,7 +1467,7 @@ mod tests {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
                 },
-                storage: StorageConfig::S3FileSystem {
+                storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
                     access_key_id: None,
@@ -1497,7 +1497,7 @@ mod tests {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
                 },
-                storage: StorageConfig::S3FileSystem {
+                storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
                     access_key_id: Some(String::from("my-key")),
