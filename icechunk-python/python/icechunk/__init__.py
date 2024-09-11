@@ -1,7 +1,7 @@
 # module
 import json
 from typing import Any, AsyncGenerator, Self
-from ._icechunk_python import IcechunkStore as RustIcechunkStore, icechunk_store_from_json_config
+from ._icechunk_python import PyIcechunkStore, pyicechunk_store_from_json_config
 
 from zarr.abc.store import Store
 from zarr.core.buffer import Buffer, BufferPrototype
@@ -10,10 +10,10 @@ from zarr.core.sync import SyncMixin
 
 
 class IcechunkStore(Store, SyncMixin):
-    _store: RustIcechunkStore
+    _store: PyIcechunkStore
 
     def __init__(
-        self, store: RustIcechunkStore, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
+        self, store: PyIcechunkStore, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ):
         super().__init__(mode, *args, **kwargs)
         self._store = store
@@ -21,8 +21,18 @@ class IcechunkStore(Store, SyncMixin):
     @staticmethod
     async def from_json(config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any) -> Self:
         config_str = json.dumps(config)
-        store = await icechunk_store_from_json_config(config_str)
+        store = await pyicechunk_store_from_json_config(config_str)
         return IcechunkStore(store=store, mode=mode, *args, **kwargs)
+    
+    async def checkout(self, snapshot_id: str) -> None:
+        '''Checkout a snapshot by its id.
+        
+        TODO: Support branches and tags.
+        '''
+        return await self._store.checkout_snapshot(snapshot_id)
+
+    async def commit(self, update_branch_name: str, message: str) -> str:
+        return await self._store.commit(update_branch_name, message)
 
     async def empty(self) -> bool:
         return await self._store.empty()

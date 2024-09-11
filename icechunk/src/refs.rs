@@ -146,7 +146,7 @@ pub async fn create_tag(
     Ok(())
 }
 
-#[async_recursion(?Send)]
+#[async_recursion]
 pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     name: &str,

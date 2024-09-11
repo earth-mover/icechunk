@@ -32,7 +32,6 @@ use crate::{
 };
 
 pub use crate::format::ObjectId;
-pub use crate::format::SnapshotId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
@@ -42,6 +41,15 @@ pub enum StorageConfig {
 
     #[serde(rename = "local_filesystem")]
     LocalFileSystem { root: PathBuf },
+
+    #[serde(rename = "s3")]
+    S3ObjectStore {
+        bucket: String,
+        prefix: String,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+        endpoint: Option<String>,
+    },
 
     #[serde(rename = "cached")]
     Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
@@ -127,6 +135,21 @@ impl Store {
             dataset,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
         }
+    }
+
+    pub async fn checkout(&mut self, version: VersionInfo) -> Result<(), DatasetError> {
+        let storage = self.dataset.storage().clone();
+        let dataset = match version {
+            VersionInfo::SnapshotId(sid) => Dataset::update(storage, sid),
+            VersionInfo::TagRef(tag) => Dataset::from_tag(storage, &tag).await?,
+            VersionInfo::BranchTipRef(branch) => {
+                Dataset::from_branch_tip(storage, &branch).await?
+            }
+        }
+        .build();
+
+        self.dataset = dataset;
+        Ok(())
     }
 
     pub async fn commit(
@@ -469,7 +492,30 @@ fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, 
         StorageConfig::InMemory => Ok(Arc::new(ObjectStorage::new_in_memory_store())),
         StorageConfig::LocalFileSystem { root } => {
             let storage = ObjectStorage::new_local_store(root)
-                .map_err(|e| format!("Error creating storage: {}", e))?;
+                .map_err(|e| format!("Error creating storage: {e}"))?;
+            Ok(Arc::new(storage))
+        }
+        StorageConfig::S3ObjectStore {
+            bucket,
+            prefix,
+            access_key_id,
+            secret_access_key,
+            endpoint,
+        } => {
+            let storage = if let (Some(access_key_id), Some(secret_access_key)) =
+                (access_key_id, secret_access_key)
+            {
+                ObjectStorage::new_s3_store_with_config(
+                    bucket,
+                    prefix,
+                    access_key_id,
+                    secret_access_key,
+                    endpoint.clone(),
+                )
+            } else {
+                ObjectStorage::new_s3_store_from_env(bucket, prefix)
+            }
+            .map_err(|e| format!("Error creating storage: {e}"))?;
             Ok(Arc::new(storage))
         }
         StorageConfig::Cached { approx_max_memory_bytes, backend } => {
@@ -775,8 +821,6 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 mod tests {
 
     use std::borrow::BorrowMut;
-
-    use crate::Storage;
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1280,6 +1324,49 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store());
+        let ds = Dataset::create(Arc::clone(&storage)).build();
+        let mut store = Store::new(ds, None);
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+
+        let (snapshot_id, _version) =
+            store.commit("main", "initial commit").await.unwrap();
+
+        let new_data = Bytes::copy_from_slice(b"world");
+        store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
+        let (new_snapshot_id, _version) = store.commit("main", "update").await.unwrap();
+
+        store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
+
+        store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), new_data);
+
+        let new_store_from_snapshot =
+            Store::new(Dataset::update(Arc::clone(&storage), snapshot_id).build(), None);
+        assert_eq!(
+            new_store_from_snapshot.get("array/c/0/1/0", &(None, None)).await.unwrap(),
+            data
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
@@ -1305,7 +1392,7 @@ mod tests {
                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
-                "previous_version": {"snapshot_id":"000102030405060708090a0b0c0d0e0f"},
+                "previous_version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
                 "inline_chunk_threshold_bytes":128
              },
              "get_partial_values_concurrency": 100
@@ -1373,6 +1460,60 @@ mod tests {
             },
             serde_json::from_str(json)?
         );
+
+        let json = r#"
+            {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
+             "dataset": {}
+            }
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                storage: StorageConfig::S3ObjectStore {
+                    bucket: String::from("test"),
+                    prefix: String::from("root"),
+                    access_key_id: None,
+                    secret_access_key: None,
+                    endpoint: None
+                },
+                get_partial_values_concurrency: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+        {"storage":{
+             "type": "s3", 
+             "bucket":"test", 
+             "prefix":"root", 
+             "access_key_id":"my-key", 
+             "secret_access_key":"my-secret-key", 
+             "endpoint": "http://localhost:9000"
+         },
+         "dataset": {}
+        }
+    "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                },
+                storage: StorageConfig::S3ObjectStore {
+                    bucket: String::from("test"),
+                    prefix: String::from("root"),
+                    access_key_id: Some(String::from("my-key")),
+                    secret_access_key: Some(String::from("my-secret-key")),
+                    endpoint: Some(String::from("http://localhost:9000"))
+                },
+                get_partial_values_concurrency: None,
+            },
+            serde_json::from_str(json)?
+        );
+
         Ok(())
     }
 }

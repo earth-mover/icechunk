@@ -13,11 +13,11 @@ use tokio::sync::Mutex;
 ///
 /// Inspired by https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c
 #[pyclass]
-pub struct AsyncStringGenerator {
+pub struct PyAsyncStringGenerator {
     stream: Arc<Mutex<Pin<Box<dyn Stream<Item = Result<String, StoreError>> + Send>>>>,
 }
 
-impl AsyncStringGenerator {
+impl PyAsyncStringGenerator {
     pub fn new(
         stream: Arc<
             Mutex<Pin<Box<dyn Stream<Item = Result<String, StoreError>> + Send>>>,
@@ -28,7 +28,7 @@ impl AsyncStringGenerator {
 }
 
 #[pymethods]
-impl AsyncStringGenerator {
+impl PyAsyncStringGenerator {
     /// We don't want to create another classes, we want this
     /// class to be iterable. Since we implemented __anext__ method,
     /// we can return self here.

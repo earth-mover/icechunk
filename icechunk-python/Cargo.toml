@@ -15,4 +15,5 @@ futures = "0.3.30"
 icechunk = { path = "../icechunk", version = "0.1.0" }
 pyo3 = { version = "0.21", features = ["extension-module", "experimental-async"] }
 pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
+thiserror = "1.0.63"
 tokio = "1.40"

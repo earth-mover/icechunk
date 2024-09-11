@@ -1,9 +1,9 @@
 use core::fmt;
-use std::{ops::Range, path::PathBuf};
+use std::{fmt::Debug, ops::Range, path::PathBuf};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
 
@@ -16,27 +16,11 @@ pub mod snapshot;
 
 pub type Path = PathBuf;
 
-#[serde_as]
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct SnapshotId(#[serde_as(as = "serde_with::hex::Hex")] pub [u8; 16]); // FIXME: this doesn't need to be this big
-
-impl fmt::Debug for SnapshotId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02x}", self.0.iter().format(""))
-    }
-}
-
-impl SnapshotId {
-    pub fn random() -> Self {
-        Self(rand::random())
-    }
-}
-
 /// The id of a file in object store
 // FIXME: should this be passed by ref everywhere?
 #[serde_as]
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ObjectId(#[serde_as(as = "serde_with::hex::Hex")] pub [u8; 16]); // FIXME: this doesn't need to be this big
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ObjectId(pub [u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
     const SIZE: usize = 16;
@@ -60,6 +44,38 @@ impl TryFrom<&[u8]> for ObjectId {
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let buf = value.try_into();
         buf.map(ObjectId).map_err(|_| "Invalid ObjectId buffer length")
+    }
+}
+
+impl TryFrom<&str> for ObjectId {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let bytes = base32::decode(base32::Alphabet::Crockford, value);
+        let Some(bytes) = bytes else { return Err("Invalid ObjectId string") };
+        Self::try_from(bytes.as_slice())
+    }
+}
+
+impl From<&ObjectId> for String {
+    fn from(value: &ObjectId) -> Self {
+        base32::encode(base32::Alphabet::Crockford, &value.0)
+    }
+}
+
+impl Serialize for ObjectId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Just use the string representation
+        serializer.serialize_str(&String::from(self))
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Because we implement TryFrom<&str> for ObjectId, we can use it here instead of
+        // having to implement a custom deserializer
+        let s = String::deserialize(d)?;
+        ObjectId::try_from(s.as_str()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -164,29 +180,14 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_snapshot_id_serialization() {
-        let sid = SnapshotId([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-        assert_eq!(
-            serde_json::to_string(&sid).unwrap(),
-            r#""000102030405060708090a0b0c0d0e0f""#
-        );
-        let sid = SnapshotId::random();
-        assert_eq!(
-            serde_json::from_slice::<SnapshotId>(
-                serde_json::to_vec(&sid).unwrap().as_slice()
-            )
-            .unwrap(),
-            sid,
-        );
-    }
-
-    #[test]
     fn test_object_id_serialization() {
         let sid = ObjectId([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
         assert_eq!(
             serde_json::to_string(&sid).unwrap(),
-            r#""000102030405060708090a0b0c0d0e0f""#
+            r#""000G40R40M30E209185GR38E1W""#
         );
+        assert_eq!(String::from(&sid), "000G40R40M30E209185GR38E1W");
+        assert_eq!(sid, ObjectId::try_from("000G40R40M30E209185GR38E1W").unwrap());
         let sid = ObjectId::random();
         assert_eq!(
             serde_json::from_slice::<ObjectId>(
