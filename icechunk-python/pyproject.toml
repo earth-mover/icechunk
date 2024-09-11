@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "icechunk"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -13,13 +13,24 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
-    "zarr==3.0.0a1"
+    "zarr==3.0.0a3"
+]
+
+[project.optional-dependencies]
+test = [
+    "coverage",
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
 ]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.pyright]
 venvPath = "."
