@@ -1,7 +1,7 @@
 use core::fmt;
 use futures::stream::BoxStream;
 use parquet::errors as parquet_errors;
-use std::{ops::Range, sync::Arc};
+use std::{ops::Range, path::Path as StdPath, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -36,6 +36,8 @@ pub enum StorageError {
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
+    #[error("I/O error: {0}")]
+    IO(#[from] futures::io::Error),
     #[error("generic storage error: {0}")]
     OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),
     #[error("unknown storage error: {0}")]
@@ -56,6 +58,11 @@ pub trait Storage: fmt::Debug {
         id: &ObjectId,
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
     async fn fetch_manifests(&self, id: &ObjectId) -> StorageResult<Arc<ManifestsTable>>; // FIXME: format flags
+                                                                                          //    async fn fetch_manifest(
+                                                                                          //        &self,
+                                                                                          //        id: &ObjectId,
+                                                                                          //        destination: &StdPath,
+                                                                                          //    ) -> StorageResult<()>; // FIXME: format flags
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
