@@ -1392,7 +1392,7 @@ mod tests {
                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
-                "previous_version": {"snapshot_id":"000102030405060708090a0b0c0d0e0f"},
+                "previous_version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
                 "inline_chunk_threshold_bytes":128
              },
              "get_partial_values_concurrency": 100
