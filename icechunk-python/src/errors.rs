@@ -9,13 +9,13 @@ use thiserror::Error;
 /// the errors where this is returned from a python class
 #[derive(Debug, Error)]
 pub enum PyIcechunkStoreError {
-    #[error("{0}")]
+    #[error("Store Error: {0}")]
     StoreError(#[from] StoreError),
-    #[error("{0}")]
+    #[error("Dataset Error: {0}")]
     DatasetError(#[from] DatasetError),
-    #[error("{0}")]
+    #[error("Icechunk Format Error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
-    #[error("{0}")]
+    #[error("Value Error: {0}")]
     PyValueError(#[from] PyValueError),
     #[error("{0}")]
     UnkownError(String),

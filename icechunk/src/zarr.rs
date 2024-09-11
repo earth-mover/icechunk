@@ -822,8 +822,6 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
-    use crate::Storage;
-
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -1353,11 +1351,18 @@ mod tests {
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
         let (new_snapshot_id, _version) = store.commit("main", "update").await.unwrap();
 
-        store.checkout(VersionInfo::SnapshotId(snapshot_id)).await.unwrap();
+        store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
 
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), new_data);
+
+        let new_store_from_snapshot =
+            Store::new(Dataset::update(Arc::clone(&storage), snapshot_id).build(), None);
+        assert_eq!(
+            new_store_from_snapshot.get("array/c/0/1/0", &(None, None)).await.unwrap(),
+            data
+        );
 
         Ok(())
     }
