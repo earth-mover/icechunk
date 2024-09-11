@@ -140,6 +140,14 @@ impl Storage for MemCachingStorage {
         }
     }
 
+    async fn fetch_manifest(
+        &self,
+        id: &ObjectId,
+    ) -> StorageResult<BoxStream<StorageResult<Bytes>>> {
+        // FIXME: implement cache
+        self.backend.fetch_manifest(id).await
+    }
+
     async fn fetch_chunk(
         &self,
         id: &ObjectId,

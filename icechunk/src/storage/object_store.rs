@@ -1,7 +1,7 @@
 use core::fmt;
-use std::{fs::create_dir_all, future::ready, path::Path as StdPath, sync::Arc};
+use std::{fs::create_dir_all, future::ready, sync::Arc};
 
-use ::futures::{io::copy, stream::BoxStream, StreamExt, TryStreamExt};
+use ::futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
@@ -14,7 +14,6 @@ use parquet::arrow::{
     async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
     AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
 };
-use tokio::{io::AsyncWriteExt, sync::futures};
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
@@ -160,21 +159,14 @@ impl Storage for ObjectStorage {
         Ok(Arc::new(ManifestsTable { batch }))
     }
 
-    //    async fn fetch_manifest(
-    //        &self,
-    //        id: &ObjectId,
-    //        destination: &StdPath,
-    //    ) -> StorageResult<()> {
-    //        let path = self.get_path(MANIFEST_PREFIX, id);
-    //        let res = self.store.get(&path).await?;
-    //        let mut stream = res.into_stream();
-    //        let mut file = tokio::fs::File::create(destination).await.unwrap();
-    //        // TODO: couldn't make this work with tokio::io::copy
-    //        while let Some(v) = stream.next().await {
-    //            file.write_all(v?.as_ref()).await?;
-    //        }
-    //        Ok(())
-    //    }
+    async fn fetch_manifest(
+        &self,
+        id: &ObjectId,
+    ) -> StorageResult<BoxStream<StorageResult<Bytes>>> {
+        let path = self.get_path(MANIFEST_PREFIX, id);
+        let res = self.store.get(&path).await?;
+        Ok(res.into_stream().map_err(|e| e.into()).boxed())
+    }
 
     async fn write_snapshot(
         &self,

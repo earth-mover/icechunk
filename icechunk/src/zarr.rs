@@ -83,7 +83,7 @@ pub struct StoreConfig {
 pub type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
 pub type StoreResult<A> = Result<A, StoreError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug /*, Clone*/)]
 pub struct Store {
     dataset: Dataset,
     get_partial_values_concurrency: u16,

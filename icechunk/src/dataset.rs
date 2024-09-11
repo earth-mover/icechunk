@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
+    path::Path as StdPath,
     path::PathBuf,
     sync::Arc,
 };
@@ -18,6 +19,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::{Either, Itertools};
+use rocksdb::OptimisticTransactionDB;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -40,21 +42,30 @@ use crate::{
 pub struct DatasetConfig {
     // Chunks smaller than this will be stored inline in the manifst
     pub inline_threshold_bytes: u16,
+    pub manifest_databases_dir: PathBuf,
 }
 
 impl Default for DatasetConfig {
     fn default() -> Self {
-        Self { inline_threshold_bytes: 512 }
+        Self {
+            inline_threshold_bytes: 512,
+            manifest_databases_dir: {
+                let mut tmp = std::env::temp_dir();
+                tmp.push("icechunk-manifests");
+                tmp
+            },
+        }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(/*Clone,*/ Debug)]
 pub struct Dataset {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
+    manifests: HashMap<ObjectId, OptimisticTransactionDB>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -281,6 +292,7 @@ impl Dataset {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
+            manifests: HashMap::new(),
         }
     }
 
@@ -596,6 +608,31 @@ impl Dataset {
         }
     }
 
+    async fn fetch_manifest(
+        &self,
+        id: &ObjectId,
+    ) -> DatasetResult<&OptimisticTransactionDB> {
+        let m = self.storage.fetch_manifest(id).await?;
+        let mut dir = self.config.manifest_databases_dir.clone();
+        let dir_name: String = id.into();
+        dir.push(id.into());
+        todo!()
+    }
+
+    async fn get_manifest(
+        &self,
+        id: &ObjectId,
+    ) -> DatasetResult<&OptimisticTransactionDB> {
+        let db = match self.manifests.get(&id) {
+            Some(db) => db,
+            None => self.fetch_manifest(id).await?,
+        };
+
+        //let manifest_tar =
+        //self.storage.fetch_manifests(&manifest.object_id).await?;
+        todo!()
+    }
+
     async fn get_old_chunk(
         &self,
         manifests: &[ManifestRef],
@@ -640,7 +677,7 @@ impl Dataset {
         }
     }
 
-    /// Warning: The presence of a single error may mean multiple missing items
+    /// Warning: The presence of a single error item may mean multiple missing items
     async fn node_chunk_iterator(
         &self,
         node: NodeSnapshot,

@@ -2,6 +2,7 @@ use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use prop::strategy::LazyJust;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
@@ -20,9 +21,11 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 
 pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
     // FIXME: add storages strategy
-    let storage = ObjectStorage::new_in_memory_store();
-    let dataset = Dataset::create(Arc::new(storage)).build();
-    prop_oneof![Just(dataset)]
+    fn make() -> Dataset {
+        let storage = ObjectStorage::new_in_memory_store();
+        Dataset::create(Arc::new(storage)).build()
+    }
+    prop_oneof![LazyJust::new(make)]
 }
 
 pub fn codecs() -> impl Strategy<Value = Vec<Codec>> {

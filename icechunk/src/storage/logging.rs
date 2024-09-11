@@ -67,6 +67,14 @@ impl Storage for LoggingStorage {
         self.backend.fetch_manifests(id).await
     }
 
+    async fn fetch_manifest(
+        &self,
+        id: &ObjectId,
+    ) -> StorageResult<BoxStream<StorageResult<Bytes>>> {
+        // FIXME: implement cache
+        self.backend.fetch_manifest(id).await
+    }
+
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
