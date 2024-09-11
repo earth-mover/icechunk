@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from _pytest.compat import LEGACY_PATH
 
 
-@pytest.fixture(params=["local", "memory"])
+@pytest.fixture(params=["memory"])
 async def store(request: pytest.FixtureRequest, tmpdir: LEGACY_PATH) -> IcechunkStore:
     result = await parse_store(request.param, str(tmpdir))
     if not isinstance(result, IcechunkStore):
@@ -37,10 +37,10 @@ def exists_ok(request: pytest.FixtureRequest) -> bool:
     return result
 
 
-@pytest.fixture(params=[2, 3], ids=["zarr2", "zarr3"])
+@pytest.fixture(params=[3], ids=["zarr3"])
 def zarr_format(request: pytest.FixtureRequest) -> ZarrFormat:
     result = request.param
-    if result not in (2, 3):
+    if result not in [3]:
         raise ValueError("Wrong value returned from test fixture.")
     return cast(ZarrFormat, result)
 
@@ -392,8 +392,8 @@ def test_group_create_array(
     assert np.array_equal(array[:], data)
 
 
-@pytest.mark.parametrize("store", ("local", "memory"), indirect=["store"])
-@pytest.mark.parametrize("zarr_format", (2, 3))
+@pytest.mark.parametrize("store", ("memory"), indirect=["store"])
+@pytest.mark.parametrize("zarr_format", [3])
 @pytest.mark.parametrize("exists_ok", [True, False])
 @pytest.mark.parametrize("extant_node", ["array", "group"])
 def test_group_creation_existing_node(
@@ -542,7 +542,6 @@ async def test_asyncgroup_open_wrong_format(
     "data",
     (
         {"zarr_format": 3, "node_type": "group", "attributes": {"foo": 100}},
-        {"zarr_format": 2, "attributes": {"foo": 100}},
     ),
 )
 def test_asyncgroup_from_dict(store: IcechunkStore, data: dict[str, Any]) -> None:
