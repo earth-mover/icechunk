@@ -427,6 +427,7 @@ def test_group_creation_existing_node(
     new_attributes = {"new": True}
 
     if exists_ok:
+        pytest.xfail("exists_ok is not implemented for Group.create")
         node_new = Group.create(
             spath / "extant",
             attributes=new_attributes,

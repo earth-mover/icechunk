@@ -338,14 +338,16 @@ impl Store {
         // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
         // evolution
 
-        let idx = if prefix == "/" { 0 } else { prefix.len() };
+        let idx: usize = if prefix == "/" { 0 } else { prefix.len() };
 
         let parents: HashSet<_> = self
             .list_prefix(prefix)
             .await?
             .map_ok(move |s| {
-                let rem = &s[idx..];
-                let parent = rem.split_once('/').map_or(rem, |(parent, _)| parent);
+                // If the prefix is "/", get rid of it. This can happend when prefix is missing 
+                // the trailing slash (as it does in zarr-python impl)
+                let rem = &s[idx..].trim_start_matches("/");
+                let parent = rem.split_once('/').map_or(*rem, |(parent, _)| parent);
                 parent.to_string()
             })
             .try_collect()
@@ -423,13 +425,7 @@ impl Store {
         &'a self,
         prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
-        let prefix = if let Some(prefix) = prefix.strip_suffix('/') {
-            prefix
-        } else if prefix.len() == 0 {
-            prefix
-        } else {
-            return Err(StoreError::BadKeyPrefix(prefix.to_string()));
-        };
+        let prefix = prefix.trim_end_matches("/");
 
         let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
         // TODO: handle non-utf8?
@@ -448,13 +444,7 @@ impl Store {
         &'a self,
         prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
-        let prefix = if let Some(prefix) = prefix.strip_suffix('/') {
-            prefix
-        } else if prefix.len() == 0 {
-            prefix
-        } else {
-            return Err(StoreError::BadKeyPrefix(prefix.to_string()));
-        };
+        let prefix = prefix.trim_end_matches("/");
 
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -1113,19 +1103,6 @@ mod tests {
         let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds, None);
 
-        assert!(
-            store.list_prefix("").await.is_ok(),
-        );
-        assert!(
-            matches!(store.list_prefix("foo").await, Err(StoreError::BadKeyPrefix(p)) if p == "foo")
-        );
-        assert!(
-            matches!(store.list_prefix("foo/bar").await, Err(StoreError::BadKeyPrefix(p)) if p == "foo/bar")
-        );
-        assert!(
-            matches!(store.list_prefix("/foo/bar").await, Err(StoreError::BadKeyPrefix(p)) if p == "/foo/bar")
-        );
-
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
 
@@ -1253,6 +1230,10 @@ mod tests {
         let mut dir = store.list_dir("/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
+
+        let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
 
         let mut dir = store.list_dir("array/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
