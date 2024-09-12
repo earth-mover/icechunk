@@ -159,7 +159,7 @@ class IcechunkStore(Store, SyncMixin):
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
-        return self._sync(self._store.list())
+        return self._store.list()
 
     def list_prefix(self, prefix: str) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store with a given prefix.
@@ -175,7 +175,7 @@ class IcechunkStore(Store, SyncMixin):
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
-        return self._sync(self._store.list_prefix(prefix))
+        return self._store.list_prefix(prefix)
 
     def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
         """
@@ -193,4 +193,4 @@ class IcechunkStore(Store, SyncMixin):
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
-        return self._sync(self._store.list_dir(prefix))
+        return self._store.list_dir(prefix)
