@@ -98,20 +98,25 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
         "subarray", shape=(100,), dtype="uint8", chunk_shape=(10,), exists_ok=True
     )
 
-    # add an extra object to the domain of the group.
+    # This is not supported by Icechunk, so we expect an error
+    # zarr-python: add an extra object to the domain of the group.
     # the list of children should ignore this object.
-    sync(
-        store.set(f"{path}/extra_object-1", default_buffer_prototype().buffer.from_bytes(b"000000"))
-    )
-    # add an extra object under a directory-like prefix in the domain of the group.
+    with pytest.raises(ValueError):
+        sync(
+            store.set(f"{path}/extra_object-1", default_buffer_prototype().buffer.from_bytes(b"000000"))
+        )
+    
+    # This is not supported by Icechunk, so we expect an error
+    # zarr-python: add an extra object under a directory-like prefix in the domain of the group.
     # this creates a directory with a random key in it
     # this should not show up as a member
-    sync(
-        store.set(
-            f"{path}/extra_directory/extra_object-2",
-            default_buffer_prototype().buffer.from_bytes(b"000000"),
+    with pytest.raises(ValueError):
+        sync(
+            store.set(
+                f"{path}/extra_directory/extra_object-2",
+                default_buffer_prototype().buffer.from_bytes(b"000000"),
+            )
         )
-    )
     members_observed = group.members()
     # members are not guaranteed to be ordered, so sort before comparing
     assert sorted(dict(members_observed)) == sorted(members_expected)
@@ -392,7 +397,7 @@ def test_group_create_array(
     assert np.array_equal(array[:], data)
 
 
-@pytest.mark.parametrize("store", ("memory"), indirect=["store"])
+@pytest.mark.parametrize("store", ["memory"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
 @pytest.mark.parametrize("exists_ok", [True, False])
 @pytest.mark.parametrize("extant_node", ["array", "group"])

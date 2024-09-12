@@ -423,44 +423,48 @@ impl Store {
         &'a self,
         prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
-        if let Some(prefix) = prefix.strip_suffix('/') {
-            let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
-            // TODO: handle non-utf8?
-            Ok(nodes.map_err(|e| e.into()).try_filter_map(move |node| async move {
-                Ok(Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
-                    if key.starts_with(prefix) {
-                        Some(key)
-                    } else {
-                        None
-                    }
-                }))
-            }))
+        let prefix = if let Some(prefix) = prefix.strip_suffix('/') {
+            prefix
+        } else if prefix.len() == 0 {
+            prefix
         } else {
-            Err(StoreError::BadKeyPrefix(prefix.to_string()))
-        }
+            return Err(StoreError::BadKeyPrefix(prefix.to_string()));
+        };
+
+        let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
+        // TODO: handle non-utf8?
+        Ok(nodes.map_err(|e| e.into()).try_filter_map(move |node| async move {
+            Ok(Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
+                if key.starts_with(prefix) {
+                    Some(key)
+                } else {
+                    None
+                }
+            }))
+        }))
     }
 
     async fn list_chunks_prefix<'a>(
         &'a self,
         prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+        let prefix = if let Some(prefix) = prefix.strip_suffix('/') {
+            prefix
+        } else if prefix.len() == 0 {
+            prefix
+        } else {
+            return Err(StoreError::BadKeyPrefix(prefix.to_string()));
+        };
+
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        if let Some(prefix) = prefix.strip_suffix('/') {
-            let chunks = self.dataset.all_chunks().await?;
-            Ok(chunks.map_err(|e| e.into()).try_filter_map(
-                move |(path, chunk)| async move {
-                    //FIXME: utf handling
-                    Ok(Key::Chunk { node_path: path, coords: chunk.coord }
-                        .to_string()
-                        .and_then(
-                            |key| if key.starts_with(prefix) { Some(key) } else { None },
-                        ))
-                },
-            ))
-        } else {
-            Err(StoreError::BadKeyPrefix(prefix.to_string()))
-        }
+        let chunks = self.dataset.all_chunks().await?;
+        Ok(chunks.map_err(|e| e.into()).try_filter_map(move |(path, chunk)| async move {
+            //FIXME: utf handling
+            Ok(Key::Chunk { node_path: path, coords: chunk.coord }
+                .to_string()
+                .and_then(|key| if key.starts_with(prefix) { Some(key) } else { None }))
+        }))
     }
 }
 
@@ -627,6 +631,7 @@ pub struct ZarrArrayMetadataSerialzer {
     pub chunk_key_encoding: ChunkKeyEncoding,
     pub fill_value: serde_json::Value,
     pub codecs: Vec<Codec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     // each dimension name can be null in Zarr
     pub dimension_names: Option<DimensionNames>,
@@ -1109,7 +1114,7 @@ mod tests {
         let mut store = Store::new(ds, None);
 
         assert!(
-            matches!(store.list_prefix("").await, Err(StoreError::BadKeyPrefix(p)) if p.is_empty())
+            store.list_prefix("").await.is_ok(),
         );
         assert!(
             matches!(store.list_prefix("foo").await, Err(StoreError::BadKeyPrefix(p)) if p == "foo")

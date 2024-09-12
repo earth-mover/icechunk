@@ -19,13 +19,15 @@ use tokio::sync::{Mutex, RwLock};
 #[pyclass]
 struct PyIcechunkStore {
     store: Arc<RwLock<Store>>,
+    rt: tokio::runtime::Runtime,
 }
 
 impl PyIcechunkStore {
     async fn from_json_config(json: &[u8]) -> Result<Self, String> {
         let store = Store::from_json_config(json).await?;
         let store = Arc::new(RwLock::new(store));
-        Ok(Self { store })
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
     }
 }
 
@@ -202,29 +204,29 @@ impl PyIcechunkStore {
         Ok(supports_listing)
     }
 
-    pub async fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.store.read().await;
-        let list = store.list().await?;
+    pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list())?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
-    pub async fn list_prefix(
+    pub fn list_prefix(
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.store.read().await;
-        let list = store.list_prefix(&prefix).await?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list_prefix(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
-    pub async fn list_dir(
+    pub fn list_dir(
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.store.read().await;
-        let list = store.list_dir(&prefix).await?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list_dir(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
