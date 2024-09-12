@@ -344,7 +344,7 @@ impl Store {
             .list_prefix(prefix)
             .await?
             .map_ok(move |s| {
-                // If the prefix is "/", get rid of it. This can happend when prefix is missing 
+                // If the prefix is "/", get rid of it. This can happend when prefix is missing
                 // the trailing slash (as it does in zarr-python impl)
                 let rem = &s[idx..].trim_start_matches("/");
                 let parent = rem.split_once('/').map_or(*rem, |(parent, _)| parent);
