@@ -61,14 +61,14 @@ pub struct Dataset {
 struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
-    updated_arrays: HashMap<Path, ZarrArrayMetadata>,
+    updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
     // These paths may point to Arrays or Groups,
     // since both Groups and Arrays support UserAttributes
-    updated_attributes: HashMap<Path, Option<UserAttributes>>,
+    updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<Path, HashMap<ChunkIndices, Option<ChunkPayload>>>,
-    deleted_groups: HashMap<Path, NodeId>,
-    deleted_arrays: HashMap<Path, NodeId>,
+    set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashSet<NodeId>,
+    deleted_arrays: HashSet<NodeId>,
 }
 
 impl ChangeSet {
@@ -80,11 +80,18 @@ impl ChangeSet {
         self.new_groups.get(path)
     }
 
-    fn delete_group(&mut self, path: Path, node_id: NodeId) {
-        let was_new = self.new_groups.remove(&path).is_some();
-        self.updated_attributes.remove(&path);
-        if !was_new {
-            self.deleted_groups.insert(path, node_id);
+    fn get_array(&self, path: &Path) -> Option<&(NodeId, ZarrArrayMetadata)> {
+        self.new_arrays.get(path)
+    }
+
+    fn delete_group(&mut self, path: &Path, node_id: NodeId) {
+        let new_node_id = self.new_groups.remove(path);
+        let is_new_group = new_node_id.is_some();
+        debug_assert!(!is_new_group || new_node_id == Some(node_id));
+
+        self.updated_attributes.remove(&node_id);
+        if !is_new_group {
+            self.deleted_groups.insert(node_id);
         }
     }
 
@@ -92,53 +99,47 @@ impl ChangeSet {
         self.new_arrays.insert(path, (node_id, metadata));
     }
 
-    fn get_array(&self, path: &Path) -> Option<&(NodeId, ZarrArrayMetadata)> {
-        if self.deleted_arrays.contains_key(path) {
-            None
-        } else {
-            self.new_arrays.get(path)
-        }
+    fn update_array(&mut self, node_id: NodeId, metadata: ZarrArrayMetadata) {
+        self.updated_arrays.insert(node_id, metadata);
     }
 
-    fn update_array(&mut self, path: Path, metadata: ZarrArrayMetadata) {
-        // TODO: consider only inserting for arrays not present in `self.new_arrays`?
-        self.updated_arrays.insert(path, metadata);
-    }
-
-    fn delete_array(&mut self, path: Path, node_id: NodeId) {
+    fn delete_array(&mut self, path: &Path, node_id: NodeId) {
         // if deleting a new array created in this session, just remove the entry
         // from new_arrays
-        let was_new = self.new_arrays.remove(&path).is_some();
-        self.updated_arrays.remove(&path);
-        self.updated_attributes.remove(&path);
-        self.set_chunks.remove(&path);
-        if !was_new {
-            self.deleted_arrays.insert(path, node_id);
+        let node_and_meta = self.new_arrays.remove(path);
+        let is_new_array = node_and_meta.is_some();
+        debug_assert!(!is_new_array || node_and_meta.map(|n| n.0) == Some(node_id));
+
+        self.updated_arrays.remove(&node_id);
+        self.updated_attributes.remove(&node_id);
+        self.set_chunks.remove(&node_id);
+        if !is_new_array {
+            self.deleted_arrays.insert(node_id);
         }
     }
 
-    fn get_updated_zarr_metadata(&self, path: &Path) -> Option<&ZarrArrayMetadata> {
-        self.updated_arrays.get(path)
+    fn get_updated_zarr_metadata(&self, node_id: NodeId) -> Option<&ZarrArrayMetadata> {
+        self.updated_arrays.get(&node_id)
     }
 
-    fn update_user_attributes(&mut self, path: Path, atts: Option<UserAttributes>) {
-        self.updated_attributes.insert(path, atts);
+    fn update_user_attributes(&mut self, node_id: NodeId, atts: Option<UserAttributes>) {
+        self.updated_attributes.insert(node_id, atts);
     }
 
-    fn get_user_attributes(&self, path: &Path) -> Option<&Option<UserAttributes>> {
-        self.updated_attributes.get(path)
+    fn get_user_attributes(&self, node_id: NodeId) -> Option<&Option<UserAttributes>> {
+        self.updated_attributes.get(&node_id)
     }
 
     fn set_chunk_ref(
         &mut self,
-        path: Path,
+        node_id: NodeId,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) {
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
-            .entry(path)
+            .entry(node_id)
             .and_modify(|h| {
                 h.insert(coord.clone(), data.clone());
             })
@@ -147,17 +148,17 @@ impl ChangeSet {
 
     fn get_chunk_ref(
         &self,
-        path: &Path,
+        node_id: NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.set_chunks.get(path).and_then(|h| h.get(coords))
+        self.set_chunks.get(&node_id).and_then(|h| h.get(coords))
     }
 
     fn array_chunks_iterator(
         &self,
-        path: &Path,
+        node_id: NodeId,
     ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
-        match self.set_chunks.get(path) {
+        match self.set_chunks.get(&node_id) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
         }
@@ -167,7 +168,7 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (PathBuf, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.array_chunks_iterator(path).filter_map(|(coords, payload)| {
+            self.array_chunks_iterator(*node_id).filter_map(|(coords, payload)| {
                 payload.as_ref().map(|p| {
                     (
                         path.clone(),
@@ -308,7 +309,7 @@ impl Dataset {
     pub async fn delete_group(&mut self, path: Path) -> DatasetResult<()> {
         self.get_group(&path)
             .await
-            .map(|node| self.change_set.delete_group(node.path, node.id))
+            .map(|node| self.change_set.delete_group(&node.path, node.id))
     }
 
     /// Add an array to the store.
@@ -343,13 +344,13 @@ impl Dataset {
     ) -> DatasetResult<()> {
         self.get_array(&path)
             .await
-            .map(|node| self.change_set.update_array(node.path, metadata))
+            .map(|node| self.change_set.update_array(node.id, metadata))
     }
 
     pub async fn delete_array(&mut self, path: Path) -> DatasetResult<()> {
         self.get_array(&path)
             .await
-            .map(|node| self.change_set.delete_array(node.path, node.id))
+            .map(|node| self.change_set.delete_array(&node.path, node.id))
     }
 
     /// Record the write or delete of user attributes to array or group
@@ -358,8 +359,8 @@ impl Dataset {
         path: Path,
         atts: Option<UserAttributes>,
     ) -> DatasetResult<()> {
-        self.get_node(&path).await?;
-        self.change_set.update_user_attributes(path, atts);
+        let node = self.get_node(&path).await?;
+        self.change_set.update_user_attributes(node.id, atts);
         Ok(())
     }
 
@@ -374,7 +375,7 @@ impl Dataset {
     ) -> DatasetResult<()> {
         self.get_array(&path)
             .await
-            .map(|node| self.change_set.set_chunk_ref(node.path, coord, data))
+            .map(|node| self.change_set.set_chunk_ref(node.id, coord, data))
     }
 
     async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
@@ -411,15 +412,16 @@ impl Dataset {
         match self.get_new_node(path) {
             Some(node) => Ok(node),
             None => {
-                if self.change_set.deleted_groups.contains_key(path)
-                    || self.change_set.deleted_arrays.contains_key(path)
+                let node = self.get_existing_node(path).await?;
+                if self.change_set.deleted_groups.contains(&node.id)
+                    || self.change_set.deleted_arrays.contains(&node.id)
                 {
                     Err(DatasetError::NotFound {
                         path: path.clone(),
                         message: "getting node".to_string(),
                     })
                 } else {
-                    self.get_existing_node(path).await
+                    Ok(node)
                 }
             }
         }
@@ -457,12 +459,7 @@ impl Dataset {
         let snapshot_id = self.snapshot_id.as_ref().ok_or(err())?;
         let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
 
-        let session_atts = self
-            .change_set
-            .get_user_attributes(path)
-            .cloned()
-            .map(|a| a.map(UserAttributesSnapshot::Inline));
-        let res = snapshot.get_node(path).map_err(|err| match err {
+        let node = snapshot.get_node(path).map_err(|err| match err {
             // A missing node here is not really a format error, so we need to
             // generate the correct error for datasets
             IcechunkFormatError::NodeNotFound { path } => DatasetError::NotFound {
@@ -471,12 +468,17 @@ impl Dataset {
             },
             err => DatasetError::FormatError(err),
         })?;
+        let session_atts = self
+            .change_set
+            .get_user_attributes(node.id)
+            .cloned()
+            .map(|a| a.map(UserAttributesSnapshot::Inline));
         let res = NodeSnapshot {
-            user_attributes: session_atts.unwrap_or(res.user_attributes),
-            ..res
+            user_attributes: session_atts.unwrap_or(node.user_attributes),
+            ..node
         };
         if let Some(session_meta) =
-            self.change_set.get_updated_zarr_metadata(path).cloned()
+            self.change_set.get_updated_zarr_metadata(node.id).cloned()
         {
             if let NodeData::Array(_, manifests) = res.node_data {
                 Ok(NodeSnapshot {
@@ -498,8 +500,8 @@ impl Dataset {
     fn get_new_array(&self, path: &Path) -> Option<NodeSnapshot> {
         self.change_set.get_array(path).map(|(id, meta)| {
             let meta =
-                self.change_set.get_updated_zarr_metadata(path).unwrap_or(meta).clone();
-            let atts = self.change_set.get_user_attributes(path).cloned();
+                self.change_set.get_updated_zarr_metadata(*id).unwrap_or(meta).clone();
+            let atts = self.change_set.get_user_attributes(*id).cloned();
             NodeSnapshot {
                 id: *id,
                 path: path.clone(),
@@ -513,7 +515,7 @@ impl Dataset {
 
     fn get_new_group(&self, path: &Path) -> Option<NodeSnapshot> {
         self.change_set.get_group(path).map(|id| {
-            let atts = self.change_set.get_user_attributes(path).cloned();
+            let atts = self.change_set.get_user_attributes(*id).cloned();
             NodeSnapshot {
                 id: *id,
                 path: path.clone(),
@@ -539,7 +541,8 @@ impl Dataset {
             NodeData::Array(_, manifests) => {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
-                let session_chunk = self.change_set.get_chunk_ref(path, coords).cloned();
+                let session_chunk =
+                    self.change_set.get_chunk_ref(node.id, coords).cloned();
                 // If session_chunk is not None we have to return it, because is the update the
                 // user made in the current session
                 // If session_chunk == None, user hasn't modified the chunk in this session and we
@@ -576,14 +579,14 @@ impl Dataset {
         data: Bytes,
     ) -> DatasetResult<()> {
         match self.get_array(path).await {
-            Ok(_) => {
+            Ok(node) => {
                 let payload = if data.len() > self.config.inline_threshold_bytes as usize
                 {
                     new_materialized_chunk(self.storage.as_ref(), data).await?
                 } else {
                     new_inline_chunk(data)
                 };
-                self.change_set.set_chunk_ref(path.clone(), coord.clone(), Some(payload));
+                self.change_set.set_chunk_ref(node.id, coord.clone(), Some(payload));
                 Ok(())
             }
             Err(_) => Err(DatasetError::NotFound {
@@ -647,14 +650,14 @@ impl Dataset {
             NodeData::Array(_, manifests) => {
                 let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                     self.change_set
-                        .array_chunks_iterator(&node.path)
+                        .array_chunks_iterator(node.id)
                         .map(|(idx, _)| idx)
                         .collect(),
                 );
 
                 let new_chunks = self
                     .change_set
-                    .array_chunks_iterator(&node.path)
+                    .array_chunks_iterator(node.id)
                     .filter_map(move |(idx, payload)| {
                         payload.as_ref().map(|payload| {
                             Ok(ChunkInfo {
@@ -669,7 +672,6 @@ impl Dataset {
                     futures::stream::iter(new_chunks).chain(
                         futures::stream::iter(manifests)
                             .then(move |manifest_ref| {
-                                let path = node.path.clone();
                                 let new_chunk_indices = new_chunk_indices.clone();
                                 async move {
                                     let manifest = self
@@ -688,8 +690,7 @@ impl Dataset {
                                                 });
 
                                             let old_chunks = self.update_existing_chunks(
-                                                path.clone(),
-                                                old_chunks,
+                                                node.id, old_chunks,
                                             );
                                             futures::future::Either::Left(
                                                 futures::stream::iter(old_chunks)
@@ -716,11 +717,11 @@ impl Dataset {
 
     fn update_existing_chunks<'a, E>(
         &'a self,
-        path: Path,
+        node: NodeId,
         chunks: impl Iterator<Item = Result<ChunkInfo, E>> + 'a,
     ) -> impl Iterator<Item = Result<ChunkInfo, E>> + 'a {
         chunks.filter_map_ok(move |chunk| {
-            match self.change_set.get_chunk_ref(&path, &chunk.coord) {
+            match self.change_set.get_chunk_ref(node, &chunk.coord) {
                 None => Some(chunk),
                 Some(new_payload) => {
                     new_payload.clone().map(|pl| ChunkInfo { payload: pl, ..chunk })
@@ -823,7 +824,7 @@ impl Dataset {
     ) -> NodeSnapshot {
         let session_atts = self
             .change_set
-            .get_user_attributes(&node.path)
+            .get_user_attributes(node.id)
             .cloned()
             .map(|a| a.map(UserAttributesSnapshot::Inline));
         let new_atts = session_atts.unwrap_or(node.user_attributes);
@@ -832,7 +833,7 @@ impl Dataset {
             NodeData::Array(old_zarr_meta, _) => {
                 let new_zarr_meta = self
                     .change_set
-                    .get_updated_zarr_metadata(&node.path)
+                    .get_updated_zarr_metadata(node.id)
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 
@@ -1320,9 +1321,9 @@ mod tests {
         if let Ok(NodeSnapshot {
             node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
             ..
-        }) = node
+        }) = &node
         {
-            assert_eq!(shape, vec![2, 2, 3]);
+            assert_eq!(shape, &vec![2, 2, 3]);
         } else {
             panic!("Failed to update zarr metadata");
         }
@@ -1335,9 +1336,14 @@ mod tests {
         assert_eq!(chunk, Some(data));
 
         let path: Path = "/group/array2".into();
-        assert!(ds.change_set.updated_attributes.contains_key(&path));
+        let node = ds.get_node(&path).await;
+        assert!(ds
+            .change_set
+            .updated_attributes
+            .contains_key(&node.as_ref().unwrap().id));
         assert!(ds.delete_array(path.clone()).await.is_ok());
-        assert!(!ds.change_set.updated_attributes.contains_key(&path));
+        dbg!(&node, &ds.change_set.updated_attributes);
+        assert!(!ds.change_set.updated_attributes.contains_key(&node?.id));
 
         Ok(())
     }
@@ -1373,26 +1379,26 @@ mod tests {
         change_set.add_array("foo/baz".into(), 2, zarr_meta);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk_ref("foo/bar".into(), ChunkIndices(vec![0, 1]), None);
+        change_set.set_chunk_ref(1, ChunkIndices(vec![0, 1]), None);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
-            "foo/bar".into(),
+            1,
             ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
         );
         change_set.set_chunk_ref(
-            "foo/bar".into(),
+            1,
             ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
         );
         change_set.set_chunk_ref(
-            "foo/baz".into(),
+            2,
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
         );
         change_set.set_chunk_ref(
-            "foo/baz".into(),
+            2,
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
         );
