@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow::{
     array::{
@@ -11,6 +11,9 @@ use arrow::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
+use rocksdb::OptimisticTransactionDB;
+use serde::{Deserialize, Serialize};
+use serde_with::{base64::Base64, serde_as};
 
 use super::{
     arrow::get_column, BatchLike, ChunkIndices, Flags, IcechunkFormatError,
@@ -28,28 +31,30 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkRef {
     pub id: ObjectId,
     pub offset: u64,
     pub length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[serde_as]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ChunkPayload {
-    Inline(Bytes), // FIXME: optimize copies
+    // FIXME: use something more optimal
+    Inline(#[serde_as(as = "Base64")] Bytes),
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkInfo {
     pub node: NodeId,
     pub coord: ChunkIndices,
@@ -65,6 +70,49 @@ impl BatchLike for ManifestsTable {
     fn get_batch(&self) -> &RecordBatch {
         &self.batch
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DBKey<'a> {
+    #[serde(rename = "n")]
+    node: &'a NodeId,
+    #[serde(rename = "c")]
+    coord: &'a ChunkIndices,
+}
+
+fn db_key(node_id: &NodeId, coord: &ChunkIndices) -> Vec<u8> {
+    let key = DBKey { node: node_id, coord };
+    serde_json::to_vec(&key).unwrap()
+}
+
+pub fn write_chunk_info(
+    db: &OptimisticTransactionDB,
+    node_id: &NodeId,
+    chunk: &ChunkInfo,
+) {
+    let key = db_key(node_id, &chunk.coord);
+    // FIXME: we don't need all the data
+    let value = serde_json::to_vec(&chunk).unwrap();
+    db.put(key.as_slice(), value.as_slice()).unwrap();
+}
+
+pub fn get_chunk_info(
+    db: &OptimisticTransactionDB,
+    node_id: &NodeId,
+    coord: &ChunkIndices,
+) -> IcechunkResult<ChunkInfo> {
+    let key = db_key(node_id, coord);
+    let bytes = db
+        .get(key.as_slice())
+        .unwrap()
+        .ok_or(IcechunkFormatError::ChunkCoordinatesNotFound { coords: coord.clone() })?;
+    serde_json::from_slice(bytes.as_slice()).map_err(|_| {
+        IcechunkFormatError::InvalidArrayManifest {
+            index: 0,
+            field: "all".to_string(),
+            message: "parsing error".to_string(),
+        }
+    })
 }
 
 impl ManifestsTable {

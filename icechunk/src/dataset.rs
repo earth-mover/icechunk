@@ -1,9 +1,10 @@
+use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
+    io::ErrorKind,
     iter,
-    path::Path as StdPath,
-    path::PathBuf,
-    sync::Arc,
+    path::{Path as StdPath, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 pub use crate::{
@@ -14,19 +15,21 @@ pub use crate::{
     },
 };
 
+use ::rocksdb::OptimisticTransactionDB;
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::{Either, Itertools};
-use rocksdb::OptimisticTransactionDB;
+use rocksdb::SingleThreaded;
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
     format::{
         manifest::{
-            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
+            get_chunk_info, mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents,
+            ManifestRef,
         },
         snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
         Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
@@ -35,6 +38,7 @@ use crate::{
         fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version, update_branch,
         BranchVersion, RefError,
     },
+    rocksdb::{extract_db, open_db},
     Storage, StorageError,
 };
 
@@ -58,14 +62,51 @@ impl Default for DatasetConfig {
     }
 }
 
-#[derive(/*Clone,*/ Debug)]
+#[derive()]
 pub struct Dataset {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: Option<ObjectId>,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
-    manifests: HashMap<ObjectId, OptimisticTransactionDB>,
+    manifests: RwLock<HashMap<ObjectId, Arc<OptimisticTransactionDB>>>,
+    rocksdb_env: ::rocksdb::Env,
+}
+impl fmt::Debug for Dataset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        #[derive(Debug)]
+        struct DebuggableConfig<'a> {
+            config: &'a DatasetConfig,
+            storage: &'a Arc<dyn Storage + Send + Sync>,
+            snapshot_id: &'a Option<ObjectId>,
+            last_node_id: &'a Option<NodeId>,
+            change_set: &'a ChangeSet,
+            manifests: &'a RwLock<HashMap<ObjectId, Arc<OptimisticTransactionDB>>>,
+        }
+
+        let Self {
+            config,
+            storage,
+            snapshot_id,
+            last_node_id,
+            change_set,
+            manifests,
+            rocksdb_env: _,
+        } = self;
+
+        // per Chayim Friedman’s suggestion
+        fmt::Debug::fmt(
+            &DebuggableConfig {
+                config,
+                storage,
+                snapshot_id,
+                last_node_id,
+                change_set,
+                manifests,
+            },
+            f,
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -246,6 +287,10 @@ pub enum DatasetError {
     Ref(#[from] RefError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
+    #[error("i/o error: `{0}")]
+    IO(#[from] std::io::Error),
+    #[error("RocksDB error error: `{0}")]
+    RocksDB(#[from] ::rocksdb::Error),
 }
 
 type DatasetResult<T> = Result<T, DatasetError>;
@@ -292,7 +337,9 @@ impl Dataset {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
-            manifests: HashMap::new(),
+            manifests: RwLock::new(HashMap::new()),
+            // FIXME: unwrap
+            rocksdb_env: ::rocksdb::Env::new().unwrap(),
         }
     }
 
@@ -561,7 +608,9 @@ impl Dataset {
                 // need to fallback to fetching the manifests
                 match session_chunk {
                     Some(res) => Ok(res),
-                    None => self.get_old_chunk(manifests.as_slice(), coords).await,
+                    None => {
+                        self.get_old_chunk(manifests.as_slice(), &node.id, coords).await
+                    }
                 }
             }
         }
@@ -608,42 +657,82 @@ impl Dataset {
         }
     }
 
+    fn db_dir(&self, manifest_id: &ObjectId) -> PathBuf {
+        let mut dir = self.config.manifest_databases_dir.clone();
+        let dir_name: String = manifest_id.into();
+        dir.push(dir_name.as_str());
+        dir
+    }
+
     async fn fetch_manifest(
         &self,
         id: &ObjectId,
-    ) -> DatasetResult<&OptimisticTransactionDB> {
-        let m = self.storage.fetch_manifest(id).await?;
-        let mut dir = self.config.manifest_databases_dir.clone();
-        let dir_name: String = id.into();
-        dir.push(id.into());
-        todo!()
+    ) -> DatasetResult<OptimisticTransactionDB> {
+        let dir = self.db_dir(id);
+        let db_bytes = self
+            .storage
+            .fetch_manifest(id)
+            .await?
+            .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
+        extract_db(dir.as_path(), db_bytes).await?;
+        let db = open_db(dir.as_path(), &self.rocksdb_env)?;
+        Ok(db)
     }
 
     async fn get_manifest(
         &self,
         id: &ObjectId,
-    ) -> DatasetResult<&OptimisticTransactionDB> {
-        let db = match self.manifests.get(&id) {
-            Some(db) => db,
-            None => self.fetch_manifest(id).await?,
+    ) -> DatasetResult<Arc<OptimisticTransactionDB>> {
+        let cached = {
+            let m = self.manifests.read().unwrap();
+            m.get(id).map(Arc::clone)
         };
 
-        //let manifest_tar =
-        //self.storage.fetch_manifests(&manifest.object_id).await?;
-        todo!()
+        match cached {
+            Some(db) => Ok(db),
+            None => {
+                let db = self.fetch_manifest(id).await?;
+                self.manifests.write().unwrap().insert(id.clone(), Arc::new(db));
+                let man = self.manifests.read().unwrap();
+                let res = man.get(id).unwrap();
+                Ok(Arc::clone(res))
+            }
+        }
     }
+
+    //async fn get_old_chunk(
+    //    &self,
+    //    manifests: &[ManifestRef],
+    //    coords: &ChunkIndices,
+    //) -> DatasetResult<Option<ChunkPayload>> {
+    //    // FIXME: use manifest extents
+    //    for manifest in manifests {
+    //        let manifest_structure =
+    //            self.storage.fetch_manifests(&manifest.object_id).await?;
+    //        match manifest_structure
+    //            .get_chunk_info(coords, &manifest.location)
+    //            .map(|info| info.payload)
+    //        {
+    //            Ok(payload) => {
+    //                return Ok(Some(payload));
+    //            }
+    //            Err(IcechunkFormatError::ChunkCoordinatesNotFound { .. }) => {}
+    //            Err(err) => return Err(err.into()),
+    //        }
+    //    }
+    //    Ok(None)
+    //}
 
     async fn get_old_chunk(
         &self,
         manifests: &[ManifestRef],
-        coords: &ChunkIndices,
+        node_id: &NodeId,
+        coord: &ChunkIndices,
     ) -> DatasetResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
         for manifest in manifests {
-            let manifest_structure =
-                self.storage.fetch_manifests(&manifest.object_id).await?;
-            match manifest_structure
-                .get_chunk_info(coords, &manifest.location)
+            let manifest_db = self.get_manifest(&manifest.object_id).await?;
+            match get_chunk_info(manifest_db.as_ref(), node_id, coord)
                 .map(|info| info.payload)
             {
                 Ok(payload) => {
@@ -910,6 +999,34 @@ impl Dataset {
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
+        let manifest = match self.snapshot_id.as_ref() {
+            None => {
+                let manifest_id = ObjectId::random();
+                let db_path = self.db_dir(&manifest_id);
+                Arc::new(open_db::<SingleThreaded>(db_path.as_path(), &self.rocksdb_env)?)
+            }
+            Some(snapshot_id) => {
+                let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
+                let manifest_id = snapshot.iter_arc().find_map(|node| {
+                    node.ok().and_then(|node| match node.node_data {
+                        NodeData::Array(_, man) => {
+                            // TODO: can we avoid clone
+                            man.first().map(|manifest| manifest.object_id.clone())
+                        }
+                        NodeData::Group => None,
+                    })
+                });
+                match manifest_id {
+                    Some(ref manifest_id) => self.get_manifest(manifest_id).await?,
+                    None => {
+                        let manifest_id = ObjectId::random();
+                        let db_path = self.db_dir(&manifest_id);
+                        Arc::new(open_db(db_path.as_path(), &self.rocksdb_env)?)
+                    }
+                }
+            }
+        };
+
         let mut region_tracker = TableRegionTracker::default();
         let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
             region_tracker.update(&chunk.1);
