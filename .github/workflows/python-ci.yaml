@@ -62,8 +62,7 @@ jobs:
       - name: pytest
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         shell: bash
-        with:
-          working-directory: icechunk-python
+        working-directory: icechunk-python
         run: |
           set -e
           python3 -m venv .venv
