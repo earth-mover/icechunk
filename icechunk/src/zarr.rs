@@ -182,6 +182,7 @@ impl Store {
             }
         }?;
 
+        // TODO: This should be done already when calling get_chunk or get_metadata. Faking it for now
         let bytes = match byte_range {
             (Some(start), Some(end)) => bytes.slice(*start as usize..*end as usize),
             (Some(start), None) => bytes.slice(*start as usize..),
