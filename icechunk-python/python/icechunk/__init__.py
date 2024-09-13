@@ -72,33 +72,6 @@ class IcechunkStore(Store, SyncMixin):
             return None
 
         return prototype.buffer.from_bytes(result)
-    
-    def get_sync(
-        self,
-        key: str,
-        prototype: BufferPrototype,
-        byte_range: tuple[int | None, int | None] | None = None,
-    ) -> Buffer | None:
-        """Retrieve the value associated with a given key.
-
-        Parameters
-        ----------
-        key : str
-        byte_range : tuple[int, Optional[int]], optional
-
-        Returns
-        -------
-        Buffer
-        """
-        try:
-            result = self._store.get_sync(key, byte_range)
-            if result is None:
-                return None
-        except ValueError as _e:
-            # Zarr python expects None to be returned if the key does not exist
-            return None
-
-        return prototype.buffer.from_bytes(result)
 
     async def get_partial_values(
         self,
@@ -148,16 +121,6 @@ class IcechunkStore(Store, SyncMixin):
         value : Buffer
         """
         return await self._store.set(key, value.to_bytes())
-    
-    def set_sync(self, key: str, value: Buffer) -> None:
-        """Store a (key, value) pair.
-
-        Parameters
-        ----------
-        key : str
-        value : Buffer
-        """
-        return self._store.set_sync(key, value.to_bytes())
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store

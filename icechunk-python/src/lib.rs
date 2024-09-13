@@ -87,20 +87,6 @@ impl PyIcechunkStore {
         Ok(pybytes)
     }
 
-    pub fn get_sync(
-        &self,
-        key: String,
-        byte_range: Option<ByteRange>,
-    ) -> PyIcechunkStoreResult<PyObject> {
-        let byte_range = byte_range.unwrap_or((None, None));
-        let data = self.rt.block_on(self.store.blocking_read().get(&key, &byte_range))?;
-        let pybytes = Python::with_gil(|py| {
-            let bound_bytes = PyBytes::new_bound(py, &data);
-            bound_bytes.to_object(py)
-        });
-        Ok(pybytes)
-    }
-
     pub async fn get_partial_values(
         &self,
         key_ranges: Vec<(String, ByteRange)>,
@@ -161,11 +147,6 @@ impl PyIcechunkStore {
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(result)
         })
-    }
-
-    pub fn set_sync(&mut self, key: String, value: Vec<u8>) -> PyIcechunkStoreResult<()> {
-        self.rt.block_on(self.store.blocking_write().set(&key, Bytes::from(value)))?;
-        Ok(())
     }
 
     pub async fn delete(&mut self, key: String) -> PyIcechunkStoreResult<()> {

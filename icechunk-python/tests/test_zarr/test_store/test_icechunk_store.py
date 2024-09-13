@@ -16,11 +16,19 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
 
-    def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
-        store.set_sync(key, value)
+    async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
+        await store._store.set(key, value.to_bytes())
 
-    def get(self, store: IcechunkStore, key: str) -> Buffer:
-        return store.get_sync(key, default_buffer_prototype())
+    async def get(self, store: IcechunkStore, key: str) -> Buffer:
+        try:
+            result = await store._store.get(key)
+            if result is None:
+                return None
+        except ValueError as _e:
+            # Zarr python expects None to be returned if the key does not exist
+            return None
+
+        return self.buffer_cls.from_bytes(result)
 
     @pytest.fixture(scope="function", params=[None, True])
     def store_kwargs(
@@ -127,10 +135,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_set(self, store: IcechunkStore) -> None:
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
         assert await store.exists("zarr.json")
-        assert self.get(store, "zarr.json").to_bytes() == DEFAULT_GROUP_METADATA
+        result = await self.get(store, "zarr.json")
+        assert result.to_bytes() == DEFAULT_GROUP_METADATA
 
     async def test_get(self, store: IcechunkStore) -> None:
-        self.set(store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        await self.set(store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
         assert await store.exists("zarr.json")
         result = await store.get("zarr.json", default_buffer_prototype())
         assert result.to_bytes() == DEFAULT_GROUP_METADATA

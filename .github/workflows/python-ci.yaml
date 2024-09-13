@@ -3,7 +3,7 @@
 #
 #    maturin generate-ci github --pytest
 #
-name: CI
+name: Python CI
 
 on:
   push:
@@ -21,6 +21,8 @@ permissions:
 jobs:
   linux:
     runs-on: ${{ matrix.platform.runner }}
+    defaults:
+      working-directory: ./icechunk-python
     strategy:
       matrix:
         platform:
@@ -44,7 +46,6 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
