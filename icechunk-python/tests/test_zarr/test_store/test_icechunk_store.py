@@ -12,7 +12,7 @@ from icechunk import IcechunkStore
 DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
 
 
-class TestMemoryStore(StoreTests[IcechunkStore, cpu.Buffer]):
+class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
 
@@ -118,7 +118,9 @@ class TestMemoryStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.mark.xfail(reason="Invalid usage pattern with Icechunk")
     async def test_get_partial_values(
-        self, store: IcechunkStore, key_ranges: list[tuple[str, tuple[int | None, int | None]]]
+        self,
+        store: IcechunkStore,
+        key_ranges: list[tuple[str, tuple[int | None, int | None]]],
     ) -> None:
         await super().test_get_partial_values(store, key_ranges)
 
