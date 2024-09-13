@@ -53,6 +53,10 @@ in
       # Replace llvmPackages with llvmPackages_X, where X is the latest LLVM version (at the time of writing, 16)
       llvmPackages_17.bintools
       rustup
+      taplo # toml lsp server
+      awscli2
+      just # script launcher with a make flavor
+      alejandra # nix code formatter
     ];
     RUSTC_VERSION = overrides.toolchain.channel;
     # https://github.com/rust-lang/rust-bindgen#environment-variables
@@ -60,6 +64,11 @@ in
     shellHook = ''
       export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin
       export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/$RUSTC_VERSION-x86_64-unknown-linux-gnu/bin/
+
+      export AWS_ACCESS_KEY_ID=minio123
+      export AWS_SECRET_ACCESS_KEY=minio123
+      export AWS_DEFAULT_REGION=us-east-1
+      export RUSTFLAGS="-W unreachable-pub -W bare-trait-objects"
       '';
     # Add precompiled library to rustc search path
     RUSTFLAGS = (builtins.map (a: ''-L ${a}/lib'') [
