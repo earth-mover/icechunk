@@ -1037,12 +1037,16 @@ impl Dataset {
             }
         };
 
-        {
-            // fixme transaction
-            // fixme should we use stricter options?
+        // FIXME: this is an ugly and expensive clone, but a tricky one. We could turn change_set
+        // into an Arc<Mutex<_>> instead
+        let chunk_changes = self.change_set.set_chunks.clone();
+        let manifest_db_c = Arc::clone(&manifest_db);
+
+        task::spawn_blocking(move || {
+            // fixme should we use stricter options for the tx?
             // fixme async
-            let tx = manifest_db.transaction();
-            for (node_id, chunks) in self.change_set.set_chunks.iter() {
+            let tx = manifest_db_c.transaction();
+            for (node_id, chunks) in chunk_changes.iter() {
                 for (coord, maybe_payload) in chunks.iter() {
                     match maybe_payload {
                         Some(payload) => {
@@ -1056,18 +1060,12 @@ impl Dataset {
                     }
                 }
             }
-            //for (_, chunk) in self.change_set.new_arrays_chunk_iterator() {
-            //    // FIXME add/delete other chunks
-            //    write_chunk_info(&tx, &chunk)
-            //}
-            tx.commit()?;
-        }
+            tx.commit();
 
-        task::spawn_blocking(move || {
             let mut wait_opts = WaitForCompactOptions::default();
             wait_opts.set_flush(true);
-            manifest_db.wait_for_compact(&wait_opts);
-            drop(manifest_db);
+            manifest_db_c.wait_for_compact(&wait_opts);
+            // FIXME: is this enough to guarantee we can tar the db?
         })
         .await
         .unwrap();
