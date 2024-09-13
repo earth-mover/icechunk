@@ -26,6 +26,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
                 return None
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
+            # but an IcechunkStore returns an error if the key does not exist
             return None
 
         return self.buffer_cls.from_bytes(result)
@@ -129,13 +130,25 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         await store.delete("foo/zarr.json")
         assert not await store.exists("foo/zarr.json")
 
-    @pytest.mark.xfail(reason="Invalid usage pattern with Icechunk")
     async def test_get_partial_values(
         self,
         store: IcechunkStore,
-        key_ranges: list[tuple[str, tuple[int | None, int | None]]],
     ) -> None:
-        await super().test_get_partial_values(store, key_ranges)
+        await self.set(
+            store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        # read back just part of it
+        values = await store.get_partial_values(
+            default_buffer_prototype(),
+            [
+                ("zarr.json", (0, 5)),
+            ],
+        )
+
+        assert len(values) == 1
+        data = values[0].to_bytes()
+        assert len(data) == 5
+        assert data == DEFAULT_GROUP_METADATA[:5]
 
     async def test_set(self, store: IcechunkStore) -> None:
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
@@ -144,7 +157,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert result.to_bytes() == DEFAULT_GROUP_METADATA
 
     async def test_get(self, store: IcechunkStore) -> None:
-        await self.set(store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        await self.set(
+            store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
         assert await store.exists("zarr.json")
         result = await store.get("zarr.json", default_buffer_prototype())
         assert result.to_bytes() == DEFAULT_GROUP_METADATA

@@ -174,13 +174,23 @@ impl Store {
     }
 
     // TODO: prototype argument
-    pub async fn get(&self, key: &str, _byte_range: &ByteRange) -> StoreResult<Bytes> {
-        match Key::parse(key)? {
+    pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
+        let bytes = match Key::parse(key)? {
             Key::Metadata { node_path } => self.get_metadata(key, &node_path).await,
             Key::Chunk { node_path, coords } => {
                 self.get_chunk(key, node_path, coords).await
             }
-        }
+        }?;
+
+        let (start, end) = byte_range;
+        let bytes = match (start, end) {
+            (Some(start), Some(end)) => bytes.slice(*start as usize..*end as usize),
+            (Some(start), None) => bytes.slice(*start as usize..),
+            (None, Some(end)) => bytes.slice(..*end as usize),
+            (None, None) => bytes,
+        };
+
+        Ok(bytes)
     }
 
     /// Get all the requested keys concurrently.
