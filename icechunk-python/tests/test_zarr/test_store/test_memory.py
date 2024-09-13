@@ -3,10 +3,13 @@ import asyncio
 
 import pytest
 
-from zarr.core.buffer import Buffer, cpu
+from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.testing.store import StoreTests
 
 from icechunk import IcechunkStore
+
+
+DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
 
 
 class TestMemoryStore(StoreTests[IcechunkStore, cpu.Buffer]):
@@ -17,7 +20,7 @@ class TestMemoryStore(StoreTests[IcechunkStore, cpu.Buffer]):
         store.set_sync(key, value)
 
     def get(self, store: IcechunkStore, key: str) -> Buffer:
-        return store.get_sync(key)
+        return store.get_sync(key, default_buffer_prototype())
 
     @pytest.fixture(scope="function", params=[None, True])
     def store_kwargs(
@@ -31,12 +34,11 @@ class TestMemoryStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.fixture(scope="function")
     def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
-        print(store_kwargs)
         return asyncio.run(IcechunkStore.from_json(**store_kwargs))
 
+    @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
-        # TODO
-        assert True
+        super().test_store_repr(store)
 
     def test_store_supports_writes(self, store: IcechunkStore) -> None:
         assert store.supports_writes
@@ -50,6 +52,83 @@ class TestMemoryStore(StoreTests[IcechunkStore, cpu.Buffer]):
     def test_list_prefix(self, store: IcechunkStore) -> None:
         assert True
 
-    @pytest.mark.skip(reason="Not implemented")
+    @pytest.mark.xfail(reason="Not implemented")
     async def test_clear(self, store: IcechunkStore) -> None:
-        await self.test_clear(store)
+        await super().test_clear(store)
+
+    async def test_exists(self, store: IcechunkStore) -> None:
+        # Icechunk store does not support arbitrary keys
+        with pytest.raises(ValueError):
+            await store.exists("foo")
+        assert not await store.exists("foo/zarr.json")
+
+        # Icechunk store does not support arbitrary data either
+        with pytest.raises(ValueError):
+            await store.set("foo", self.buffer_cls.from_bytes(b"bar"))
+
+        await store.set(
+            "foo/zarr.json",
+            self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA),
+        )
+        assert await store.exists("foo/zarr.json")
+
+    async def test_empty(self, store: IcechunkStore) -> None:
+        assert await store.empty()
+
+        await store.set(
+            "foo/zarr.json",
+            self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA),
+        )
+        assert not await store.empty()
+
+    async def test_list(self, store: IcechunkStore) -> None:
+        assert [k async for k in store.list()] == []
+        await store.set(
+            "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        keys = [k async for k in store.list()]
+        assert keys == ["foo/zarr.json"], keys
+
+    async def test_list_dir(self, store: IcechunkStore) -> None:
+        out = [k async for k in store.list_dir("")]
+        assert out == []
+
+        await store.set(
+            "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        await store.set(
+            "goo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+
+        keys_expected = ["foo", "goo"]
+        keys_observed = [k async for k in store.list_dir("")]
+        assert set(keys_observed) == set(keys_expected)
+
+        keys_expected = ["zarr.json"]
+        keys_observed = [k async for k in store.list_dir("foo")]
+        assert set(keys_observed) == set(keys_expected)
+
+    async def test_delete(self, store: IcechunkStore) -> None:
+        await store.set(
+            "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        assert await store.exists("foo/zarr.json")
+        await store.delete("foo/zarr.json")
+        assert not await store.exists("foo/zarr.json")
+
+    @pytest.mark.xfail(reason="Invalid usage pattern with Icechunk")
+    async def test_get_partial_values(
+        self, store: IcechunkStore, key_ranges: list[tuple[str, tuple[int | None, int | None]]]
+    ) -> None:
+        await super().test_get_partial_values(store, key_ranges)
+
+    async def test_set(self, store: IcechunkStore) -> None:
+        await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        assert await store.exists("zarr.json")
+        assert self.get(store, "zarr.json").to_bytes() == DEFAULT_GROUP_METADATA
+
+    async def test_get(self, store: IcechunkStore) -> None:
+        self.set(store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        assert await store.exists("zarr.json")
+        result = await store.get("zarr.json", default_buffer_prototype())
+        assert result.to_bytes() == DEFAULT_GROUP_METADATA
