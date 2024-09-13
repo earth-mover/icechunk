@@ -22,7 +22,8 @@ jobs:
   linux:
     runs-on: ${{ matrix.platform.runner }}
     defaults:
-      working-directory: ./icechunk-python
+      run:
+        working-directory: ./icechunk-python
     strategy:
       matrix:
         platform:
