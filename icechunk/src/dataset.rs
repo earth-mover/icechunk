@@ -5,6 +5,7 @@ use std::{
     iter,
     path::{Path as StdPath, PathBuf},
     sync::{Arc, RwLock},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub use crate::{
@@ -19,18 +20,21 @@ use ::rocksdb::OptimisticTransactionDB;
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use chrono::Utc;
-use futures::{future::ready, Stream, StreamExt, TryStreamExt};
+use futures::{future::ready, io::AsyncWriteExt, Stream, StreamExt, TryStreamExt};
 use itertools::{Either, Itertools};
-use rocksdb::SingleThreaded;
+use rocksdb::{SingleThreaded, WaitForCompactOptions};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::{pin, task::spawn_blocking};
+use tokio::{
+    pin,
+    task::{self, spawn_blocking},
+};
 use tokio_util::io::SyncIoBridge;
 
 use crate::{
     format::{
         manifest::{
-            get_chunk_info, mk_manifests_table, write_chunk_info, ChunkInfo, ChunkRef,
+            delete_chunk, get_chunk_payload, write_chunk_payload, ChunkInfo, ChunkRef,
             ManifestExtents, ManifestRef,
         },
         snapshot::{
@@ -60,6 +64,13 @@ impl Default for DatasetConfig {
             manifest_databases_dir: {
                 let mut tmp = std::env::temp_dir();
                 tmp.push("icechunk-manifests");
+                tmp.push(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_micros()
+                        .to_string(),
+                );
                 tmp
             },
         }
@@ -736,9 +747,7 @@ impl Dataset {
         // FIXME: use manifest extents
         for manifest in manifests {
             let manifest_db = self.get_manifest(&manifest.object_id).await?;
-            match get_chunk_info(manifest_db.as_ref(), node_id, coord)
-                .map(|info| info.payload)
-            {
+            match get_chunk_payload(manifest_db.as_ref(), node_id, coord) {
                 Ok(payload) => {
                     return Ok(Some(payload));
                 }
@@ -1028,10 +1037,40 @@ impl Dataset {
             }
         };
 
-        for (_, chunk) in self.change_set.new_arrays_chunk_iterator() {
-            // FIXME add/delete other chunks
-            write_chunk_info(manifest_db.as_ref(), &chunk)
+        {
+            // fixme transaction
+            // fixme should we use stricter options?
+            // fixme async
+            let tx = manifest_db.transaction();
+            for (node_id, chunks) in self.change_set.set_chunks.iter() {
+                for (coord, maybe_payload) in chunks.iter() {
+                    match maybe_payload {
+                        Some(payload) => {
+                            // a chunk was updated or inserted
+                            write_chunk_payload(&tx, node_id, coord, payload);
+                        }
+                        None => {
+                            // a chunk was deleted
+                            delete_chunk(&tx, node_id, coord);
+                        }
+                    }
+                }
+            }
+            //for (_, chunk) in self.change_set.new_arrays_chunk_iterator() {
+            //    // FIXME add/delete other chunks
+            //    write_chunk_info(&tx, &chunk)
+            //}
+            tx.commit()?;
         }
+
+        task::spawn_blocking(move || {
+            let mut wait_opts = WaitForCompactOptions::default();
+            wait_opts.set_flush(true);
+            manifest_db.wait_for_compact(&wait_opts);
+            drop(manifest_db);
+        })
+        .await
+        .unwrap();
 
         let new_manifest_id = ObjectId::random();
         // fixme: clone
@@ -1039,18 +1078,9 @@ impl Dataset {
         let writer = writer;
 
         let db_path = self.db_dir(&old_manifest_id);
-        compress_db(db_path.as_ref(), writer).await?;
         // fixme close database
-        //let mut res = spawn_blocking(move || {
-        //    let res = compress_db(db_path.as_ref(), writer);
-        //    //dbg!("result from compress", &res);
-        //    res
-        //})
-        //.await
-        //.unwrap()
-        //.unwrap();
-        //res.shutdown()?;
-        dbg!("done spawning");
+        let mut writer = compress_db(db_path.as_ref(), writer).await?;
+        writer.close().await?;
 
         let all_nodes = self.updated_nodes(&new_manifest_id).await?;
         let new_snapshot = match mk_snapshot_table(all_nodes) {
@@ -1620,38 +1650,38 @@ mod tests {
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        // let snapshot_id = ds.flush().await?;
+        let snapshot_id = ds.flush().await?;
 
-        //assert_eq!(Some(snapshot_id), ds.snapshot_id);
-        //assert_eq!(
-        //    ds.get_node(&"/".into()).await.ok(),
-        //    Some(NodeSnapshot {
-        //        id: 1,
-        //        path: "/".into(),
-        //        user_attributes: None,
-        //        node_data: NodeData::Group
-        //    })
-        //);
+        assert_eq!(Some(snapshot_id), ds.snapshot_id);
+        assert_eq!(
+            ds.get_node(&"/".into()).await.ok(),
+            Some(NodeSnapshot {
+                id: 1,
+                path: "/".into(),
+                user_attributes: None,
+                node_data: NodeData::Group
+            })
+        );
         ds.add_group("/group".into()).await?;
-        //let _snapshot_id = ds.flush().await?;
-        //assert_eq!(
-        //    ds.get_node(&"/".into()).await.ok(),
-        //    Some(NodeSnapshot {
-        //        id: 1,
-        //        path: "/".into(),
-        //        user_attributes: None,
-        //        node_data: NodeData::Group
-        //    })
-        //);
-        //assert_eq!(
-        //    ds.get_node(&"/group".into()).await.ok(),
-        //    Some(NodeSnapshot {
-        //        id: 2,
-        //        path: "/group".into(),
-        //        user_attributes: None,
-        //        node_data: NodeData::Group
-        //    })
-        //);
+        let _snapshot_id = ds.flush().await?;
+        assert_eq!(
+            ds.get_node(&"/".into()).await.ok(),
+            Some(NodeSnapshot {
+                id: 1,
+                path: "/".into(),
+                user_attributes: None,
+                node_data: NodeData::Group
+            })
+        );
+        assert_eq!(
+            ds.get_node(&"/group".into()).await.ok(),
+            Some(NodeSnapshot {
+                id: 2,
+                path: "/group".into(),
+                user_attributes: None,
+                node_data: NodeData::Group
+            })
+        );
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
@@ -1666,11 +1696,12 @@ mod tests {
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
+        dbg!("1");
         let new_array_path: PathBuf = "/group/array1".to_string().into();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
-        // wo commit to test the case of a chunkless array
-        //let _snapshot_id = ds.flush().await?;
+        // no commit to test the case of a chunkless array
+        let _snapshot_id = ds.flush().await?;
 
         // we set a chunk in a new array
         ds.set_chunk_ref(
@@ -1680,6 +1711,7 @@ mod tests {
         )
         .await?;
 
+        dbg!("2");
         let _snapshot_id = ds.flush().await?;
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
@@ -1714,81 +1746,91 @@ mod tests {
         );
 
         dbg!("!!!!!!!!!!!!!!!!!!!!!!!!");
-        //// we modify a chunk in an existing array
-        //ds.set_chunk_ref(
-        //    new_array_path.clone(),
-        //    ChunkIndices(vec![0, 0, 0]),
-        //    Some(ChunkPayload::Inline("bye".into())),
-        //)
-        //.await?;
+        // we modify a chunk in an existing array
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 0]),
+            Some(ChunkPayload::Inline("bye".into())),
+        )
+        .await?;
 
-        //// we add a new chunk in an existing array
-        //ds.set_chunk_ref(
-        //    new_array_path.clone(),
-        //    ChunkIndices(vec![0, 0, 1]),
-        //    Some(ChunkPayload::Inline("new chunk".into())),
-        //)
-        //.await?;
+        dbg!("3");
+        // we add a new chunk in an existing array
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 1]),
+            Some(ChunkPayload::Inline("new chunk".into())),
+        )
+        .await?;
 
-        //let previous_snapshot_id = ds.flush().await?;
-        //assert_eq!(
-        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
-        //    Some(ChunkPayload::Inline("bye".into()))
-        //);
-        //assert_eq!(
-        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
-        //    Some(ChunkPayload::Inline("new chunk".into()))
-        //);
+        let previous_snapshot_id = ds.flush().await?;
+        assert_eq!(
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
+            Some(ChunkPayload::Inline("bye".into()))
+        );
+        assert_eq!(
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
+            Some(ChunkPayload::Inline("new chunk".into()))
+        );
 
-        //// we delete a chunk
-        //ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
-        //    .await?;
+        dbg!("4");
+        // we delete a chunk
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
+            .await?;
 
-        //let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
-        //// we change zarr metadata
-        //ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
+        let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
+        // we change zarr metadata
+        ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
 
-        //// we change user attributes metadata
-        //ds.set_user_attributes(
-        //    new_array_path.clone(),
-        //    Some(UserAttributes::try_new(br#"{"foo":42}"#).unwrap()),
-        //)
-        //.await?;
+        // we change user attributes metadata
+        ds.set_user_attributes(
+            new_array_path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":42}"#).unwrap()),
+        )
+        .await?;
+        dbg!("5");
 
-        //let snapshot_id = ds.flush().await?;
-        //let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
+        let snapshot_id = ds.flush().await?;
+        let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
 
-        //assert_eq!(
-        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
-        //    Some(ChunkPayload::Inline("bye".into()))
-        //);
-        //assert_eq!(
-        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
-        //    None
-        //);
-        //assert!(matches!(
-        //    ds.get_node(&new_array_path).await.ok(),
-        //    Some(NodeSnapshot {
-        //        id: 3,
-        //        path,
-        //        user_attributes: Some(atts),
-        //        node_data: NodeData::Array(meta, manifests)
-        //    }) if path == new_array_path && meta == new_meta.clone() &&
-        //            manifests.len() == 1 &&
-        //            atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
-        //));
+        dbg!("6");
+        assert_eq!(
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
+            Some(ChunkPayload::Inline("bye".into()))
+        );
+        dbg!("7");
+        assert_eq!(
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
+            None
+        );
+        dbg!("8");
+        assert!(matches!(
+            ds.get_node(&new_array_path).await.ok(),
+            Some(NodeSnapshot {
+                id: 3,
+                path,
+                user_attributes: Some(atts),
+                node_data: NodeData::Array(meta, manifests)
+            }) if path == new_array_path && meta == new_meta.clone() &&
+                    manifests.len() == 1 &&
+                    atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
+        ));
 
-        ////test the previous version is still alive
-        //let ds = Dataset::update(Arc::clone(&storage), previous_snapshot_id).build();
-        //assert_eq!(
-        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
-        //    Some(ChunkPayload::Inline("bye".into()))
-        //);
-        //assert_eq!(
-        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
-        //    Some(ChunkPayload::Inline("new chunk".into()))
-        //);
+        dbg!("9");
+        //test the previous version is still alive
+        let ds = Dataset::update(Arc::clone(&storage), previous_snapshot_id).build();
+        dbg!("10");
+        assert_eq!(
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
+            Some(ChunkPayload::Inline("bye".into()))
+        );
+        dbg!("11");
+        assert_eq!(
+            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
+            Some(ChunkPayload::Inline("new chunk".into()))
+        );
 
+        dbg!("12");
         Ok(())
     }
 

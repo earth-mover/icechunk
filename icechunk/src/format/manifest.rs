@@ -11,7 +11,7 @@ use arrow::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use rocksdb::OptimisticTransactionDB;
+use rocksdb::{OptimisticTransactionDB, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
@@ -85,18 +85,32 @@ fn db_key(node_id: &NodeId, coord: &ChunkIndices) -> Vec<u8> {
     serde_json::to_vec(&key).unwrap()
 }
 
-pub fn write_chunk_info(db: &OptimisticTransactionDB, chunk: &ChunkInfo) {
-    let key = db_key(&chunk.node, &chunk.coord);
+pub fn write_chunk_payload<DB>(
+    db: &Transaction<'_, DB>,
+    node_id: &NodeId,
+    coord: &ChunkIndices,
+    payload: &ChunkPayload,
+) {
+    let key = db_key(node_id, coord);
     // FIXME: we don't need all the data
-    let value = serde_json::to_vec(&chunk).unwrap();
+    let value = serde_json::to_vec(&payload).unwrap();
     db.put(key.as_slice(), value.as_slice()).unwrap();
 }
 
-pub fn get_chunk_info(
+pub fn delete_chunk<DB>(
+    db: &Transaction<'_, DB>,
+    node_id: &NodeId,
+    coord: &ChunkIndices,
+) {
+    let key = db_key(node_id, coord);
+    db.delete(key).unwrap();
+}
+
+pub fn get_chunk_payload(
     db: &OptimisticTransactionDB,
     node_id: &NodeId,
     coord: &ChunkIndices,
-) -> IcechunkResult<ChunkInfo> {
+) -> IcechunkResult<ChunkPayload> {
     let key = db_key(node_id, coord);
     let bytes = db
         .get(key.as_slice())

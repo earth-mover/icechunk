@@ -3,6 +3,7 @@ use std::{
     fs::create_dir_all,
     future::ready,
     ops::DerefMut,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
@@ -95,18 +96,8 @@ impl ObjectStorage {
         ObjectPath::from(path)
     }
 
-    fn get_manifest_path(
-        &self,
-        file_prefix: &str,
-        ObjectId(asu8): &ObjectId,
-    ) -> ObjectPath {
-        // TODO: be careful about allocation here
-        let path = format!(
-            "{}/{}/{}.tar",
-            self.prefix,
-            file_prefix,
-            BASE64_URL_SAFE.encode(asu8)
-        );
+    fn get_manifest_path(&self, id: &ObjectId) -> ObjectPath {
+        let path = format!("{}/{}/{}.tar", self.prefix, MANIFEST_PREFIX, id);
         ObjectPath::from(path)
     }
 
@@ -185,7 +176,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> StorageResult<BoxStream<StorageResult<Bytes>>> {
-        let path = self.get_manifest_path(MANIFEST_PREFIX, id);
+        let path = self.get_manifest_path(id);
         let res = self.store.get(&path).await?;
         Ok(res.into_stream().map_err(|e| e.into()).boxed())
     }
@@ -225,8 +216,7 @@ impl Storage for ObjectStorage {
         &self,
         id: ObjectId,
     ) -> StorageResult<Box<dyn AsyncWrite + Send + Sync + Unpin>> {
-        #[pin_project]
-        struct SyncWriter(#[pin] Mutex<object_store::buffered::BufWriter>);
+        struct SyncWriter(Arc<Mutex<object_store::buffered::BufWriter>>);
 
         impl AsyncWrite for SyncWriter {
             fn poll_write(
@@ -234,39 +224,34 @@ impl Storage for ObjectStorage {
                 cx: &mut std::task::Context<'_>,
                 buf: &[u8],
             ) -> std::task::Poll<Result<usize, std::io::Error>> {
-                let this = self.project();
-                let w = this.0;
-                w.poll_write(todo!(), cx, buf);
-                //w.poll_write(todo!(), cx, buf)
-                todo!()
+                let mut guard = self.0.lock().unwrap();
+                let this = Pin::new(guard.deref_mut());
+                this.poll_write(cx, buf)
             }
 
             fn poll_flush(
                 self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<Result<(), std::io::Error>> {
-                todo!()
+                let mut guard = self.0.lock().unwrap();
+                let this = Pin::new(guard.deref_mut());
+                this.poll_flush(cx)
             }
 
             fn poll_shutdown(
                 self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<Result<(), std::io::Error>> {
-                todo!()
+                let mut guard = self.0.lock().unwrap();
+                let this = Pin::new(guard.deref_mut());
+                this.poll_shutdown(cx)
             }
         }
 
-        let path = format!(
-            "{}/{}/{}.tar",
-            self.prefix,
-            MANIFEST_PREFIX,
-            BASE64_URL_SAFE.encode(id.0)
-        );
-        let path = ObjectPath::from(path);
-        dbg!(&path);
+        let path = self.get_manifest_path(&id);
         let writer =
             object_store::buffered::BufWriter::new(Arc::clone(&self.store), path);
-        Ok(Box::new(SyncWriter(Mutex::new(writer))))
+        Ok(Box::new(SyncWriter(Arc::new(Mutex::new(writer)))))
     }
     async fn fetch_chunk(
         &self,

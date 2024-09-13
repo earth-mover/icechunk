@@ -63,6 +63,12 @@ impl From<&ObjectId> for String {
     }
 }
 
+impl fmt::Display for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(base32::encode(base32::Alphabet::Crockford, &self.0).as_str())
+    }
+}
+
 impl Serialize for ObjectId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // Just use the string representation
