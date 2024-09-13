@@ -8,7 +8,7 @@ async def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkS
     if store == "local":
         return await IcechunkStore.from_json(
             {
-                "storage": {"type": "local_filesystem", "path": path},
+                "storage": {"type": "local_filesystem", "root": path},
                 "dataset": {},
             }, 
             mode="w"

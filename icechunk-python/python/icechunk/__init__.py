@@ -12,6 +12,12 @@ from zarr.core.sync import SyncMixin
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
 
+    @classmethod
+    async def open(cls, *args: Any, **kwargs: Any) -> Self:
+        store = await cls.from_json(*args, **kwargs)
+        await store._open()
+        return store
+
     def __init__(
         self, store: PyIcechunkStore, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ):
@@ -59,6 +65,33 @@ class IcechunkStore(Store, SyncMixin):
         """
         try:
             result = await self._store.get(key, byte_range)
+            if result is None:
+                return None
+        except ValueError as _e:
+            # Zarr python expects None to be returned if the key does not exist
+            return None
+
+        return prototype.buffer.from_bytes(result)
+    
+    def get_sync(
+        self,
+        key: str,
+        prototype: BufferPrototype,
+        byte_range: tuple[int | None, int | None] | None = None,
+    ) -> Buffer | None:
+        """Retrieve the value associated with a given key.
+
+        Parameters
+        ----------
+        key : str
+        byte_range : tuple[int, Optional[int]], optional
+
+        Returns
+        -------
+        Buffer
+        """
+        try:
+            result = self._store.get_sync(key, byte_range)
             if result is None:
                 return None
         except ValueError as _e:
@@ -115,6 +148,16 @@ class IcechunkStore(Store, SyncMixin):
         value : Buffer
         """
         return await self._store.set(key, value.to_bytes())
+    
+    def set_sync(self, key: str, value: Buffer) -> None:
+        """Store a (key, value) pair.
+
+        Parameters
+        ----------
+        key : str
+        value : Buffer
+        """
+        return self._store.set_sync(key, value.to_bytes())
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store
