@@ -3,7 +3,6 @@ name = "icechunk"
 version = "0.1.0"
 edition = "2021"
 description = "Icechunk client"
-readme = "README.md"
 publish = false
 
 [dependencies]
