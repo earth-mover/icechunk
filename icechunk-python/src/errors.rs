@@ -17,6 +17,8 @@ pub enum PyIcechunkStoreError {
     IcechunkFormatError(#[from] IcechunkFormatError),
     #[error("value error: {0}")]
     PyValueError(#[from] PyValueError),
+    #[error("error: {0}")]
+    PyError(#[from] PyErr),
     #[error("{0}")]
     UnkownError(String),
 }

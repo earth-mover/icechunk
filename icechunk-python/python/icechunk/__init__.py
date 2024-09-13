@@ -12,6 +12,12 @@ from zarr.core.sync import SyncMixin
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
 
+    @classmethod
+    async def open(cls, *args: Any, **kwargs: Any) -> Self:
+        store = await cls.from_json(*args, **kwargs)
+        await store._open()
+        return store
+
     def __init__(
         self, store: PyIcechunkStore, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ):
@@ -63,6 +69,7 @@ class IcechunkStore(Store, SyncMixin):
                 return None
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
+            # but an IcechunkStore returns an error if the key does not exist
             return None
 
         return prototype.buffer.from_bytes(result)

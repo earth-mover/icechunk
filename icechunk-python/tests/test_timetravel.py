@@ -1,12 +1,8 @@
-import pytest
 import zarr
 
 import icechunk
 
-pytest_plugins = ("pytest_asyncio",)
 
-
-@pytest.mark.asyncio
 async def test_timetravel():
     store = await icechunk.IcechunkStore.from_json(
         config={"storage": {"type": "in_memory"}, "dataset": {}}, mode="w"
