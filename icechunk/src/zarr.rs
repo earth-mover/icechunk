@@ -182,8 +182,7 @@ impl Store {
             }
         }?;
 
-        let (start, end) = byte_range;
-        let bytes = match (start, end) {
+        let bytes = match byte_range {
             (Some(start), Some(end)) => bytes.slice(*start as usize..*end as usize),
             (Some(start), None) => bytes.slice(*start as usize..),
             (None, Some(end)) => bytes.slice(..*end as usize),
