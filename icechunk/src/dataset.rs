@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
-    io::{ErrorKind, Write},
+    io::ErrorKind,
     iter,
     path::{Path as StdPath, PathBuf},
     sync::{Arc, RwLock},
@@ -1155,23 +1155,6 @@ impl Dataset {
             }
             Err(err) => Err(err.into()),
         }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct TableRegionTracker(HashMap<NodeId, TableRegion>, u32);
-
-impl TableRegionTracker {
-    fn update(&mut self, chunk: &ChunkInfo) {
-        self.0
-            .entry(chunk.node)
-            .and_modify(|tr| tr.extend_right(1))
-            .or_insert(TableRegion::singleton(self.1));
-        self.1 += 1;
-    }
-
-    fn region(&self, node: NodeId) -> Option<&TableRegion> {
-        self.0.get(&node)
     }
 }
 
