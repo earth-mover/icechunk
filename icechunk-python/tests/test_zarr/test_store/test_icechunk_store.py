@@ -62,7 +62,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.mark.xfail(reason="Not implemented")
     async def test_clear(self, store: IcechunkStore) -> None:
-        await store.set(
+        await self.set(
+            store,
             "foo/zarr.json",
             self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA),
         )
