@@ -2,6 +2,7 @@ use core::fmt;
 use futures::stream::BoxStream;
 use parquet::errors as parquet_errors;
 use std::{ops::Range, sync::Arc};
+use tokio::io::AsyncWrite;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -83,6 +84,10 @@ pub trait Storage: fmt::Debug {
         id: ObjectId,
         table: Arc<ManifestsTable>,
     ) -> StorageResult<()>;
+    async fn manifest_writer(
+        &self,
+        id: ObjectId,
+    ) -> StorageResult<Box<dyn AsyncWrite + Send + Sync + Unpin>>;
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> StorageResult<()>;
 
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;

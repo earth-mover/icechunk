@@ -6,6 +6,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use tokio::io::AsyncWrite;
 
 use super::{Storage, StorageError, StorageResult};
 use crate::format::{
@@ -109,6 +110,13 @@ impl Storage for LoggingStorage {
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id, table).await
+    }
+
+    async fn manifest_writer(
+        &self,
+        id: ObjectId,
+    ) -> StorageResult<Box<dyn AsyncWrite + Send + Sync + Unpin>> {
+        self.backend.manifest_writer(id).await
     }
 
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {

@@ -7,6 +7,7 @@ use quick_cache::{
     sync::{Cache, DefaultLifecycle},
     DefaultHashBuilder, OptionsBuilder, Weighter,
 };
+use tokio::io::AsyncWrite;
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
@@ -197,6 +198,13 @@ impl Storage for MemCachingStorage {
         self.backend.write_manifests(id.clone(), Arc::clone(&table)).await?;
         self.cache.insert(CacheKey::Manifest(id), CacheValue::Manifest(table));
         Ok(())
+    }
+
+    async fn manifest_writer(
+        &self,
+        id: ObjectId,
+    ) -> StorageResult<Box<dyn AsyncWrite + Send + Sync + Unpin>> {
+        self.backend.manifest_writer(id).await
     }
 
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {

@@ -27,7 +27,10 @@ base32 = "0.5.1"
 chrono = { version = "0.4.38", features = ["serde"] }
 async-recursion = "1.1.1"
 rocksdb = "0.22.0"
+tokio-util = { version = "0.7.12", features = ["compat", "io", "io-util"] }
+tar = "0.4.41"
 async-tar = "0.5.0"
+pin-project = "1.1.5"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

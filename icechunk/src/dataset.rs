@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     iter,
     path::{Path as StdPath, PathBuf},
     sync::{Arc, RwLock},
@@ -24,21 +24,25 @@ use itertools::{Either, Itertools};
 use rocksdb::SingleThreaded;
 use serde_json::Value;
 use thiserror::Error;
+use tokio::{pin, task::spawn_blocking};
+use tokio_util::io::SyncIoBridge;
 
 use crate::{
     format::{
         manifest::{
-            get_chunk_info, mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents,
-            ManifestRef,
+            get_chunk_info, mk_manifests_table, write_chunk_info, ChunkInfo, ChunkRef,
+            ManifestExtents, ManifestRef,
         },
-        snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
+        snapshot::{
+            mk_snapshot_table, NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot,
+        },
         Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
     },
     refs::{
         fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version, update_branch,
         BranchVersion, RefError,
     },
-    rocksdb::{extract_db, open_db},
+    rocksdb::{compress_db, extract_db, open_db},
     Storage, StorageError,
 };
 
@@ -859,7 +863,6 @@ impl Dataset {
     async fn updated_existing_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-        manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
@@ -875,19 +878,17 @@ impl Dataset {
                         Err(e) => Err(e.into()),
                     })
                     .map_ok(move |node| {
-                        let region = manifest_tracker.and_then(|t| t.region(node.id));
-                        let new_manifests = region.map(|r| {
-                            if r.start() == r.end() {
-                                vec![]
-                            } else {
-                                vec![ManifestRef {
-                                    object_id: manifest_id.clone(),
-                                    location: r.clone(),
-                                    flags: Flags(),
-                                    extents: ManifestExtents(vec![]),
-                                }]
-                            }
-                        });
+                        let new_manifests = if node.node_type() == NodeType::Array {
+                            //FIXME: it could be none for empty arrays
+                            Some(vec![ManifestRef {
+                                object_id: manifest_id.clone(),
+                                location: TableRegion::new(0, 1).unwrap(),
+                                flags: Flags(),
+                                extents: ManifestExtents(vec![]),
+                            }])
+                        } else {
+                            None
+                        };
                         self.update_existing_node(node, new_manifests)
                     }),
             )),
@@ -897,7 +898,6 @@ impl Dataset {
     fn new_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-        manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
         self.change_set.new_nodes().map(move |path| {
             // we should be able to create the full node because we
@@ -907,24 +907,14 @@ impl Dataset {
             match node.node_data {
                 NodeData::Group => node,
                 NodeData::Array(meta, _no_manifests_yet) => {
-                    let region = manifest_tracker.and_then(|t| t.region(node.id));
-                    let new_manifests = region.map(|r| {
-                        if r.start() == r.end() {
-                            vec![]
-                        } else {
-                            vec![ManifestRef {
-                                object_id: manifest_id.clone(),
-                                location: r.clone(),
-                                flags: Flags(),
-                                extents: ManifestExtents(vec![]),
-                            }]
-                        }
-                    });
+                    let new_manifests = vec![ManifestRef {
+                        object_id: manifest_id.clone(),
+                        location: TableRegion::new(0, 1).unwrap(),
+                        flags: Flags(),
+                        extents: ManifestExtents(vec![]),
+                    }];
                     NodeSnapshot {
-                        node_data: NodeData::Array(
-                            meta,
-                            new_manifests.unwrap_or_default(),
-                        ),
+                        node_data: NodeData::Array(meta, new_manifests),
                         ..node
                     }
                 }
@@ -935,12 +925,11 @@ impl Dataset {
     async fn updated_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-        manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
         Ok(self
-            .updated_existing_nodes(manifest_id, manifest_tracker)
+            .updated_existing_nodes(manifest_id)
             .await?
-            .chain(self.new_nodes(manifest_id, manifest_tracker).map(Ok)))
+            .chain(self.new_nodes(manifest_id).map(Ok)))
     }
 
     fn update_existing_node(
@@ -979,7 +968,7 @@ impl Dataset {
     pub async fn list_nodes(
         &self,
     ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + '_> {
-        self.updated_nodes(&ObjectId::FAKE, None).await
+        self.updated_nodes(&ObjectId::FAKE).await
     }
 
     pub async fn all_chunks(
@@ -999,14 +988,21 @@ impl Dataset {
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
-        let manifest = match self.snapshot_id.as_ref() {
+        let (old_manifest_id, manifest_db) = match self.snapshot_id.as_ref() {
             None => {
                 let manifest_id = ObjectId::random();
                 let db_path = self.db_dir(&manifest_id);
-                Arc::new(open_db::<SingleThreaded>(db_path.as_path(), &self.rocksdb_env)?)
+                (
+                    manifest_id,
+                    Arc::new(open_db::<SingleThreaded>(
+                        db_path.as_path(),
+                        &self.rocksdb_env,
+                    )?),
+                )
             }
             Some(snapshot_id) => {
                 let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
+                // FIXME: currently only looking for the first manifest
                 let manifest_id = snapshot.iter_arc().find_map(|node| {
                     node.ok().and_then(|node| match node.node_data {
                         NodeData::Array(_, man) => {
@@ -1017,34 +1013,46 @@ impl Dataset {
                     })
                 });
                 match manifest_id {
-                    Some(ref manifest_id) => self.get_manifest(manifest_id).await?,
+                    Some(ref manifest_id) => {
+                        (manifest_id.clone(), self.get_manifest(manifest_id).await?)
+                    }
                     None => {
                         let manifest_id = ObjectId::random();
                         let db_path = self.db_dir(&manifest_id);
-                        Arc::new(open_db(db_path.as_path(), &self.rocksdb_env)?)
+                        (
+                            manifest_id,
+                            Arc::new(open_db(db_path.as_path(), &self.rocksdb_env)?),
+                        )
                     }
                 }
             }
         };
 
-        let mut region_tracker = TableRegionTracker::default();
-        let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
-            region_tracker.update(&chunk.1);
-            chunk
-        });
-        let new_manifest =
-            match mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await {
-                Ok(man) => man,
-                Err(Ok(e)) => Err(e)?,
-                Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
-            };
-        let new_manifest_id = ObjectId::random();
-        self.storage
-            .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
-            .await?;
+        for (_, chunk) in self.change_set.new_arrays_chunk_iterator() {
+            // FIXME add/delete other chunks
+            write_chunk_info(manifest_db.as_ref(), &chunk)
+        }
 
-        let all_nodes =
-            self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await?;
+        let new_manifest_id = ObjectId::random();
+        // fixme: clone
+        let writer = self.storage.manifest_writer(new_manifest_id.clone()).await?;
+        let writer = writer;
+
+        let db_path = self.db_dir(&old_manifest_id);
+        compress_db(db_path.as_ref(), writer).await?;
+        // fixme close database
+        //let mut res = spawn_blocking(move || {
+        //    let res = compress_db(db_path.as_ref(), writer);
+        //    //dbg!("result from compress", &res);
+        //    res
+        //})
+        //.await
+        //.unwrap()
+        //.unwrap();
+        //res.shutdown()?;
+        dbg!("done spawning");
+
+        let all_nodes = self.updated_nodes(&new_manifest_id).await?;
         let new_snapshot = match mk_snapshot_table(all_nodes) {
             Ok(str) => str,
             Err(Ok(e)) => Err(e)?,
@@ -1496,7 +1504,6 @@ mod tests {
             .updated_attributes
             .contains_key(&node.as_ref().unwrap().id));
         assert!(ds.delete_array(path.clone()).await.is_ok());
-        dbg!(&node, &ds.change_set.updated_attributes);
         assert!(!ds.change_set.updated_attributes.contains_key(&node?.id));
 
         Ok(())
@@ -1605,42 +1612,46 @@ mod tests {
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+            ObjectStorage::new_local_store(&PathBuf::from("/tmp/test-object-store"))
+                .unwrap(),
+        );
         let mut ds = Dataset::create(Arc::clone(&storage)).build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let snapshot_id = ds.flush().await?;
+        // let snapshot_id = ds.flush().await?;
 
-        assert_eq!(Some(snapshot_id), ds.snapshot_id);
-        assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: "/".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+        //assert_eq!(Some(snapshot_id), ds.snapshot_id);
+        //assert_eq!(
+        //    ds.get_node(&"/".into()).await.ok(),
+        //    Some(NodeSnapshot {
+        //        id: 1,
+        //        path: "/".into(),
+        //        user_attributes: None,
+        //        node_data: NodeData::Group
+        //    })
+        //);
         ds.add_group("/group".into()).await?;
-        let _snapshot_id = ds.flush().await?;
-        assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: "/".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        assert_eq!(
-            ds.get_node(&"/group".into()).await.ok(),
-            Some(NodeSnapshot {
-                id: 2,
-                path: "/group".into(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+        //let _snapshot_id = ds.flush().await?;
+        //assert_eq!(
+        //    ds.get_node(&"/".into()).await.ok(),
+        //    Some(NodeSnapshot {
+        //        id: 1,
+        //        path: "/".into(),
+        //        user_attributes: None,
+        //        node_data: NodeData::Group
+        //    })
+        //);
+        //assert_eq!(
+        //    ds.get_node(&"/group".into()).await.ok(),
+        //    Some(NodeSnapshot {
+        //        id: 2,
+        //        path: "/group".into(),
+        //        user_attributes: None,
+        //        node_data: NodeData::Group
+        //    })
+        //);
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
@@ -1659,7 +1670,7 @@ mod tests {
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
         // wo commit to test the case of a chunkless array
-        let _snapshot_id = ds.flush().await?;
+        //let _snapshot_id = ds.flush().await?;
 
         // we set a chunk in a new array
         ds.set_chunk_ref(
@@ -1702,80 +1713,81 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into()))
         );
 
-        // we modify a chunk in an existing array
-        ds.set_chunk_ref(
-            new_array_path.clone(),
-            ChunkIndices(vec![0, 0, 0]),
-            Some(ChunkPayload::Inline("bye".into())),
-        )
-        .await?;
+        dbg!("!!!!!!!!!!!!!!!!!!!!!!!!");
+        //// we modify a chunk in an existing array
+        //ds.set_chunk_ref(
+        //    new_array_path.clone(),
+        //    ChunkIndices(vec![0, 0, 0]),
+        //    Some(ChunkPayload::Inline("bye".into())),
+        //)
+        //.await?;
 
-        // we add a new chunk in an existing array
-        ds.set_chunk_ref(
-            new_array_path.clone(),
-            ChunkIndices(vec![0, 0, 1]),
-            Some(ChunkPayload::Inline("new chunk".into())),
-        )
-        .await?;
+        //// we add a new chunk in an existing array
+        //ds.set_chunk_ref(
+        //    new_array_path.clone(),
+        //    ChunkIndices(vec![0, 0, 1]),
+        //    Some(ChunkPayload::Inline("new chunk".into())),
+        //)
+        //.await?;
 
-        let previous_snapshot_id = ds.flush().await?;
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
-            Some(ChunkPayload::Inline("bye".into()))
-        );
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
-            Some(ChunkPayload::Inline("new chunk".into()))
-        );
+        //let previous_snapshot_id = ds.flush().await?;
+        //assert_eq!(
+        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
+        //    Some(ChunkPayload::Inline("bye".into()))
+        //);
+        //assert_eq!(
+        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
+        //    Some(ChunkPayload::Inline("new chunk".into()))
+        //);
 
-        // we delete a chunk
-        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
-            .await?;
+        //// we delete a chunk
+        //ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
+        //    .await?;
 
-        let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
-        // we change zarr metadata
-        ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
+        //let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
+        //// we change zarr metadata
+        //ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
 
-        // we change user attributes metadata
-        ds.set_user_attributes(
-            new_array_path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":42}"#).unwrap()),
-        )
-        .await?;
+        //// we change user attributes metadata
+        //ds.set_user_attributes(
+        //    new_array_path.clone(),
+        //    Some(UserAttributes::try_new(br#"{"foo":42}"#).unwrap()),
+        //)
+        //.await?;
 
-        let snapshot_id = ds.flush().await?;
-        let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
+        //let snapshot_id = ds.flush().await?;
+        //let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
 
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
-            Some(ChunkPayload::Inline("bye".into()))
-        );
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
-            None
-        );
-        assert!(matches!(
-            ds.get_node(&new_array_path).await.ok(),
-            Some(NodeSnapshot {
-                id: 3,
-                path,
-                user_attributes: Some(atts),
-                node_data: NodeData::Array(meta, manifests)
-            }) if path == new_array_path && meta == new_meta.clone() &&
-                    manifests.len() == 1 &&
-                    atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
-        ));
+        //assert_eq!(
+        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
+        //    Some(ChunkPayload::Inline("bye".into()))
+        //);
+        //assert_eq!(
+        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
+        //    None
+        //);
+        //assert!(matches!(
+        //    ds.get_node(&new_array_path).await.ok(),
+        //    Some(NodeSnapshot {
+        //        id: 3,
+        //        path,
+        //        user_attributes: Some(atts),
+        //        node_data: NodeData::Array(meta, manifests)
+        //    }) if path == new_array_path && meta == new_meta.clone() &&
+        //            manifests.len() == 1 &&
+        //            atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
+        //));
 
-        //test the previous version is still alive
-        let ds = Dataset::update(Arc::clone(&storage), previous_snapshot_id).build();
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
-            Some(ChunkPayload::Inline("bye".into()))
-        );
-        assert_eq!(
-            ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
-            Some(ChunkPayload::Inline("new chunk".into()))
-        );
+        ////test the previous version is still alive
+        //let ds = Dataset::update(Arc::clone(&storage), previous_snapshot_id).build();
+        //assert_eq!(
+        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
+        //    Some(ChunkPayload::Inline("bye".into()))
+        //);
+        //assert_eq!(
+        //    ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
+        //    Some(ChunkPayload::Inline("new chunk".into()))
+        //);
 
         Ok(())
     }

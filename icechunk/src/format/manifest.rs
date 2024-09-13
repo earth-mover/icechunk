@@ -85,12 +85,8 @@ fn db_key(node_id: &NodeId, coord: &ChunkIndices) -> Vec<u8> {
     serde_json::to_vec(&key).unwrap()
 }
 
-pub fn write_chunk_info(
-    db: &OptimisticTransactionDB,
-    node_id: &NodeId,
-    chunk: &ChunkInfo,
-) {
-    let key = db_key(node_id, &chunk.coord);
+pub fn write_chunk_info(db: &OptimisticTransactionDB, chunk: &ChunkInfo) {
+    let key = db_key(&chunk.node, &chunk.coord);
     // FIXME: we don't need all the data
     let value = serde_json::to_vec(&chunk).unwrap();
     db.put(key.as_slice(), value.as_slice()).unwrap();
