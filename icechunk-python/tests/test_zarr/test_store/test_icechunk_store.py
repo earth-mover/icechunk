@@ -62,7 +62,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.mark.xfail(reason="Not implemented")
     async def test_clear(self, store: IcechunkStore) -> None:
-        await super().test_clear(store)
+        await store.set(
+            "foo/zarr.json",
+            self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA),
+        )
+        await store.clear()
 
     async def test_exists(self, store: IcechunkStore) -> None:
         # Icechunk store does not support arbitrary keys
