@@ -18,12 +18,13 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
 jobs:
   linux:
     runs-on: ${{ matrix.platform.runner }}
-    defaults:
-      run:
-        working-directory: ./icechunk-python
     strategy:
       matrix:
         platform:
@@ -221,7 +222,6 @@ jobs:
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: icechunk-python
           command: sdist
           args: --out dist
       - name: Upload sdist
