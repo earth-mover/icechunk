@@ -11,7 +11,7 @@ This specification describes a single Icechunk **store**.
 A store is defined as a Zarr store containing one or more Arrays and Groups.
 The most common scenario is for a store to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
 However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
-Users of Icechunk SHOULD aim to scope their stores only to related arrays and groups that require consistent transactional updates.
+Users of Icechunk should aim to scope their stores only to related arrays and groups that require consistent transactional updates.
 
 All the data and metadata for a store are stored in a directory in object storage or file storage.
 
@@ -19,17 +19,20 @@ All the data and metadata for a store are stored in a directory in object storag
 
 The goals of the specification are as follows:
 
+1. **Object storage** - the format is designed around the consistency features and performance characteristics available in modern cloud object storage. No external database or catalog is required.
 1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to arrays will be committed via a single atomic operation and will not be partially visible. Readers will not acquire locks.
-2. **Time travel** - Previous snapshots of a store remain accessible after new ones have been written.
-3. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-4. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
+1. **Time travel** - Previous snapshots of a store remain accessible after new ones have been written.
+1. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
+1. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
 
 ### Non Goals
 
 1. **Low Latency** - Icechunk is designed to support analytical workloads for large stores. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
+1. **No Catalog** - The spec does not extend beyond a single store or provide a way to organize multiple stores into a hierarchy.
 
 ### Storage Operations
 
+An explicit goal of 
 Icechunk requires that the storage system support the following operations:
 
 - **In-place write** - Files are not moved or altered once they are written. Strong read-after-write and list-after-write consistency is expected.
@@ -48,37 +51,37 @@ The storage system is not required to support random-access writes. Once written
 
 Icechunk uses a series of linked metadata files to describe the state of the store.
 
-- The **state file** is the entry point to the store. It stores a record of snapshots, each of which is a pointer to a single structure file. State files follow a deterministic sequential naming scheme.
-- The **structure file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new structure file. The structure file contains pointers to one or more chunk manifest files and [optionally] attribute files.
+- The **Snapshot file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files and [optionally] attribute files.
 - **Chunk Manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
+- **Reference files** track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by creating the next branch file in a sequence.
 
-When reading a store, the client opens the latest state file and then chooses a structure file corresponding to a specific snapshot to open.
-The client then reads the structure file to determine the structure and hierarchy of the store.
+When reading from store, the client opens the latest branch or tag file to obtain a pointer to the relevant snapshot file.
+The client then reads the snapshot file to determine the structure and hierarchy of the store.
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
-When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new structure file and state file.
-Finally, in an atomic put-if-not-exists operation, it creates the next state file in the sequence.
+When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
+Finally, in an atomic put-if-not-exists operation, to commit the transaction, it creates the next branch file in the sequence.
 This operation may fail if a different client has already committed the next snapshot.
 In this case, the client may attempt to resolve the conflicts and retry the commit.
 
 
 ```mermaid
 flowchart TD
-    subgraph metadata
-    subgraph state_files
-    old_state[State File 1]
-    state[State File 2]
+    subgraph metadata[Metadata]
+    subgraph reference_files[Reference Files]
+    old_branch[Main Branch File 001]
+    branch[Main Branch File 002]
     end
-    subgraph structure
-    structure1[Structure File 1]
-    structure2[Structure File 2]
+    subgraph snapshots[Snapshots]
+    snapshot1[Snapshot File 1]
+    snapshot2[Snapshot File 2]
     end
-    subgraph attributes
+    subgraph attributes[Attributes]
     attrs[Attribute File]
     end
-    subgraph manifests
+    subgraph manifests[Manifests]
     manifestA[Chunk Manifest A]
     manifestB[Chunk Manifest B]
     end
@@ -90,12 +93,12 @@ flowchart TD
     chunk4[Chunk File 4]
     end
     
-    state -- snapshot ID --> structure2
-    structure1 --> attrs
-    structure1 --> manifestA
-    structure2 --> attrs
-    structure2 -->manifestA
-    structure2 -->manifestB
+    branch -- snapshot ID --> snapshot2
+    snapshot1 --> attrs
+    snapshot1 --> manifestA
+    snapshot2 --> attrs
+    snapshot2 -->manifestA
+    snapshot2 -->manifestB
     manifestA --> chunk1
     manifestA --> chunk2
     manifestB --> chunk3
@@ -105,81 +108,101 @@ flowchart TD
 
 ### File Layout
 
-All data and metadata files are stored in a warehouse (typically an object store) using the following directory structure.
+All data and metadata files are stored within a root directory (typically a prefix within an object store) using the following directory structure.
 
-- `$ROOT` base URI (s3, gcs, file, etc.)
-- `$ROOT/t/` state files
-- `$ROOT/s/` for the structure files
-- `$ROOT/a/` for attribute files
-- `$ROOT/m/` for array chunk manifests
-- `$ROOT/c/` for array chunks
+- `$ROOT` base URI (s3, gcs, local directory, etc.)
+- `$ROOT/r/` reference files
+- `$ROOT/s/` snapshot files
+- `$ROOT/a/` attribute files
+- `$ROOT/m/` chunk manifests
+- `$ROOT/c/` chunks
 
-### State File
+### Reference Files
 
-The **state file** records the current state and history of the store.
-All commits occur by creating a new state file.
-The state file contains a list of active (non-expired) snapshots.
-Each snapshot includes a pointer to the structure file for that snapshot.
+Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
+These references point to a specific snapshot of the store.
 
-The state file is a JSON file with the following JSON schema:
+- **Branches** are _mutable_ references to a snapshot.
+  Stores may have one or more branches.
+  The default branch name is `main`.
+  Stores must have a `main` branch.
+  After creation, branches may be updated to point to a different snapshot.
+- **Tags** are _immutable_ references to a snapshot.
+  A store may contain zero or more tags.
+  After creation, tags may never be updated.
 
-[TODO: convert to JSON schema]
+References are very important in the Icechunk design.
+Creating or updating references is the point at which consistency and isolation of Icechunk transactions is enforced.
+Different client sessions may simultaneously create two inconsistent snapshots; however, only one session may successfully update a reference to that snapshot.
 
-| Name | Required | Type | Description |
-|--|--|--|--|
-| id | YES | str UID | A unique identifier for the store |
-| generation | YES | int | An integer which must be incremented whenever the state file is updated |
-| store_root | YES | str | A URI which points to the root location of the store in object storage. | 
-| snapshots | YES | array[snapshot] | A list of all of the snapshots. |
-| refs | NO | mapping[reference] | A mapping of references (string names) to snapshots |
-
-A snapshot contains the following properties
-
-| Name | Required | Type | Description |
-|--|--|--|--|
-| snapshot-id | YES | str UID | Unique identifier for the snapshot |
-| parent-snapshot-id | YES |  null OR str UID | Parent snapshot (null for no parent) |
-| timestamp-ms | YES | int | When was snapshot commited |
-| structure-file | YES | str | Name of the structure file for this snapshot |
-| properties | NO | object | arbitrary user-defined attributes to associate with this snapshot | 
-
-References are a mapping of string names to snapshots
+References (both branches and tags) are stored as JSON files with the following structure.
 
 | Name | Required | Type | Description |
-|--|--|--|--|
-| name | YES | str | Name of the reference|
-| snapshot-id | YES | str UID | What snaphot does it point to |
-| type | YES | "tag" / "branch" | Whether the reference is a tag or a branch | 
+| snapshot-id | YES | str UID | ID for identifying the snapshot pointed by the reference |
+| parent-snapshot-id | YES | str UID or Null | ID of the previous snapshot |
+| timestamp-ms | YES | int | Timestamp at which the reference was created |
 
-#### State File Naming
+#### Creating and Updating Branches
 
-The name of the state file is determined by the _generation_ parameter.
-The first _generation_ is always 0 and increases by 1 with every commit.
-The state file name is generated by
-- subtracting the generation from the integer `1099511627775`
-- encoding the resulting integer as a string using [Base 32 Crockford](https://www.crockford.com/base32.html)
+The process of creating and updating branches is designed to use the limited consistency guarantees offered by object storage to ensure transactional consistency.
+When a client checks out a branch, it obtains a specific snapshot ID and uses this snapshot as the basis for any changes it creates during its session.
+The client creates a new snapshot and then updates the branch reference to point to the new snapshot (a "commit").
+However, when updating the branch reference, the client must detect whether a _different session_ has updated the branch reference in the interim, possibly retrying or failing the commit if so.
+
+The simplest way to do this would be to store the branch reference in a specific file (e.g. `main.json`) and update it via an atomic "compare and swap" operation.
+Unfortunately not all popular object stores support this operation (AWS S3 notably does not).
+
+However, all popular object stores _do_ support a comparable operation: "create if not exists".
+In other words, object stores can guard against the race condition which occurs when two sessions attempt to create the same file at the same time.
+This motivates the design of Icechunk's branch file naming convention.
+
+Each commit to an Icechunk branch augments a counter called the _sequence number_.
+The first commit creates sequence number 0.
+The next commit creates sequence number 1. Etc.
+This sequence number is encoded into the branch reference file name.
+
+When a client checks out a branch, it keeps track of its current sequence number _N_.
+When it tries to commit, it attempts to create the file corresponding to sequence number _N + 1_ in an atomic "create if not exists" operation.
+If this succeeds, the commit is successful.
+If this fails (because another client created that file already), the commit fails.
+At this point, the client may choose retry its commit and create sequence number _N + 2_.
+
+Branch references are stored in the `r/` directory within a subdirectory corresponding to the branch name: `r/$BRANCH_NAME/`.
+Branch names may not contain the `/` character.
+
+To facilitate easy lookups of the latest branch reference, we use the following encoding for the sequence number.
+- subtract the sequence number from the integer `1099511627775`
+- encode the resulting integer as a string using [Base 32 Crockford](https://www.crockford.com/base32.html)
 - left-padding the string with 0s to a length of 8 characters
-- appending the suffix `.json`.
-This produces a deterministic sequence of state file names in which the latest generation always appears first
-when sorted lexicographically, facilitating easy lookup by listing the object store.
+This produces a deterministic sequence of branch file names in which the latest sequence always appears first when sorted lexicographically, facilitating easy lookup by listing the object store.
 
-For example, the first state file in a store is always named `ZZZZZZZZ.json`.
-The state file for generation 100 is `ZZZZZZWV.json`.
+The full branch file name is then given by `r/$BRANCH_NAME/$ENCODED_SEQUENCE.json`.
+
+For example, the first main branch file is in a store, corresponding with sequence number 0, is always named `r/main/ZZZZZZZZ.json`.
+The branch file for sequence number 100 is `r/main/ZZZZZZWV.json`.
 The maximum number of commits allowed in an Icechunk store is consequently `1099511627775`,
-corresponding to the state file `00000000.json`.
+corresponding to the state file `r/main/00000000.json`.
 
-To provide consistent isolation between commits, only one client must be allowed to create a state file.
-This is possible on all object stores that support a "conditional put" operation in which a request to
-create a new object only succeeds if the object does not already exist.
+#### Tags
 
-### Structure Files
+Since tags are immutable, they are simpler than branches.
 
-The structure file fully describes the schema of the store, including all arrays and groups.
+Tag files follow the pattern `r/$TAG_NAME.json`.
 
-The structure file is a Parquet file.
+When creating a new tag, the client attempts to create the tag file using a "create if not exists" operation.
+If successful, the tag is created successful.
+If not, that means another client has already created that tag.
+
+Tags cannot be deleted once created.
+
+### Snapshot Files
+
+The snapshot file fully describes the schema of the store, including all arrays and groups.
+
+The snapshot file is a Parquet file.
 Each row of the file represents an individual node (array or group) of the Zarr store. 
  
-The structure file has the following Arrow schema:
+The snapshot file has the following Arrow schema:
 
 ```
 id: uint32 not null
@@ -232,19 +255,20 @@ manifests: list<item: struct<manifest_id: uint16 not null, row: uint16 not null,
       child 3, flags: uint16
 ```
 
-The most recent committed state file MUST be replicated to the file `icechunk.json` at the top-level store directory.
-During the commit process, this file is replaced with an atomic compare-and-swap operation.
-Storage systems that don't support atomic compare-and-swap may use an external synchronization endpoint for updates.
 
 ### Attributes Files
 
-Attribute files hold user-defined attributes separately from the structure file.
+Attribute files hold user-defined attributes separately from the snapshot file.
 
 ### Chunk Manifest Files
 
 A chunk manifest file stores chunk references.
 Chunk references from multiple arrays can be stored in the same chunk manifest.
 The chunks from a single array can also be spread across multiple manifests.
+
+> [!WARNING]  
+> The manifest file format is still under active development.
+> Nothing below here is certain.
 
 Chunk manifest files are Parquet files.
 They have the following arrow schema.
@@ -298,28 +322,56 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 ### Initialize New Store
 
-Initializing a new store is performed by writing the first state file, `t/ZZZZZZZZ.json`
-within the store root directory.
-This state file may contain a snapshot or the snapshot list may be empty.
+A new store is initialized by creating a new [possibly empty] snapshot file and then creating the first file in the main branch sequence.
 
-### Write Snapshot
+If another client attempts to initialize a store in the same location, only one can succeed. 
 
-1. Open a store at a specific generation and snapshot (see Read snapshot)
-1. [optional] Write new chunks
-1. [optional] Write new chunk manifests
-1. Write new structure files
-1. Attempt to write next state file
-   a. If successful, commit succeeded
-   b. If unsuccessful, attempt to reconcile and retry the commit
-1. [optional] On successful commit, post state file to callback URL.
+### Read from Store
 
-### Read Snapshot
+#### From Snapshot ID
 
-1. List the state file directory in alphabetical order and open the first file
-1. Use the specified shapshot or ref to fetch the structure file
-1. Fetch desired attributes and values from arrays
+If the specific snapshot ID is known, a client can open it directly in read only mode.
 
-### Expire Snapshots
+1. Use the specified shapshot ID to fetch the snapshot file.
+1. Fetch desired attributes and values from arrays.
+
+#### From Branch
+
+Usually, a client will want to read from the latest branch (e.g. `main`).
+
+1. List the object store prefix `r/$BRANCH_NAME/` to obtain the latest branch file in the sequence. Due to the encoding of the sequence number, this should be the _first file_ in lexicographical order.
+1. Read the branch file to obtain the snapshot ID.
+1. Use the shapshot ID to fetch the snapshot file.
+1. Fetch desired attributes and values from arrays.
+
+#### From Tag
+
+Opening a store from a tag results in a read-only view.
+
+1. Read the tag file found at `r/$TAG_NAME.json` to obtain the snapshot ID.
+1. Use the shapshot ID to fetch the snapshot file.
+1. Fetch desired attributes and values from arrays.
+
+### Write New Snapshot
+
+Writing can only be done on a branch.
+
+1. Open a store at a specific branch as described above, keeping track of the sequence number and branch name in the session context.
+1. [optional] Write new chunk files.
+1. [optional] Write new chunk manifests.
+1. Write a new snapshot file.
+1. Attempt to write the next branch file in the sequence
+   a. If successful, the commit succeeded and the branch is updated.
+   b. If unsuccessful, attempt to reconcile and retry the commit.
+
+### Create New Tag
+
+A tag can be created from any snapshot.
+
+1. Open the store at a specific snapshot.
+1. Attempt to create the tag file.
+   a. If successful, the tag was created.
+   b. If unsuccessful, the tag already exists.
 
 ## Appendices
 
@@ -332,5 +384,5 @@ But while Iceberg describes a table, the Icechunk store is a Zarr store (hierarc
 |--|--|--|
 | Table | Store | The fundamental entity described by the spec |
 | Column | Array | The logical container for a homogenous collection of values | 
-| Metadata File | State File | The highest-level entry point into the dataset |
 | Snapshot | Snapshot | A single committed snapshot of the dataset |
+| Catalog | N/A | There is no concept of a catalog in Icechunk. Consistency provided by object store. |
