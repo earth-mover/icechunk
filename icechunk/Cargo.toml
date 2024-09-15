@@ -1,0 +1,33 @@
+[package]
+name = "icechunk"
+version = "0.1.0"
+edition = "2021"
+description = "Icechunk client"
+readme = "README.md"
+publish = false
+
+[dependencies]
+arrow = { version = "53.0.0", features = ["prettyprint"] }
+async-trait = "0.1.82"
+bytes = "1.7.1"
+base64 = "0.22.1"
+futures = "0.3.30"
+itertools = "0.13.0"
+object_store = { version = "0.11.0", features = ["aws"] }
+parquet = { version = "53.0.0", features = ["object_store"] }
+rand = "0.8.5"
+thiserror = "1.0.63"
+serde_json = "1.0.128"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_with = { version = "3.9.0", features = ["hex"] }
+tokio = { version = "1.40.0", features = ["rt-multi-thread", "macros"] }
+test-strategy = "0.4.0"
+proptest = "1.5.0"
+quick_cache = "0.6.6"
+base32 = "0.5.1"
+chrono = { version = "0.4.38", features = ["serde"] }
+async-recursion = "1.1.1"
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+proptest-state-machine = "0.3.0"
