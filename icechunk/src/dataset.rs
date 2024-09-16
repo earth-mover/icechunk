@@ -30,8 +30,8 @@ use crate::{
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
     },
     refs::{
-        fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version, update_branch,
-        BranchVersion, RefError,
+        create_tag, fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version,
+        update_branch, BranchVersion, RefError,
     },
     Storage, StorageError,
 };
@@ -233,6 +233,8 @@ pub enum DatasetError {
     ArrowError(#[from] ArrowError),
     #[error("ref error: `{0}`")]
     Ref(#[from] RefError),
+    #[error("tag error: `{0}`")]
+    Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
 }
@@ -967,6 +969,22 @@ impl Dataset {
             Err(err) => Err(err.into()),
         }
     }
+
+    pub async fn tag(&self, tag_name: &str, message: &str) -> DatasetResult<ObjectId> {
+        let Some(snapshot_id) = self.snapshot_id.clone() else {
+            return Err(DatasetError::Tag(String::from("no snapshot to tag")));
+        };
+        let now = Utc::now();
+        create_tag(
+            self.storage.as_ref(),
+            tag_name,
+            snapshot_id.clone(),
+            now,
+            HashMap::from_iter(vec![("message".to_string(), Value::from(message))]),
+        )
+        .await?;
+        Ok(snapshot_id)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1643,6 +1661,12 @@ mod tests {
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
+
+        let tag_snapshot_id = ds.tag("v1", "version 1.0.0").await?;
+        let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
+        assert_eq!(ref_name, Ref::Tag("v1".to_string()));
+        assert_eq!(tag_snapshot_id, ref_data.snapshot);
+        assert_eq!("version 1.0.0", ref_data.properties["message"]);
 
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
