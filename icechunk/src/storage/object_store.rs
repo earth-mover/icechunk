@@ -32,11 +32,26 @@ impl From<&ByteRange> for Option<GetRange> {
             }
             (Bound::Included(start), Bound::Unbounded) => {
                 Some(GetRange::Offset(start as usize))
-            }
+            },
+            (Bound::Included(start), Bound::Included(end)) => {
+              Some(GetRange::Bounded(start as usize..=end as usize))
+            },
+            (Bound::Excluded(start), Bound::Excluded(end)) => {
+                Some(GetRange::Bounded(start as usize+1..end as usize))
+            },
+            (Bound::Excluded(start), Bound::Unbounded) => {
+                Some(GetRange::Offset(start as usize+1))
+            },
+            (Bound::Excluded(start), Bound::Included(end)) => {
+                Some(GetRange::Bounded(start as usize+1..=end as usize))
+            },
             (Bound::Unbounded, Bound::Excluded(end)) => {
                 Some(GetRange::Suffix(end as usize))
-            }
-            _ => None,
+            },
+            (Bound::Unbounded, Bound::Included(end)) => {
+                Some(GetRange::Suffix(end as usize+1))
+            },
+            (Bound::Unbounded, Bound::Unbounded) => None,
         }
     }
 }
