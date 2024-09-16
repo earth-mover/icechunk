@@ -213,7 +213,8 @@ impl Storage for ObjectStorage {
         let path = self.get_path(CHUNK_PREFIX, id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
-        let options = GetOptions { range: range.into(), ..Default::default() };
+        let options =
+            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
         let chunk = self.store.get_opts(&path, options).await?.bytes().await?;
         Ok(chunk)
     }

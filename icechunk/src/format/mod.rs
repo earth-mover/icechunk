@@ -1,10 +1,5 @@
 use core::fmt;
-use std::{
-    fmt::Debug,
-    hash::{Hash, Hasher},
-    ops::Range,
-    path::PathBuf,
-};
+use std::{fmt::Debug, hash::Hash, ops::Range, path::PathBuf};
 
 use ::arrow::array::RecordBatch;
 use bytes::Bytes;
@@ -95,34 +90,12 @@ pub struct ChunkIndices(pub Vec<u64>);
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ByteRange {
     Range((ChunkOffset, ChunkOffset)),
     From(ChunkOffset),
     To(ChunkOffset),
     All,
-}
-
-impl Hash for ByteRange {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            ByteRange::Range(r) => {
-                state.write_u64(r.0);
-                state.write_u64(r.1);
-            }
-            ByteRange::From(r) => {
-                const F: u8 = b'f';
-                state.write_u8(F);
-                state.write_u64(*r);
-            }
-            ByteRange::To(r) => {
-                const T: u8 = b't';
-                state.write_u8(T);
-                state.write_u64(*r);
-            }
-            ByteRange::All => {}
-        }
-    }
 }
 
 impl ByteRange {
