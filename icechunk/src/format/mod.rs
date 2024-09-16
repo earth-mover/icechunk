@@ -2,11 +2,12 @@ use core::fmt;
 use std::{
     fmt::Debug,
     hash::{Hash, Hasher},
-    ops::{Range, RangeFrom, RangeTo},
+    ops::Range,
     path::PathBuf,
 };
 
 use ::arrow::array::RecordBatch;
+use bytes::Bytes;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
@@ -96,9 +97,9 @@ pub type ChunkLength = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ByteRange {
-    Range(Range<ChunkOffset>),
-    Offset(RangeFrom<ChunkOffset>),
-    Suffix(RangeTo<ChunkOffset>),
+    Range((ChunkOffset, ChunkOffset)),
+    From(ChunkOffset),
+    To(ChunkOffset),
     All,
 }
 
@@ -106,43 +107,41 @@ impl Hash for ByteRange {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             ByteRange::Range(r) => {
-                state.write_u64(r.start);
-                state.write_u64(r.end);
+                state.write_u64(r.0);
+                state.write_u64(r.1);
             }
-            ByteRange::Offset(r) => {
-                state.write_u64(r.start);
+            ByteRange::From(r) => {
+                const F: u8 = b'f';
+                state.write_u8(F);
+                state.write_u64(*r);
             }
-            ByteRange::Suffix(r) => {
-                state.write_u64(r.end);
+            ByteRange::To(r) => {
+                const T: u8 = b't';
+                state.write_u8(T);
+                state.write_u64(*r);
             }
             ByteRange::All => {}
         }
     }
 }
 
-impl From<&ByteRange> for Option<Range<usize>> {
-    fn from(value: &ByteRange) -> Self {
-        match value {
-            ByteRange::Range(r) => Some(r.start as usize..r.end as usize),
-            ByteRange::Offset(r) => Some(r.start as usize..usize::MAX),
-            ByteRange::Suffix(r) => Some(0..r.end as usize),
-            ByteRange::All => None,
+impl ByteRange {
+    pub fn slice(&self, bytes: Bytes) -> Bytes {
+        match self {
+            ByteRange::Range((start, end)) => bytes.slice(*start as usize..*end as usize),
+            ByteRange::From(start) => bytes.slice(*start as usize..),
+            ByteRange::To(end) => bytes.slice(..*end as usize),
+            ByteRange::All => bytes,
         }
-    }
-}
-
-impl From<Range<usize>> for ByteRange {
-    fn from(r: Range<usize>) -> Self {
-        ByteRange::Range(r.start as ChunkOffset..r.end as ChunkOffset)
     }
 }
 
 impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
     fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
         match (start, end) {
-            (Some(start), Some(end)) => ByteRange::Range(start..end),
-            (Some(start), None) => ByteRange::Offset(start..),
-            (None, Some(end)) => ByteRange::Suffix(..end),
+            (Some(start), Some(end)) => ByteRange::Range((start, end)),
+            (Some(start), None) => ByteRange::From(start),
+            (None, Some(end)) => ByteRange::To(end),
             (None, None) => ByteRange::All,
         }
     }

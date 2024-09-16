@@ -566,7 +566,7 @@ impl Dataset {
                 // TODO: we don't have a way to distinguish if we want to pass a range or not
                 Ok(self.storage.fetch_chunk(&id, byte_range).await.map(Some)?)
             }
-            Some(ChunkPayload::Inline(bytes)) => Ok(Some(bytes)),
+            Some(ChunkPayload::Inline(bytes)) => Ok(Some(byte_range.slice(bytes))),
             //FIXME: implement virtual fetch
             Some(ChunkPayload::Virtual(_)) => todo!(),
             None => Ok(None),

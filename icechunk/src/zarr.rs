@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     iter,
     num::NonZeroU64,
-    ops::Range,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -399,11 +398,7 @@ impl Store {
             }
         }?;
 
-        if let Some(range) = Into::<Option<Range<usize>>>::into(range) {
-            Ok(full_metadata.slice(range).to_owned())
-        } else {
-            Ok(full_metadata)
-        }
+        Ok(range.slice(full_metadata))
     }
 
     async fn set_array_meta(
@@ -1044,6 +1039,22 @@ mod tests {
             .await?;
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::All).await.unwrap(),
+            zarr_meta
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::To(5)).await.unwrap(),
+            zarr_meta[..5]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::From(5)).await.unwrap(),
+            zarr_meta[5..]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::Range((1, 24))).await.unwrap(),
+            zarr_meta[1..24]
+        );
 
         // a small inline chunk
         let small_data = Bytes::copy_from_slice(b"hello");
@@ -1051,6 +1062,18 @@ mod tests {
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::All).await.unwrap(),
             small_data
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::To(2)).await.unwrap(),
+            small_data[0..2]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::From(3)).await.unwrap(),
+            small_data[3..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::Range((1, 4))).await.unwrap(),
+            small_data[1..4]
         );
         // no new chunks written because it was inline
         // FiXME: add this test
@@ -1060,6 +1083,14 @@ mod tests {
         let big_data = Bytes::copy_from_slice(b"hello".repeat(512).as_slice());
         store.set("array/c/0/1/1", big_data.clone()).await?;
         assert_eq!(store.get("array/c/0/1/1", &ByteRange::All).await.unwrap(), big_data);
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::From(512 - 3)).await.unwrap(),
+            big_data[(512 - 3)..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::Range((20, 90))).await.unwrap(),
+            big_data[20..90]
+        );
         // FiXME: add this test
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);

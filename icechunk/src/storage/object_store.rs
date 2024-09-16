@@ -7,8 +7,7 @@ use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, ObjectStore, PutMode, PutOptions, PutPayload,
+    buffered::BufWriter, local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions, PutPayload
 };
 use parquet::arrow::{
     async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
@@ -21,6 +20,18 @@ use crate::format::{
 };
 
 use super::{Storage, StorageError, StorageResult};
+
+// Get Range is object_store specific, keep it with this module
+impl From<&ByteRange> for Option<GetRange> {
+    fn from(value: &ByteRange) -> Self {
+        match value {
+            ByteRange::Range((start, end)) => Some(GetRange::Bounded(*start as usize..*end as usize)),
+            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
+            ByteRange::To(end) => Some(GetRange::Suffix(*end as usize)),
+            ByteRange::All => None,
+        }
+    }
+}
 
 const SNAPSHOT_PREFIX: &str = "s/";
 const MANIFEST_PREFIX: &str = "m/";
@@ -198,12 +209,12 @@ impl Storage for ObjectStorage {
         let path = self.get_path(CHUNK_PREFIX, id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
-        if let Some(range) = range.into() {
-            Ok(self.store.get_range(&path, range).await?)
-        } else {
-            // TODO: Can't figure out if `get` is the most efficient way to get the whole object.
-            Ok(self.store.get(&path).await?.bytes().await?)
-        }
+        let options = GetOptions {
+            range: range.into(),
+            ..Default::default()
+        };
+        let chunk = self.store.get_opts(&path, options).await?.bytes().await?;
+        Ok(chunk)
     }
 
     async fn write_chunk(
