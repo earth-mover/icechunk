@@ -42,13 +42,16 @@ pub struct MemCachingStorage {
     cache: Cache<CacheKey, CacheValue, CacheWeighter>,
 }
 
+/// FIXME: this is not a good idea, with the new serialization formats can no longer estimate the
+/// size of objects. Also, the storage layer doesn't know enough about the format to know what to
+/// cache and not cache.
 impl Weighter<CacheKey, CacheValue> for CacheWeighter {
     fn weight(&self, _key: &CacheKey, val: &CacheValue) -> u64 {
         // We ignore the keys weigth
         match val {
             CacheValue::Snapshot(table) => table.batch.get_array_memory_size() as u64,
             CacheValue::Attributes(table) => table.batch.get_array_memory_size() as u64,
-            CacheValue::Manifest(table) => table.batch.get_array_memory_size() as u64,
+            CacheValue::Manifest(table) => table.estimated_size_bytes() as u64,
             CacheValue::Chunk(bytes) => bytes.len() as u64,
         }
     }

@@ -114,7 +114,7 @@ impl ObjectStorage {
     fn get_path(&self, file_prefix: &str, ObjectId(asu8): &ObjectId) -> ObjectPath {
         // TODO: be careful about allocation here
         let path = format!(
-            "{}/{}/{}.parquet",
+            "{}/{}/{}.msgpack",
             self.prefix,
             file_prefix,
             BASE64_URL_SAFE.encode(asu8)
@@ -189,8 +189,10 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, id);
-        let batch = self.read_parquet(&path).await?;
-        Ok(Arc::new(ManifestsTable { batch }))
+        let bytes = self.store.get(&path).await?.bytes().await?;
+        // TODO: optimize using from_read
+        let res = rmp_serde::from_slice(bytes.as_ref())?;
+        Ok(Arc::new(res))
     }
 
     async fn write_snapshot(
@@ -220,7 +222,9 @@ impl Storage for ObjectStorage {
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, &id);
-        self.write_parquet(&path, &table.batch).await?;
+        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        // FIXME: use multipart
+        self.store.put(&path, bytes.into()).await?;
         Ok(())
     }
 

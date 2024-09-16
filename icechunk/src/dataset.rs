@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     iter,
+    mem::take,
     path::PathBuf,
     sync::Arc,
 };
@@ -20,14 +21,15 @@ use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::{Either, Itertools};
 use serde_json::Value;
 use thiserror::Error;
+use tokio::task;
 
 use crate::{
     format::{
-        manifest::{
-            mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
+        manifest::{ChunkInfo, ChunkRef, ManifestExtents, ManifestRef, ManifestsTable},
+        snapshot::{
+            mk_snapshot_table, NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot,
         },
-        snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
-        ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
+        ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
         fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version, update_branch,
@@ -549,7 +551,9 @@ impl Dataset {
                 // need to fallback to fetching the manifests
                 match session_chunk {
                     Some(res) => Ok(res),
-                    None => self.get_old_chunk(manifests.as_slice(), coords).await,
+                    None => {
+                        self.get_old_chunk(node.id, manifests.as_slice(), coords).await
+                    }
                 }
             }
         }
@@ -599,6 +603,7 @@ impl Dataset {
 
     async fn get_old_chunk(
         &self,
+        node: NodeId,
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
     ) -> DatasetResult<Option<ChunkPayload>> {
@@ -606,12 +611,9 @@ impl Dataset {
         for manifest in manifests {
             let manifest_structure =
                 self.storage.fetch_manifests(&manifest.object_id).await?;
-            match manifest_structure
-                .get_chunk_info(coords, &manifest.location)
-                .map(|info| info.payload)
-            {
+            match manifest_structure.get_chunk_payload(node, coords.clone()) {
                 Ok(payload) => {
-                    return Ok(Some(payload));
+                    return Ok(Some(payload.clone()));
                 }
                 Err(IcechunkFormatError::ChunkCoordinatesNotFound { .. }) => {}
                 Err(err) => return Err(err.into()),
@@ -682,21 +684,21 @@ impl Dataset {
                                     match manifest {
                                         Ok(manifest) => {
                                             let old_chunks = manifest
-                                                .iter(
-                                                    Some(manifest_ref.location.start()),
-                                                    Some(manifest_ref.location.end()),
-                                                )
-                                                .filter_ok(move |c| {
-                                                    !new_chunk_indices.contains(&c.coord)
+                                                .iter(&node.id)
+                                                .filter(move |(coord, _)| {
+                                                    !new_chunk_indices.contains(coord)
+                                                })
+                                                .map(move |(coord, payload)| ChunkInfo {
+                                                    node: node.id,
+                                                    coord,
+                                                    payload,
                                                 });
 
                                             let old_chunks = self.update_existing_chunks(
                                                 node.id, old_chunks,
                                             );
                                             futures::future::Either::Left(
-                                                futures::stream::iter(old_chunks)
-                                                    // convert error types
-                                                    .map_err(|e| e.into()),
+                                                futures::stream::iter(old_chunks.map(Ok)),
                                             )
                                         }
                                         // if we cannot even fetch the manifest, we generate a
@@ -716,12 +718,12 @@ impl Dataset {
         }
     }
 
-    fn update_existing_chunks<'a, E>(
+    fn update_existing_chunks<'a>(
         &'a self,
         node: NodeId,
-        chunks: impl Iterator<Item = Result<ChunkInfo, E>> + 'a,
-    ) -> impl Iterator<Item = Result<ChunkInfo, E>> + 'a {
-        chunks.filter_map_ok(move |chunk| {
+        chunks: impl Iterator<Item = ChunkInfo> + 'a,
+    ) -> impl Iterator<Item = ChunkInfo> + 'a {
+        chunks.filter_map(move |chunk| {
             match self.change_set.get_chunk_ref(node, &chunk.coord) {
                 None => Some(chunk),
                 Some(new_payload) => {
@@ -734,7 +736,6 @@ impl Dataset {
     async fn updated_existing_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-        manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
@@ -750,19 +751,16 @@ impl Dataset {
                         Err(e) => Err(e.into()),
                     })
                     .map_ok(move |node| {
-                        let region = manifest_tracker.and_then(|t| t.region(node.id));
-                        let new_manifests = region.map(|r| {
-                            if r.start() == r.end() {
-                                vec![]
-                            } else {
-                                vec![ManifestRef {
-                                    object_id: manifest_id.clone(),
-                                    location: r.clone(),
-                                    flags: Flags(),
-                                    extents: ManifestExtents(vec![]),
-                                }]
-                            }
-                        });
+                        let new_manifests = if node.node_type() == NodeType::Array {
+                            //FIXME: it could be none for empty arrays
+                            Some(vec![ManifestRef {
+                                object_id: manifest_id.clone(),
+                                flags: Flags(),
+                                extents: ManifestExtents(vec![]),
+                            }])
+                        } else {
+                            None
+                        };
                         self.update_existing_node(node, new_manifests)
                     }),
             )),
@@ -772,7 +770,6 @@ impl Dataset {
     fn new_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-        manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
         self.change_set.new_nodes().map(move |path| {
             // we should be able to create the full node because we
@@ -782,24 +779,13 @@ impl Dataset {
             match node.node_data {
                 NodeData::Group => node,
                 NodeData::Array(meta, _no_manifests_yet) => {
-                    let region = manifest_tracker.and_then(|t| t.region(node.id));
-                    let new_manifests = region.map(|r| {
-                        if r.start() == r.end() {
-                            vec![]
-                        } else {
-                            vec![ManifestRef {
-                                object_id: manifest_id.clone(),
-                                location: r.clone(),
-                                flags: Flags(),
-                                extents: ManifestExtents(vec![]),
-                            }]
-                        }
-                    });
+                    let new_manifests = vec![ManifestRef {
+                        object_id: manifest_id.clone(),
+                        flags: Flags(),
+                        extents: ManifestExtents(vec![]),
+                    }];
                     NodeSnapshot {
-                        node_data: NodeData::Array(
-                            meta,
-                            new_manifests.unwrap_or_default(),
-                        ),
+                        node_data: NodeData::Array(meta, new_manifests),
                         ..node
                     }
                 }
@@ -810,12 +796,11 @@ impl Dataset {
     async fn updated_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-        manifest_tracker: Option<&'a TableRegionTracker>,
     ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
         Ok(self
-            .updated_existing_nodes(manifest_id, manifest_tracker)
+            .updated_existing_nodes(manifest_id)
             .await?
-            .chain(self.new_nodes(manifest_id, manifest_tracker).map(Ok)))
+            .chain(self.new_nodes(manifest_id).map(Ok)))
     }
 
     fn update_existing_node(
@@ -854,7 +839,7 @@ impl Dataset {
     pub async fn list_nodes(
         &self,
     ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + '_> {
-        self.updated_nodes(&ObjectId::FAKE, None).await
+        self.updated_nodes(&ObjectId::FAKE).await
     }
 
     pub async fn all_chunks(
@@ -874,24 +859,61 @@ impl Dataset {
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
-        let mut region_tracker = TableRegionTracker::default();
-        let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
-            region_tracker.update(&chunk.1);
-            chunk
-        });
-        let new_manifest =
-            match mk_manifests_table(all_chunks.map_ok(|(_path, chunk)| chunk)).await {
-                Ok(man) => man,
-                Err(Ok(e)) => Err(e)?,
-                Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
-            };
-        let new_manifest_id = ObjectId::random();
-        self.storage
-            .write_manifests(new_manifest_id.clone(), Arc::new(new_manifest))
-            .await?;
+        // We search for the current manifest. We are assumming a single one for now
+        let old_manifest = match self.snapshot_id.as_ref() {
+            None => Arc::new(ManifestsTable::default()),
+            Some(snapshot_id) => {
+                let snapshot = self.storage().fetch_snapshot(snapshot_id).await?;
+                // FIXME: currently only looking for the first manifest
+                let manifest_id = snapshot.iter_arc().find_map(|node| {
+                    node.ok().and_then(|node| match node.node_data {
+                        NodeData::Array(_, man) => {
+                            // TODO: can we avoid clone
+                            man.first().map(|manifest| manifest.object_id.clone())
+                        }
+                        NodeData::Group => None,
+                    })
+                });
+                match manifest_id {
+                    Some(ref manifest_id) => {
+                        self.storage.fetch_manifests(manifest_id).await?
+                    }
+                    // If there is no previous manifest we create an empty one
+                    None => Arc::new(ManifestsTable::default()),
+                }
+            }
+        };
 
-        let all_nodes =
-            self.updated_nodes(&new_manifest_id, Some(&region_tracker)).await?;
+        // The manifest update process is CPU intensive, so we want to executed it on a worker
+        // thread. Currently it's also destructive of the manifest, so we are also cloning the
+        // old manifest data
+        //
+        // The update process requires reference access to the set_chunks map, since we are running
+        // it on blocking task, it wants that reference to be 'static, which we cannot provide.
+        // As a solution, we temporarily `take` the map, replacing it an empty one, run the thread,
+        // and at the end we put the map back to where it was, in case there is some later failure.
+        // We always want to leave things in the previous state if there was a failure.
+
+        let chunk_changes = take(&mut self.change_set.set_chunks);
+        let (new_chunks, chunk_changes) = task::spawn_blocking(move || {
+            //FIXME: avoid clone, t his one is extremely expensive en memory
+            //it's currently needed because we don't want to destroy the manifest in case of later
+            //failure
+            let mut new_chunks = old_manifest.as_ref().chunks.clone();
+            update_manifest(&mut new_chunks, &chunk_changes);
+            (new_chunks, chunk_changes)
+        })
+        .await
+        .unwrap();
+
+        // reset the set_chunks map to it's previous value
+        self.change_set.set_chunks = chunk_changes;
+
+        let new_manifest = Arc::new(ManifestsTable { chunks: new_chunks });
+        let new_manifest_id = ObjectId::random();
+        self.storage.write_manifests(new_manifest_id.clone(), new_manifest).await?;
+
+        let all_nodes = self.updated_nodes(&new_manifest_id).await?;
         let new_snapshot = match mk_snapshot_table(all_nodes) {
             Ok(str) => str,
             Err(Ok(e)) => Err(e)?,
@@ -969,23 +991,6 @@ impl Dataset {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct TableRegionTracker(HashMap<NodeId, TableRegion>, u32);
-
-impl TableRegionTracker {
-    fn update(&mut self, chunk: &ChunkInfo) {
-        self.0
-            .entry(chunk.node)
-            .and_modify(|tr| tr.extend_right(1))
-            .or_insert(TableRegion::singleton(self.1));
-        self.1 += 1;
-    }
-
-    fn region(&self, node: NodeId) -> Option<&TableRegion> {
-        self.0.get(&node)
-    }
-}
-
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
@@ -999,6 +1004,26 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
     ChunkPayload::Inline(data)
 }
 
+fn update_manifest(
+    original_chunks: &mut BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
+    set_chunks: &HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+) {
+    for (node_id, chunks) in set_chunks.iter() {
+        for (coord, maybe_payload) in chunks.iter() {
+            match maybe_payload {
+                Some(payload) => {
+                    // a chunk was updated or inserted
+                    original_chunks.insert((*node_id, coord.clone()), payload.clone());
+                }
+                None => {
+                    // a chunk was deleted
+                    original_chunks.remove(&(*node_id, coord.clone()));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1006,11 +1031,7 @@ mod tests {
     use std::{convert::Infallible, error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        format::{
-            manifest::{mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents},
-            snapshot::mk_snapshot_table,
-            Flags, TableRegion,
-        },
+        format::manifest::ChunkInfo,
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
@@ -1156,14 +1177,8 @@ mod tests {
             payload: ChunkPayload::Inline("hello".into()),
         };
 
-        let manifest = Arc::new(
-            mk_manifests_table::<Infallible>(futures::stream::iter(vec![
-                Ok(chunk1.clone()),
-                Ok(chunk2.clone()),
-            ]))
-            .await
-            .unwrap(),
-        );
+        let manifest =
+            Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
         let manifest_id = ObjectId::random();
         storage.write_manifests(manifest_id.clone(), manifest).await?;
 
@@ -1190,7 +1205,6 @@ mod tests {
         };
         let manifest_ref = ManifestRef {
             object_id: manifest_id,
-            location: TableRegion::new(0, 2).unwrap(),
             flags: Flags(),
             extents: ManifestExtents(vec![]),
         };

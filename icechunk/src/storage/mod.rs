@@ -30,6 +30,10 @@ pub enum StorageError {
     ObjectStore(#[from] ::object_store::Error),
     #[error("parquet file error: {0}")]
     ParquetError(#[from] parquet_errors::ParquetError),
+    #[error("messagepack decode error: {0}")]
+    MsgPackDecodeError(#[from] rmp_serde::decode::Error),
+    #[error("messagepack encode error: {0}")]
+    MsgPackEncodeError(#[from] rmp_serde::encode::Error),
     #[error("error parsing RecordBatch from parquet file {0}.")]
     BadRecordBatchRead(Path),
     #[error("cannot overwrite ref: {0}")]

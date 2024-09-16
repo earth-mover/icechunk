@@ -4,12 +4,11 @@ use arrow::{
     array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, FixedSizeBinaryArray,
         FixedSizeBinaryBuilder, ListArray, ListBuilder, RecordBatch, StringArray,
-        StringBuilder, StructArray, UInt32Array, UInt32Builder, UInt8Array,
+        StringBuilder, StructArray, UInt32Array, UInt8Array,
     },
     datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type},
     error::ArrowError,
 };
-use itertools::izip;
 
 use crate::metadata::{
     ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
@@ -20,7 +19,7 @@ use super::{
     arrow::get_column,
     manifest::{ManifestExtents, ManifestRef},
     BatchLike, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId, Path,
-    TableOffset, TableRegion,
+    TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,52 +268,8 @@ impl SnapshotTable {
                 },
             )?;
 
-            let row_from = manifest_refs_array
-                .column_by_name("start_row")
-                .ok_or(IcechunkFormatError::ColumnNotFound {
-                    column: "manifest_references.start_row".to_string(),
-                })?
-                .as_list_opt::<i32>()
-                .ok_or(IcechunkFormatError::InvalidColumnType {
-                    column_name: "manifest_references.start_row".to_string(),
-                    expected_column_type: "list of u32".to_string(),
-                })?
-                // TODO: is ok to consider it empty if null
-                .value(idx);
-            let row_from = row_from.as_primitive_opt::<UInt32Type>().ok_or(
-                IcechunkFormatError::InvalidColumnType {
-                    column_name: format!("manifest_references.start_row[{idx}]"),
-                    expected_column_type: "u32".to_string(),
-                },
-            )?;
-
-            let row_to = manifest_refs_array
-                .column_by_name("end_row")
-                .ok_or(IcechunkFormatError::ColumnNotFound {
-                    column: "manifest_references.end_row".to_string(),
-                })?
-                .as_list_opt::<i32>()
-                .ok_or(IcechunkFormatError::InvalidColumnType {
-                    column_name: "manifest_references.end_row".to_string(),
-                    expected_column_type: "list of u32".to_string(),
-                })?
-                // TODO: is ok to consider it empty if null
-                .value(idx);
-            let row_to = row_to.as_primitive_opt::<UInt32Type>().ok_or(
-                IcechunkFormatError::InvalidColumnType {
-                    column_name: format!("manifest_references.end_row[{idx}]"),
-                    expected_column_type: "u32".to_string(),
-                },
-            )?;
-
             // FIXME: add extents and flags
-
-            let it = izip!(refs.iter(), row_from.iter(), row_to.iter()).map(
-                |(r, f, t)| match (r.and_then(|r| r.try_into().ok()), f, t) {
-                    (Some(r), Some(f), Some(t)) => Some((r, f, t)),
-                    _ => None,
-                },
-            );
+            let it = refs.iter().map(|r| r.and_then(|r| r.try_into().ok()));
             let res = it
                 .collect::<Option<Vec<_>>>()
                 .ok_or(IcechunkFormatError::InvalidArrayManifest {
@@ -323,9 +278,8 @@ impl SnapshotTable {
                     message: "null or incorrect reference".to_string(),
                 })?
                 .iter()
-                .map(|(r, f, t)| ManifestRef {
+                .map(|r| ManifestRef {
                     object_id: ObjectId(*r),
-                    location: TableRegion(*f, *t),
                     // FIXME: flags
                     flags: Flags(),
                     // FIXME: extents
@@ -571,15 +525,11 @@ where
 {
     let mut ref_array =
         ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
-    let mut from_row_array = ListBuilder::new(UInt32Builder::new());
-    let mut to_row_array = ListBuilder::new(UInt32Builder::new());
 
     for m in coll {
         match m {
             None => {
                 ref_array.append_null();
-                from_row_array.append_null();
-                to_row_array.append_null();
             }
             Some(manifests) => {
                 for manifest in manifests {
@@ -588,18 +538,12 @@ where
                         .values()
                         .append_value(manifest.object_id.0)
                         .expect("Invariant violation: bad manifest ObjectId size");
-                    from_row_array.values().append_value(manifest.location.0);
-                    to_row_array.values().append_value(manifest.location.1);
                 }
                 ref_array.append(true);
-                from_row_array.append(true);
-                to_row_array.append(true);
             }
         }
     }
     let ref_array = ref_array.finish();
-    let from_row_array = from_row_array.finish();
-    let to_row_array = to_row_array.finish();
 
     // I don't know how to create non nullabe list arrays directly
     let (_, offsets, values, nulls) = ref_array.into_parts();
@@ -610,44 +554,18 @@ where
     ));
     let ref_array = ListArray::new(field, offsets, values, nulls);
 
-    let (_, offsets, values, nulls) = from_row_array.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
-    let from_row_array = ListArray::new(field, offsets, values, nulls);
-
-    let (_, offsets, values, nulls) = to_row_array.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt32, false));
-    let to_row_array = ListArray::new(field, offsets, values, nulls);
-
-    StructArray::from(vec![
-        (
-            Arc::new(Field::new_list(
-                "reference",
-                Field::new(
-                    "item",
-                    arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
-                    false,
-                ),
-                true,
-            )),
-            Arc::new(ref_array) as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new_list(
-                "start_row",
-                Field::new("item", arrow::datatypes::DataType::UInt32, false),
-                true,
-            )),
-            Arc::new(from_row_array) as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new_list(
-                "end_row",
-                Field::new("item", arrow::datatypes::DataType::UInt32, false),
-                true,
-            )),
-            Arc::new(to_row_array) as ArrayRef,
-        ),
-    ])
+    StructArray::from(vec![(
+        Arc::new(Field::new_list(
+            "reference",
+            Field::new(
+                "item",
+                arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                false,
+            ),
+            true,
+        )),
+        Arc::new(ref_array) as ArrayRef,
+    )])
 }
 
 // This is pretty awful, but Rust Try infrastructure is experimental
@@ -804,29 +722,15 @@ pub fn mk_snapshot_table<E>(
         Field::new("user_attributes_row", arrow::datatypes::DataType::UInt32, true),
         Field::new(
             "manifest_references",
-            arrow::datatypes::DataType::Struct(Fields::from(vec![
-                Field::new_list(
-                    "reference",
-                    Field::new(
-                        "item",
-                        arrow::datatypes::DataType::FixedSizeBinary(
-                            ObjectId::SIZE as i32,
-                        ),
-                        false,
-                    ),
-                    true,
+            arrow::datatypes::DataType::Struct(Fields::from(vec![Field::new_list(
+                "reference",
+                Field::new(
+                    "item",
+                    arrow::datatypes::DataType::FixedSizeBinary(ObjectId::SIZE as i32),
+                    false,
                 ),
-                Field::new_list(
-                    "start_row",
-                    Field::new("item", arrow::datatypes::DataType::UInt32, false),
-                    true,
-                ),
-                Field::new_list(
-                    "end_row",
-                    Field::new("item", arrow::datatypes::DataType::UInt32, false),
-                    true,
-                ),
-            ])),
+                true,
+            )])),
             true,
         ),
     ]));
@@ -906,13 +810,11 @@ mod tests {
             ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
-            location: TableRegion(0, 1),
             flags: Flags(),
             extents: ManifestExtents(vec![]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
-            location: TableRegion(0, 1),
             flags: Flags(),
             extents: ManifestExtents(vec![]),
         };
