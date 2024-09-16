@@ -123,7 +123,9 @@ impl ByteRange {
             (Bound::Excluded(start), Bound::Excluded(end)) => {
                 bytes.slice(start as usize + 1..end as usize)
             }
-            (Bound::Excluded(start), Bound::Unbounded) => bytes.slice(start as usize + 1..),
+            (Bound::Excluded(start), Bound::Unbounded) => {
+                bytes.slice(start as usize + 1..)
+            }
             (Bound::Unbounded, Bound::Included(end)) => bytes.slice(..=end as usize),
             (Bound::Included(start), Bound::Included(end)) => {
                 bytes.slice(start as usize..=end as usize)
