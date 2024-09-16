@@ -1,7 +1,6 @@
 use std::{
-    cmp,
     collections::{BTreeMap, HashMap, HashSet},
-    iter::{self, zip},
+    iter::{self},
     path::PathBuf,
     sync::Arc,
 };
@@ -17,7 +16,7 @@ pub use crate::{
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
-use itertools::{multiunzip, Either, Itertools, MultiUnzip};
+use itertools::{Either, Itertools};
 use thiserror::Error;
 
 use crate::{
@@ -89,6 +88,7 @@ impl ChunkTracker {
 
         let mut keys_iter = self.payloads.keys();
         let first_key = keys_iter.next().cloned();
+        dbg!(self.extents.clone(), first_key.clone());
         match first_key {
             Some(ChunkIndices(coord)) => {
                 for elem in coord {
@@ -253,10 +253,11 @@ impl ChangeSet {
         self.new_groups.keys().chain(self.new_arrays.keys())
     }
 
-    fn update_extents(&mut self, existing: Option<&Vec<ManifestExtents>>) {
-        for (_path, tracker) in self.set_chunks.iter_mut() {
+    fn update_extents(&mut self, existing: HashMap<Path, Vec<ManifestExtents>>) {
+        for (path, tracker) in self.set_chunks.iter_mut() {
             // Warning: this is one loop over all chunks to create consolidated extents
-            tracker.compute_extents(existing);
+            tracker.compute_extents(existing.get(path));
+            dbg!(tracker.extents.clone());
         }
     }
 }
@@ -728,6 +729,7 @@ impl Dataset {
                                         .await;
                                     match manifest {
                                         Ok(manifest) => {
+                                            dbg!(manifest_ref.clone());
                                             let old_chunks = manifest
                                                 .iter(
                                                     manifest_ref.extents,
@@ -808,6 +810,7 @@ impl Dataset {
                                     object_id: manifest_id.clone(),
                                     location: r.clone(),
                                     flags: Flags(),
+                                    // FIXME
                                     extents: ManifestExtents(vec![]),
                                 }]
                             }
@@ -832,6 +835,7 @@ impl Dataset {
                 NodeData::Group => node,
                 NodeData::Array(meta, _no_manifests_yet) => {
                     let region = manifest_tracker.and_then(|t| t.region(node.id));
+                    // Q: Is this implemented for one table region only?
                     let new_manifests = region.map(|r| {
                         if r.start() == r.end() {
                             vec![]
@@ -840,7 +844,12 @@ impl Dataset {
                                 object_id: manifest_id.clone(),
                                 location: r.clone(),
                                 flags: Flags(),
-                                extents: ManifestExtents(vec![]),
+                                extents: match self.change_set.set_chunks.get(path) {
+                                    // TODO: handle multiple extents here.
+                                    _res @ Some( &ChunkTracker { extents: Some( extents ), .. } ) => extents[0].clone(),
+                                    _res @ Some( &ChunkTracker { extents: None, .. } ) => ManifestExtents(vec![]),
+                                    _ => ManifestExtents(vec![]),
+                                }
                             }]
                         }
                     });
@@ -887,12 +896,12 @@ impl Dataset {
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 
+                let new_manifests = new_manifests.unwrap_or_default();
+                // FIXME: update extents here?
+                dbg!(new_manifests.clone());
                 NodeSnapshot {
                     // FIXME: bad option type, change
-                    node_data: NodeData::Array(
-                        new_zarr_meta,
-                        new_manifests.unwrap_or_default(),
-                    ),
+                    node_data: NodeData::Array(new_zarr_meta, new_manifests),
                     user_attributes: new_atts,
                     ..node
                 }
@@ -939,7 +948,28 @@ impl Dataset {
         // TODO: figure out how to add to arrow.
         //
         // TODO: pluck existing extents from latest snapshot
-        let existing_extents: Option<&Vec<ManifestExtents>> = None;
+        // FIXME: get this done
+        let mut existing_extents: HashMap<Path, Vec<ManifestExtents>> = HashMap::new();
+        for path in self.change_set.updated_arrays.keys() {
+            // TODO: use intersection(updated_arrays.keys(), set_chunks.keys())
+            // TODO: is the string interpolation format right?
+            existing_extents.insert(
+                path.clone(),
+                (match self.get_node(path).await {
+                    Ok(NodeSnapshot {
+                        node_data: NodeData::Array(_meta, manifests),
+                        ..
+                    }) => Ok(manifests
+                        .iter()
+                        .map(|m| m.extents.clone())
+                        .collect::<Vec<_>>()),
+                    _ => Err("foo"),
+                })
+                .expect("bug in grabbing existing extents for updated_arrays"),
+            );
+        }
+        dbg!(existing_extents.clone());
+        dbg!(self.change_set.clone());
         self.change_set.update_extents(existing_extents);
 
         // TODO: there is one ManifestTable per extents. To construct these:
@@ -949,6 +979,7 @@ impl Dataset {
         // In theory we could optimize by having ChunkTracker.iter() return chunks sorted by extents.
         // that way we can construct and flush one manifest at a time.
         let all_chunks = self.all_chunks().await?.map_ok(|chunk| {
+            dbg!(chunk.clone());
             region_tracker.update(&chunk.1);
             chunk
         });
@@ -1395,7 +1426,7 @@ mod tests {
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref("foo/bar".into(), ChunkIndices(vec![0, 1]), None);
-        change_set.update_extents(None);
+        change_set.update_extents(HashMap::new());
 
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
@@ -1420,7 +1451,7 @@ mod tests {
             Some(ChunkPayload::Inline("baz2".into())),
         );
 
-        change_set.update_extents(None);
+        change_set.update_extents(HashMap::new());
 
         {
             let all_chunks: Vec<_> = change_set
@@ -1599,6 +1630,8 @@ mod tests {
         .await?;
 
         let previous_snapshot_id = ds.flush().await?;
+        dbg!("new flush before deletion");
+        ds.flush().await?;
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1607,6 +1640,8 @@ mod tests {
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
+
+        dbg!("deleting a chunk");
 
         // we delete a chunk
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
@@ -1623,8 +1658,12 @@ mod tests {
         )
         .await?;
 
+        // FIXME: failure below here
+        dbg!("asd");
         let snapshot_id = ds.flush().await?;
         let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
+        // FIXME: failure above here
+        dbg!("asd");
 
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,

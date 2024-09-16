@@ -17,6 +17,7 @@ use super::{
     IcechunkResult, NodeId, ObjectId, TableOffset, TableRegion,
 };
 
+// Restrict to two element struct: start, stop
 #[derive(Default, Hash, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
 
@@ -276,6 +277,7 @@ pub async fn mk_manifests_table<E>(
             Ok(chunk) => chunk,
             Err(err) => return Err(Ok(err)),
         };
+        dbg!(chunk.clone());
         array_ids.push(chunk.node);
         coords.push(match chunk.get_relative_coord() {
             Ok(coords) => coords,

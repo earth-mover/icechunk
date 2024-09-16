@@ -1,10 +1,6 @@
 use crate::format::manifest::ManifestExtents;
 use core::fmt;
-use std::{
-    iter::zip,
-    ops::{Range, Sub},
-    path::PathBuf,
-};
+use std::{ops::Range, path::PathBuf};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
@@ -156,6 +152,9 @@ pub enum IcechunkFormatError {
     InvalidManifestIndex { index: usize, max_index: usize },
     #[error("chunk coordinates not found `{coords:?}`")]
     ChunkCoordinatesNotFound { coords: ChunkIndices },
+    // FIXME: better error message
+    #[error("invalid extent : {message}")]
+    InvalidExtents { message: String },
     #[error("invalid extent and coords `{extents:?}` `{coords:?}`")]
     InvalidExtentAndCoord { extents: ManifestExtents, coords: ChunkIndices },
 }

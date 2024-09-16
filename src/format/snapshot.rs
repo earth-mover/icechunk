@@ -3,10 +3,13 @@ use std::{num::NonZeroU64, sync::Arc};
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, FixedSizeBinaryArray,
-        FixedSizeBinaryBuilder, ListArray, ListBuilder, RecordBatch, StringArray,
-        StringBuilder, StructArray, UInt32Array, UInt32Builder, UInt8Array,
+        FixedSizeBinaryBuilder, GenericListBuilder, ListArray, ListBuilder, RecordBatch,
+        StringArray, StringBuilder, StructArray, UInt32Array, UInt32Builder,
+        UInt64Builder, UInt8Array,
     },
-    datatypes::{Field, Fields, Schema, UInt32Type, UInt64Type},
+    datatypes::{
+        DataType as ArrowDataType, Field, Fields, Schema, UInt32Type, UInt64Type,
+    },
     error::ArrowError,
 };
 use itertools::izip;
@@ -19,8 +22,8 @@ use crate::metadata::{
 use super::{
     arrow::get_column,
     manifest::{ManifestExtents, ManifestRef},
-    BatchLike, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId, Path,
-    TableOffset, TableRegion,
+    BatchLike, ChunkIndices, Flags, IcechunkFormatError, IcechunkResult, NodeId,
+    ObjectId, Path, TableOffset, TableRegion,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,14 +310,76 @@ impl SnapshotTable {
                 },
             )?;
 
-            // FIXME: add extents and flags
-
-            let it = izip!(refs.iter(), row_from.iter(), row_to.iter()).map(
-                |(r, f, t)| match (r.and_then(|r| r.try_into().ok()), f, t) {
-                    (Some(r), Some(f), Some(t)) => Some((r, f, t)),
-                    _ => None,
+            let extents = manifest_refs_array
+                .column_by_name("extents")
+                .ok_or(IcechunkFormatError::ColumnNotFound {
+                    column: "manifest_references.extents".to_string(),
+                })?
+                .as_list_opt::<i32>()
+                .ok_or(IcechunkFormatError::InvalidColumnType {
+                    column_name: "manifest_references.extents".to_string(),
+                    expected_column_type: "list of u32".to_string(),
+                })?
+                .value(idx);
+            let extents = extents.as_list_opt::<i32>().ok_or(
+                IcechunkFormatError::InvalidColumnType {
+                    column_name: format!("manifest_references.extents[{idx}]"),
+                    expected_column_type: "list".to_string(),
                 },
-            );
+            )?;
+
+            let mut extents_vec = Vec::new();
+            for x in extents.iter() {
+                let mut new_extents = Vec::new();
+                let a = x.ok_or(IcechunkFormatError::InvalidExtents {
+                    message: "could not iterate".to_string(),
+                })?; // ????
+                let nested = a.as_list_opt::<i32>().ok_or(
+                    IcechunkFormatError::InvalidExtents {
+                        message: "could not interpret as list array".to_string(),
+                    },
+                )?;
+                if nested.len() > 2 {
+                    Err(IcechunkFormatError::InvalidExtents {
+                        message: "more than two entries for extent".to_string(),
+                    })?;
+                }
+                for elem in nested.iter() {
+                    let elem = elem.ok_or(IcechunkFormatError::InvalidExtents {
+                        message: "invalid extents".to_string(),
+                    })?;
+                    let coords = elem.as_primitive_opt::<UInt64Type>().ok_or(
+                        IcechunkFormatError::InvalidExtents {
+                            message:
+                                "could not interpret an extent as coordinate location"
+                                    .to_string(),
+                        },
+                    )?;
+                    new_extents.push(ChunkIndices(
+                        coords.iter().collect::<Option<Vec<_>>>().ok_or(
+                            IcechunkFormatError::InvalidExtents {
+                                message: "could not interpret coordinates".to_string(),
+                            },
+                        )?,
+                    ));
+                }
+                extents_vec.push(new_extents);
+            }
+
+            // FIXME: add flags
+
+            let it = izip!(
+                refs.iter(),
+                row_from.iter(),
+                row_to.iter(),
+                extents_vec.into_iter()
+            )
+            .map(|(r, f, t, e)| {
+                match (r.and_then(|r| r.try_into().ok()), f, t, e) {
+                    (Some(r), Some(f), Some(t), e) => Some((r, f, t, e)),
+                    _ => None,
+                }
+            });
             let res = it
                 .collect::<Option<Vec<_>>>()
                 .ok_or(IcechunkFormatError::InvalidArrayManifest {
@@ -323,13 +388,12 @@ impl SnapshotTable {
                     message: "null or incorrect reference".to_string(),
                 })?
                 .iter()
-                .map(|(r, f, t)| ManifestRef {
+                .map(|(r, f, t, e)| ManifestRef {
                     object_id: ObjectId(*r),
                     location: TableRegion(*f, *t),
                     // FIXME: flags
                     flags: Flags(),
-                    // FIXME: extents
-                    extents: ManifestExtents(vec![]),
+                    extents: ManifestExtents(e.clone()),
                 })
                 .collect();
             Ok(res)
@@ -441,7 +505,7 @@ where
     // I don't know how to create a ListArray that has not nullable elements
     let res = ListArray::from_iter_primitive::<UInt64Type, _, _>(iter);
     let (_, offsets, values, nulls) = res.into_parts();
-    let field = Arc::new(Field::new("item", arrow::datatypes::DataType::UInt64, false));
+    let field = Arc::new(Field::new("item", ArrowDataType::UInt64, false));
     ListArray::new(field, offsets, values, nulls)
 }
 
@@ -564,6 +628,17 @@ fn mk_user_attributes_row_array<T: IntoIterator<Item = Option<u32>>>(
     UInt32Array::from_iter(coll)
 }
 
+fn add_extents_entry(
+    out: &mut GenericListBuilder<i32, GenericListBuilder<i32, UInt64Builder>>,
+    extents: ManifestExtents,
+) {
+    let ManifestExtents(as_vec) = extents;
+    for ChunkIndices(coord) in as_vec {
+        out.values().append_value(coord.into_iter().map(|e| Some(e)));
+    }
+    out.append(true);
+}
+
 fn mk_manifest_refs_array<T, P>(coll: T) -> StructArray
 where
     T: IntoIterator<Item = Option<P>>,
@@ -573,6 +648,8 @@ where
         ListBuilder::new(FixedSizeBinaryBuilder::new(ObjectId::SIZE as i32));
     let mut from_row_array = ListBuilder::new(UInt32Builder::new());
     let mut to_row_array = ListBuilder::new(UInt32Builder::new());
+    let mut extents_array =
+        ListBuilder::new(ListBuilder::new(ListBuilder::new(UInt64Builder::new())));
 
     for m in coll {
         match m {
@@ -580,6 +657,7 @@ where
                 ref_array.append_null();
                 from_row_array.append_null();
                 to_row_array.append_null();
+                extents_array.append_null();
             }
             Some(manifests) => {
                 for manifest in manifests {
@@ -590,17 +668,19 @@ where
                         .expect("Invariant violation: bad manifest ObjectId size");
                     from_row_array.values().append_value(manifest.location.0);
                     to_row_array.values().append_value(manifest.location.1);
-                    // TODO: handle extents here
+                    add_extents_entry(&mut extents_array.values(), manifest.extents)
                 }
                 ref_array.append(true);
                 from_row_array.append(true);
                 to_row_array.append(true);
+                extents_array.append(true);
             }
         }
     }
     let ref_array = ref_array.finish();
     let from_row_array = from_row_array.finish();
     let to_row_array = to_row_array.finish();
+    let extents_array = extents_array.finish();
 
     // I don't know how to create non nullable list arrays directly
     let (_, offsets, values, nulls) = ref_array.into_parts();
@@ -618,6 +698,8 @@ where
     let (_, offsets, values, nulls) = to_row_array.into_parts();
     let field = Arc::new(Field::new("item", ArrowDataType::UInt32, false));
     let to_row_array = ListArray::new(field, offsets, values, nulls);
+
+    // FIXME: make extents_array non_nullable?
 
     StructArray::from(vec![
         (
@@ -647,6 +729,27 @@ where
                 true,
             )),
             Arc::new(to_row_array) as ArrayRef,
+        ),
+        (
+            //FIXME: nullable=false as appropriate
+            Arc::new(Field::new_list(
+                "extents",
+                Field::new(
+                    "item",
+                    ArrowDataType::List(Arc::new(Field::new(
+                        "item",
+                        ArrowDataType::List(Arc::new(Field::new(
+                            "item",
+                            ArrowDataType::UInt64,
+                            true,
+                        ))),
+                        true,
+                    ))),
+                    true,
+                ),
+                true,
+            )),
+            Arc::new(extents_array) as ArrayRef,
         ),
     ])
 }
@@ -819,6 +922,24 @@ pub fn mk_snapshot_table<E>(
                 Field::new_list(
                     "end_row",
                     Field::new("item", ArrowDataType::UInt32, false),
+                    true,
+                ),
+                //FIXME: nullable=false as appropriate
+                Field::new_list(
+                    "extents",
+                    Field::new(
+                        "item",
+                        ArrowDataType::List(Arc::new(Field::new(
+                            "item",
+                            ArrowDataType::List(Arc::new(Field::new(
+                                "item",
+                                ArrowDataType::UInt64,
+                                true,
+                            ))),
+                            true,
+                        ))),
+                        true,
+                    ),
                     true,
                 ),
             ])),
@@ -1104,5 +1225,23 @@ mod tests {
             let decoded = decode_fill_values_array(dtypes, encoded).unwrap();
             prop_assert_eq!(fill_values, decoded);
         }
+    }
+
+    #[test]
+    fn test_unit_add_extents_entry() {
+        let first = ManifestExtents(vec![
+            ChunkIndices(vec![0, 0, 0]),
+            ChunkIndices(vec![10, 10, 10]),
+        ]);
+        let second = ManifestExtents(vec![
+            ChunkIndices(vec![11, 11, 11]),
+            ChunkIndices(vec![20, 20, 20]),
+        ]);
+        let mut extents_builder =
+            ListBuilder::new(ListBuilder::new(UInt64Builder::new()));
+        add_extents_entry(&mut extents_builder, first);
+        add_extents_entry(&mut extents_builder, second);
+        let extents_array = extents_builder.finish();
+        dbg!(extents_array);
     }
 }
