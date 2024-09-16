@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{fs::create_dir_all, future::ready, sync::Arc};
+use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
@@ -8,7 +8,8 @@ use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
     buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, ObjectStore, PutMode, PutOptions, PutPayload,
+    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
+    PutPayload,
 };
 use parquet::arrow::{
     async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
@@ -17,10 +18,43 @@ use parquet::arrow::{
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId, Path,
+    ByteRange, ObjectId, Path,
 };
 
 use super::{Storage, StorageError, StorageResult};
+
+// Get Range is object_store specific, keep it with this module
+impl From<&ByteRange> for Option<GetRange> {
+    fn from(value: &ByteRange) -> Self {
+        match (value.0, value.1) {
+            (Bound::Included(start), Bound::Excluded(end)) => {
+                Some(GetRange::Bounded(start as usize..end as usize))
+            }
+            (Bound::Included(start), Bound::Unbounded) => {
+                Some(GetRange::Offset(start as usize))
+            }
+            (Bound::Included(start), Bound::Included(end)) => {
+                Some(GetRange::Bounded(start as usize..end as usize + 1))
+            }
+            (Bound::Excluded(start), Bound::Excluded(end)) => {
+                Some(GetRange::Bounded(start as usize + 1..end as usize))
+            }
+            (Bound::Excluded(start), Bound::Unbounded) => {
+                Some(GetRange::Offset(start as usize + 1))
+            }
+            (Bound::Excluded(start), Bound::Included(end)) => {
+                Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
+            }
+            (Bound::Unbounded, Bound::Excluded(end)) => {
+                Some(GetRange::Suffix(end as usize))
+            }
+            (Bound::Unbounded, Bound::Included(end)) => {
+                Some(GetRange::Suffix(end as usize + 1))
+            }
+            (Bound::Unbounded, Bound::Unbounded) => None,
+        }
+    }
+}
 
 const SNAPSHOT_PREFIX: &str = "s/";
 const MANIFEST_PREFIX: &str = "m/";
@@ -193,20 +227,15 @@ impl Storage for ObjectStorage {
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
-        range: &Option<std::ops::Range<ChunkOffset>>,
+        range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_path(CHUNK_PREFIX, id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
-        if let Some(range) = range {
-            Ok(self
-                .store
-                .get_range(&path, (range.start as usize)..(range.end as usize))
-                .await?)
-        } else {
-            // TODO: Can't figure out if `get` is the most efficient way to get the whole object.
-            Ok(self.store.get(&path).await?.bytes().await?)
-        }
+        let options =
+            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+        let chunk = self.store.get_opts(&path, options).await?.bytes().await?;
+        Ok(chunk)
     }
 
     async fn write_chunk(

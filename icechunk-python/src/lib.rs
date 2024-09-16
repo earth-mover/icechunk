@@ -3,11 +3,7 @@ mod streams;
 
 use std::{pin::Pin, sync::Arc};
 
-use ::icechunk::{
-    format::ChunkOffset,
-    zarr::{ByteRange, StoreError},
-    Store,
-};
+use ::icechunk::{format::ChunkOffset, zarr::StoreError, Store};
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
@@ -76,9 +72,9 @@ impl PyIcechunkStore {
     pub async fn get(
         &self,
         key: String,
-        byte_range: Option<ByteRange>,
+        byte_range: Option<(Option<ChunkOffset>, Option<ChunkOffset>)>,
     ) -> PyIcechunkStoreResult<PyObject> {
-        let byte_range = byte_range.unwrap_or((None, None));
+        let byte_range = byte_range.unwrap_or((None, None)).into();
         let data = self.store.read().await.get(&key, &byte_range).await?;
         let pybytes = Python::with_gil(|py| {
             let bound_bytes = PyBytes::new_bound(py, &data);
@@ -89,9 +85,9 @@ impl PyIcechunkStore {
 
     pub async fn get_partial_values(
         &self,
-        key_ranges: Vec<(String, ByteRange)>,
+        key_ranges: Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>,
     ) -> PyIcechunkStoreResult<Vec<Option<PyObject>>> {
-        let iter = key_ranges.into_iter();
+        let iter = key_ranges.into_iter().map(|r| (r.0, r.1.into()));
         let result = self
             .store
             .read()

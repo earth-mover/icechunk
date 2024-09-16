@@ -2,7 +2,7 @@ use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use icechunk::Store;
+use icechunk::{format::ByteRange, Store};
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(value) = store
                     .read()
                     .await
-                    .get(format!("array/c/{i}").as_str(), &(None, None))
+                    .get(format!("array/c/{i}").as_str(), &ByteRange::ALL)
                     .await
                 {
                     println!("Got {value:?} in {attempts} attempts");

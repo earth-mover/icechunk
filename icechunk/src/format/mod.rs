@@ -1,7 +1,13 @@
 use core::fmt;
-use std::{fmt::Debug, ops::Range, path::PathBuf};
+use std::{
+    fmt::Debug,
+    hash::Hash,
+    ops::{Bound, Range},
+    path::PathBuf,
+};
 
 use ::arrow::array::RecordBatch;
+use bytes::Bytes;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
@@ -88,6 +94,62 @@ pub struct ChunkIndices(pub Vec<u64>);
 
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ByteRange(pub Bound<ChunkOffset>, pub Bound<ChunkOffset>);
+
+impl ByteRange {
+    pub fn from_offset(offset: ChunkOffset) -> Self {
+        Self(Bound::Included(offset), Bound::Unbounded)
+    }
+
+    pub fn to_offset(offset: ChunkOffset) -> Self {
+        Self(Bound::Unbounded, Bound::Excluded(offset))
+    }
+
+    pub fn bounded(start: ChunkOffset, end: ChunkOffset) -> Self {
+        Self(Bound::Included(start), Bound::Excluded(end))
+    }
+
+    pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
+
+    pub fn slice(&self, bytes: Bytes) -> Bytes {
+        match (self.0, self.1) {
+            (Bound::Included(start), Bound::Excluded(end)) => {
+                bytes.slice(start as usize..end as usize)
+            }
+            (Bound::Included(start), Bound::Unbounded) => bytes.slice(start as usize..),
+            (Bound::Unbounded, Bound::Excluded(end)) => bytes.slice(..end as usize),
+            (Bound::Excluded(start), Bound::Excluded(end)) => {
+                bytes.slice(start as usize + 1..end as usize)
+            }
+            (Bound::Excluded(start), Bound::Unbounded) => {
+                bytes.slice(start as usize + 1..)
+            }
+            (Bound::Unbounded, Bound::Included(end)) => bytes.slice(..=end as usize),
+            (Bound::Included(start), Bound::Included(end)) => {
+                bytes.slice(start as usize..=end as usize)
+            }
+            (Bound::Excluded(start), Bound::Included(end)) => {
+                bytes.slice(start as usize + 1..=end as usize)
+            }
+            (Bound::Unbounded, Bound::Unbounded) => bytes,
+        }
+    }
+}
+
+impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
+    fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
+        match (start, end) {
+            (Some(start), Some(end)) => {
+                Self(Bound::Included(start), Bound::Excluded(end))
+            }
+            (Some(start), None) => Self(Bound::Included(start), Bound::Unbounded),
+            (None, Some(end)) => Self(Bound::Unbounded, Bound::Excluded(end)),
+            (None, None) => Self(Bound::Unbounded, Bound::Unbounded),
+        }
+    }
+}
 
 pub type TableOffset = u32;
 

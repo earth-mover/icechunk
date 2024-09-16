@@ -23,9 +23,8 @@ use crate::{
         UserAttributes, ZarrArrayMetadata,
     },
     format::{
-        snapshot::{NodeData, UserAttributesSnapshot}, // TODO: we shouldn't need these imports, too low level
-        ChunkOffset,
-        IcechunkFormatError,
+        snapshot::{NodeData, UserAttributesSnapshot},
+        ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::BranchVersion,
     Dataset, MemCachingStorage, ObjectStorage, Storage,
@@ -80,7 +79,6 @@ pub struct StoreConfig {
     get_partial_values_concurrency: Option<u16>,
 }
 
-pub type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
 pub type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone)]
@@ -176,19 +174,13 @@ impl Store {
     // TODO: prototype argument
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
         let bytes = match Key::parse(key)? {
-            Key::Metadata { node_path } => self.get_metadata(key, &node_path).await,
+            Key::Metadata { node_path } => {
+                self.get_metadata(key, &node_path, byte_range).await
+            }
             Key::Chunk { node_path, coords } => {
-                self.get_chunk(key, node_path, coords).await
+                self.get_chunk(key, node_path, coords, byte_range).await
             }
         }?;
-
-        // TODO: This should be done already when calling get_chunk or get_metadata. Faking it for now
-        let bytes = match byte_range {
-            (Some(start), Some(end)) => bytes.slice(*start as usize..*end as usize),
-            (Some(start), None) => bytes.slice(*start as usize..),
-            (None, Some(end)) => bytes.slice(..*end as usize),
-            (None, None) => bytes,
-        };
 
         Ok(bytes)
     }
@@ -256,7 +248,7 @@ impl Store {
 
     // TODO: prototype argument
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
-        match self.get(key, &(None, None)).await {
+        match self.get(key, &ByteRange::ALL).await {
             Ok(_) => Ok(true),
             Err(StoreError::NotFound(_)) => Ok(false),
             Err(other_error) => Err(other_error),
@@ -372,8 +364,9 @@ impl Store {
         key: &str,
         path: Path,
         coords: ChunkIndices,
+        byte_range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let chunk = self.dataset.get_chunk(&path, &coords).await?;
+        let chunk = self.dataset.get_chunk(&path, &coords, byte_range).await?;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
             key: key.to_string(),
             path,
@@ -381,7 +374,12 @@ impl Store {
         }))
     }
 
-    async fn get_metadata(&self, _key: &str, path: &Path) -> StoreResult<Bytes> {
+    async fn get_metadata(
+        &self,
+        _key: &str,
+        path: &Path,
+        range: &ByteRange,
+    ) -> StoreResult<Bytes> {
         let node = self.dataset.get_node(path).await.map_err(|_| {
             StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
         })?;
@@ -391,12 +389,16 @@ impl Store {
             // FIXME: implement
             Some(UserAttributesSnapshot::Ref(_)) => todo!(),
         };
-        match node.node_data {
-            NodeData::Group => Ok(GroupMetadata::new(user_attributes).to_bytes()),
+        let full_metadata = match node.node_data {
+            NodeData::Group => {
+                Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
+            }
             NodeData::Array(zarr_metadata, _) => {
                 Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
             }
-        }
+        }?;
+
+        Ok(range.slice(full_metadata))
     }
 
     async fn set_array_meta(
@@ -947,7 +949,7 @@ mod tests {
         let mut store = Store::new(ds, None);
 
         assert!(matches!(
-            store.get("zarr.json", &(None, None)).await,
+            store.get("zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_str() == Some("/")
         ));
 
@@ -958,7 +960,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            store.get("zarr.json", &(None, None)).await.unwrap(),
+            store.get("zarr.json", &ByteRange::ALL).await.unwrap(),
             Bytes::copy_from_slice(
                 br#"{"zarr_format":3,"node_type":"group","attributes":null}"#
             )
@@ -966,7 +968,7 @@ mod tests {
 
         store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
         assert_eq!(
-            store.get("a/b/zarr.json", &(None, None)).await.unwrap(),
+            store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
             Bytes::copy_from_slice(
                 br#"{"zarr_format":3,"node_type":"group","attributes":{"eggs":42,"spam":"ham"}}"#
             )
@@ -975,7 +977,7 @@ mod tests {
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(
-            store.get("a/b/array/zarr.json", &(None, None)).await.unwrap(),
+            store.get("a/b/array/zarr.json", &ByteRange::ALL).await.unwrap(),
             zarr_meta.clone()
         );
 
@@ -1005,14 +1007,14 @@ mod tests {
         // delete metadata tests
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
-            store.get("array/zarr.json", &(None, None)).await,
+            store.get("array/zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
                 if path.to_str() == Some("/array"),
         ));
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
-            store.get("array/zarr.json", &(None, None)).await,
+            store.get("array/zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
                 if path.to_str() == Some("/array"),
         ));
@@ -1037,11 +1039,42 @@ mod tests {
             .await?;
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            zarr_meta
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::to_offset(5)).await.unwrap(),
+            zarr_meta[..5]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::from_offset(5)).await.unwrap(),
+            zarr_meta[5..]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::bounded(1, 24)).await.unwrap(),
+            zarr_meta[1..24]
+        );
 
         // a small inline chunk
         let small_data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", small_data.clone()).await?;
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            small_data
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::to_offset(2)).await.unwrap(),
+            small_data[0..2]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::from_offset(3)).await.unwrap(),
+            small_data[3..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::bounded(1, 4)).await.unwrap(),
+            small_data[1..4]
+        );
         // no new chunks written because it was inline
         // FiXME: add this test
         //assert!(in_mem_storage.chunk_ids().is_empty());
@@ -1049,7 +1082,19 @@ mod tests {
         // a big chunk
         let big_data = Bytes::copy_from_slice(b"hello".repeat(512).as_slice());
         store.set("array/c/0/1/1", big_data.clone()).await?;
-        assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
+        assert_eq!(store.get("array/c/0/1/1", &ByteRange::ALL).await.unwrap(), big_data);
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::from_offset(512 - 3)).await.unwrap(),
+            big_data[(512 - 3)..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::to_offset(5)).await.unwrap(),
+            big_data[..5]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::bounded(20, 90)).await.unwrap(),
+            big_data[20..90]
+        );
         // FiXME: add this test
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
@@ -1059,8 +1104,11 @@ mod tests {
 
         let ds = Dataset::update(storage, oid).build();
         let store = Store::new(ds, None);
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
-        assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            small_data
+        );
+        assert_eq!(store.get("array/c/0/1/1", &ByteRange::ALL).await.unwrap(), big_data);
 
         Ok(())
     }
@@ -1094,7 +1142,7 @@ mod tests {
         // deleting non-existent chunk is allowed
         store.delete("array/c/1/1/1").await.unwrap();
         assert!(matches!(
-            store.get("array/c/0/1/0", &(None, None)).await,
+            store.get("array/c/0/1/0", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
                 if key == "array/c/0/1/0" && path.to_str() == Some("/array") && coords == ChunkIndices([0, 1, 0].to_vec())
         ));
@@ -1290,8 +1338,7 @@ mod tests {
             store.set(key.as_str(), value.clone()).await?;
         }
 
-        let key_ranges =
-            key_vals.iter().map(|(k, _)| (k.clone(), (None::<u64>, None::<u64>)));
+        let key_ranges = key_vals.iter().map(|(k, _)| (k.clone(), ByteRange::ALL));
 
         assert_eq!(
             key_vals.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
@@ -1304,8 +1351,7 @@ mod tests {
         );
 
         // let's try in reverse order
-        let key_ranges =
-            key_vals.iter().rev().map(|(k, _)| (k.clone(), (None::<u64>, None::<u64>)));
+        let key_ranges = key_vals.iter().rev().map(|(k, _)| (k.clone(), ByteRange::ALL));
 
         assert_eq!(
             key_vals.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
@@ -1348,15 +1394,15 @@ mod tests {
         let (new_snapshot_id, _version) = store.commit("main", "update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), new_data);
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_store_from_snapshot =
             Store::new(Dataset::update(Arc::clone(&storage), snapshot_id).build(), None);
         assert_eq!(
-            new_store_from_snapshot.get("array/c/0/1/0", &(None, None)).await.unwrap(),
+            new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             data
         );
 
@@ -1482,11 +1528,11 @@ mod tests {
 
         let json = r#"
         {"storage":{
-             "type": "s3", 
-             "bucket":"test", 
-             "prefix":"root", 
-             "access_key_id":"my-key", 
-             "secret_access_key":"my-secret-key", 
+             "type": "s3",
+             "bucket":"test",
+             "prefix":"root",
+             "access_key_id":"my-key",
+             "secret_access_key":"my-secret-key",
              "endpoint": "http://localhost:9000"
          },
          "dataset": {}
