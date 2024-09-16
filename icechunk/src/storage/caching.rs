@@ -194,7 +194,7 @@ impl Storage for MemCachingStorage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id.clone(), bytes.clone()).await?;
         // TODO: we could add the chunk also with its full range (0, size)
-        self.cache.insert(CacheKey::Chunk(id, ByteRange::All), CacheValue::Chunk(bytes));
+        self.cache.insert(CacheKey::Chunk(id, ByteRange::ALL), CacheValue::Chunk(bytes));
         Ok(())
     }
 

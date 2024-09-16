@@ -1334,7 +1334,7 @@ mod tests {
         ds.set_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), data.clone()).await?;
 
         let chunk = ds
-            .get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::All)
+            .get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
             .await?;
         assert_eq!(chunk, Some(data));
 

@@ -1,5 +1,10 @@
 use core::fmt;
-use std::{fmt::Debug, hash::Hash, ops::Range, path::PathBuf};
+use std::{
+    fmt::Debug,
+    hash::Hash,
+    ops::{Bound, Range},
+    path::PathBuf,
+};
 
 use ::arrow::array::RecordBatch;
 use bytes::Bytes;
@@ -91,20 +96,42 @@ pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ByteRange {
-    Range((ChunkOffset, ChunkOffset)),
-    From(ChunkOffset),
-    To(ChunkOffset),
-    All,
-}
+pub struct ByteRange(pub Bound<ChunkOffset>, pub Bound<ChunkOffset>);
 
 impl ByteRange {
+    pub fn from_offset(offset: ChunkOffset) -> Self {
+        Self(Bound::Included(offset), Bound::Unbounded)
+    }
+
+    pub fn to_offset(offset: ChunkOffset) -> Self {
+        Self(Bound::Unbounded, Bound::Excluded(offset))
+    }
+
+    pub fn bounded(start: ChunkOffset, end: ChunkOffset) -> Self {
+        Self(Bound::Included(start), Bound::Excluded(end))
+    }
+
+    pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
+
     pub fn slice(&self, bytes: Bytes) -> Bytes {
-        match self {
-            ByteRange::Range((start, end)) => bytes.slice(*start as usize..*end as usize),
-            ByteRange::From(start) => bytes.slice(*start as usize..),
-            ByteRange::To(end) => bytes.slice(..*end as usize),
-            ByteRange::All => bytes,
+        match (self.0, self.1) {
+            (Bound::Included(start), Bound::Excluded(end)) => {
+                bytes.slice(start as usize..end as usize)
+            }
+            (Bound::Included(start), Bound::Unbounded) => bytes.slice(start as usize..),
+            (Bound::Unbounded, Bound::Excluded(end)) => bytes.slice(..end as usize),
+            (Bound::Excluded(start), Bound::Excluded(end)) => {
+                bytes.slice(start as usize..end as usize)
+            }
+            (Bound::Excluded(start), Bound::Unbounded) => bytes.slice(start as usize..),
+            (Bound::Unbounded, Bound::Included(end)) => bytes.slice(..=end as usize),
+            (Bound::Included(start), Bound::Included(end)) => {
+                bytes.slice(start as usize..=end as usize)
+            }
+            (Bound::Excluded(start), Bound::Included(end)) => {
+                bytes.slice(start as usize..=end as usize)
+            }
+            (Bound::Unbounded, Bound::Unbounded) => bytes,
         }
     }
 }
@@ -112,10 +139,12 @@ impl ByteRange {
 impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
     fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
         match (start, end) {
-            (Some(start), Some(end)) => ByteRange::Range((start, end)),
-            (Some(start), None) => ByteRange::From(start),
-            (None, Some(end)) => ByteRange::To(end),
-            (None, None) => ByteRange::All,
+            (Some(start), Some(end)) => {
+                Self(Bound::Included(start), Bound::Excluded(end))
+            }
+            (Some(start), None) => Self(Bound::Included(start), Bound::Unbounded),
+            (None, Some(end)) => Self(Bound::Unbounded, Bound::Excluded(end)),
+            (None, None) => Self(Bound::Unbounded, Bound::Unbounded),
         }
     }
 }

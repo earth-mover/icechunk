@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{fs::create_dir_all, future::ready, sync::Arc};
+use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
@@ -26,13 +26,17 @@ use super::{Storage, StorageError, StorageResult};
 // Get Range is object_store specific, keep it with this module
 impl From<&ByteRange> for Option<GetRange> {
     fn from(value: &ByteRange) -> Self {
-        match value {
-            ByteRange::Range((start, end)) => {
-                Some(GetRange::Bounded(*start as usize..*end as usize))
+        match (value.0, value.1) {
+            (Bound::Included(start), Bound::Excluded(end)) => {
+                Some(GetRange::Bounded(start as usize..end as usize))
             }
-            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
-            ByteRange::To(end) => Some(GetRange::Suffix(*end as usize)),
-            ByteRange::All => None,
+            (Bound::Included(start), Bound::Unbounded) => {
+                Some(GetRange::Offset(start as usize))
+            }
+            (Bound::Unbounded, Bound::Excluded(end)) => {
+                Some(GetRange::Suffix(end as usize))
+            }
+            _ => None,
         }
     }
 }

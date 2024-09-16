@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(value) = store
                     .read()
                     .await
-                    .get(format!("array/c/{i}").as_str(), &ByteRange::All)
+                    .get(format!("array/c/{i}").as_str(), &ByteRange::ALL)
                     .await
                 {
                     println!("Got {value:?} in {attempts} attempts");
