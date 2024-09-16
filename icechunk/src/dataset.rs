@@ -27,7 +27,7 @@ use crate::{
             mk_manifests_table, ChunkInfo, ChunkRef, ManifestExtents, ManifestRef,
         },
         snapshot::{mk_snapshot_table, NodeData, NodeSnapshot, UserAttributesSnapshot},
-        Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
+        ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId, TableRegion,
     },
     refs::{
         fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version, update_branch,
@@ -559,11 +559,12 @@ impl Dataset {
         &self,
         path: &Path,
         coords: &ChunkIndices,
+        byte_range: &ByteRange,
     ) -> DatasetResult<Option<Bytes>> {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
                 // TODO: we don't have a way to distinguish if we want to pass a range or not
-                Ok(self.storage.fetch_chunk(&id, &None).await.map(Some)?)
+                Ok(self.storage.fetch_chunk(&id, byte_range).await.map(Some)?)
             }
             Some(ChunkPayload::Inline(bytes)) => Ok(Some(bytes)),
             //FIXME: implement virtual fetch
@@ -1332,7 +1333,9 @@ mod tests {
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
         ds.set_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), data.clone()).await?;
 
-        let chunk = ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0])).await?;
+        let chunk = ds
+            .get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::All)
+            .await?;
         assert_eq!(chunk, Some(data));
 
         let path: Path = "/group/array2".into();

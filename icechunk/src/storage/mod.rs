@@ -1,7 +1,7 @@
 use core::fmt;
 use futures::stream::BoxStream;
 use parquet::errors as parquet_errors;
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,7 +19,7 @@ pub use object_store::ObjectStorage;
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId, Path,
+    ByteRange, ObjectId, Path,
 };
 
 #[derive(Debug, Error)]
@@ -56,11 +56,8 @@ pub trait Storage: fmt::Debug {
         id: &ObjectId,
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
     async fn fetch_manifests(&self, id: &ObjectId) -> StorageResult<Arc<ManifestsTable>>; // FIXME: format flags
-    async fn fetch_chunk(
-        &self,
-        id: &ObjectId,
-        range: &Option<Range<ChunkOffset>>,
-    ) -> StorageResult<Bytes>; // FIXME: format flags
+    async fn fetch_chunk(&self, id: &ObjectId, range: &ByteRange)
+        -> StorageResult<Bytes>; // FIXME: format flags
 
     async fn write_snapshot(
         &self,

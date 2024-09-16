@@ -17,7 +17,7 @@ use parquet::arrow::{
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId, Path,
+    ByteRange, ObjectId, Path,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -193,16 +193,13 @@ impl Storage for ObjectStorage {
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
-        range: &Option<std::ops::Range<ChunkOffset>>,
+        range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_path(CHUNK_PREFIX, id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
-        if let Some(range) = range {
-            Ok(self
-                .store
-                .get_range(&path, (range.start as usize)..(range.end as usize))
-                .await?)
+        if let Some(range) = range.into() {
+            Ok(self.store.get_range(&path, range).await?)
         } else {
             // TODO: Can't figure out if `get` is the most efficient way to get the whole object.
             Ok(self.store.get(&path).await?.bytes().await?)

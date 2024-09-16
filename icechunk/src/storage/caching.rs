@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -10,7 +10,7 @@ use quick_cache::{
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId,
+    ByteRange, ObjectId,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -20,7 +20,7 @@ enum CacheKey {
     Snapshot(ObjectId),
     Attributes(ObjectId),
     Manifest(ObjectId),
-    Chunk(ObjectId, Option<Range<ChunkOffset>>),
+    Chunk(ObjectId, ByteRange),
 }
 
 #[derive(Clone)]
@@ -143,7 +143,7 @@ impl Storage for MemCachingStorage {
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
-        range: &Option<Range<ChunkOffset>>,
+        range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let key = CacheKey::Chunk(id.clone(), range.clone());
         match self.cache.get_value_or_guard_async(&key).await {
@@ -194,7 +194,7 @@ impl Storage for MemCachingStorage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id.clone(), bytes.clone()).await?;
         // TODO: we could add the chunk also with its full range (0, size)
-        self.cache.insert(CacheKey::Chunk(id, None), CacheValue::Chunk(bytes));
+        self.cache.insert(CacheKey::Chunk(id, ByteRange::All), CacheValue::Chunk(bytes));
         Ok(())
     }
 

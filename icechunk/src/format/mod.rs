@@ -1,5 +1,10 @@
 use core::fmt;
-use std::{fmt::Debug, ops::Range, path::PathBuf};
+use std::{
+    fmt::Debug,
+    hash::{Hash, Hasher},
+    ops::{Range, RangeFrom, RangeTo},
+    path::PathBuf,
+};
 
 use ::arrow::array::RecordBatch;
 use itertools::Itertools;
@@ -88,6 +93,60 @@ pub struct ChunkIndices(pub Vec<u64>);
 
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ByteRange {
+    Range(Range<ChunkOffset>),
+    Offset(RangeFrom<ChunkOffset>),
+    Suffix(RangeTo<ChunkOffset>),
+    All,
+}
+
+impl Hash for ByteRange {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            ByteRange::Range(r) => {
+                state.write_u64(r.start);
+                state.write_u64(r.end);
+            }
+            ByteRange::Offset(r) => {
+                state.write_u64(r.start);
+            }
+            ByteRange::Suffix(r) => {
+                state.write_u64(r.end);
+            }
+            ByteRange::All => {}
+        }
+    }
+}
+
+impl From<&ByteRange> for Option<Range<usize>> {
+    fn from(value: &ByteRange) -> Self {
+        match value {
+            ByteRange::Range(r) => Some(r.start as usize..r.end as usize),
+            ByteRange::Offset(r) => Some(r.start as usize..usize::MAX),
+            ByteRange::Suffix(r) => Some(0..r.end as usize),
+            ByteRange::All => None,
+        }
+    }
+}
+
+impl From<Range<usize>> for ByteRange {
+    fn from(r: Range<usize>) -> Self {
+        ByteRange::Range(r.start as ChunkOffset..r.end as ChunkOffset)
+    }
+}
+
+impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
+    fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
+        match (start, end) {
+            (Some(start), Some(end)) => ByteRange::Range(start..end),
+            (Some(start), None) => ByteRange::Offset(start..),
+            (None, Some(end)) => ByteRange::Suffix(..end),
+            (None, None) => ByteRange::All,
+        }
+    }
+}
 
 pub type TableOffset = u32;
 
