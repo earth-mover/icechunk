@@ -155,8 +155,8 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, id);
-        let batch = self.read_parquet(&path).await?;
-        Ok(Arc::new(ManifestsTable { batch }))
+        let bytes = self.store.get(&path).await?.bytes().await?;
+        Ok(Arc::new(ManifestsTable::from_bytes(bytes).unwrap()))
     }
 
     async fn write_snapshot(
@@ -186,7 +186,9 @@ impl Storage for ObjectStorage {
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, &id);
-        self.write_parquet(&path, &table.batch).await?;
+        let bytes = table.to_bytes();
+        // FIXME: use multipart
+        self.store.put(&path, bytes.into()).await?;
         Ok(())
     }
 

@@ -48,7 +48,8 @@ impl Weighter<CacheKey, CacheValue> for CacheWeighter {
         match val {
             CacheValue::Snapshot(table) => table.batch.get_array_memory_size() as u64,
             CacheValue::Attributes(table) => table.batch.get_array_memory_size() as u64,
-            CacheValue::Manifest(table) => table.batch.get_array_memory_size() as u64,
+            //FIXME:
+            CacheValue::Manifest(_table) => 100, //table.batch.get_array_memory_size() as u64,
             CacheValue::Chunk(bytes) => bytes.len() as u64,
         }
     }
