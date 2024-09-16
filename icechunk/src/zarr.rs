@@ -1088,6 +1088,10 @@ mod tests {
             big_data[(512 - 3)..]
         );
         assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::To(5)).await.unwrap(),
+            big_data[..5]
+        );
+        assert_eq!(
             store.get("array/c/0/1/1", &ByteRange::Range((20, 90))).await.unwrap(),
             big_data[20..90]
         );
