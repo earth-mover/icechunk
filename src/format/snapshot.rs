@@ -903,13 +903,19 @@ mod tests {
             object_id: ObjectId::random(),
             location: TableRegion(0, 1),
             flags: Flags(),
-            extents: ManifestExtents(vec![]),
+            extents: ManifestExtents(vec![
+                ChunkIndices(vec![0, 0, 0]),
+                ChunkIndices(vec![10, 20, 30]),
+            ]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
             location: TableRegion(0, 1),
             flags: Flags(),
-            extents: ManifestExtents(vec![]),
+            extents: ManifestExtents(vec![
+                ChunkIndices(vec![11, 11, 11]),
+                ChunkIndices(vec![10, 20, 30]),
+            ]),
         };
 
         let oid = ObjectId::random();
