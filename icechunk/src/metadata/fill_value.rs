@@ -26,11 +26,19 @@ pub enum FillValue {
 }
 
 impl FillValue {
+    /// This function tries to generate a FillValue from another that was parsed without knowledge
+    /// of the DataType. The issue is zarr metadata doesn't have information abouta the datatype in
+    /// its fill_value field. So we parse it "blindly" first, and then "correct" it with this
+    /// function and with DataType information.
+    ///
+    /// Example: Maybe the fill value was `0`, which parsed as FillValue::Int8(0), but the data
+    /// type is Float64. In cases like that one, we need to convert to the right DataType.
+    /// Parsing happens in order of definition of the FillValue variants, so we only need to check
+    /// the ones "above".
     pub fn from_data_type_and_untagged(
         dt: &DataType,
         fill_value: FillValue,
     ) -> Result<Self, IcechunkFormatError> {
-        #![allow(clippy::expect_used)] // before calling `as_foo` we check with `fits_foo`
         use FillValue::*;
         match (dt, &fill_value) {
             (DataType::Bool, Bool(_)) => Ok(fill_value),
@@ -63,10 +71,39 @@ impl FillValue {
             (DataType::UInt64, UInt16(n)) => Ok(UInt64(*n as u64)),
             (DataType::UInt64, UInt32(n)) => Ok(UInt64(*n as u64)),
 
+            (DataType::Float16, Int8(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, Int16(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, Int32(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, Int64(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, UInt8(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, UInt16(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, UInt32(n)) => Ok(Float16(*n as f32)),
+            (DataType::Float16, UInt64(n)) => Ok(Float16(*n as f32)),
+
+            (DataType::Float32, Int8(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, Int16(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, Int32(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, Int64(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, UInt8(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, UInt16(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, UInt32(n)) => Ok(Float32(*n as f32)),
+            (DataType::Float32, UInt64(n)) => Ok(Float32(*n as f32)),
             (DataType::Float32, Float16(n)) => Ok(Float32(*n)),
+
+            (DataType::Float64, Int8(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, Int16(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, Int32(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, Int64(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, UInt8(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, UInt16(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, UInt32(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, UInt64(n)) => Ok(Float64(*n as f64)),
             (DataType::Float64, Float16(n)) => Ok(Float64(*n as f64)),
             (DataType::Float64, Float32(n)) => Ok(Float64(*n as f64)),
 
+            (DataType::Complex128, Complex64(r, i)) => {
+                Ok(Complex128(*r as f64, *i as f64))
+            }
             // TODO: ranges
             (DataType::RawBits(_), Complex64(r, i)) => {
                 Ok(RawBits(vec![*r as u8, *i as u8]))
