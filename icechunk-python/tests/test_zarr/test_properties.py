@@ -11,12 +11,9 @@ from hypothesis import given, settings  # noqa
 from zarr.testing.strategies import arrays, np_arrays, basic_indices  # noqa
 import icechunk
 
-def sync_from_json(func, **kwargs):
-    return sync(func(**kwargs))
-
-icechunk_stores = st.builds(partial(sync_from_json, icechunk.IcechunkStore.from_json),
+icechunk_stores = st.builds(icechunk.IcechunkStore.from_json,
                             config=st.just({"storage": {"type": "in_memory"}, "dataset": {}}),
-                            mode=st.just("w"),)
+                            mode=st.just("w")).map(lambda x: sync(x))
 
 @given(st.data())
 def test_roundtrip(data: st.DataObject) -> None:
