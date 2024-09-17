@@ -28,9 +28,17 @@ impl PyIcechunkStore {
 }
 
 #[pyfunction]
-async fn pyicechunk_store_from_json_config(json: String) -> PyResult<PyIcechunkStore> {
-    let json = json.as_bytes();
-    PyIcechunkStore::from_json_config(json).await.map_err(PyValueError::new_err)
+fn pyicechunk_store_from_json_config<'py>(
+    json: String,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let json = json.as_bytes().to_owned();
+
+    // The commit mechanism is async and calls tokio::spawn so we need to use the
+    // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::from_json_config(&json).await.map_err(PyValueError::new_err)
+    })
 }
 
 #[pymethods]
