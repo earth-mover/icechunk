@@ -22,6 +22,7 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
+    "hypothesis",
 ]
 
 [tool.maturin]

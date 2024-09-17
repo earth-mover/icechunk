@@ -71,6 +71,15 @@ jobs:
           working-directory: icechunk-python
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
+          # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
       - name: pytest
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         shell: bash
@@ -97,6 +106,14 @@ jobs:
             set -e
             pip3 install icechunk['test'] --find-links dist --force-reinstall
             pytest
+     # explicitly save the cache so it gets updated, also do this even if it fails.
+      - name: Save cached hypothesis directory
+        id: save-hypothesis-cache
+        if: always() && steps.status.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: .hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
   # musllinux:
   #   runs-on: ${{ matrix.platform.runner }}
