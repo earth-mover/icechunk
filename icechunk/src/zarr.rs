@@ -215,12 +215,16 @@ impl Store {
         Ok(())
     }
 
-    /// Switch to a new branch, commiting all pending changes as the initial commit
-    /// to the new branch.
+    /// Switch to a new branch and commit the current snapshot to it. This fails if there is uncommitted changes,
+    /// or if the branch already exists (because this would cause a conflict).
     pub async fn new_branch(
         &mut self,
         branch: &str,
     ) -> StoreResult<(ObjectId, BranchVersion)> {
+        if self.dataset.has_pending_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+
         self.current_branch = Some(branch.to_string());
         let result = self.commit(format!("Created {branch} branch").as_str()).await?;
         Ok(result)
