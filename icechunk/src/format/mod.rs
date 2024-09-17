@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
 
-use crate::metadata::DataType;
+use crate::metadata::{DataType, FillValue};
 
 pub mod attributes;
 pub mod manifest;
@@ -147,12 +147,12 @@ pub type TableOffset = u32;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags(); // FIXME: implement
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq)]
 pub enum IcechunkFormatError {
     #[error("error decoding fill_value from array")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
     #[error("error decoding fill_value from json")]
-    FillValueParse { data_type: DataType, value: serde_json::Value },
+    FillValueParse { data_type: DataType, value: FillValue },
     #[error("node not found at `{path:?}`")]
     NodeNotFound { path: Path },
     #[error("chunk coordinates not found `{coords:?}`")]

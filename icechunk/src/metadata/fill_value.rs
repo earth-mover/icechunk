@@ -26,127 +26,59 @@ pub enum FillValue {
 }
 
 impl FillValue {
-    pub fn from_data_type_and_json(
+    pub fn from_data_type_and_untagged(
         dt: &DataType,
-        value: &serde_json::Value,
+        fill_value: FillValue,
     ) -> Result<Self, IcechunkFormatError> {
         #![allow(clippy::expect_used)] // before calling `as_foo` we check with `fits_foo`
-        match (dt, value) {
-            (DataType::Bool, serde_json::Value::Bool(b)) => Ok(FillValue::Bool(*b)),
-            (DataType::Int8, serde_json::Value::Number(n))
-                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
-            {
-                Ok(FillValue::Int8(
-                    n.as_i64().expect("bug in from_data_type_and_json") as i8
-                ))
-            }
-            (DataType::Int16, serde_json::Value::Number(n))
-                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
-            {
-                Ok(FillValue::Int16(
-                    n.as_i64().expect("bug in from_data_type_and_json") as i16
-                ))
-            }
-            (DataType::Int32, serde_json::Value::Number(n))
-                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
-            {
-                Ok(FillValue::Int32(
-                    n.as_i64().expect("bug in from_data_type_and_json") as i32
-                ))
-            }
-            (DataType::Int64, serde_json::Value::Number(n))
-                if n.as_i64().map(|n| dt.fits_i64(n)) == Some(true) =>
-            {
-                Ok(FillValue::Int64(n.as_i64().expect("bug in from_data_type_and_json")))
-            }
-            (DataType::UInt8, serde_json::Value::Number(n))
-                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
-            {
-                Ok(FillValue::UInt8(
-                    n.as_u64().expect("bug in from_data_type_and_json") as u8
-                ))
-            }
-            (DataType::UInt16, serde_json::Value::Number(n))
-                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
-            {
-                Ok(FillValue::UInt16(
-                    n.as_u64().expect("bug in from_data_type_and_json") as u16
-                ))
-            }
-            (DataType::UInt32, serde_json::Value::Number(n))
-                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
-            {
-                Ok(FillValue::UInt32(
-                    n.as_u64().expect("bug in from_data_type_and_json") as u32
-                ))
-            }
-            (DataType::UInt64, serde_json::Value::Number(n))
-                if n.as_u64().map(|n| dt.fits_u64(n)) == Some(true) =>
-            {
-                Ok(FillValue::UInt64(n.as_u64().expect("bug in from_data_type_and_json")))
-            }
-            (DataType::Float16, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
-                // FIXME: limits logic
-                Ok(FillValue::Float16(
-                    n.as_f64().expect("bug in from_data_type_and_json") as f32,
-                ))
-            }
-            (DataType::Float32, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
-                // FIXME: limits logic
-                Ok(FillValue::Float32(
-                    n.as_f64().expect("bug in from_data_type_and_json") as f32,
-                ))
-            }
-            (DataType::Float64, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
-                // FIXME: limits logic
-                Ok(FillValue::Float64(
-                    n.as_f64().expect("bug in from_data_type_and_json"),
-                ))
-            }
-            (DataType::Complex64, serde_json::Value::Array(arr)) if arr.len() == 2 => {
-                let r = FillValue::from_data_type_and_json(&DataType::Float32, &arr[0])?;
-                let i = FillValue::from_data_type_and_json(&DataType::Float32, &arr[1])?;
-                match (r, i) {
-                    (FillValue::Float32(r), FillValue::Float32(i)) => {
-                        Ok(FillValue::Complex64(r, i))
-                    }
-                    _ => Err(IcechunkFormatError::FillValueParse {
-                        data_type: dt.clone(),
-                        value: value.clone(),
-                    }),
-                }
-            }
-            (DataType::Complex128, serde_json::Value::Array(arr)) if arr.len() == 2 => {
-                let r = FillValue::from_data_type_and_json(&DataType::Float64, &arr[0])?;
-                let i = FillValue::from_data_type_and_json(&DataType::Float64, &arr[1])?;
-                match (r, i) {
-                    (FillValue::Float64(r), FillValue::Float64(i)) => {
-                        Ok(FillValue::Complex128(r, i))
-                    }
-                    _ => Err(IcechunkFormatError::FillValueParse {
-                        data_type: dt.clone(),
-                        value: value.clone(),
-                    }),
-                }
+        use FillValue::*;
+        match (dt, &fill_value) {
+            (DataType::Bool, Bool(_)) => Ok(fill_value),
+            (DataType::Int8, Int8(_)) => Ok(fill_value),
+            (DataType::Int16, Int16(_)) => Ok(fill_value),
+            (DataType::Int32, Int32(_)) => Ok(fill_value),
+            (DataType::Int64, Int64(_)) => Ok(fill_value),
+            (DataType::UInt8, UInt8(_)) => Ok(fill_value),
+            (DataType::UInt16, UInt16(_)) => Ok(fill_value),
+            (DataType::UInt32, UInt32(_)) => Ok(fill_value),
+            (DataType::UInt64, UInt64(_)) => Ok(fill_value),
+            (DataType::Float16, Float16(_)) => Ok(fill_value),
+            (DataType::Float32, Float32(_)) => Ok(fill_value),
+            (DataType::Float64, Float64(_)) => Ok(fill_value),
+            (DataType::Complex64, Complex64(_, _)) => Ok(fill_value),
+            (DataType::Complex128, Complex128(_, _)) => Ok(fill_value),
+            (DataType::RawBits(_), RawBits(_)) => Ok(fill_value),
+
+            (DataType::Int16, Int8(n)) => Ok(Int16(*n as i16)),
+            (DataType::Int32, Int8(n)) => Ok(Int32(*n as i32)),
+            (DataType::Int32, Int16(n)) => Ok(Int32(*n as i32)),
+            (DataType::Int64, Int8(n)) => Ok(Int64(*n as i64)),
+            (DataType::Int64, Int16(n)) => Ok(Int64(*n as i64)),
+            (DataType::Int64, Int32(n)) => Ok(Int64(*n as i64)),
+
+            (DataType::UInt16, UInt8(n)) => Ok(UInt16(*n as u16)),
+            (DataType::UInt32, UInt8(n)) => Ok(UInt32(*n as u32)),
+            (DataType::UInt32, UInt16(n)) => Ok(UInt32(*n as u32)),
+            (DataType::UInt64, UInt8(n)) => Ok(UInt64(*n as u64)),
+            (DataType::UInt64, UInt16(n)) => Ok(UInt64(*n as u64)),
+            (DataType::UInt64, UInt32(n)) => Ok(UInt64(*n as u64)),
+
+            (DataType::Float32, Float16(n)) => Ok(Float32(*n)),
+            (DataType::Float64, Float16(n)) => Ok(Float64(*n as f64)),
+            (DataType::Float64, Float32(n)) => Ok(Float64(*n as f64)),
+
+            // TODO: ranges
+            (DataType::RawBits(_), Complex64(r, i)) => {
+                Ok(RawBits(vec![*r as u8, *i as u8]))
             }
 
-            (DataType::RawBits(n), serde_json::Value::Array(arr)) if arr.len() == *n => {
-                let bits = arr
-                    .iter()
-                    .map(|b| FillValue::from_data_type_and_json(&DataType::UInt8, b))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(FillValue::RawBits(
-                    bits.iter()
-                        .map(|b| match b {
-                            FillValue::UInt8(n) => *n,
-                            _ => 0,
-                        })
-                        .collect(),
-                ))
+            // TODO: ranges
+            (DataType::RawBits(_), Complex128(r, i)) => {
+                Ok(RawBits(vec![*r as u8, *i as u8]))
             }
             _ => Err(IcechunkFormatError::FillValueParse {
                 data_type: dt.clone(),
-                value: value.clone(),
+                value: fill_value.clone(),
             }),
         }
     }

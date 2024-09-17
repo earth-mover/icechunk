@@ -24,30 +24,6 @@ pub enum DataType {
     RawBits(usize),
 }
 
-impl DataType {
-    pub fn fits_i64(&self, n: i64) -> bool {
-        use DataType::*;
-        match self {
-            Int8 => n >= i8::MIN as i64 && n <= i8::MAX as i64,
-            Int16 => n >= i16::MIN as i64 && n <= i16::MAX as i64,
-            Int32 => n >= i32::MIN as i64 && n <= i32::MAX as i64,
-            Int64 => true,
-            _ => false,
-        }
-    }
-
-    pub fn fits_u64(&self, n: u64) -> bool {
-        use DataType::*;
-        match self {
-            UInt8 => n >= u8::MIN as u64 && n <= u8::MAX as u64,
-            UInt16 => n >= u16::MIN as u64 && n <= u16::MAX as u64,
-            UInt32 => n >= u32::MIN as u64 && n <= u32::MAX as u64,
-            UInt64 => true,
-            _ => false,
-        }
-    }
-}
-
 impl TryFrom<&str> for DataType {
     type Error = &'static str;
 

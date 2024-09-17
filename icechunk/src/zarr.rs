@@ -104,7 +104,7 @@ pub enum StoreError {
     #[error("unsuccessful dataset operation: `{0}`")]
     CannotUpdate(#[from] DatasetError),
     #[error("bad metadata: `{0}`")]
-    BadMetadata(#[from] serde_json::Error),
+    BadMetadata(#[from] json5::Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
@@ -123,8 +123,8 @@ impl Store {
     }
 
     pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
-        let config: StoreConfig =
-            serde_json::from_slice(json).map_err(|e| e.to_string())?;
+        let config: StoreConfig = json5::from_str(std::str::from_utf8(json).unwrap())
+            .map_err(|e| e.to_string())?;
         Self::from_config(&config).await
     }
 
@@ -262,10 +262,12 @@ impl Store {
     pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
+                if let Ok(array_meta) =
+                    json5::from_str(std::str::from_utf8(value.as_ref()).unwrap())
+                {
                     self.set_array_meta(node_path, array_meta).await
                 } else {
-                    match serde_json::from_slice(value.as_ref()) {
+                    match json5::from_str(std::str::from_utf8(value.as_ref()).unwrap()) {
                         Ok(group_meta) => {
                             self.set_group_meta(node_path, group_meta).await
                         }
@@ -619,8 +621,77 @@ struct ArrayMetadata {
     zarr_metadata: ZarrArrayMetadata,
 }
 
+pub enum UndefinedFillValue {}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UntaggedFillValue {
+    // FIXME: test all json (de)serializations
+    Bool(bool),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    Float16(f32),
+    Float32(f32),
+    Float64(f64),
+    Complex64(f32, f32),
+    Complex128(f64, f64),
+    RawBits(Vec<u8>),
+}
+
+impl Into<FillValue> for UntaggedFillValue {
+    fn into(self) -> FillValue {
+        use UntaggedFillValue::*;
+        match self {
+            Bool(x) => FillValue::Bool(x),
+            Int8(x) => FillValue::Int8(x),
+            Int16(x) => FillValue::Int16(x),
+            Int32(x) => FillValue::Int32(x),
+            Int64(x) => FillValue::Int64(x),
+            UInt8(x) => FillValue::UInt8(x),
+            UInt16(x) => FillValue::UInt16(x),
+            UInt32(x) => FillValue::UInt32(x),
+            UInt64(x) => FillValue::UInt64(x),
+            Float16(x) => FillValue::Float16(x),
+            Float32(x) => FillValue::Float32(x),
+            Float64(x) => FillValue::Float64(x),
+            Complex64(r, i) => FillValue::Complex64(r, i),
+            Complex128(r, i) => FillValue::Complex128(r, i),
+            RawBits(x) => FillValue::RawBits(x),
+        }
+    }
+}
+
+impl From<FillValue> for UntaggedFillValue {
+    fn from(value: FillValue) -> Self {
+        use FillValue::*;
+        match value {
+            Bool(x) => UntaggedFillValue::Bool(x),
+            Int8(x) => UntaggedFillValue::Int8(x),
+            Int16(x) => UntaggedFillValue::Int16(x),
+            Int32(x) => UntaggedFillValue::Int32(x),
+            Int64(x) => UntaggedFillValue::Int64(x),
+            UInt8(x) => UntaggedFillValue::UInt8(x),
+            UInt16(x) => UntaggedFillValue::UInt16(x),
+            UInt32(x) => UntaggedFillValue::UInt32(x),
+            UInt64(x) => UntaggedFillValue::UInt64(x),
+            Float16(x) => UntaggedFillValue::Float16(x),
+            Float32(x) => UntaggedFillValue::Float32(x),
+            Float64(x) => UntaggedFillValue::Float64(x),
+            Complex64(r, i) => UntaggedFillValue::Complex64(r, i),
+            Complex128(r, i) => UntaggedFillValue::Complex128(r, i),
+            RawBits(x) => UntaggedFillValue::RawBits(x),
+        }
+    }
+}
+
 #[serde_as]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ZarrArrayMetadataSerialzer {
     pub shape: ArrayShape,
     pub data_type: DataType,
@@ -631,7 +702,7 @@ pub struct ZarrArrayMetadataSerialzer {
 
     #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
     pub chunk_key_encoding: ChunkKeyEncoding,
-    pub fill_value: serde_json::Value,
+    pub fill_value: UntaggedFillValue,
     pub codecs: Vec<Codec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_transformers: Option<Vec<StorageTransformer>>,
@@ -654,7 +725,8 @@ impl TryFrom<ZarrArrayMetadataSerialzer> for ZarrArrayMetadata {
             dimension_names,
         } = value;
         {
-            let fill_value = FillValue::from_data_type_and_json(&data_type, &fill_value)?;
+            let fill_value =
+                FillValue::from_data_type_and_untagged(&data_type, fill_value.into())?;
             Ok(ZarrArrayMetadata {
                 fill_value,
                 shape,
@@ -682,27 +754,6 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
             dimension_names,
         } = value;
         {
-            fn fill_value_to_json(f: FillValue) -> serde_json::Value {
-                match f {
-                    FillValue::Bool(b) => b.into(),
-                    FillValue::Int8(n) => n.into(),
-                    FillValue::Int16(n) => n.into(),
-                    FillValue::Int32(n) => n.into(),
-                    FillValue::Int64(n) => n.into(),
-                    FillValue::UInt8(n) => n.into(),
-                    FillValue::UInt16(n) => n.into(),
-                    FillValue::UInt32(n) => n.into(),
-                    FillValue::UInt64(n) => n.into(),
-                    FillValue::Float16(f) => f.into(),
-                    FillValue::Float32(f) => f.into(),
-                    FillValue::Float64(f) => f.into(),
-                    FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::RawBits(r) => r.into(),
-                }
-            }
-
-            let fill_value = fill_value_to_json(fill_value);
             ZarrArrayMetadataSerialzer {
                 shape,
                 data_type,
@@ -711,7 +762,7 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
                 codecs,
                 storage_transformers,
                 dimension_names,
-                fill_value,
+                fill_value: fill_value.into(),
             }
         }
     }
@@ -730,11 +781,9 @@ impl ArrayMetadata {
     }
 
     fn to_bytes(&self) -> Bytes {
-        Bytes::from_iter(
-            // We can unpack because it comes from controlled datastructures that can be serialized
-            #[allow(clippy::expect_used)]
-            serde_json::to_vec(self).expect("bug in ArrayMetadata serialization"),
-        )
+        // We can unpack because it comes from controlled datastructures that can be serialized
+        #[allow(clippy::expect_used)]
+        Bytes::from(json5::to_string(self).expect("bug in ArrayMetadata serialization"))
     }
 }
 
@@ -744,11 +793,9 @@ impl GroupMetadata {
     }
 
     fn to_bytes(&self) -> Bytes {
-        Bytes::from_iter(
-            // We can unpack because it comes from controlled datastructures that can be serialized
-            #[allow(clippy::expect_used)]
-            serde_json::to_vec(self).expect("bug in GroupMetadata serialization"),
-        )
+        // We can unpack because it comes from controlled datastructures that can be serialized
+        #[allow(clippy::expect_used)]
+        Bytes::from(json5::to_string(self).expect("bug in GroupMetadata serialization"))
     }
 }
 
@@ -992,7 +1039,14 @@ mod tests {
             )
         );
 
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("a/b/array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            zarr_meta.clone()
+        );
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":NaN,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(
             store.get("a/b/array/zarr.json", &ByteRange::ALL).await.unwrap(),
@@ -1019,7 +1073,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
 
         // delete metadata tests
@@ -1055,7 +1109,7 @@ mod tests {
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
             )
             .await?;
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(
             store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
@@ -1147,7 +1201,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
 
         let data = Bytes::copy_from_slice(b"hello");
@@ -1210,7 +1264,7 @@ mod tests {
             vec!["group/zarr.json".to_string()]
         );
 
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("group/array/zarr.json", zarr_meta).await?;
         assert!(!store.empty().await.unwrap());
         assert!(store.exists("zarr.json").await.unwrap());
@@ -1251,7 +1305,7 @@ mod tests {
             )
             .await?;
 
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta).await?;
 
         let data = Bytes::copy_from_slice(b"hello");
@@ -1286,7 +1340,7 @@ mod tests {
             )
             .await?;
 
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta).await?;
 
         let data = Bytes::copy_from_slice(b"hello");
@@ -1340,7 +1394,7 @@ mod tests {
             )
             .await?;
 
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[20],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[20],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x"]}"#);
         store.set("array/zarr.json", zarr_meta).await?;
 
         let key_vals: Vec<_> = (0i32..20)
@@ -1398,7 +1452,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"\/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
 
         let data = Bytes::copy_from_slice(b"hello");
@@ -1458,7 +1512,7 @@ mod tests {
              "get_partial_values_concurrency": 100
             }
         "#;
-        assert_eq!(expected, serde_json::from_str(json)?);
+        assert_eq!(expected, json5::from_str(json)?);
 
         let json = r#"
             {"storage":
@@ -1480,7 +1534,7 @@ mod tests {
                 get_partial_values_concurrency: None,
                 ..expected.clone()
             },
-            serde_json::from_str(json)?
+            json5::from_str(json)?
         );
 
         let json = r#"
@@ -1501,7 +1555,7 @@ mod tests {
                 get_partial_values_concurrency: None,
                 ..expected.clone()
             },
-            serde_json::from_str(json)?
+            json5::from_str(json)?
         );
 
         let json = r#"
@@ -1518,7 +1572,7 @@ mod tests {
                 storage: StorageConfig::InMemory,
                 get_partial_values_concurrency: None,
             },
-            serde_json::from_str(json)?
+            json5::from_str(json)?
         );
 
         let json = r#"
@@ -1541,7 +1595,7 @@ mod tests {
                 },
                 get_partial_values_concurrency: None,
             },
-            serde_json::from_str(json)?
+            json5::from_str(json)?
         );
 
         let json = r#"
@@ -1571,7 +1625,7 @@ mod tests {
                 },
                 get_partial_values_concurrency: None,
             },
-            serde_json::from_str(json)?
+            json5::from_str(json)?
         );
 
         Ok(())
