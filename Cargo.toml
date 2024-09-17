@@ -7,8 +7,3 @@ resolver = "2"
 expect_used = "warn"
 unwrap_used = "warn"
 panic = "warn"
-
-[profile.release-with-debug]
-inherits = "release"
-debug = true
-

@@ -286,7 +286,6 @@ async fn print_nodes(ds: &Dataset) -> Result<(), StoreError> {
     let rows = ds
         .list_nodes()
         .await?
-        .map(|r| r.unwrap())
         .sorted_by_key(|n| n.path.clone())
         .map(|node| {
             format!(

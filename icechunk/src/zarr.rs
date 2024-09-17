@@ -362,7 +362,7 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        let meta = self.list_metadata_prefix(prefix).await?;
+        let meta = self.list_metadata_prefix(prefix).await?.map(Ok);
         let chunks = self.list_chunks_prefix(prefix).await?;
         Ok(meta.chain(chunks))
     }
@@ -385,7 +385,7 @@ impl Store {
             .map_ok(move |s| {
                 // If the prefix is "/", get rid of it. This can happend when prefix is missing
                 // the trailing slash (as it does in zarr-python impl)
-                let rem = &s[idx..].trim_start_matches("/");
+                let rem = &s[idx..].trim_start_matches('/');
                 let parent = rem.split_once('/').map_or(*rem, |(parent, _)| parent);
                 parent.to_string()
             })
@@ -473,19 +473,19 @@ impl Store {
     async fn list_metadata_prefix<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
-        let prefix = prefix.trim_end_matches("/");
+    ) -> StoreResult<impl Stream<Item = String> + 'a> {
+        let prefix = prefix.trim_end_matches('/');
 
         let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
         // TODO: handle non-utf8?
-        Ok(nodes.map_err(|e| e.into()).try_filter_map(move |node| async move {
-            Ok(Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
+        Ok(nodes.filter_map(move |node| async move {
+            Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
                 if key.starts_with(prefix) {
                     Some(key)
                 } else {
                     None
                 }
-            }))
+            })
         }))
     }
 
@@ -493,7 +493,7 @@ impl Store {
         &'a self,
         prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
-        let prefix = prefix.trim_end_matches("/");
+        let prefix = prefix.trim_end_matches('/');
 
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -727,9 +727,27 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
             dimension_names,
         } = value;
         {
-            #[allow(clippy::expect_used)]
-            let fill_value = serde_json::to_value(fill_value)
-                .expect("Fill values are always serializable");
+            fn fill_value_to_json(f: FillValue) -> serde_json::Value {
+                match f {
+                    FillValue::Bool(b) => b.into(),
+                    FillValue::Int8(n) => n.into(),
+                    FillValue::Int16(n) => n.into(),
+                    FillValue::Int32(n) => n.into(),
+                    FillValue::Int64(n) => n.into(),
+                    FillValue::UInt8(n) => n.into(),
+                    FillValue::UInt16(n) => n.into(),
+                    FillValue::UInt32(n) => n.into(),
+                    FillValue::UInt64(n) => n.into(),
+                    FillValue::Float16(f) => f.into(),
+                    FillValue::Float32(f) => f.into(),
+                    FillValue::Float64(f) => f.into(),
+                    FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
+                    FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
+                    FillValue::RawBits(r) => r.into(),
+                }
+            }
+
+            let fill_value = fill_value_to_json(fill_value);
             ZarrArrayMetadataSerialzer {
                 shape,
                 data_type,
