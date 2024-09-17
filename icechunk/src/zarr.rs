@@ -3,6 +3,7 @@ use std::{
     iter,
     num::NonZeroU64,
     path::PathBuf,
+    str::Utf8Error,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -105,6 +106,8 @@ pub enum StoreError {
     CannotUpdate(#[from] DatasetError),
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] json5::Error),
+    #[error("utf-8 error: `{0}`")]
+    Utf8(#[from] Utf8Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
@@ -123,8 +126,9 @@ impl Store {
     }
 
     pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
-        let config: StoreConfig = json5::from_str(std::str::from_utf8(json).unwrap())
-            .map_err(|e| e.to_string())?;
+        let str = std::str::from_utf8(json)
+            .map_err(|_| "Invalid UTF8 character".to_string())?;
+        let config: StoreConfig = json5::from_str(str).map_err(|e| e.to_string())?;
         Self::from_config(&config).await
     }
 
@@ -262,12 +266,12 @@ impl Store {
     pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                if let Ok(array_meta) =
-                    json5::from_str(std::str::from_utf8(value.as_ref()).unwrap())
-                {
+                let str =
+                    std::str::from_utf8(value.as_ref()).map_err(StoreError::Utf8)?;
+                if let Ok(array_meta) = json5::from_str(str) {
                     self.set_array_meta(node_path, array_meta).await
                 } else {
-                    match json5::from_str(std::str::from_utf8(value.as_ref()).unwrap()) {
+                    match json5::from_str(str) {
                         Ok(group_meta) => {
                             self.set_group_meta(node_path, group_meta).await
                         }
@@ -625,7 +629,7 @@ pub enum UndefinedFillValue {}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum UntaggedFillValue {
+pub enum SerializedFillValue {
     // FIXME: test all json (de)serializations
     Bool(bool),
     Int8(i8),
@@ -644,10 +648,10 @@ pub enum UntaggedFillValue {
     RawBits(Vec<u8>),
 }
 
-impl Into<FillValue> for UntaggedFillValue {
-    fn into(self) -> FillValue {
-        use UntaggedFillValue::*;
-        match self {
+impl From<SerializedFillValue> for FillValue {
+    fn from(value: SerializedFillValue) -> Self {
+        use SerializedFillValue::*;
+        match value {
             Bool(x) => FillValue::Bool(x),
             Int8(x) => FillValue::Int8(x),
             Int16(x) => FillValue::Int16(x),
@@ -667,25 +671,25 @@ impl Into<FillValue> for UntaggedFillValue {
     }
 }
 
-impl From<FillValue> for UntaggedFillValue {
+impl From<FillValue> for SerializedFillValue {
     fn from(value: FillValue) -> Self {
         use FillValue::*;
         match value {
-            Bool(x) => UntaggedFillValue::Bool(x),
-            Int8(x) => UntaggedFillValue::Int8(x),
-            Int16(x) => UntaggedFillValue::Int16(x),
-            Int32(x) => UntaggedFillValue::Int32(x),
-            Int64(x) => UntaggedFillValue::Int64(x),
-            UInt8(x) => UntaggedFillValue::UInt8(x),
-            UInt16(x) => UntaggedFillValue::UInt16(x),
-            UInt32(x) => UntaggedFillValue::UInt32(x),
-            UInt64(x) => UntaggedFillValue::UInt64(x),
-            Float16(x) => UntaggedFillValue::Float16(x),
-            Float32(x) => UntaggedFillValue::Float32(x),
-            Float64(x) => UntaggedFillValue::Float64(x),
-            Complex64(r, i) => UntaggedFillValue::Complex64(r, i),
-            Complex128(r, i) => UntaggedFillValue::Complex128(r, i),
-            RawBits(x) => UntaggedFillValue::RawBits(x),
+            Bool(x) => SerializedFillValue::Bool(x),
+            Int8(x) => SerializedFillValue::Int8(x),
+            Int16(x) => SerializedFillValue::Int16(x),
+            Int32(x) => SerializedFillValue::Int32(x),
+            Int64(x) => SerializedFillValue::Int64(x),
+            UInt8(x) => SerializedFillValue::UInt8(x),
+            UInt16(x) => SerializedFillValue::UInt16(x),
+            UInt32(x) => SerializedFillValue::UInt32(x),
+            UInt64(x) => SerializedFillValue::UInt64(x),
+            Float16(x) => SerializedFillValue::Float16(x),
+            Float32(x) => SerializedFillValue::Float32(x),
+            Float64(x) => SerializedFillValue::Float64(x),
+            Complex64(r, i) => SerializedFillValue::Complex64(r, i),
+            Complex128(r, i) => SerializedFillValue::Complex128(r, i),
+            RawBits(x) => SerializedFillValue::RawBits(x),
         }
     }
 }
@@ -702,7 +706,7 @@ pub struct ZarrArrayMetadataSerialzer {
 
     #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
     pub chunk_key_encoding: ChunkKeyEncoding,
-    pub fill_value: UntaggedFillValue,
+    pub fill_value: SerializedFillValue,
     pub codecs: Vec<Codec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_transformers: Option<Vec<StorageTransformer>>,
