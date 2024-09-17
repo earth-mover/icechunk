@@ -52,7 +52,6 @@ impl PyIcechunkStore {
     pub fn commit<'py>(
         &'py mut self,
         py: Python<'py>,
-        update_branch_name: String,
         message: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
@@ -62,7 +61,7 @@ impl PyIcechunkStore {
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let mut writeable_store = store.write().await;
             let (oid, _version) = writeable_store
-                .commit(&update_branch_name, &message)
+                .commit(&message)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(String::from(&oid))

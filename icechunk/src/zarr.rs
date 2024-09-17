@@ -97,7 +97,9 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful dataset operation: `{0}`")]
     CannotUpdate(#[from] DatasetError),
-    #[error("cannot commit when not on a branch")]
+    #[error("cannot commit when no snapshot is present")]
+    NoSnapshot,
+    #[error("all commits must be made on a branch")]
     NotOnBranch,
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] serde_json::Error),
@@ -107,6 +109,10 @@ pub enum StoreError {
     BadKeyPrefix(String),
     #[error("error during parallel execution of get_partial_values")]
     PartialValuesPanic,
+    #[error(
+        "uncommitted changes in dataset, commit changes or reset dataset and try again."
+    )]
+    UncommittedChanges,
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -150,7 +156,44 @@ impl Store {
         }
     }
 
-    pub async fn checkout(&mut self, version: VersionInfo) -> Result<(), DatasetError> {
+    pub fn current_branch(&self) -> &Option<String> {
+        &self.current_branch
+    }
+
+    pub fn snapshot_id(&self) -> &Option<ObjectId> {
+        self.dataset.snapshot_id()
+    }
+
+    pub fn has_pending_changes(&self) -> bool {
+        self.dataset.has_pending_changes()
+    }
+
+    /// Resets the store to the head commit state. If there are any uncommitted changes, they will
+    /// be lost.
+    pub async fn reset(&mut self) -> StoreResult<()> {
+        let Some(head_snapshot) = self.dataset.snapshot_id() else {
+            return Err(StoreError::NotOnBranch);
+        };
+
+        self.dataset =
+            Dataset::update(Arc::clone(self.dataset.storage()), head_snapshot.clone())
+                .build();
+
+        Ok(())
+    }
+
+    /// Checkout a specific version of the dataset. This can be a snapshot id, a tag, or a branch tip.
+    ///
+    /// If the version is a branch tip, the branch will be set as the current branch. If the version
+    /// is a tag or snapshot id, the current branch will be unset and the store will be in detached state.
+    ///
+    /// If there are uncommitted changes, this method will return an error.
+    pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
+        // Checking out is not allowed if there are uncommitted changes
+        if self.dataset.has_pending_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+
         let storage = self.dataset.storage().clone();
         let dataset = match version {
             VersionInfo::SnapshotId(sid) => {
@@ -172,12 +215,15 @@ impl Store {
         Ok(())
     }
 
-    /// Switch to a different branch without pulling the latest changes, or committing
-    /// the current changes.
-    /// TODO: Should this be allowed?
-    pub fn switch_branch(&mut self, branch: &str) -> StoreResult<()> {
+    /// Switch to a new branch, commiting all pending changes as the initial commit
+    /// to the new branch.
+    pub async fn new_branch(
+        &mut self,
+        branch: &str,
+    ) -> StoreResult<(ObjectId, BranchVersion)> {
         self.current_branch = Some(branch.to_string());
-        Ok(())
+        let result = self.commit(format!("Created {branch} branch").as_str()).await?;
+        Ok(result)
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
@@ -192,6 +238,17 @@ impl Store {
         } else {
             Err(StoreError::NotOnBranch)
         }
+    }
+
+    /// Tag the given snapshot with a specified tag
+    pub async fn tag(
+        &mut self,
+        tag: &str,
+        snapshot_id: &ObjectId,
+        message: Option<&str>,
+    ) -> StoreResult<(String, ObjectId)> {
+        let result = self.dataset.tag(tag, snapshot_id, message).await?;
+        Ok(result)
     }
 
     /// Attempt to fast forward the current branch to the latest commit on the remote. If
@@ -1478,6 +1535,22 @@ mod tests {
 
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        let _newest_data = Bytes::copy_from_slice(b"earth");
+        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+        assert_eq!(store.has_pending_changes(), true);
+
+        let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
+        assert!(result.is_err());
+
+        store.reset().await?;
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        // TODO: Create a new branch and do stuff with it
+        // store.new_branch("dev").await?;
+        // store.set("array/c/0/1/0", new_data.clone()).await?;
+
+        // assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_store_from_snapshot = Store::from_dataset(
             Dataset::update(Arc::clone(&storage), snapshot_id).build(),

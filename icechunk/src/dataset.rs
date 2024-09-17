@@ -281,6 +281,10 @@ impl Dataset {
         Ok(Self::update(storage, ref_data.snapshot))
     }
 
+    /// Initialize a new dataset with a single empty commit to the main branch.
+    ///
+    /// This is the default way to create a new dataset to avoid race conditions
+    /// when creating datasets.
     pub async fn init(
         config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
@@ -312,10 +316,18 @@ impl Dataset {
         }
     }
 
+    /// Returns a pointer to the storage for the dataset
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
         &self.storage
     }
 
+    /// Returns the head snapshot id of the dataset, not including
+    /// anm uncommitted changes
+    pub fn snapshot_id(&self) -> &Option<ObjectId> {
+        &self.snapshot_id
+    }
+
+    /// Indicates if the dataset has pending changes
     pub fn has_pending_changes(&self) -> bool {
         !self.change_set.is_empty()
     }
@@ -1013,20 +1025,21 @@ impl Dataset {
         }
     }
 
-    pub async fn tag(&self, tag_name: &str, message: &str) -> DatasetResult<ObjectId> {
-        let Some(snapshot_id) = self.snapshot_id.clone() else {
-            return Err(DatasetError::Tag(String::from("no snapshot to tag")));
-        };
+    pub async fn tag(
+        &self,
+        tag_name: &str,
+        snapshot_id: &ObjectId,
+        message: Option<&str>,
+    ) -> DatasetResult<(String, ObjectId)> {
         let now = Utc::now();
-        create_tag(
-            self.storage.as_ref(),
-            tag_name,
-            snapshot_id.clone(),
-            now,
-            HashMap::from_iter(vec![("message".to_string(), Value::from(message))]),
-        )
-        .await?;
-        Ok(snapshot_id)
+        let mut properties = HashMap::new();
+        if let Some(message) = message {
+            properties.insert(String::from("message"), Value::from(message));
+        }
+
+        create_tag(self.storage.as_ref(), tag_name, snapshot_id.clone(), now, properties)
+            .await?;
+        Ok((String::from(tag_name), snapshot_id.clone()))
     }
 }
 
@@ -1761,10 +1774,11 @@ mod tests {
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
 
-        let tag_snapshot_id = ds.tag("v1", "version 1.0.0").await?;
+        let (_v1_tag, v1_tag_snapshot_id) =
+            ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
-        assert_eq!(tag_snapshot_id, ref_data.snapshot);
+        assert_eq!(v1_tag_snapshot_id, ref_data.snapshot);
         assert_eq!("version 1.0.0", ref_data.properties["message"]);
 
         assert_eq!(
