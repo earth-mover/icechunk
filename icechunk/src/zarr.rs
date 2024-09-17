@@ -21,10 +21,13 @@ use crate::{
         ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec, DataType,
         DatasetError, DimensionNames, FillValue, Path, StorageTransformer,
         UserAttributes, ZarrArrayMetadata,
-    }, format::{
+    },
+    format::{
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError,
-    }, refs::BranchVersion, Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage
+    },
+    refs::BranchVersion,
+    Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -511,25 +514,26 @@ async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(Dataset, Option<String>), String> {
-    let (mut builder, branch): (DatasetBuilder, Option<String>) = match &dataset.previous_version {
-        None => (Dataset::create(storage), Some("main".to_string())),
-        Some(VersionInfo::SnapshotId(sid)) => {
-            let builder = Dataset::update(storage, sid.clone());
-            (builder, None)
-        },
-        Some(VersionInfo::TagRef(tag)) => {
-            let builder = Dataset::from_tag(storage, tag)
-                .await
-                .map_err(|err| format!("Error fetching tag: {err}"))?;
-            (builder, None)
-        },
-        Some(VersionInfo::BranchTipRef(branch)) => {
-            let builder = Dataset::from_branch_tip(storage, branch)
-                .await
-                .map_err(|err| format!("Error fetching branch: {err}"))?;
-            (builder, Some(branch.clone()))
-        }
-    };
+    let (mut builder, branch): (DatasetBuilder, Option<String>) =
+        match &dataset.previous_version {
+            None => (Dataset::create(storage), Some("main".to_string())),
+            Some(VersionInfo::SnapshotId(sid)) => {
+                let builder = Dataset::update(storage, sid.clone());
+                (builder, None)
+            }
+            Some(VersionInfo::TagRef(tag)) => {
+                let builder = Dataset::from_tag(storage, tag)
+                    .await
+                    .map_err(|err| format!("Error fetching tag: {err}"))?;
+                (builder, None)
+            }
+            Some(VersionInfo::BranchTipRef(branch)) => {
+                let builder = Dataset::from_branch_tip(storage, branch)
+                    .await
+                    .map_err(|err| format!("Error fetching branch: {err}"))?;
+                (builder, Some(branch.clone()))
+            }
+        };
 
     if let Some(thr) = dataset.inline_chunk_threshold_bytes {
         builder.with_inline_threshold_bytes(thr);
