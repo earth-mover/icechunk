@@ -49,14 +49,24 @@ impl PyIcechunkStore {
         Ok(())
     }
 
-    pub async fn commit(
-        &mut self,
+    pub fn commit<'py>(
+        &'py mut self,
+        py: Python<'py>,
         update_branch_name: String,
         message: String,
-    ) -> PyIcechunkStoreResult<String> {
-        let (oid, _version) =
-            self.store.write().await.commit(&update_branch_name, &message).await?;
-        Ok(String::from(&oid))
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        // The commit mechanism is async and calls tokio::spawn so we need to use the
+        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut writeable_store = store.write().await;
+            let (oid, _version) = writeable_store
+                .commit(&update_branch_name, &message)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(String::from(&oid))
+        })
     }
 
     pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {
