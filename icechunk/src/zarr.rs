@@ -516,7 +516,13 @@ async fn mk_dataset(
 ) -> Result<(Dataset, Option<String>), String> {
     let (mut builder, branch): (DatasetBuilder, Option<String>) =
         match &dataset.previous_version {
-            None => (Dataset::create(storage), Some("main".to_string())),
+            None => {
+                let builder =
+                    Dataset::init(crate::dataset::DatasetConfig::default(), storage)
+                        .await
+                        .map_err(|err| format!("Error initializing dataset: {err}"))?;
+                (builder, Some(String::from("main")))
+            }
             Some(VersionInfo::SnapshotId(sid)) => {
                 let builder = Dataset::update(storage, sid.clone());
                 (builder, None)

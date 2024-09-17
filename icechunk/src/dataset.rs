@@ -271,6 +271,23 @@ impl Dataset {
         Ok(Self::update(storage, ref_data.snapshot))
     }
 
+    pub async fn init(
+        config: DatasetConfig,
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> DatasetResult<DatasetBuilder> {
+        let mut temp_dataset = Dataset {
+            snapshot_id: None,
+            config,
+            storage: Arc::clone(&storage),
+            last_node_id: None,
+            change_set: ChangeSet::default(),
+        };
+        let (snapshot_id, _version) =
+            temp_dataset.commit("main", "Store created").await?;
+
+        Ok(Self::update(storage, snapshot_id))
+    }
+
     fn new(
         config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
