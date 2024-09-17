@@ -739,8 +739,6 @@ impl Key {
 
         if key == Key::ROOT_KEY {
             Ok(Key::Metadata { node_path: "/".into() })
-        } else if key.starts_with('/') {
-            Err(StoreError::InvalidKey { key: key.to_string() })
         } else if let Some(path) = key.strip_suffix(Key::METADATA_SUFFIX) {
             // we need to be careful indexing into utf8 strings
             Ok(Key::Metadata { node_path: ["/", path].iter().collect() })
@@ -1595,6 +1593,33 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("/array/zarr.json", zarr_meta.clone()).await?;
+        store.set("/0/zarr.json", zarr_meta.clone()).await?;
+        store.set("0/zarr.json", zarr_meta).await?;
+        // store.get("/array/zarr.json").await?;
+        Ok(())
+    }
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
