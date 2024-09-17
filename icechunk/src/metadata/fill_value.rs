@@ -6,7 +6,6 @@ use crate::format::IcechunkFormatError;
 use super::DataType;
 
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
 pub enum FillValue {
     // FIXME: test all json (de)serializations
     Bool(bool),

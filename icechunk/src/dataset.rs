@@ -14,11 +14,10 @@ pub use crate::{
     },
 };
 
-use arrow::error::ArrowError;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
-use itertools::{Either, Itertools};
+use itertools::Either;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::task;
@@ -26,9 +25,7 @@ use tokio::task;
 use crate::{
     format::{
         manifest::{ChunkInfo, ChunkRef, ManifestExtents, ManifestRef, ManifestsTable},
-        snapshot::{
-            mk_snapshot_table, NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot,
-        },
+        snapshot::{NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot},
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
@@ -231,8 +228,8 @@ pub enum DatasetError {
     AlreadyExists { node: NodeSnapshot, message: String },
     #[error("no changes made to the dataset")]
     NoChangesToFlush,
-    #[error("Arrow format error: `{0}`")]
-    ArrowError(#[from] ArrowError),
+    #[error("unknown flush error")]
+    OtherFlushError,
     #[error("ref error: `{0}`")]
     Ref(#[from] RefError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
@@ -383,20 +380,13 @@ impl Dataset {
     async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
         match &self.snapshot_id {
             None => Ok(0),
-            Some(id) => {
-                let mut max_id = 0;
-                for maybe_node in self.storage.fetch_snapshot(id).await?.iter() {
-                    match maybe_node {
-                        Ok(node) => {
-                            max_id = std::cmp::max(max_id, node.id);
-                        }
-                        Err(err) => {
-                            Err(err)?;
-                        }
-                    }
-                }
-                Ok(max_id)
-            }
+            Some(id) => Ok(self
+                .storage
+                .fetch_snapshot(id)
+                .await?
+                .iter()
+                .max_by_key(|n| n.id)
+                .map_or(0, |n| n.id)),
         }
     }
 
@@ -476,8 +466,8 @@ impl Dataset {
             .cloned()
             .map(|a| a.map(UserAttributesSnapshot::Inline));
         let res = NodeSnapshot {
-            user_attributes: session_atts.unwrap_or(node.user_attributes),
-            ..node
+            user_attributes: session_atts.unwrap_or_else(|| node.user_attributes.clone()),
+            ..node.clone()
         };
         if let Some(session_meta) =
             self.change_set.get_updated_zarr_metadata(node.id).cloned()
@@ -631,14 +621,13 @@ impl Dataset {
             Some(snapshot_id) => {
                 let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
                 let nodes = futures::stream::iter(snapshot.iter_arc());
-                let res = nodes.and_then(move |node| async move {
+                let res = nodes.then(move |node| async move {
                     let path = node.path.clone();
-                    Ok(self
-                        .node_chunk_iterator(node)
+                    self.node_chunk_iterator(node)
                         .await
-                        .map_ok(move |ci| (path.clone(), ci)))
+                        .map_ok(move |ci| (path.clone(), ci))
                 });
-                Ok(futures::future::Either::Right(res.try_flatten()))
+                Ok(futures::future::Either::Right(res.flatten()))
             }
         }
     }
@@ -736,33 +725,25 @@ impl Dataset {
     async fn updated_existing_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
+    ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
         match &self.snapshot_id {
             None => Ok(Either::Left(iter::empty())),
             Some(id) => Ok(Either::Right(
-                self.storage
-                    .fetch_snapshot(id)
-                    .await?
-                    .iter_arc()
-                    .map(|maybe_node| match maybe_node {
-                        Ok(n) => Ok(n),
-                        Err(e) => Err(e.into()),
-                    })
-                    .map_ok(move |node| {
-                        let new_manifests = if node.node_type() == NodeType::Array {
-                            //FIXME: it could be none for empty arrays
-                            Some(vec![ManifestRef {
-                                object_id: manifest_id.clone(),
-                                flags: Flags(),
-                                extents: ManifestExtents(vec![]),
-                            }])
-                        } else {
-                            None
-                        };
-                        self.update_existing_node(node, new_manifests)
-                    }),
+                self.storage.fetch_snapshot(id).await?.iter_arc().map(move |node| {
+                    let new_manifests = if node.node_type() == NodeType::Array {
+                        //FIXME: it could be none for empty arrays
+                        Some(vec![ManifestRef {
+                            object_id: manifest_id.clone(),
+                            flags: Flags(),
+                            extents: ManifestExtents(vec![]),
+                        }])
+                    } else {
+                        None
+                    };
+                    self.update_existing_node(node, new_manifests)
+                }),
             )),
         }
     }
@@ -796,11 +777,11 @@ impl Dataset {
     async fn updated_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + 'a> {
+    ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         Ok(self
             .updated_existing_nodes(manifest_id)
             .await?
-            .chain(self.new_nodes(manifest_id).map(Ok)))
+            .chain(self.new_nodes(manifest_id)))
     }
 
     fn update_existing_node(
@@ -838,7 +819,7 @@ impl Dataset {
 
     pub async fn list_nodes(
         &self,
-    ) -> DatasetResult<impl Iterator<Item = DatasetResult<NodeSnapshot>> + '_> {
+    ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + '_> {
         self.updated_nodes(&ObjectId::FAKE).await
     }
 
@@ -866,13 +847,13 @@ impl Dataset {
                 let snapshot = self.storage().fetch_snapshot(snapshot_id).await?;
                 // FIXME: currently only looking for the first manifest
                 let manifest_id = snapshot.iter_arc().find_map(|node| {
-                    node.ok().and_then(|node| match node.node_data {
+                    match node.node_data {
                         NodeData::Array(_, man) => {
                             // TODO: can we avoid clone
                             man.first().map(|manifest| manifest.object_id.clone())
                         }
                         NodeData::Group => None,
-                    })
+                    }
                 });
                 match manifest_id {
                     Some(ref manifest_id) => {
@@ -894,39 +875,48 @@ impl Dataset {
         // and at the end we put the map back to where it was, in case there is some later failure.
         // We always want to leave things in the previous state if there was a failure.
 
-        let chunk_changes = take(&mut self.change_set.set_chunks);
-        let (new_chunks, chunk_changes) = task::spawn_blocking(move || {
+        let chunk_changes = Arc::new(take(&mut self.change_set.set_chunks));
+        let chunk_changes_c = Arc::clone(&chunk_changes);
+
+        let update_task = task::spawn_blocking(move || {
             //FIXME: avoid clone, t his one is extremely expensive en memory
             //it's currently needed because we don't want to destroy the manifest in case of later
             //failure
             let mut new_chunks = old_manifest.as_ref().chunks.clone();
-            update_manifest(&mut new_chunks, &chunk_changes);
+            update_manifest(&mut new_chunks, &chunk_changes_c);
             (new_chunks, chunk_changes)
-        })
-        .await
-        .unwrap();
+        });
 
-        // reset the set_chunks map to it's previous value
-        self.change_set.set_chunks = chunk_changes;
+        match update_task.await {
+            Ok((new_chunks, chunk_changes)) => {
+                // reset the set_chunks map to it's previous value
+                #[allow(clippy::expect_used)]
+                {
+                    // It's OK to call into_inner here because we created the Arc locally and never
+                    // shared it with other code
+                    self.change_set.set_chunks =
+                        Arc::into_inner(chunk_changes).expect("Bug in flush task join");
+                }
 
-        let new_manifest = Arc::new(ManifestsTable { chunks: new_chunks });
-        let new_manifest_id = ObjectId::random();
-        self.storage.write_manifests(new_manifest_id.clone(), new_manifest).await?;
+                let new_manifest = Arc::new(ManifestsTable { chunks: new_chunks });
+                let new_manifest_id = ObjectId::random();
+                self.storage
+                    .write_manifests(new_manifest_id.clone(), new_manifest)
+                    .await?;
 
-        let all_nodes = self.updated_nodes(&new_manifest_id).await?;
-        let new_snapshot = match mk_snapshot_table(all_nodes) {
-            Ok(str) => str,
-            Err(Ok(e)) => Err(e)?,
-            Err(Err(arrow_error)) => Err(DatasetError::ArrowError(arrow_error))?,
-        };
-        let new_snapshot_id = ObjectId::random();
-        self.storage
-            .write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot))
-            .await?;
+                let all_nodes = self.updated_nodes(&new_manifest_id).await?;
+                let new_snapshot = all_nodes.collect();
+                let new_snapshot_id = ObjectId::random();
+                self.storage
+                    .write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot))
+                    .await?;
 
-        self.snapshot_id = Some(new_snapshot_id.clone());
-        self.change_set = ChangeSet::default();
-        Ok(new_snapshot_id)
+                self.snapshot_id = Some(new_snapshot_id.clone());
+                self.change_set = ChangeSet::default();
+                Ok(new_snapshot_id)
+            }
+            Err(_) => Err(DatasetError::OtherFlushError),
+        }
     }
 
     pub async fn commit(
@@ -1028,7 +1018,7 @@ fn update_manifest(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::{convert::Infallible, error::Error, num::NonZeroU64, path::PathBuf};
+    use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
         format::manifest::ChunkInfo,
@@ -1210,23 +1200,23 @@ mod tests {
         };
         let array1_path: PathBuf = "/array1".to_string().into();
         let nodes = vec![
-            Ok(NodeSnapshot {
+            NodeSnapshot {
                 path: "/".into(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
-            }),
-            Ok(NodeSnapshot {
+            },
+            NodeSnapshot {
                 path: array1_path.clone(),
                 id: array_id,
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
                 )),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
-            }),
+            },
         ];
 
-        let snapshot = Arc::new(mk_snapshot_table::<Infallible>(nodes.clone()).unwrap());
+        let snapshot = Arc::new(nodes.iter().cloned().collect());
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
         let mut ds = Dataset::update(Arc::new(storage), snapshot_id)
@@ -1235,7 +1225,7 @@ mod tests {
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await?;
-        assert_eq!(nodes.get(1).unwrap().as_ref().unwrap(), &node);
+        assert_eq!(nodes.get(1).unwrap(), &node);
 
         let group_name = "/tbd-group".to_string();
         ds.add_group(group_name.clone().into()).await?;
@@ -1359,7 +1349,6 @@ mod tests {
             .updated_attributes
             .contains_key(&node.as_ref().unwrap().id));
         assert!(ds.delete_array(path.clone()).await.is_ok());
-        dbg!(&node, &ds.change_set.updated_attributes);
         assert!(!ds.change_set.updated_attributes.contains_key(&node?.id));
 
         Ok(())
@@ -1551,6 +1540,7 @@ mod tests {
                 node_data: NodeData::Group
             })
         );
+        dbg!(ds.get_node(&new_array_path).await.unwrap().node_data);
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
@@ -1640,6 +1630,70 @@ mod tests {
             Some(ChunkPayload::Inline("new chunk".into()))
         );
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store());
+        let mut ds = Dataset::create(Arc::clone(&storage)).build();
+
+        // add a new array and retrieve its node
+        ds.add_group("/".into()).await?;
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1, 1, 2],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
+            dimension_names: Some(vec![Some("t".to_string())]),
+        };
+
+        let new_array_path: PathBuf = "/array".to_string().into();
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        // we 3 chunks
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 1]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![1, 0, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        let snapshot_id = ds.flush().await?;
+        let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
+        let coords = ds
+            .all_chunks()
+            .await?
+            .map_ok(|(_, chunk)| chunk.coord)
+            .try_collect::<HashSet<_>>()
+            .await?;
+        assert_eq!(
+            coords,
+            vec![
+                ChunkIndices(vec![0, 0, 0]),
+                ChunkIndices(vec![0, 0, 1]),
+                ChunkIndices(vec![1, 0, 0])
+            ]
+            .into_iter()
+            .collect()
+        );
         Ok(())
     }
 

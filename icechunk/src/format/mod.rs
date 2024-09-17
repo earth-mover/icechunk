@@ -1,7 +1,6 @@
 use core::fmt;
 use std::{fmt::Debug, hash::Hash, ops::Bound, path::PathBuf};
 
-use ::arrow::array::RecordBatch;
 use bytes::Bytes;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -10,7 +9,6 @@ use thiserror::Error;
 
 use crate::metadata::DataType;
 
-pub mod arrow;
 pub mod attributes;
 pub mod manifest;
 pub mod snapshot;
@@ -24,8 +22,6 @@ pub type Path = PathBuf;
 pub struct ObjectId(pub [u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
-    const SIZE: usize = 16;
-
     pub fn random() -> Self {
         Self(rand::random())
     }
@@ -148,7 +144,7 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags(); // FIXME: implement
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -157,33 +153,13 @@ pub enum IcechunkFormatError {
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
     #[error("error decoding fill_value from json")]
     FillValueParse { data_type: DataType, value: serde_json::Value },
-    #[error("column not found: `{column}`")]
-    ColumnNotFound { column: String },
-    #[error("invalid column type: `{expected_column_type}` for column `{column_name}`")]
-    InvalidColumnType { column_name: String, expected_column_type: String },
-    #[error("invalid path: `{path:?}`")]
-    InvalidPath { path: Path },
     #[error("node not found at `{path:?}`")]
     NodeNotFound { path: Path },
-    #[error("unexpected null element at column `{column_name}` index `{index}`")]
-    NullElement { index: usize, column_name: String },
-    #[error("invalid node type `{node_type}` at index `{index}`")]
-    InvalidNodeType { index: usize, node_type: String },
-    #[error("invalid array metadata field `{field}` at index `{index}`: {message}")]
-    InvalidArrayMetadata { index: usize, field: String, message: String },
-    #[error("invalid array manifest field `{field}` at index `{index}`: {message}")]
-    InvalidArrayManifest { index: usize, field: String, message: String },
-    #[error("invalid manifest index `{index}` > `{max_index}`")]
-    InvalidManifestIndex { index: usize, max_index: usize },
     #[error("chunk coordinates not found `{coords:?}`")]
     ChunkCoordinatesNotFound { coords: ChunkIndices },
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
-
-pub trait BatchLike {
-    fn get_batch(&self) -> &RecordBatch;
-}
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]

@@ -1,19 +1,13 @@
 use core::fmt;
 use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
 
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
-    PutPayload,
-};
-use parquet::arrow::{
-    async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
-    AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
+    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
+    GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
 
 use crate::format::{
@@ -122,34 +116,6 @@ impl ObjectStorage {
         ObjectPath::from(path)
     }
 
-    async fn read_parquet(&self, path: &ObjectPath) -> Result<RecordBatch, StorageError> {
-        // FIXME: avoid this metadata read since we are always reading the whole thing.
-        let meta = self.store.head(path).await?;
-        let reader = ParquetObjectReader::new(Arc::clone(&self.store), meta);
-        let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?.build()?;
-        // TODO: do we always have only one batch ever? Assert that
-        let maybe_batch = builder.next().await;
-        Ok(maybe_batch
-            .ok_or(StorageError::BadRecordBatchRead(path.as_ref().into()))??)
-    }
-
-    async fn write_parquet(
-        &self,
-        path: &ObjectPath,
-        batch: &RecordBatch,
-    ) -> Result<(), StorageError> {
-        // defaults are concurrency=8, buffer capacity=10MB
-        // TODO: allow configuring these
-        let writer = ParquetObjectWriter::from_buf_writer(BufWriter::new(
-            Arc::clone(&self.store),
-            path.clone(),
-        ));
-        let mut writer = AsyncArrowWriter::try_new(writer, batch.schema(), None)?;
-        writer.write(batch).await?;
-        writer.close().await?;
-        Ok(())
-    }
-
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
         path.prefix_match(&ObjectPath::from(format!("{}/{}", self.prefix, prefix)))
             .map(|it| it.collect())
@@ -173,8 +139,10 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
     ) -> Result<Arc<SnapshotTable>, StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, id);
-        let batch = self.read_parquet(&path).await?;
-        Ok(Arc::new(SnapshotTable { batch }))
+        let bytes = self.store.get(&path).await?.bytes().await?;
+        // TODO: optimize using from_read
+        let res = rmp_serde::from_slice(bytes.as_ref())?;
+        Ok(Arc::new(res))
     }
 
     async fn fetch_attributes(
@@ -201,7 +169,9 @@ impl Storage for ObjectStorage {
         table: Arc<SnapshotTable>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, &id);
-        self.write_parquet(&path, &table.batch).await?;
+        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        // FIXME: use multipart
+        self.store.put(&path, bytes.into()).await?;
         Ok(())
     }
 
@@ -316,56 +286,5 @@ impl Storage for ObjectStorage {
                 _ => e.into(),
             })
             .map(|_| ())
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use std::env::temp_dir;
-    use std::sync::Arc;
-
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use rand;
-    use rand::distributions::Alphanumeric;
-    use rand::Rng;
-
-    use super::*;
-
-    fn make_record_batch(data: Vec<i32>) -> RecordBatch {
-        let id_array = Int32Array::from(data);
-        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap()
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_read_write_parquet_object_storage() {
-        // simple test to make sure we can speak to all stores
-        let batch = make_record_batch(vec![1, 2, 3, 4, 5]);
-        let mut prefix = temp_dir().to_str().unwrap().to_string();
-        let rdms: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        prefix.push_str(rdms.as_str());
-
-        for store in [
-            ObjectStorage::new_in_memory_store(),
-            // FIXME: figure out local and minio tests on CI
-            // ObjectStorage::new_local_store(&prefix.clone().into()).unwrap(),
-            // ObjectStorage::new_s3_store_from_env("testbucket".to_string(), prefix.clone()).unwrap(),
-            // ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
-            //     .unwrap(),
-        ] {
-            let id = ObjectId::random();
-            let path = store.get_path("foo_prefix/", &id);
-            store.write_parquet(&path, &batch).await.unwrap();
-            let actual = store.read_parquet(&path).await.unwrap();
-            assert_eq!(actual, batch)
-        }
     }
 }

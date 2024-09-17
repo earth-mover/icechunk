@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use arrow::datatypes::ToByteSlice;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -19,7 +18,7 @@ fn crock_encode_int(n: u64) -> String {
 
 fn crock_decode_int(data: &str) -> Option<u64> {
     let bytes = base32::decode(base32::Alphabet::Crockford, data)?;
-    let bytes = bytes.to_byte_slice().try_into().ok()?;
+    let bytes = bytes.try_into().ok()?;
     Some(u64::from_be_bytes(bytes))
 }
 

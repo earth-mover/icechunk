@@ -1,6 +1,5 @@
 use core::fmt;
 use futures::stream::BoxStream;
-use parquet::errors as parquet_errors;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -28,8 +27,6 @@ pub enum StorageError {
     NotFound(ObjectId),
     #[error("error contacting object store {0}")]
     ObjectStore(#[from] ::object_store::Error),
-    #[error("parquet file error: {0}")]
-    ParquetError(#[from] parquet_errors::ParquetError),
     #[error("messagepack decode error: {0}")]
     MsgPackDecodeError(#[from] rmp_serde::decode::Error),
     #[error("messagepack encode error: {0}")]
