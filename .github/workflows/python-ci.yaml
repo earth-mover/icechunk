@@ -73,11 +73,10 @@ jobs:
           path: dist
           # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
       - name: Restore cached hypothesis directory
-        working-directory: icechunk-python
         id: restore-hypothesis-cache
         uses: actions/cache/restore@v4
         with:
-          path: .hypothesis/
+          path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             cache-hypothesis-
@@ -109,12 +108,11 @@ jobs:
             pytest
      # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
-        working-directory: icechunk-python
         id: save-hypothesis-cache
-        if: always() && steps.status.outcome != 'skipped'
+        if: always()
         uses: actions/cache/save@v4
         with:
-          path: .hypothesis/
+          path: icehunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
   # musllinux:
