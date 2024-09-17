@@ -71,6 +71,16 @@ struct ChangeSet {
 }
 
 impl ChangeSet {
+    fn is_empty(&self) -> bool {
+        self.new_groups.is_empty()
+            && self.new_arrays.is_empty()
+            && self.updated_arrays.is_empty()
+            && self.updated_attributes.is_empty()
+            && self.set_chunks.is_empty()
+            && self.deleted_groups.is_empty()
+            && self.deleted_arrays.is_empty()
+    }
+
     fn add_group(&mut self, path: Path, node_id: NodeId) {
         self.new_groups.insert(path, node_id);
     }
@@ -304,6 +314,10 @@ impl Dataset {
 
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
         &self.storage
+    }
+
+    pub fn has_pending_changes(&self) -> bool {
+        !self.change_set.is_empty()
     }
 
     /// Add a group to the store.
