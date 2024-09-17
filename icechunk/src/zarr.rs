@@ -122,7 +122,7 @@ impl Store {
     pub async fn from_config(config: &StoreConfig) -> Result<Self, String> {
         let storage = mk_storage(&config.storage)?;
         let (dataset, branch) = mk_dataset(&config.dataset, storage).await?;
-        Ok(Self::new(dataset, branch, config.get_partial_values_concurrency))
+        Ok(Self::from_dataset(dataset, branch, config.get_partial_values_concurrency))
     }
 
     pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
@@ -131,7 +131,14 @@ impl Store {
         Self::from_config(&config).await
     }
 
-    pub fn new(
+    pub async fn new_from_storage(
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Result<Self, String> {
+        let (dataset, branch) = mk_dataset(&DatasetConfig::default(), storage).await?;
+        Ok(Self::from_dataset(dataset, branch, None))
+    }
+
+    pub fn from_dataset(
         dataset: Dataset,
         current_branch: Option<String>,
         get_partial_values_concurrency: Option<u16>,
@@ -1019,7 +1026,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1064,7 +1071,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1102,7 +1109,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         store
             .set(
@@ -1176,7 +1183,7 @@ mod tests {
         let oid = ds.flush().await?;
 
         let ds = Dataset::update(storage, oid).build();
-        let store = Store::new(ds, None, None);
+        let store = Store::from_dataset(ds, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1193,7 +1200,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         store
             .set(
@@ -1232,7 +1239,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1296,7 +1303,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         store
             .borrow_mut()
@@ -1331,7 +1338,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         store
             .borrow_mut()
@@ -1385,7 +1392,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None, None);
+        let mut store = Store::from_dataset(ds, None, None);
 
         store
             .borrow_mut()
@@ -1443,8 +1450,8 @@ mod tests {
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, Some("main".to_string()), None);
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
 
         store
             .set(
@@ -1459,7 +1466,8 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
 
-        let (snapshot_id, _version) = store.commit("initial commit").await.unwrap();
+        let (snapshot_id, version) = store.commit("initial commit").await.unwrap();
+        assert_eq!(version.0, 1);
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
@@ -1471,7 +1479,7 @@ mod tests {
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_store_from_snapshot = Store::new(
+        let new_store_from_snapshot = Store::from_dataset(
             Dataset::update(Arc::clone(&storage), snapshot_id).build(),
             None,
             None,
