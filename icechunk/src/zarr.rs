@@ -751,7 +751,7 @@ where
     if value != "array" {
         return Err(de::Error::invalid_value(
             de::Unexpected::Str(value.as_str()),
-            &"the word 'arary'",
+            &"the word 'array'",
         ));
     }
 
