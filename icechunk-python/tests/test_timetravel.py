@@ -14,12 +14,12 @@ async def test_timetravel():
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
 
-    snapshot_id = await store.commit("main", "Initial commit")
+    snapshot_id = await store.commit("Initial commit")
 
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
 
-    new_snapshot_id = await store.commit("main", "update air temp")
+    new_snapshot_id = await store.commit("update air temp")
 
     await store.checkout(snapshot_id)
     assert air_temp[200, 6] == 42

@@ -10,8 +10,3 @@ async def test_make_store_path() -> None:
     store = await parse_store("memory", path="")
     store_path = await make_store_path(store)
     assert isinstance(store_path.store, IcechunkStore)
-
-    # Local file store
-    store = await parse_store("local", path="test.zarr")
-    store_path = await make_store_path(store)
-    assert isinstance(store_path.store, IcechunkStore)

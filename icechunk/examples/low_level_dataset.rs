@@ -29,10 +29,11 @@ let mut ds = Dataset::create(Arc::clone(&storage));
 
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(ObjectStorage::new_in_memory_store());
-    let mut ds = Dataset::create(Arc::new(MemCachingStorage::new(
+    let mut ds = Dataset::init(Arc::new(MemCachingStorage::new(
         Arc::clone(&storage),
         100_000_000,
     )))
+    .await?
     .build();
 
     println!();

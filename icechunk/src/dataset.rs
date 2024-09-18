@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    iter,
+    iter::{self},
     mem::take,
     path::PathBuf,
     sync::Arc,
@@ -32,8 +32,8 @@ use crate::{
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
-        fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version, update_branch,
-        BranchVersion, RefError,
+        create_tag, fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version,
+        update_branch, BranchVersion, RefError,
     },
     Storage, StorageError,
 };
@@ -54,7 +54,7 @@ impl Default for DatasetConfig {
 pub struct Dataset {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-    snapshot_id: Option<ObjectId>,
+    snapshot_id: ObjectId,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
 }
@@ -74,6 +74,10 @@ struct ChangeSet {
 }
 
 impl ChangeSet {
+    fn is_empty(&self) -> bool {
+        self == &ChangeSet::default()
+    }
+
     fn add_group(&mut self, path: Path, node_id: NodeId) {
         self.new_groups.insert(path, node_id);
     }
@@ -194,19 +198,21 @@ impl ChangeSet {
 pub struct DatasetBuilder {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-    snapshot_id: Option<ObjectId>,
+    snapshot_id: ObjectId,
 }
 
 impl DatasetBuilder {
-    fn new(
-        storage: Arc<dyn Storage + Send + Sync>,
-        snapshot_id: Option<ObjectId>,
-    ) -> Self {
+    fn new(storage: Arc<dyn Storage + Send + Sync>, snapshot_id: ObjectId) -> Self {
         Self { config: DatasetConfig::default(), snapshot_id, storage }
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
         self.config.inline_threshold_bytes = threshold;
+        self
+    }
+
+    pub fn with_config(&mut self, config: DatasetConfig) -> &mut Self {
+        self.config = config;
         self
     }
 
@@ -235,6 +241,8 @@ pub enum DatasetError {
     OtherFlushError,
     #[error("ref error: `{0}`")]
     Ref(#[from] RefError),
+    #[error("tag error: `{0}`")]
+    Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
 }
@@ -244,15 +252,11 @@ type DatasetResult<T> = Result<T, DatasetError>;
 /// FIXME: what do we want to do with implicit groups?
 ///
 impl Dataset {
-    pub fn create(storage: Arc<dyn Storage + Send + Sync>) -> DatasetBuilder {
-        DatasetBuilder::new(storage, None)
-    }
-
     pub fn update(
         storage: Arc<dyn Storage + Send + Sync>,
         previous_version_snapshot_id: ObjectId,
     ) -> DatasetBuilder {
-        DatasetBuilder::new(storage, Some(previous_version_snapshot_id))
+        DatasetBuilder::new(storage, previous_version_snapshot_id)
     }
 
     pub async fn from_branch_tip(
@@ -272,13 +276,27 @@ impl Dataset {
         Ok(Self::update(storage, ref_data.snapshot))
     }
 
+    /// Initialize a new dataset with a single empty commit to the main branch.
+    ///
+    /// This is the default way to create a new dataset to avoid race conditions
+    /// when creating datasets.
+    pub async fn init(
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> DatasetResult<DatasetBuilder> {
+        let new_snapshot = Snapshot::empty();
+        let new_snapshot_id = ObjectId::random();
+        storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
+
+        Ok(DatasetBuilder::new(storage, new_snapshot_id))
+    }
+
     fn new(
         config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-        previous_version_snapshot_id: Option<ObjectId>,
+        snapshot_id: ObjectId,
     ) -> Self {
         Dataset {
-            snapshot_id: previous_version_snapshot_id,
+            snapshot_id,
             config,
             storage,
             last_node_id: None,
@@ -286,8 +304,20 @@ impl Dataset {
         }
     }
 
+    /// Returns a pointer to the storage for the dataset
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
         &self.storage
+    }
+
+    /// Returns the head snapshot id of the dataset, not including
+    /// anm uncommitted changes
+    pub fn snapshot_id(&self) -> &ObjectId {
+        &self.snapshot_id
+    }
+
+    /// Indicates if the dataset has pending changes
+    pub fn has_uncomitted_changes(&self) -> bool {
+        !self.change_set.is_empty()
     }
 
     /// Add a group to the store.
@@ -381,16 +411,14 @@ impl Dataset {
     }
 
     async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
-        match &self.snapshot_id {
-            None => Ok(0),
-            Some(id) => Ok(self
-                .storage
-                .fetch_snapshot(id)
-                .await?
-                .iter()
-                .max_by_key(|n| n.id)
-                .map_or(0, |n| n.id)),
-        }
+        let node_id = self
+            .storage
+            .fetch_snapshot(&self.snapshot_id)
+            .await?
+            .iter()
+            .max_by_key(|n| n.id)
+            .map_or(0, |n| n.id);
+        Ok(node_id)
     }
 
     async fn reserve_node_id(&mut self) -> DatasetResult<NodeId> {
@@ -446,12 +474,7 @@ impl Dataset {
 
     async fn get_existing_node(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
         // An existing node is one that is present in a Snapshot file on storage
-        let err = || DatasetError::NotFound {
-            path: path.clone(),
-            message: "getting existing node".to_string(),
-        };
-
-        let snapshot_id = self.snapshot_id.as_ref().ok_or(err())?;
+        let snapshot_id = &self.snapshot_id;
         let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
 
         let node = snapshot.get_node(path).map_err(|err| match err {
@@ -619,20 +642,13 @@ impl Dataset {
     async fn updated_chunk_iterator(
         &self,
     ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
-        match self.snapshot_id.as_ref() {
-            None => Ok(futures::future::Either::Left(futures::stream::empty())),
-            Some(snapshot_id) => {
-                let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
-                let nodes = futures::stream::iter(snapshot.iter_arc());
-                let res = nodes.then(move |node| async move {
-                    let path = node.path.clone();
-                    self.node_chunk_iterator(node)
-                        .await
-                        .map_ok(move |ci| (path.clone(), ci))
-                });
-                Ok(futures::future::Either::Right(res.flatten()))
-            }
-        }
+        let snapshot = self.storage.fetch_snapshot(&self.snapshot_id).await?;
+        let nodes = futures::stream::iter(snapshot.iter_arc());
+        let res = nodes.then(move |node| async move {
+            let path = node.path.clone();
+            self.node_chunk_iterator(node).await.map_ok(move |ci| (path.clone(), ci))
+        });
+        Ok(res.flatten())
     }
 
     /// Warning: The presence of a single error may mean multiple missing items
@@ -731,10 +747,9 @@ impl Dataset {
     ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
-        match &self.snapshot_id {
-            None => Ok(Either::Left(iter::empty())),
-            Some(id) => Ok(Either::Right(
-                self.storage.fetch_snapshot(id).await?.iter_arc().map(move |node| {
+        let updated_nodes =
+            self.storage.fetch_snapshot(&self.snapshot_id).await?.iter_arc().map(
+                move |node| {
                     let new_manifests = if node.node_type() == NodeType::Array {
                         //FIXME: it could be none for empty arrays
                         Some(vec![ManifestRef {
@@ -746,9 +761,10 @@ impl Dataset {
                         None
                     };
                     self.update_existing_node(node, new_manifests)
-                }),
-            )),
-        }
+                },
+            );
+
+        Ok(updated_nodes)
     }
 
     fn new_nodes<'a>(
@@ -847,30 +863,22 @@ impl Dataset {
         properties: SnapshotProperties,
     ) -> DatasetResult<ObjectId> {
         // We search for the current manifest. We are assumming a single one for now
-        let (old_snapshot, old_manifest) = match self.snapshot_id.as_ref() {
-            None => (None, Arc::new(Manifest::default())),
-            Some(snapshot_id) => {
-                let old_snapshot = self.storage().fetch_snapshot(snapshot_id).await?;
-                let old_snapshot_c = Arc::clone(&old_snapshot);
-                // FIXME: currently only looking for the first manifest
-                let manifest_id = old_snapshot_c.iter_arc().find_map(|node| {
-                    match node.node_data {
-                        NodeData::Array(_, man) => {
-                            // TODO: can we avoid clone
-                            man.first().map(|manifest| manifest.object_id.clone())
-                        }
-                        NodeData::Group => None,
-                    }
-                });
-                let old_manifest = match manifest_id {
-                    Some(ref manifest_id) => {
-                        self.storage.fetch_manifests(manifest_id).await?
-                    }
-                    // If there is no previous manifest we create an empty one
-                    None => Arc::new(Manifest::default()),
-                };
-                (Some(old_snapshot), old_manifest)
+        let old_snapshot = self.storage().fetch_snapshot(&self.snapshot_id).await?;
+        let old_snapshot_c = Arc::clone(&old_snapshot);
+        let manifest_id = old_snapshot_c.iter_arc().find_map(|node| {
+            match node.node_data {
+                NodeData::Array(_, man) => {
+                    // TODO: can we avoid clone
+                    man.first().map(|manifest| manifest.object_id.clone())
+                }
+                NodeData::Group => None,
             }
+        });
+
+        let old_manifest = match manifest_id {
+            Some(ref manifest_id) => self.storage.fetch_manifests(manifest_id).await?,
+            // If there is no previous manifest we create an empty one
+            None => Arc::new(Manifest::default()),
         };
 
         // The manifest update process is CPU intensive, so we want to executed it on a worker
@@ -887,7 +895,7 @@ impl Dataset {
         let chunk_changes_c = Arc::clone(&chunk_changes);
 
         let update_task = task::spawn_blocking(move || {
-            //FIXME: avoid clone, t his one is extremely expensive en memory
+            //FIXME: avoid clone, this one is extremely expensive en memory
             //it's currently needed because we don't want to destroy the manifest in case of later
             //failure
             let mut new_chunks = old_manifest.as_ref().chunks.clone();
@@ -914,19 +922,18 @@ impl Dataset {
 
                 let all_nodes = self.updated_nodes(&new_manifest_id).await?;
 
-                let new_snapshot = match old_snapshot.as_deref() {
-                    Some(parent) => {
-                        Snapshot::child_from_iter(parent, Some(properties), all_nodes)
-                    }
-                    None => Snapshot::first_from_iter(Some(properties), all_nodes),
-                };
+                let new_snapshot = Snapshot::child_from_iter(
+                    old_snapshot.as_ref(),
+                    Some(properties),
+                    all_nodes,
+                );
                 let new_snapshot = Arc::new(new_snapshot);
                 let new_snapshot_id = &new_snapshot.metadata.id;
                 self.storage
                     .write_snapshot(new_snapshot_id.clone(), Arc::clone(&new_snapshot))
                     .await?;
 
-                self.snapshot_id = Some(new_snapshot_id.clone());
+                self.snapshot_id = new_snapshot_id.clone();
                 self.change_set = ChangeSet::default();
                 Ok(new_snapshot_id.clone())
             }
@@ -938,29 +945,24 @@ impl Dataset {
         &mut self,
         update_branch_name: &str,
         message: &str,
+        properties: Option<SnapshotProperties>,
     ) -> DatasetResult<(ObjectId, BranchVersion)> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
+
         match current {
             Err(RefError::RefNotFound(_)) => {
-                if self.snapshot_id.is_none() {
-                    self.do_commit(update_branch_name, message).await
-                } else {
-                    Err(DatasetError::Conflict {
-                        expected_parent: self.snapshot_id.clone(),
-                        actual_parent: None,
-                    })
-                }
+                self.do_commit(update_branch_name, message, properties).await
             }
             Err(err) => Err(err.into()),
             Ok(ref_data) => {
                 // we can detect there will be a conflict before generating the new snapshot
-                if Some(&ref_data.snapshot) != self.snapshot_id.as_ref() {
+                if ref_data.snapshot != self.snapshot_id {
                     Err(DatasetError::Conflict {
-                        expected_parent: self.snapshot_id.clone(),
+                        expected_parent: Some(self.snapshot_id.clone()),
                         actual_parent: Some(ref_data.snapshot.clone()),
                     })
                 } else {
-                    self.do_commit(update_branch_name, message).await
+                    self.do_commit(update_branch_name, message, properties).await
                 }
             }
         }
@@ -970,18 +972,20 @@ impl Dataset {
         &mut self,
         update_branch_name: &str,
         message: &str,
+        properties: Option<SnapshotProperties>,
     ) -> DatasetResult<(ObjectId, BranchVersion)> {
-        let parent_snaphsot = self.snapshot_id.clone();
-        let new_snapshot = self.flush(SnapshotProperties::default()).await?;
+        let parent_snapshot = self.snapshot_id.clone();
+        let mut properties = properties.unwrap_or_default();
+        properties.extend(vec![("message".to_string(), Value::from(message))]);
+
+        let new_snapshot = self.flush(properties.clone()).await?;
         let now = Utc::now();
-        let properties =
-            HashMap::from_iter(vec![("message".to_string(), Value::from(message))]);
 
         match update_branch(
             self.storage.as_ref(),
             update_branch_name,
             new_snapshot.clone(),
-            parent_snaphsot.as_ref(),
+            Some(&parent_snapshot),
             now,
             properties,
         )
@@ -993,6 +997,48 @@ impl Dataset {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub async fn new_branch(&self, branch_name: &str) -> DatasetResult<BranchVersion> {
+        let now = Utc::now();
+        let properties = HashMap::new();
+
+        // TODO: The parent snapshot should exist?
+        let version = match update_branch(
+            self.storage.as_ref(),
+            branch_name,
+            self.snapshot_id.clone(),
+            None,
+            now,
+            properties,
+        )
+        .await
+        {
+            Ok(branch_version) => Ok(branch_version),
+            Err(RefError::Conflict { expected_parent, actual_parent }) => {
+                Err(DatasetError::Conflict { expected_parent, actual_parent })
+            }
+            Err(err) => Err(err.into()),
+        }?;
+
+        Ok(version)
+    }
+
+    pub async fn tag(
+        &self,
+        tag_name: &str,
+        snapshot_id: &ObjectId,
+        message: Option<&str>,
+    ) -> DatasetResult<()> {
+        let now = Utc::now();
+        let mut properties = HashMap::new();
+        if let Some(message) = message {
+            properties.insert(String::from("message"), Value::from(message));
+        }
+
+        create_tag(self.storage.as_ref(), tag_name, snapshot_id.clone(), now, properties)
+            .await?;
+        Ok(())
     }
 }
 
@@ -1472,13 +1518,13 @@ mod tests {
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let mut ds = Dataset::create(Arc::clone(&storage)).build();
+        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
         let snapshot_id = ds.flush(SnapshotProperties::default()).await?;
 
-        assert_eq!(Some(snapshot_id), ds.snapshot_id);
+        assert_eq!(snapshot_id, ds.snapshot_id);
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
             Some(NodeSnapshot {
@@ -1652,7 +1698,7 @@ mod tests {
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let mut ds = Dataset::create(Arc::clone(&storage)).build();
+        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1716,16 +1762,23 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let mut ds = Dataset::create(Arc::clone(&storage)).build();
+        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let (new_snapshot_id, version) = ds.commit("main", "first commit").await?;
+        let (new_snapshot_id, version) = ds.commit("main", "first commit", None).await?;
         assert_eq!(version, BranchVersion(0));
         assert_eq!(
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
+        assert_eq!(&new_snapshot_id, ds.snapshot_id());
+
+        ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
+        let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
+        assert_eq!(ref_name, Ref::Tag("v1".to_string()));
+        assert_eq!(new_snapshot_id, ref_data.snapshot);
+        assert_eq!("version 1.0.0", ref_data.properties["message"]);
 
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
@@ -1770,7 +1823,7 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let (new_snapshot_id, version) = ds.commit("main", "second commit").await?;
+        let (new_snapshot_id, version) = ds.commit("main", "second commit", None).await?;
         assert_eq!(version, BranchVersion(1));
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "main").await?;
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
@@ -1956,8 +2009,13 @@ mod tests {
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
                 let storage = ObjectStorage::new_in_memory_store();
+                let init_dataset =
+                    tokio::runtime::Runtime::new().unwrap().block_on(async {
+                        let storage = Arc::new(storage);
+                        Dataset::init(storage).await.unwrap()
+                    });
                 TestDataset {
-                    dataset: Dataset::create(Arc::new(storage)).build(),
+                    dataset: init_dataset.build(),
                     runtime: Runtime::new().unwrap(),
                 }
             }

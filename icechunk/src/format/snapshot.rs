@@ -105,6 +105,12 @@ impl Default for SnapshotMetadata {
     }
 }
 
+impl SnapshotMetadata {
+    fn with_message(msg: String) -> Self {
+        Self { message: msg, ..Self::default() }
+    }
+}
+
 impl Snapshot {
     pub fn new(
         short_term_history: Vec<SnapshotMetadata>,
@@ -166,6 +172,11 @@ impl Snapshot {
         let with_nodes = Self::first_from_iter(None, iter);
         res.nodes = with_nodes.nodes;
         res
+    }
+
+    pub fn empty() -> Self {
+        let metadata = SnapshotMetadata::with_message("Dataset initialized".to_string());
+        Self { metadata, ..Self::first(None) }
     }
 
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
