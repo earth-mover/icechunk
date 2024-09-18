@@ -2,7 +2,6 @@ use core::fmt;
 use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
@@ -105,14 +104,10 @@ impl ObjectStorage {
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
-    fn get_path(&self, file_prefix: &str, ObjectId(asu8): &ObjectId) -> ObjectPath {
+    fn get_path(&self, file_prefix: &str, id: &ObjectId) -> ObjectPath {
         // TODO: be careful about allocation here
-        let path = format!(
-            "{}/{}/{}.msgpack",
-            self.prefix,
-            file_prefix,
-            BASE64_URL_SAFE.encode(asu8)
-        );
+        // we serialize the url using crockford
+        let path = format!("{}/{}/{}.msgpack", self.prefix, file_prefix, id);
         ObjectPath::from(path)
     }
 
