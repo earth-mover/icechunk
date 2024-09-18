@@ -27,7 +27,7 @@ use crate::{
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::BranchVersion,
-    Dataset, MemCachingStorage, ObjectStorage, Storage,
+    Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -81,12 +81,6 @@ pub struct StoreConfig {
 
 pub type StoreResult<A> = Result<A, StoreError>;
 
-#[derive(Debug, Clone)]
-pub struct Store {
-    dataset: Dataset,
-    get_partial_values_concurrency: u16,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KeyNotFoundError {
     #[error("chunk cannot be find for key `{key}`")]
@@ -103,6 +97,10 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful dataset operation: `{0}`")]
     CannotUpdate(#[from] DatasetError),
+    #[error("cannot commit when no snapshot is present")]
+    NoSnapshot,
+    #[error("all commits must be made on a branch")]
+    NotOnBranch,
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] serde_json::Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
@@ -111,15 +109,26 @@ pub enum StoreError {
     BadKeyPrefix(String),
     #[error("error during parallel execution of get_partial_values")]
     PartialValuesPanic,
+    #[error(
+        "uncommitted changes in dataset, commit changes or reset dataset and try again."
+    )]
+    UncommittedChanges,
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[derive(Debug, Clone)]
+pub struct Store {
+    dataset: Dataset,
+    current_branch: Option<String>,
+    get_partial_values_concurrency: u16,
 }
 
 impl Store {
     pub async fn from_config(config: &StoreConfig) -> Result<Self, String> {
         let storage = mk_storage(&config.storage)?;
-        let dataset = mk_dataset(&config.dataset, storage).await?;
-        Ok(Self::new(dataset, config.get_partial_values_concurrency))
+        let (dataset, branch) = mk_dataset(&config.dataset, storage).await?;
+        Ok(Self::from_dataset(dataset, branch, config.get_partial_values_concurrency))
     }
 
     pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
@@ -128,19 +137,72 @@ impl Store {
         Self::from_config(&config).await
     }
 
-    pub fn new(dataset: Dataset, get_partial_values_concurrency: Option<u16>) -> Self {
+    pub async fn new_from_storage(
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Result<Self, String> {
+        let (dataset, branch) = mk_dataset(&DatasetConfig::default(), storage).await?;
+        Ok(Self::from_dataset(dataset, branch, None))
+    }
+
+    pub fn from_dataset(
+        dataset: Dataset,
+        current_branch: Option<String>,
+        get_partial_values_concurrency: Option<u16>,
+    ) -> Self {
         Store {
             dataset,
+            current_branch,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
         }
     }
 
-    pub async fn checkout(&mut self, version: VersionInfo) -> Result<(), DatasetError> {
+    pub fn current_branch(&self) -> &Option<String> {
+        &self.current_branch
+    }
+
+    pub fn snapshot_id(&self) -> &ObjectId {
+        self.dataset.snapshot_id()
+    }
+
+    pub fn has_uncomitted_changes(&self) -> bool {
+        self.dataset.has_uncomitted_changes()
+    }
+
+    /// Resets the store to the head commit state. If there are any uncommitted changes, they will
+    /// be lost.
+    pub async fn reset(&mut self) -> StoreResult<()> {
+        let head_snapshot = self.snapshot_id();
+        self.dataset =
+            Dataset::update(Arc::clone(self.dataset.storage()), head_snapshot.clone())
+                .build();
+
+        Ok(())
+    }
+
+    /// Checkout a specific version of the dataset. This can be a snapshot id, a tag, or a branch tip.
+    ///
+    /// If the version is a branch tip, the branch will be set as the current branch. If the version
+    /// is a tag or snapshot id, the current branch will be unset and the store will be in detached state.
+    ///
+    /// If there are uncommitted changes, this method will return an error.
+    pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
+        // Checking out is not allowed if there are uncommitted changes
+        if self.dataset.has_uncomitted_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+
         let storage = self.dataset.storage().clone();
         let dataset = match version {
-            VersionInfo::SnapshotId(sid) => Dataset::update(storage, sid),
-            VersionInfo::TagRef(tag) => Dataset::from_tag(storage, &tag).await?,
+            VersionInfo::SnapshotId(sid) => {
+                self.current_branch = None;
+                Dataset::update(storage, sid)
+            }
+            VersionInfo::TagRef(tag) => {
+                self.current_branch = None;
+                Dataset::from_tag(storage, &tag).await?
+            }
             VersionInfo::BranchTipRef(branch) => {
+                self.current_branch = Some(branch.clone());
                 Dataset::from_branch_tip(storage, &branch).await?
             }
         }
@@ -150,12 +212,47 @@ impl Store {
         Ok(())
     }
 
+    /// Switch to a new branch and commit the current snapshot to it. This fails if there is uncommitted changes,
+    /// or if the branch already exists (because this would cause a conflict).
+    pub async fn new_branch(
+        &mut self,
+        branch: &str,
+    ) -> StoreResult<(ObjectId, BranchVersion)> {
+        if self.dataset.has_uncomitted_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+
+        let version = self.dataset.new_branch(branch).await?;
+        let snapshot_id = self.snapshot_id().clone();
+
+        self.current_branch = Some(branch.to_string());
+
+        Ok((snapshot_id, version))
+    }
+
+    /// Commit the current changes to the current branch. If the store is not currently
+    /// on a branch, this will return an error.
     pub async fn commit(
         &mut self,
-        update_branch_name: &str,
         message: &str,
-    ) -> Result<(ObjectId, BranchVersion), DatasetError> {
-        self.dataset.commit(update_branch_name, message).await
+    ) -> StoreResult<(ObjectId, BranchVersion)> {
+        if let Some(branch) = &self.current_branch {
+            let result = self.dataset.commit(branch, message).await?;
+            Ok(result)
+        } else {
+            Err(StoreError::NotOnBranch)
+        }
+    }
+
+    /// Tag the given snapshot with a specified tag
+    pub async fn tag(
+        &mut self,
+        tag: &str,
+        snapshot_id: &ObjectId,
+        message: Option<&str>,
+    ) -> StoreResult<()> {
+        self.dataset.tag(tag, snapshot_id, message).await?;
+        Ok(())
     }
 
     pub fn dataset(self) -> Dataset {
@@ -473,24 +570,39 @@ impl Store {
 async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-) -> Result<Dataset, String> {
-    let mut builder = match &dataset.previous_version {
-        None => Dataset::create(storage),
-        Some(VersionInfo::SnapshotId(sid)) => Dataset::update(storage, sid.clone()),
-        Some(VersionInfo::TagRef(tag)) => Dataset::from_tag(storage, tag)
-            .await
-            .map_err(|err| format!("Error fetching tag: {err}"))?,
-        Some(VersionInfo::BranchTipRef(branch)) => {
-            Dataset::from_branch_tip(storage, branch)
-                .await
-                .map_err(|err| format!("Error fetching branch: {err}"))?
-        }
-    };
-    if let Some(thr) = dataset.inline_chunk_threshold_bytes {
-        builder.with_inline_threshold_bytes(thr);
+) -> Result<(Dataset, Option<String>), String> {
+    let (mut builder, branch): (DatasetBuilder, Option<String>) =
+        match &dataset.previous_version {
+            None => {
+                let builder = Dataset::init(storage)
+                    .await
+                    .map_err(|err| format!("Error initializing dataset: {err}"))?;
+                (builder, Some(String::from("main")))
+            }
+            Some(VersionInfo::SnapshotId(sid)) => {
+                let builder = Dataset::update(storage, sid.clone());
+                (builder, None)
+            }
+            Some(VersionInfo::TagRef(tag)) => {
+                let builder = Dataset::from_tag(storage, tag)
+                    .await
+                    .map_err(|err| format!("Error fetching tag: {err}"))?;
+                (builder, None)
+            }
+            Some(VersionInfo::BranchTipRef(branch)) => {
+                let builder = Dataset::from_branch_tip(storage, branch)
+                    .await
+                    .map_err(|err| format!("Error fetching branch: {err}"))?;
+                (builder, Some(branch.clone()))
+            }
+        };
+
+    if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
+        builder.with_inline_threshold_bytes(inline_theshold);
     }
+
     // TODO: add error checking, does the previous version exist?
-    Ok(builder.build())
+    Ok((builder.build(), branch))
 }
 
 fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
@@ -1018,8 +1130,8 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1058,13 +1170,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_metadata_delete() {
+    async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1092,6 +1204,8 @@ mod tests {
                 if path.to_str() == Some("/array"),
         ));
         store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1101,8 +1215,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .set(
@@ -1176,7 +1290,7 @@ mod tests {
         let oid = ds.flush().await?;
 
         let ds = Dataset::update(storage, oid).build();
-        let store = Store::new(ds, None);
+        let store = Store::from_dataset(ds, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1187,13 +1301,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_chunk_delete() {
+    async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .set(
@@ -1225,14 +1339,16 @@ mod tests {
         ));
         // FIXME: deleting an invalid chunk should not be allowed.
         store.delete("array/c/10/1/1").await.unwrap();
+
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1295,8 +1411,8 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .borrow_mut()
@@ -1330,8 +1446,8 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .borrow_mut()
@@ -1384,8 +1500,8 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .borrow_mut()
@@ -1443,8 +1559,8 @@ mod tests {
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::new(ds, None);
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
 
         store
             .set(
@@ -1459,12 +1575,12 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
 
-        let (snapshot_id, _version) =
-            store.commit("main", "initial commit").await.unwrap();
+        let (snapshot_id, version) = store.commit("initial commit").await.unwrap();
+        assert_eq!(version.0, 0);
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
-        let (new_snapshot_id, _version) = store.commit("main", "update").await.unwrap();
+        let (new_snapshot_id, _version) = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
@@ -1472,8 +1588,28 @@ mod tests {
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_store_from_snapshot =
-            Store::new(Dataset::update(Arc::clone(&storage), snapshot_id).build(), None);
+        let _newest_data = Bytes::copy_from_slice(b"earth");
+        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+        assert_eq!(store.has_uncomitted_changes(), true);
+
+        let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
+        assert!(result.is_err());
+
+        store.reset().await?;
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        // TODO: Create a new branch and do stuff with it
+        store.new_branch("dev").await?;
+        store.set("array/c/0/1/0", new_data.clone()).await?;
+        let (dev_snapshot_id, _version) = store.commit("update dev branch").await?;
+        store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        let new_store_from_snapshot = Store::from_dataset(
+            Dataset::update(Arc::clone(&storage), snapshot_id).build(),
+            None,
+            None,
+        );
         assert_eq!(
             new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             data

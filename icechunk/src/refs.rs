@@ -163,7 +163,7 @@ pub async fn update_branch(
         Err(err) => Err(err),
     }?;
     let last_snapshot = last_ref_data.as_ref().map(|d| &d.1.snapshot);
-    if last_snapshot != parent_snapshot {
+    if last_snapshot.is_some() && last_snapshot != parent_snapshot {
         return Err(RefError::Conflict {
             expected_parent: parent_snapshot.cloned(),
             actual_parent: last_snapshot.cloned(),
@@ -343,23 +343,24 @@ mod tests {
             vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
         );
 
-        // attempting to create a branch that doesn't exist, with a fake parent fails
+        // attempting to create a branch that doesn't exist, with a fake parent
         let res = update_branch(
             &storage,
-            "branch1",
+            "branch0",
             s1.clone(),
             Some(&s2),
             t1,
             properties.clone(),
         )
         .await;
-        assert!(matches!(res,
-                Err(RefError::Conflict { expected_parent, actual_parent })
-            if expected_parent == Some(s2.clone()) && actual_parent.is_none()
-        ));
+        assert!(res.is_ok());
         assert_eq!(
             list_refs(&storage).await?,
-            vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+            vec![
+                Ref::Branch("branch0".to_string()),
+                Ref::Tag("tag1".to_string()),
+                Ref::Tag("tag2".to_string())
+            ]
         );
 
         // create a branch successfully
@@ -387,6 +388,7 @@ mod tests {
         assert_eq!(
             list_refs(&storage).await?,
             vec![
+                Ref::Branch("branch0".to_string()),
                 Ref::Branch("branch1".to_string()),
                 Ref::Tag("tag1".to_string()),
                 Ref::Tag("tag2".to_string())
