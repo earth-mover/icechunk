@@ -1551,10 +1551,12 @@ mod tests {
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         // TODO: Create a new branch and do stuff with it
-        // store.new_branch("dev").await?;
-        // store.set("array/c/0/1/0", new_data.clone()).await?;
-
-        // assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+        dbg!("Creating a new branch...");
+        store.new_branch("dev").await?;
+        store.set("array/c/0/1/0", new_data.clone()).await?;
+        let (dev_snapshot_id, _version) = store.commit("update dev branch").await?;
+        store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_store_from_snapshot = Store::from_dataset(
             Dataset::update(Arc::clone(&storage), snapshot_id).build(),

@@ -970,16 +970,10 @@ impl Dataset {
         message: &str,
     ) -> DatasetResult<(ObjectId, BranchVersion)> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
+
         match current {
             Err(RefError::RefNotFound(_)) => {
-                if self.snapshot_id.is_none() {
-                    self.do_commit(update_branch_name, message).await
-                } else {
-                    Err(DatasetError::Conflict {
-                        expected_parent: self.snapshot_id.clone(),
-                        actual_parent: None,
-                    })
-                }
+                self.do_commit(update_branch_name, message).await
             }
             Err(err) => Err(err.into()),
             Ok(ref_data) => {

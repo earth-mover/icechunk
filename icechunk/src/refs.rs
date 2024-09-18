@@ -163,7 +163,7 @@ pub async fn update_branch(
         Err(err) => Err(err),
     }?;
     let last_snapshot = last_ref_data.as_ref().map(|d| &d.1.snapshot);
-    if last_snapshot != parent_snapshot {
+    if last_snapshot.is_some() && last_snapshot != parent_snapshot {
         return Err(RefError::Conflict {
             expected_parent: parent_snapshot.cloned(),
             actual_parent: last_snapshot.cloned(),
