@@ -27,7 +27,7 @@ use crate::{
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::BranchVersion,
-    Dataset, MemCachingStorage, ObjectStorage, Storage,
+    Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -576,43 +576,38 @@ async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(Dataset, Option<String>), String> {
-    let (dataset, branch): (Dataset, Option<String>) = match &dataset.previous_version {
-        None => {
-            let dataset =
-                Dataset::init(crate::dataset::DatasetConfig::default(), storage)
+    let (mut builder, branch): (DatasetBuilder, Option<String>) =
+        match &dataset.previous_version {
+            None => {
+                let builder = Dataset::init(storage)
                     .await
                     .map_err(|err| format!("Error initializing dataset: {err}"))?;
-            (dataset, Some(String::from("main")))
-        }
-        Some(VersionInfo::SnapshotId(sid)) => {
-            let mut builder = Dataset::update(storage, sid.clone());
-            if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
-                builder.with_inline_threshold_bytes(inline_theshold);
+                (builder, Some(String::from("main")))
             }
-            (builder.build(), None)
-        }
-        Some(VersionInfo::TagRef(tag)) => {
-            let mut builder = Dataset::from_tag(storage, tag)
-                .await
-                .map_err(|err| format!("Error fetching tag: {err}"))?;
-            if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
-                builder.with_inline_threshold_bytes(inline_theshold);
+            Some(VersionInfo::SnapshotId(sid)) => {
+                let builder = Dataset::update(storage, sid.clone());
+                (builder, None)
             }
-            (builder.build(), None)
-        }
-        Some(VersionInfo::BranchTipRef(branch)) => {
-            let mut builder = Dataset::from_branch_tip(storage, branch)
-                .await
-                .map_err(|err| format!("Error fetching branch: {err}"))?;
-            if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
-                builder.with_inline_threshold_bytes(inline_theshold);
+            Some(VersionInfo::TagRef(tag)) => {
+                let builder = Dataset::from_tag(storage, tag)
+                    .await
+                    .map_err(|err| format!("Error fetching tag: {err}"))?;
+                (builder, None)
             }
-            (builder.build(), Some(branch.clone()))
-        }
-    };
+            Some(VersionInfo::BranchTipRef(branch)) => {
+                let builder = Dataset::from_branch_tip(storage, branch)
+                    .await
+                    .map_err(|err| format!("Error fetching branch: {err}"))?;
+                (builder, Some(branch.clone()))
+            }
+        };
+
+    if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
+        builder.with_inline_threshold_bytes(inline_theshold);
+    }
 
     // TODO: add error checking, does the previous version exist?
-    Ok((dataset, branch))
+    Ok((builder.build(), branch))
 }
 
 fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
@@ -1527,7 +1522,7 @@ mod tests {
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
 
         let (snapshot_id, version) = store.commit("initial commit").await.unwrap();
-        assert_eq!(version.0, 1);
+        assert_eq!(version.0, 0);
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    iter,
+    iter::{self, Empty},
     mem::take,
     path::PathBuf,
     sync::Arc,
@@ -285,12 +285,19 @@ impl Dataset {
     /// This is the default way to create a new dataset to avoid race conditions
     /// when creating datasets.
     pub async fn init(
-        config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-    ) -> DatasetResult<Dataset> {
-        let mut dataset = Dataset::create(storage).with_config(config).build();
-        dataset.commit("main", "Store created").await?;
-        Ok(dataset)
+    ) -> DatasetResult<DatasetBuilder> {
+        let manifest = Arc::new(ManifestsTable::default());
+        let new_manifest_id = ObjectId::random();
+        storage.write_manifests(new_manifest_id.clone(), manifest).await?;
+
+        let new_snapshot =
+            Either::<Empty<NodeSnapshot>, Empty<NodeSnapshot>>::Left(iter::empty())
+                .collect();
+        let new_snapshot_id = ObjectId::random();
+        storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
+
+        Ok(DatasetBuilder::new(storage, Some(new_snapshot_id)))
     }
 
     fn new(
@@ -915,7 +922,7 @@ impl Dataset {
         let chunk_changes_c = Arc::clone(&chunk_changes);
 
         let update_task = task::spawn_blocking(move || {
-            //FIXME: avoid clone, t his one is extremely expensive en memory
+            //FIXME: avoid clone, this one is extremely expensive en memory
             //it's currently needed because we don't want to destroy the manifest in case of later
             //failure
             let mut new_chunks = old_manifest.as_ref().chunks.clone();
