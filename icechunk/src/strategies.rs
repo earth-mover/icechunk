@@ -21,7 +21,9 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
     // FIXME: add storages strategy
     let storage = ObjectStorage::new_in_memory_store();
-    let dataset = Dataset::create(Arc::new(storage)).build();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let dataset = runtime
+        .block_on(async { Dataset::init(Arc::new(storage)).await.unwrap().build() });
     prop_oneof![Just(dataset)]
 }
 

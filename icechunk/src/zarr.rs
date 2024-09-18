@@ -160,7 +160,7 @@ impl Store {
         &self.current_branch
     }
 
-    pub fn snapshot_id(&self) -> &Option<ObjectId> {
+    pub fn snapshot_id(&self) -> &ObjectId {
         self.dataset.snapshot_id()
     }
 
@@ -171,10 +171,7 @@ impl Store {
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
     pub async fn reset(&mut self) -> StoreResult<()> {
-        let Some(head_snapshot) = self.dataset.snapshot_id() else {
-            return Err(StoreError::NotOnBranch);
-        };
-
+        let head_snapshot = self.snapshot_id();
         self.dataset =
             Dataset::update(Arc::clone(self.dataset.storage()), head_snapshot.clone())
                 .build();
@@ -226,9 +223,7 @@ impl Store {
         }
 
         let version = self.dataset.new_branch(branch).await?;
-        let Some(snapshot_id) = self.snapshot_id().clone() else {
-            return Err(StoreError::NoSnapshot);
-        };
+        let snapshot_id = self.snapshot_id().clone();
 
         self.current_branch = Some(branch.to_string());
 
@@ -1080,8 +1075,8 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1120,13 +1115,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_metadata_delete() {
+    async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1154,6 +1149,8 @@ mod tests {
                 if path.to_str() == Some("/array"),
         ));
         store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1163,8 +1160,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .set(
@@ -1249,13 +1246,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_chunk_delete() {
+    async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .set(
@@ -1287,14 +1284,16 @@ mod tests {
         ));
         // FIXME: deleting an invalid chunk should not be allowed.
         store.delete("array/c/10/1/1").await.unwrap();
+
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1357,8 +1356,8 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .borrow_mut()
@@ -1392,8 +1391,8 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .borrow_mut()
@@ -1446,8 +1445,8 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::create(Arc::clone(&storage)).build();
-        let mut store = Store::from_dataset(ds, None, None);
+        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
             .borrow_mut()
