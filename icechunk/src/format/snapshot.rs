@@ -72,6 +72,10 @@ pub struct SnapshotTable {
 }
 
 impl SnapshotTable {
+    pub fn empty() -> Self {
+        Self { nodes: BTreeMap::new() }
+    }
+
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
         self.nodes
             .get(path)

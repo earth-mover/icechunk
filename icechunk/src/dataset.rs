@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    iter::{self, Empty},
+    iter::{self},
     mem::take,
     path::PathBuf,
     sync::Arc,
@@ -25,7 +25,9 @@ use tokio::task;
 use crate::{
     format::{
         manifest::{ChunkInfo, ChunkRef, ManifestExtents, ManifestRef, ManifestsTable},
-        snapshot::{NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot},
+        snapshot::{
+            NodeData, NodeSnapshot, NodeType, SnapshotTable, UserAttributesSnapshot,
+        },
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
@@ -280,13 +282,7 @@ impl Dataset {
     pub async fn init(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> DatasetResult<DatasetBuilder> {
-        let manifest = Arc::new(ManifestsTable::default());
-        let new_manifest_id = ObjectId::random();
-        storage.write_manifests(new_manifest_id.clone(), manifest).await?;
-
-        let new_snapshot =
-            Either::<Empty<NodeSnapshot>, Empty<NodeSnapshot>>::Left(iter::empty())
-                .collect();
+        let new_snapshot = SnapshotTable::empty();
         let new_snapshot_id = ObjectId::random();
         storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
 
