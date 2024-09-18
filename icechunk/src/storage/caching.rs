@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -10,7 +10,7 @@ use quick_cache::{
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId,
+    ByteRange, ObjectId,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -20,10 +20,10 @@ enum CacheKey {
     Snapshot(ObjectId),
     Attributes(ObjectId),
     Manifest(ObjectId),
-    Chunk(ObjectId, Option<Range<ChunkOffset>>),
+    Chunk(ObjectId, ByteRange),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum CacheValue {
     Snapshot(Arc<SnapshotTable>),
     Attributes(Arc<AttributesTable>),
@@ -42,13 +42,16 @@ pub struct MemCachingStorage {
     cache: Cache<CacheKey, CacheValue, CacheWeighter>,
 }
 
+/// FIXME: this is not a good idea, with the new serialization formats can no longer estimate the
+/// size of objects. Also, the storage layer doesn't know enough about the format to know what to
+/// cache and not cache.
 impl Weighter<CacheKey, CacheValue> for CacheWeighter {
     fn weight(&self, _key: &CacheKey, val: &CacheValue) -> u64 {
         // We ignore the keys weigth
         match val {
-            CacheValue::Snapshot(table) => table.batch.get_array_memory_size() as u64,
-            CacheValue::Attributes(table) => table.batch.get_array_memory_size() as u64,
-            CacheValue::Manifest(table) => table.batch.get_array_memory_size() as u64,
+            CacheValue::Snapshot(table) => table.estimated_size_bytes() as u64,
+            CacheValue::Attributes(_) => 1,
+            CacheValue::Manifest(table) => table.estimated_size_bytes() as u64,
             CacheValue::Chunk(bytes) => bytes.len() as u64,
         }
     }
@@ -103,7 +106,7 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
-        let key = CacheKey::Snapshot(id.clone());
+        let key = CacheKey::Attributes(id.clone());
         match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Attributes(table)) => Ok(table),
             Err(guard) => {
@@ -124,7 +127,7 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
-        let key = CacheKey::Snapshot(id.clone());
+        let key = CacheKey::Manifest(id.clone());
         match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Manifest(table)) => Ok(table),
             Err(guard) => {
@@ -143,7 +146,7 @@ impl Storage for MemCachingStorage {
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
-        range: &Option<Range<ChunkOffset>>,
+        range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let key = CacheKey::Chunk(id.clone(), range.clone());
         match self.cache.get_value_or_guard_async(&key).await {
@@ -187,6 +190,7 @@ impl Storage for MemCachingStorage {
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id.clone(), Arc::clone(&table)).await?;
+        dbg!("inserting", &id);
         self.cache.insert(CacheKey::Manifest(id), CacheValue::Manifest(table));
         Ok(())
     }
@@ -194,7 +198,7 @@ impl Storage for MemCachingStorage {
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id.clone(), bytes.clone()).await?;
         // TODO: we could add the chunk also with its full range (0, size)
-        self.cache.insert(CacheKey::Chunk(id, None), CacheValue::Chunk(bytes));
+        self.cache.insert(CacheKey::Chunk(id, ByteRange::ALL), CacheValue::Chunk(bytes));
         Ok(())
     }
 
@@ -218,68 +222,69 @@ impl Storage for MemCachingStorage {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
+    use itertools::Itertools;
     use std::sync::Arc;
 
-    use arrow::{
-        array::{Int32Array, RecordBatch},
-        datatypes::{DataType, Field, Schema},
-    };
-    use itertools::Itertools;
-
     use super::*;
-    use crate::storage::{logging::LoggingStorage, ObjectStorage, Storage};
-
-    fn make_record_batch(data: Vec<i32>) -> RecordBatch {
-        let id_array = Int32Array::from(data);
-        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap()
-    }
+    use crate::{
+        dataset::{ChunkIndices, ChunkPayload},
+        format::manifest::ChunkInfo,
+        storage::{logging::LoggingStorage, ObjectStorage, Storage},
+    };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
 
+        let ci1 = ChunkInfo {
+            node: 1,
+            coord: ChunkIndices(vec![]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
+        };
+        let ci2 = ChunkInfo {
+            node: 1,
+            coord: ChunkIndices(vec![]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
+        };
         let pre_existing_id = ObjectId::random();
-        let pre_exiting_table =
-            Arc::new(SnapshotTable { batch: make_record_batch(vec![1]) });
+        let pre_exiting_table = Arc::new(vec![ci1].into_iter().collect());
         backend
-            .write_snapshot(pre_existing_id.clone(), Arc::clone(&pre_exiting_table))
+            .write_manifests(pre_existing_id.clone(), Arc::clone(&pre_exiting_table))
             .await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let caching = MemCachingStorage::new(Arc::clone(&logging_c), 100_000_000);
 
-        let table = Arc::new(SnapshotTable { batch: make_record_batch(vec![2]) });
+        let table = Arc::new(vec![ci2].into_iter().collect());
         let id = ObjectId::random();
-        caching.write_snapshot(id.clone(), Arc::clone(&table)).await?;
+        caching.write_manifests(id.clone(), Arc::clone(&table)).await?;
 
-        assert_eq!(caching.fetch_snapshot(&id).await?, table);
-        assert_eq!(caching.fetch_snapshot(&id).await?, table);
+        assert_eq!(caching.fetch_manifests(&id).await?, table);
+        assert_eq!(caching.fetch_manifests(&id).await?, table);
         // when we insert we cache, so no fetches
         assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
-        assert_eq!(caching.fetch_snapshot(&pre_existing_id).await?, pre_exiting_table);
+        assert_eq!(caching.fetch_manifests(&pre_existing_id).await?, pre_exiting_table);
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_snapshot".to_string(), pre_existing_id.clone())]
+            vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
         );
 
         // only calls backend once
-        assert_eq!(caching.fetch_snapshot(&pre_existing_id).await?, pre_exiting_table);
+        assert_eq!(caching.fetch_manifests(&pre_existing_id).await?, pre_exiting_table);
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_snapshot".to_string(), pre_existing_id.clone())]
+            vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
         );
 
         // other walues still cached
-        assert_eq!(caching.fetch_snapshot(&id).await?, table);
+        assert_eq!(caching.fetch_manifests(&id).await?, table);
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_snapshot".to_string(), pre_existing_id.clone())]
+            vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
         );
         Ok(())
     }
@@ -289,29 +294,43 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
 
+        let ci1 = ChunkInfo {
+            node: 1,
+            coord: ChunkIndices(vec![]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
+        };
+        let ci2 = ChunkInfo { node: 2, ..ci1.clone() };
+        let ci3 = ChunkInfo { node: 3, ..ci1.clone() };
+        let ci4 = ChunkInfo { node: 4, ..ci1.clone() };
+        let ci5 = ChunkInfo { node: 5, ..ci1.clone() };
+        let ci6 = ChunkInfo { node: 6, ..ci1.clone() };
+        let ci7 = ChunkInfo { node: 7, ..ci1.clone() };
+        let ci8 = ChunkInfo { node: 8, ..ci1.clone() };
+        let ci9 = ChunkInfo { node: 9, ..ci1.clone() };
+
         let id1 = ObjectId::random();
-        let table1 = Arc::new(SnapshotTable { batch: make_record_batch(vec![1, 2, 3]) });
-        backend.write_snapshot(id1.clone(), Arc::clone(&table1)).await?;
+        let table1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());
+        backend.write_manifests(id1.clone(), Arc::clone(&table1)).await?;
         let id2 = ObjectId::random();
-        let table2 = Arc::new(SnapshotTable { batch: make_record_batch(vec![4, 5, 6]) });
-        backend.write_snapshot(id2.clone(), Arc::clone(&table2)).await?;
+        let table2 = Arc::new(vec![ci4, ci5, ci6].into_iter().collect());
+        backend.write_manifests(id2.clone(), Arc::clone(&table2)).await?;
         let id3 = ObjectId::random();
-        let table3 = Arc::new(SnapshotTable { batch: make_record_batch(vec![7, 8, 9]) });
-        backend.write_snapshot(id3.clone(), Arc::clone(&table3)).await?;
+        let table3 = Arc::new(vec![ci7, ci8, ci9].into_iter().collect());
+        backend.write_manifests(id3.clone(), Arc::clone(&table3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let caching = MemCachingStorage::new(
             Arc::clone(&logging_c),
             // the cache can only fit 2 tables. TODO: This number was manually tuned
-            300,
+            900,
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
         for _ in 0..20 {
-            assert_eq!(caching.fetch_snapshot(&id1).await?, table1);
-            assert_eq!(caching.fetch_snapshot(&id2).await?, table2);
-            assert_eq!(caching.fetch_snapshot(&id3).await?, table3);
+            assert_eq!(caching.fetch_manifests(&id1).await?, table1);
+            assert_eq!(caching.fetch_manifests(&id2).await?, table2);
+            assert_eq!(caching.fetch_manifests(&id3).await?, table3);
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);

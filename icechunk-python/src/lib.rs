@@ -3,11 +3,7 @@ mod streams;
 
 use std::{pin::Pin, sync::Arc};
 
-use ::icechunk::{
-    format::ChunkOffset,
-    zarr::{ByteRange, StoreError},
-    Store,
-};
+use ::icechunk::{format::ChunkOffset, zarr::StoreError, Store};
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
@@ -19,13 +15,15 @@ use tokio::sync::{Mutex, RwLock};
 #[pyclass]
 struct PyIcechunkStore {
     store: Arc<RwLock<Store>>,
+    rt: tokio::runtime::Runtime,
 }
 
 impl PyIcechunkStore {
     async fn from_json_config(json: &[u8]) -> Result<Self, String> {
         let store = Store::from_json_config(json).await?;
         let store = Arc::new(RwLock::new(store));
-        Ok(Self { store })
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
     }
 }
 
@@ -51,14 +49,24 @@ impl PyIcechunkStore {
         Ok(())
     }
 
-    pub async fn commit(
-        &mut self,
+    pub fn commit<'py>(
+        &'py mut self,
+        py: Python<'py>,
         update_branch_name: String,
         message: String,
-    ) -> PyIcechunkStoreResult<String> {
-        let (oid, _version) =
-            self.store.write().await.commit(&update_branch_name, &message).await?;
-        Ok(String::from(&oid))
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        // The commit mechanism is async and calls tokio::spawn so we need to use the
+        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut writeable_store = store.write().await;
+            let (oid, _version) = writeable_store
+                .commit(&update_branch_name, &message)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(String::from(&oid))
+        })
     }
 
     pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {
@@ -74,9 +82,9 @@ impl PyIcechunkStore {
     pub async fn get(
         &self,
         key: String,
-        byte_range: Option<ByteRange>,
+        byte_range: Option<(Option<ChunkOffset>, Option<ChunkOffset>)>,
     ) -> PyIcechunkStoreResult<PyObject> {
-        let byte_range = byte_range.unwrap_or((None, None));
+        let byte_range = byte_range.unwrap_or((None, None)).into();
         let data = self.store.read().await.get(&key, &byte_range).await?;
         let pybytes = Python::with_gil(|py| {
             let bound_bytes = PyBytes::new_bound(py, &data);
@@ -87,9 +95,9 @@ impl PyIcechunkStore {
 
     pub async fn get_partial_values(
         &self,
-        key_ranges: Vec<(String, ByteRange)>,
+        key_ranges: Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>,
     ) -> PyIcechunkStoreResult<Vec<Option<PyObject>>> {
-        let iter = key_ranges.into_iter();
+        let iter = key_ranges.into_iter().map(|r| (r.0, r.1.into()));
         let result = self
             .store
             .read()
@@ -202,29 +210,29 @@ impl PyIcechunkStore {
         Ok(supports_listing)
     }
 
-    pub async fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.store.read().await;
-        let list = store.list().await?;
+    pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list())?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
-    pub async fn list_prefix(
+    pub fn list_prefix(
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.store.read().await;
-        let list = store.list_prefix(&prefix).await?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list_prefix(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
-    pub async fn list_dir(
+    pub fn list_dir(
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.store.read().await;
-        let list = store.list_dir(&prefix).await?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list_dir(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }

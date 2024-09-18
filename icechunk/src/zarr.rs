@@ -12,7 +12,7 @@ use std::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, skip_serializing_none, TryFromInto};
 use thiserror::Error;
 
@@ -23,9 +23,8 @@ use crate::{
         UserAttributes, ZarrArrayMetadata,
     },
     format::{
-        snapshot::{NodeData, UserAttributesSnapshot}, // TODO: we shouldn't need these imports, too low level
-        ChunkOffset,
-        IcechunkFormatError,
+        snapshot::{NodeData, UserAttributesSnapshot},
+        ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::BranchVersion,
     Dataset, MemCachingStorage, ObjectStorage, Storage,
@@ -80,7 +79,6 @@ pub struct StoreConfig {
     get_partial_values_concurrency: Option<u16>,
 }
 
-pub type ByteRange = (Option<ChunkOffset>, Option<ChunkOffset>);
 pub type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone)]
@@ -174,13 +172,17 @@ impl Store {
     }
 
     // TODO: prototype argument
-    pub async fn get(&self, key: &str, _byte_range: &ByteRange) -> StoreResult<Bytes> {
-        match Key::parse(key)? {
-            Key::Metadata { node_path } => self.get_metadata(key, &node_path).await,
-            Key::Chunk { node_path, coords } => {
-                self.get_chunk(key, node_path, coords).await
+    pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
+        let bytes = match Key::parse(key)? {
+            Key::Metadata { node_path } => {
+                self.get_metadata(key, &node_path, byte_range).await
             }
-        }
+            Key::Chunk { node_path, coords } => {
+                self.get_chunk(key, node_path, coords, byte_range).await
+            }
+        }?;
+
+        Ok(bytes)
     }
 
     /// Get all the requested keys concurrently.
@@ -246,7 +248,7 @@ impl Store {
 
     // TODO: prototype argument
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
-        match self.get(key, &(None, None)).await {
+        match self.get(key, &ByteRange::ALL).await {
             Ok(_) => Ok(true),
             Err(StoreError::NotFound(_)) => Ok(false),
             Err(other_error) => Err(other_error),
@@ -323,7 +325,7 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        let meta = self.list_metadata_prefix(prefix).await?;
+        let meta = self.list_metadata_prefix(prefix).await?.map(Ok);
         let chunks = self.list_chunks_prefix(prefix).await?;
         Ok(meta.chain(chunks))
     }
@@ -338,14 +340,16 @@ impl Store {
         // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
         // evolution
 
-        let idx = if prefix == "/" { 0 } else { prefix.len() };
+        let idx: usize = if prefix == "/" { 0 } else { prefix.len() };
 
         let parents: HashSet<_> = self
             .list_prefix(prefix)
             .await?
             .map_ok(move |s| {
-                let rem = &s[idx..];
-                let parent = rem.split_once('/').map_or(rem, |(parent, _)| parent);
+                // If the prefix is "/", get rid of it. This can happend when prefix is missing
+                // the trailing slash (as it does in zarr-python impl)
+                let rem = &s[idx..].trim_start_matches('/');
+                let parent = rem.split_once('/').map_or(*rem, |(parent, _)| parent);
                 parent.to_string()
             })
             .try_collect()
@@ -360,8 +364,9 @@ impl Store {
         key: &str,
         path: Path,
         coords: ChunkIndices,
+        byte_range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let chunk = self.dataset.get_chunk(&path, &coords).await?;
+        let chunk = self.dataset.get_chunk(&path, &coords, byte_range).await?;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
             key: key.to_string(),
             path,
@@ -369,7 +374,12 @@ impl Store {
         }))
     }
 
-    async fn get_metadata(&self, _key: &str, path: &Path) -> StoreResult<Bytes> {
+    async fn get_metadata(
+        &self,
+        _key: &str,
+        path: &Path,
+        range: &ByteRange,
+    ) -> StoreResult<Bytes> {
         let node = self.dataset.get_node(path).await.map_err(|_| {
             StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
         })?;
@@ -379,12 +389,16 @@ impl Store {
             // FIXME: implement
             Some(UserAttributesSnapshot::Ref(_)) => todo!(),
         };
-        match node.node_data {
-            NodeData::Group => Ok(GroupMetadata::new(user_attributes).to_bytes()),
+        let full_metadata = match node.node_data {
+            NodeData::Group => {
+                Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
+            }
             NodeData::Array(zarr_metadata, _) => {
                 Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
             }
-        }
+        }?;
+
+        Ok(range.slice(full_metadata))
     }
 
     async fn set_array_meta(
@@ -422,45 +436,37 @@ impl Store {
     async fn list_metadata_prefix<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
-        if let Some(prefix) = prefix.strip_suffix('/') {
-            let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
-            // TODO: handle non-utf8?
-            Ok(nodes.map_err(|e| e.into()).try_filter_map(move |node| async move {
-                Ok(Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
-                    if key.starts_with(prefix) {
-                        Some(key)
-                    } else {
-                        None
-                    }
-                }))
-            }))
-        } else {
-            Err(StoreError::BadKeyPrefix(prefix.to_string()))
-        }
+    ) -> StoreResult<impl Stream<Item = String> + 'a> {
+        let prefix = prefix.trim_end_matches('/');
+
+        let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
+        // TODO: handle non-utf8?
+        Ok(nodes.filter_map(move |node| async move {
+            Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
+                if key.starts_with(prefix) {
+                    Some(key)
+                } else {
+                    None
+                }
+            })
+        }))
     }
 
     async fn list_chunks_prefix<'a>(
         &'a self,
         prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+        let prefix = prefix.trim_end_matches('/');
+
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        if let Some(prefix) = prefix.strip_suffix('/') {
-            let chunks = self.dataset.all_chunks().await?;
-            Ok(chunks.map_err(|e| e.into()).try_filter_map(
-                move |(path, chunk)| async move {
-                    //FIXME: utf handling
-                    Ok(Key::Chunk { node_path: path, coords: chunk.coord }
-                        .to_string()
-                        .and_then(
-                            |key| if key.starts_with(prefix) { Some(key) } else { None },
-                        ))
-                },
-            ))
-        } else {
-            Err(StoreError::BadKeyPrefix(prefix.to_string()))
-        }
+        let chunks = self.dataset.all_chunks().await?;
+        Ok(chunks.map_err(|e| e.into()).try_filter_map(move |(path, chunk)| async move {
+            //FIXME: utf handling
+            Ok(Key::Chunk { node_path: path, coords: chunk.coord }
+                .to_string()
+                .and_then(|key| if key.starts_with(prefix) { Some(key) } else { None }))
+        }))
     }
 }
 
@@ -606,6 +612,7 @@ impl Key {
 #[derive(Debug, Serialize, Deserialize)]
 struct ArrayMetadata {
     zarr_format: u8,
+    #[serde(deserialize_with = "validate_array_node_type")]
     node_type: String,
     attributes: Option<UserAttributes>,
     #[serde(flatten)]
@@ -627,6 +634,7 @@ pub struct ZarrArrayMetadataSerialzer {
     pub chunk_key_encoding: ChunkKeyEncoding,
     pub fill_value: serde_json::Value,
     pub codecs: Vec<Codec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     // each dimension name can be null in Zarr
     pub dimension_names: Option<DimensionNames>,
@@ -675,9 +683,27 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
             dimension_names,
         } = value;
         {
-            #[allow(clippy::expect_used)]
-            let fill_value = serde_json::to_value(fill_value)
-                .expect("Fill values are always serializable");
+            fn fill_value_to_json(f: FillValue) -> serde_json::Value {
+                match f {
+                    FillValue::Bool(b) => b.into(),
+                    FillValue::Int8(n) => n.into(),
+                    FillValue::Int16(n) => n.into(),
+                    FillValue::Int32(n) => n.into(),
+                    FillValue::Int64(n) => n.into(),
+                    FillValue::UInt8(n) => n.into(),
+                    FillValue::UInt16(n) => n.into(),
+                    FillValue::UInt32(n) => n.into(),
+                    FillValue::UInt64(n) => n.into(),
+                    FillValue::Float16(f) => f.into(),
+                    FillValue::Float32(f) => f.into(),
+                    FillValue::Float64(f) => f.into(),
+                    FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
+                    FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
+                    FillValue::RawBits(r) => r.into(),
+                }
+            }
+
+            let fill_value = fill_value_to_json(fill_value);
             ZarrArrayMetadataSerialzer {
                 shape,
                 data_type,
@@ -695,8 +721,41 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
 #[derive(Debug, Serialize, Deserialize)]
 struct GroupMetadata {
     zarr_format: u8,
+    #[serde(deserialize_with = "validate_group_node_type")]
     node_type: String,
     attributes: Option<UserAttributes>,
+}
+
+fn validate_group_node_type<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = String::deserialize(d)?;
+
+    if value != "group" {
+        return Err(de::Error::invalid_value(
+            de::Unexpected::Str(value.as_str()),
+            &"the word 'group'",
+        ));
+    }
+
+    Ok(value)
+}
+
+fn validate_array_node_type<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = String::deserialize(d)?;
+
+    if value != "array" {
+        return Err(de::Error::invalid_value(
+            de::Unexpected::Str(value.as_str()),
+            &"the word 'array'",
+        ));
+    }
+
+    Ok(value)
 }
 
 impl ArrayMetadata {
@@ -934,6 +993,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_metadata_deserialization() {
+        assert!(serde_json::from_str::<GroupMetadata>(
+            r#"{"zarr_format":3, "node_type":"group"}"#
+        )
+        .is_ok());
+        assert!(serde_json::from_str::<GroupMetadata>(
+            r#"{"zarr_format":3, "node_type":"array"}"#
+        )
+        .is_err());
+
+        assert!(serde_json::from_str::<ArrayMetadata>(
+            r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+        )
+        .is_ok());
+        assert!(serde_json::from_str::<ArrayMetadata>(
+            r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
@@ -942,7 +1022,7 @@ mod tests {
         let mut store = Store::new(ds, None);
 
         assert!(matches!(
-            store.get("zarr.json", &(None, None)).await,
+            store.get("zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_str() == Some("/")
         ));
 
@@ -953,7 +1033,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            store.get("zarr.json", &(None, None)).await.unwrap(),
+            store.get("zarr.json", &ByteRange::ALL).await.unwrap(),
             Bytes::copy_from_slice(
                 br#"{"zarr_format":3,"node_type":"group","attributes":null}"#
             )
@@ -961,7 +1041,7 @@ mod tests {
 
         store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
         assert_eq!(
-            store.get("a/b/zarr.json", &(None, None)).await.unwrap(),
+            store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
             Bytes::copy_from_slice(
                 br#"{"zarr_format":3,"node_type":"group","attributes":{"eggs":42,"spam":"ham"}}"#
             )
@@ -970,7 +1050,7 @@ mod tests {
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(
-            store.get("a/b/array/zarr.json", &(None, None)).await.unwrap(),
+            store.get("a/b/array/zarr.json", &ByteRange::ALL).await.unwrap(),
             zarr_meta.clone()
         );
 
@@ -1000,14 +1080,14 @@ mod tests {
         // delete metadata tests
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
-            store.get("array/zarr.json", &(None, None)).await,
+            store.get("array/zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
                 if path.to_str() == Some("/array"),
         ));
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
-            store.get("array/zarr.json", &(None, None)).await,
+            store.get("array/zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
                 if path.to_str() == Some("/array"),
         ));
@@ -1032,11 +1112,42 @@ mod tests {
             .await?;
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            zarr_meta
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::to_offset(5)).await.unwrap(),
+            zarr_meta[..5]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::from_offset(5)).await.unwrap(),
+            zarr_meta[5..]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::bounded(1, 24)).await.unwrap(),
+            zarr_meta[1..24]
+        );
 
         // a small inline chunk
         let small_data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", small_data.clone()).await?;
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            small_data
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::to_offset(2)).await.unwrap(),
+            small_data[0..2]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::from_offset(3)).await.unwrap(),
+            small_data[3..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::bounded(1, 4)).await.unwrap(),
+            small_data[1..4]
+        );
         // no new chunks written because it was inline
         // FiXME: add this test
         //assert!(in_mem_storage.chunk_ids().is_empty());
@@ -1044,7 +1155,19 @@ mod tests {
         // a big chunk
         let big_data = Bytes::copy_from_slice(b"hello".repeat(512).as_slice());
         store.set("array/c/0/1/1", big_data.clone()).await?;
-        assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
+        assert_eq!(store.get("array/c/0/1/1", &ByteRange::ALL).await.unwrap(), big_data);
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::from_offset(512 - 3)).await.unwrap(),
+            big_data[(512 - 3)..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::to_offset(5)).await.unwrap(),
+            big_data[..5]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::bounded(20, 90)).await.unwrap(),
+            big_data[20..90]
+        );
         // FiXME: add this test
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
@@ -1054,8 +1177,11 @@ mod tests {
 
         let ds = Dataset::update(storage, oid).build();
         let store = Store::new(ds, None);
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), small_data);
-        assert_eq!(store.get("array/c/0/1/1", &(None, None)).await.unwrap(), big_data);
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            small_data
+        );
+        assert_eq!(store.get("array/c/0/1/1", &ByteRange::ALL).await.unwrap(), big_data);
 
         Ok(())
     }
@@ -1089,7 +1215,7 @@ mod tests {
         // deleting non-existent chunk is allowed
         store.delete("array/c/1/1/1").await.unwrap();
         assert!(matches!(
-            store.get("array/c/0/1/0", &(None, None)).await,
+            store.get("array/c/0/1/0", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
                 if key == "array/c/0/1/0" && path.to_str() == Some("/array") && coords == ChunkIndices([0, 1, 0].to_vec())
         ));
@@ -1107,19 +1233,6 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store());
         let ds = Dataset::create(Arc::clone(&storage)).build();
         let mut store = Store::new(ds, None);
-
-        assert!(
-            matches!(store.list_prefix("").await, Err(StoreError::BadKeyPrefix(p)) if p.is_empty())
-        );
-        assert!(
-            matches!(store.list_prefix("foo").await, Err(StoreError::BadKeyPrefix(p)) if p == "foo")
-        );
-        assert!(
-            matches!(store.list_prefix("foo/bar").await, Err(StoreError::BadKeyPrefix(p)) if p == "foo/bar")
-        );
-        assert!(
-            matches!(store.list_prefix("/foo/bar").await, Err(StoreError::BadKeyPrefix(p)) if p == "/foo/bar")
-        );
 
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1249,6 +1362,10 @@ mod tests {
         dir.sort();
         assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
 
+        let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
+
         let mut dir = store.list_dir("array/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
@@ -1294,8 +1411,7 @@ mod tests {
             store.set(key.as_str(), value.clone()).await?;
         }
 
-        let key_ranges =
-            key_vals.iter().map(|(k, _)| (k.clone(), (None::<u64>, None::<u64>)));
+        let key_ranges = key_vals.iter().map(|(k, _)| (k.clone(), ByteRange::ALL));
 
         assert_eq!(
             key_vals.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
@@ -1308,8 +1424,7 @@ mod tests {
         );
 
         // let's try in reverse order
-        let key_ranges =
-            key_vals.iter().rev().map(|(k, _)| (k.clone(), (None::<u64>, None::<u64>)));
+        let key_ranges = key_vals.iter().rev().map(|(k, _)| (k.clone(), ByteRange::ALL));
 
         assert_eq!(
             key_vals.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
@@ -1352,15 +1467,15 @@ mod tests {
         let (new_snapshot_id, _version) = store.commit("main", "update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), data);
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
-        assert_eq!(store.get("array/c/0/1/0", &(None, None)).await.unwrap(), new_data);
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_store_from_snapshot =
             Store::new(Dataset::update(Arc::clone(&storage), snapshot_id).build(), None);
         assert_eq!(
-            new_store_from_snapshot.get("array/c/0/1/0", &(None, None)).await.unwrap(),
+            new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             data
         );
 
@@ -1486,11 +1601,11 @@ mod tests {
 
         let json = r#"
         {"storage":{
-             "type": "s3", 
-             "bucket":"test", 
-             "prefix":"root", 
-             "access_key_id":"my-key", 
-             "secret_access_key":"my-secret-key", 
+             "type": "s3",
+             "bucket":"test",
+             "prefix":"root",
+             "access_key_id":"my-key",
+             "secret_access_key":"my-secret-key",
              "endpoint": "http://localhost:9000"
          },
          "dataset": {}

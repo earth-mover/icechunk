@@ -12,6 +12,12 @@ from zarr.core.sync import SyncMixin
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
 
+    @classmethod
+    async def open(cls, *args: Any, **kwargs: Any) -> Self:
+        store = await cls.from_json(*args, **kwargs)
+        await store._open()
+        return store
+
     def __init__(
         self, store: PyIcechunkStore, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ):
@@ -63,6 +69,7 @@ class IcechunkStore(Store, SyncMixin):
                 return None
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
+            # but an IcechunkStore returns an error if the key does not exist
             return None
 
         return prototype.buffer.from_bytes(result)
@@ -159,7 +166,7 @@ class IcechunkStore(Store, SyncMixin):
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
-        return self._sync(self._store.list())
+        return self._store.list()
 
     def list_prefix(self, prefix: str) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store with a given prefix.
@@ -175,7 +182,7 @@ class IcechunkStore(Store, SyncMixin):
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
-        return self._sync(self._store.list_prefix(prefix))
+        return self._store.list_prefix(prefix)
 
     def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
         """
@@ -193,4 +200,4 @@ class IcechunkStore(Store, SyncMixin):
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
-        return self._sync(self._store.list_dir(prefix))
+        return self._store.list_dir(prefix)

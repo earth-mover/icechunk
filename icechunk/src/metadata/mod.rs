@@ -29,7 +29,7 @@ pub struct StorageTransformer {
     pub configuration: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
 
 #[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]

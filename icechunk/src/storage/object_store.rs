@@ -1,26 +1,54 @@
 use core::fmt;
-use std::{fs::create_dir_all, future::ready, sync::Arc};
+use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
 
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    buffered::BufWriter, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, ObjectStore, PutMode, PutOptions, PutPayload,
-};
-use parquet::arrow::{
-    async_reader::ParquetObjectReader, async_writer::ParquetObjectWriter,
-    AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
+    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
+    GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId, Path,
+    ByteRange, ObjectId, Path,
 };
 
 use super::{Storage, StorageError, StorageResult};
+
+// Get Range is object_store specific, keep it with this module
+impl From<&ByteRange> for Option<GetRange> {
+    fn from(value: &ByteRange) -> Self {
+        match (value.0, value.1) {
+            (Bound::Included(start), Bound::Excluded(end)) => {
+                Some(GetRange::Bounded(start as usize..end as usize))
+            }
+            (Bound::Included(start), Bound::Unbounded) => {
+                Some(GetRange::Offset(start as usize))
+            }
+            (Bound::Included(start), Bound::Included(end)) => {
+                Some(GetRange::Bounded(start as usize..end as usize + 1))
+            }
+            (Bound::Excluded(start), Bound::Excluded(end)) => {
+                Some(GetRange::Bounded(start as usize + 1..end as usize))
+            }
+            (Bound::Excluded(start), Bound::Unbounded) => {
+                Some(GetRange::Offset(start as usize + 1))
+            }
+            (Bound::Excluded(start), Bound::Included(end)) => {
+                Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
+            }
+            (Bound::Unbounded, Bound::Excluded(end)) => {
+                Some(GetRange::Suffix(end as usize))
+            }
+            (Bound::Unbounded, Bound::Included(end)) => {
+                Some(GetRange::Suffix(end as usize + 1))
+            }
+            (Bound::Unbounded, Bound::Unbounded) => None,
+        }
+    }
+}
 
 const SNAPSHOT_PREFIX: &str = "s/";
 const MANIFEST_PREFIX: &str = "m/";
@@ -80,40 +108,12 @@ impl ObjectStorage {
     fn get_path(&self, file_prefix: &str, ObjectId(asu8): &ObjectId) -> ObjectPath {
         // TODO: be careful about allocation here
         let path = format!(
-            "{}/{}/{}.parquet",
+            "{}/{}/{}.msgpack",
             self.prefix,
             file_prefix,
             BASE64_URL_SAFE.encode(asu8)
         );
         ObjectPath::from(path)
-    }
-
-    async fn read_parquet(&self, path: &ObjectPath) -> Result<RecordBatch, StorageError> {
-        // FIXME: avoid this metadata read since we are always reading the whole thing.
-        let meta = self.store.head(path).await?;
-        let reader = ParquetObjectReader::new(Arc::clone(&self.store), meta);
-        let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?.build()?;
-        // TODO: do we always have only one batch ever? Assert that
-        let maybe_batch = builder.next().await;
-        Ok(maybe_batch
-            .ok_or(StorageError::BadRecordBatchRead(path.as_ref().into()))??)
-    }
-
-    async fn write_parquet(
-        &self,
-        path: &ObjectPath,
-        batch: &RecordBatch,
-    ) -> Result<(), StorageError> {
-        // defaults are concurrency=8, buffer capacity=10MB
-        // TODO: allow configuring these
-        let writer = ParquetObjectWriter::from_buf_writer(BufWriter::new(
-            Arc::clone(&self.store),
-            path.clone(),
-        ));
-        let mut writer = AsyncArrowWriter::try_new(writer, batch.schema(), None)?;
-        writer.write(batch).await?;
-        writer.close().await?;
-        Ok(())
     }
 
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
@@ -139,8 +139,10 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
     ) -> Result<Arc<SnapshotTable>, StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, id);
-        let batch = self.read_parquet(&path).await?;
-        Ok(Arc::new(SnapshotTable { batch }))
+        let bytes = self.store.get(&path).await?.bytes().await?;
+        // TODO: optimize using from_read
+        let res = rmp_serde::from_slice(bytes.as_ref())?;
+        Ok(Arc::new(res))
     }
 
     async fn fetch_attributes(
@@ -155,8 +157,10 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
     ) -> Result<Arc<ManifestsTable>, StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, id);
-        let batch = self.read_parquet(&path).await?;
-        Ok(Arc::new(ManifestsTable { batch }))
+        let bytes = self.store.get(&path).await?.bytes().await?;
+        // TODO: optimize using from_read
+        let res = rmp_serde::from_slice(bytes.as_ref())?;
+        Ok(Arc::new(res))
     }
 
     async fn write_snapshot(
@@ -165,7 +169,9 @@ impl Storage for ObjectStorage {
         table: Arc<SnapshotTable>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, &id);
-        self.write_parquet(&path, &table.batch).await?;
+        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        // FIXME: use multipart
+        self.store.put(&path, bytes.into()).await?;
         Ok(())
     }
 
@@ -186,27 +192,24 @@ impl Storage for ObjectStorage {
         table: Arc<ManifestsTable>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, &id);
-        self.write_parquet(&path, &table.batch).await?;
+        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        // FIXME: use multipart
+        self.store.put(&path, bytes.into()).await?;
         Ok(())
     }
 
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
-        range: &Option<std::ops::Range<ChunkOffset>>,
+        range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_path(CHUNK_PREFIX, id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
-        if let Some(range) = range {
-            Ok(self
-                .store
-                .get_range(&path, (range.start as usize)..(range.end as usize))
-                .await?)
-        } else {
-            // TODO: Can't figure out if `get` is the most efficient way to get the whole object.
-            Ok(self.store.get(&path).await?.bytes().await?)
-        }
+        let options =
+            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+        let chunk = self.store.get_opts(&path, options).await?.bytes().await?;
+        Ok(chunk)
     }
 
     async fn write_chunk(
@@ -283,56 +286,5 @@ impl Storage for ObjectStorage {
                 _ => e.into(),
             })
             .map(|_| ())
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use std::env::temp_dir;
-    use std::sync::Arc;
-
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use rand;
-    use rand::distributions::Alphanumeric;
-    use rand::Rng;
-
-    use super::*;
-
-    fn make_record_batch(data: Vec<i32>) -> RecordBatch {
-        let id_array = Int32Array::from(data);
-        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap()
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_read_write_parquet_object_storage() {
-        // simple test to make sure we can speak to all stores
-        let batch = make_record_batch(vec![1, 2, 3, 4, 5]);
-        let mut prefix = temp_dir().to_str().unwrap().to_string();
-        let rdms: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        prefix.push_str(rdms.as_str());
-
-        for store in [
-            ObjectStorage::new_in_memory_store(),
-            // FIXME: figure out local and minio tests on CI
-            // ObjectStorage::new_local_store(&prefix.clone().into()).unwrap(),
-            // ObjectStorage::new_s3_store_from_env("testbucket".to_string(), prefix.clone()).unwrap(),
-            // ObjectStorage::new_s3_store_with_config("testbucket".to_string(), prefix)
-            //     .unwrap(),
-        ] {
-            let id = ObjectId::random();
-            let path = store.get_path("foo_prefix/", &id);
-            store.write_parquet(&path, &batch).await.unwrap();
-            let actual = store.read_parquet(&path).await.unwrap();
-            assert_eq!(actual, batch)
-        }
     }
 }

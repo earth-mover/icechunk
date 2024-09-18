@@ -3,6 +3,7 @@ all-features = true
 
 [advisories]
 version = 2
+ignore = []
 
 [licenses]
 # List of explicitly allowed licenses

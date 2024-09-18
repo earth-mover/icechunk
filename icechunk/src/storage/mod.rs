@@ -1,7 +1,6 @@
 use core::fmt;
 use futures::stream::BoxStream;
-use parquet::errors as parquet_errors;
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,7 +18,7 @@ pub use object_store::ObjectStorage;
 
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId, Path,
+    ByteRange, ObjectId, Path,
 };
 
 #[derive(Debug, Error)]
@@ -28,8 +27,10 @@ pub enum StorageError {
     NotFound(ObjectId),
     #[error("error contacting object store {0}")]
     ObjectStore(#[from] ::object_store::Error),
-    #[error("parquet file error: {0}")]
-    ParquetError(#[from] parquet_errors::ParquetError),
+    #[error("messagepack decode error: {0}")]
+    MsgPackDecodeError(#[from] rmp_serde::decode::Error),
+    #[error("messagepack encode error: {0}")]
+    MsgPackEncodeError(#[from] rmp_serde::encode::Error),
     #[error("error parsing RecordBatch from parquet file {0}.")]
     BadRecordBatchRead(Path),
     #[error("cannot overwrite ref: {0}")]
@@ -56,11 +57,8 @@ pub trait Storage: fmt::Debug {
         id: &ObjectId,
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
     async fn fetch_manifests(&self, id: &ObjectId) -> StorageResult<Arc<ManifestsTable>>; // FIXME: format flags
-    async fn fetch_chunk(
-        &self,
-        id: &ObjectId,
-        range: &Option<Range<ChunkOffset>>,
-    ) -> StorageResult<Bytes>; // FIXME: format flags
+    async fn fetch_chunk(&self, id: &ObjectId, range: &ByteRange)
+        -> StorageResult<Bytes>; // FIXME: format flags
 
     async fn write_snapshot(
         &self,

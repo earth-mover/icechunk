@@ -1,7 +1,4 @@
-use std::{
-    ops::Range,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -10,7 +7,7 @@ use futures::stream::BoxStream;
 use super::{Storage, StorageError, StorageResult};
 use crate::format::{
     attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ChunkOffset, ObjectId,
+    ByteRange, ObjectId,
 };
 
 #[derive(Debug)]
@@ -70,7 +67,7 @@ impl Storage for LoggingStorage {
     async fn fetch_chunk(
         &self,
         id: &ObjectId,
-        range: &Option<Range<ChunkOffset>>,
+        range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         self.fetch_log
             .lock()
