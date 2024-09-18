@@ -72,13 +72,7 @@ struct ChangeSet {
 
 impl ChangeSet {
     fn is_empty(&self) -> bool {
-        self.new_groups.is_empty()
-            && self.new_arrays.is_empty()
-            && self.updated_arrays.is_empty()
-            && self.updated_attributes.is_empty()
-            && self.set_chunks.is_empty()
-            && self.deleted_groups.is_empty()
-            && self.deleted_arrays.is_empty()
+        self == &ChangeSet::default()
     }
 
     fn add_group(&mut self, path: Path, node_id: NodeId) {
@@ -1024,7 +1018,7 @@ impl Dataset {
         tag_name: &str,
         snapshot_id: &ObjectId,
         message: Option<&str>,
-    ) -> DatasetResult<(String, ObjectId)> {
+    ) -> DatasetResult<()> {
         let now = Utc::now();
         let mut properties = HashMap::new();
         if let Some(message) = message {
@@ -1033,7 +1027,7 @@ impl Dataset {
 
         create_tag(self.storage.as_ref(), tag_name, snapshot_id.clone(), now, properties)
             .await?;
-        Ok((String::from(tag_name), snapshot_id.clone()))
+        Ok(())
     }
 }
 
@@ -1768,11 +1762,10 @@ mod tests {
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
 
-        let (_v1_tag, v1_tag_snapshot_id) =
-            ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
+        ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
-        assert_eq!(v1_tag_snapshot_id, ref_data.snapshot);
+        assert_eq!(new_snapshot_id, ref_data.snapshot);
         assert_eq!("version 1.0.0", ref_data.properties["message"]);
 
         assert_eq!(

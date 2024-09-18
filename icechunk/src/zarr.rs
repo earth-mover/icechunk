@@ -250,20 +250,9 @@ impl Store {
         tag: &str,
         snapshot_id: &ObjectId,
         message: Option<&str>,
-    ) -> StoreResult<(String, ObjectId)> {
-        let result = self.dataset.tag(tag, snapshot_id, message).await?;
-        Ok(result)
-    }
-
-    /// Attempt to fast forward the current branch to the latest commit on the remote. If
-    /// the store is not currently on a branch, this will return an error.
-    pub async fn fast_forward(&mut self) -> StoreResult<()> {
-        if let Some(_branch) = &self.current_branch {
-            // TODO: Implement fast forward
-            todo!("fast forward not implemented")
-        } else {
-            Err(StoreError::NotOnBranch)
-        }
+    ) -> StoreResult<()> {
+        self.dataset.tag(tag, snapshot_id, message).await?;
+        Ok(())
     }
 
     pub fn dataset(self) -> Dataset {
@@ -1551,7 +1540,6 @@ mod tests {
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         // TODO: Create a new branch and do stuff with it
-        dbg!("Creating a new branch...");
         store.new_branch("dev").await?;
         store.set("array/c/0/1/0", new_data.clone()).await?;
         let (dev_snapshot_id, _version) = store.commit("update dev branch").await?;
