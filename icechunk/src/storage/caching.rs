@@ -9,8 +9,8 @@ use quick_cache::{
 };
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ByteRange, ObjectId,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -25,9 +25,9 @@ enum CacheKey {
 
 #[derive(Clone, Debug)]
 enum CacheValue {
-    Snapshot(Arc<SnapshotTable>),
+    Snapshot(Arc<Snapshot>),
     Attributes(Arc<AttributesTable>),
-    Manifest(Arc<ManifestsTable>),
+    Manifest(Arc<Manifest>),
     Chunk(Bytes),
 }
 
@@ -82,10 +82,7 @@ impl MemCachingStorage {
 
 #[async_trait]
 impl Storage for MemCachingStorage {
-    async fn fetch_snapshot(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<SnapshotTable>, StorageError> {
+    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
         let key = CacheKey::Snapshot(id.clone());
         match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Snapshot(table)) => Ok(table),
@@ -126,7 +123,7 @@ impl Storage for MemCachingStorage {
     async fn fetch_manifests(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<ManifestsTable>, StorageError> {
+    ) -> Result<Arc<Manifest>, StorageError> {
         let key = CacheKey::Manifest(id.clone());
         match self.cache.get_value_or_guard_async(&key).await {
             Ok(CacheValue::Manifest(table)) => Ok(table),
@@ -167,7 +164,7 @@ impl Storage for MemCachingStorage {
     async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<SnapshotTable>,
+        table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         self.backend.write_snapshot(id.clone(), Arc::clone(&table)).await?;
         self.cache.insert(CacheKey::Snapshot(id), CacheValue::Snapshot(table));
@@ -187,7 +184,7 @@ impl Storage for MemCachingStorage {
     async fn write_manifests(
         &self,
         id: ObjectId,
-        table: Arc<ManifestsTable>,
+        table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id.clone(), Arc::clone(&table)).await?;
         dbg!("inserting", &id);

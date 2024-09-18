@@ -67,11 +67,11 @@ impl NodeSnapshot {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct SnapshotTable {
+pub struct Snapshot {
     pub nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
-impl SnapshotTable {
+impl Snapshot {
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
         self.nodes
             .get(path)
@@ -102,7 +102,7 @@ impl SnapshotTable {
 // We need this complex dance because Rust makes it really hard to put together an object and a
 // reference to it (in the iterator) in a single self-referential struct
 struct NodeIterator {
-    table: Arc<SnapshotTable>,
+    table: Arc<Snapshot>,
     last_key: Option<Path>,
 }
 
@@ -136,10 +136,10 @@ impl Iterator for NodeIterator {
     }
 }
 
-impl FromIterator<NodeSnapshot> for SnapshotTable {
+impl FromIterator<NodeSnapshot> for Snapshot {
     fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(iter: T) -> Self {
         let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
-        SnapshotTable { nodes }
+        Snapshot { nodes }
     }
 }
 
@@ -263,7 +263,7 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = nodes.into_iter().collect::<SnapshotTable>();
+        let st = nodes.into_iter().collect::<Snapshot>();
         assert_eq!(
             st.get_node(&"/nonexistent".into()),
             Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })

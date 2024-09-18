@@ -24,7 +24,7 @@ use tokio::task;
 
 use crate::{
     format::{
-        manifest::{ChunkInfo, ChunkRef, ManifestExtents, ManifestRef, ManifestsTable},
+        manifest::{ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef},
         snapshot::{NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot},
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
@@ -842,7 +842,7 @@ impl Dataset {
     pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
         // We search for the current manifest. We are assumming a single one for now
         let old_manifest = match self.snapshot_id.as_ref() {
-            None => Arc::new(ManifestsTable::default()),
+            None => Arc::new(Manifest::default()),
             Some(snapshot_id) => {
                 let snapshot = self.storage().fetch_snapshot(snapshot_id).await?;
                 // FIXME: currently only looking for the first manifest
@@ -860,7 +860,7 @@ impl Dataset {
                         self.storage.fetch_manifests(manifest_id).await?
                     }
                     // If there is no previous manifest we create an empty one
-                    None => Arc::new(ManifestsTable::default()),
+                    None => Arc::new(Manifest::default()),
                 }
             }
         };
@@ -898,7 +898,7 @@ impl Dataset {
                         Arc::into_inner(chunk_changes).expect("Bug in flush task join");
                 }
 
-                let new_manifest = Arc::new(ManifestsTable { chunks: new_chunks });
+                let new_manifest = Arc::new(Manifest { chunks: new_chunks });
                 let new_manifest_id = ObjectId::random();
                 self.storage
                     .write_manifests(new_manifest_id.clone(), new_manifest)

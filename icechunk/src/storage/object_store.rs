@@ -11,8 +11,8 @@ use object_store::{
 };
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ByteRange, ObjectId, Path,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId, Path,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -134,10 +134,7 @@ impl fmt::Debug for ObjectStorage {
 }
 #[async_trait]
 impl Storage for ObjectStorage {
-    async fn fetch_snapshot(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<SnapshotTable>, StorageError> {
+    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
@@ -155,7 +152,7 @@ impl Storage for ObjectStorage {
     async fn fetch_manifests(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<ManifestsTable>, StorageError> {
+    ) -> Result<Arc<Manifest>, StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
@@ -166,7 +163,7 @@ impl Storage for ObjectStorage {
     async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<SnapshotTable>,
+        table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, &id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;
@@ -189,7 +186,7 @@ impl Storage for ObjectStorage {
     async fn write_manifests(
         &self,
         id: ObjectId,
-        table: Arc<ManifestsTable>,
+        table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, &id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;

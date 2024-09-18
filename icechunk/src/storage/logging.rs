@@ -6,8 +6,8 @@ use futures::stream::BoxStream;
 
 use super::{Storage, StorageError, StorageResult};
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ByteRange, ObjectId,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId,
 };
 
 #[derive(Debug)]
@@ -31,10 +31,7 @@ impl LoggingStorage {
 #[async_trait]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
-    async fn fetch_snapshot(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<SnapshotTable>, StorageError> {
+    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -56,7 +53,7 @@ impl Storage for LoggingStorage {
     async fn fetch_manifests(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<ManifestsTable>, StorageError> {
+    ) -> Result<Arc<Manifest>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -79,7 +76,7 @@ impl Storage for LoggingStorage {
     async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<SnapshotTable>,
+        table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         self.backend.write_snapshot(id, table).await
     }
@@ -95,7 +92,7 @@ impl Storage for LoggingStorage {
     async fn write_manifests(
         &self,
         id: ObjectId,
-        table: Arc<ManifestsTable>,
+        table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id, table).await
     }
