@@ -25,7 +25,10 @@ use tokio::task;
 use crate::{
     format::{
         manifest::{ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef},
-        snapshot::{NodeData, NodeSnapshot, NodeType, UserAttributesSnapshot},
+        snapshot::{
+            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotProperties,
+            UserAttributesSnapshot,
+        },
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
@@ -839,14 +842,18 @@ impl Dataset {
     ///
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
-    pub async fn flush(&mut self) -> DatasetResult<ObjectId> {
+    pub async fn flush(
+        &mut self,
+        properties: SnapshotProperties,
+    ) -> DatasetResult<ObjectId> {
         // We search for the current manifest. We are assumming a single one for now
-        let old_manifest = match self.snapshot_id.as_ref() {
-            None => Arc::new(Manifest::default()),
+        let (old_snapshot, old_manifest) = match self.snapshot_id.as_ref() {
+            None => (None, Arc::new(Manifest::default())),
             Some(snapshot_id) => {
-                let snapshot = self.storage().fetch_snapshot(snapshot_id).await?;
+                let old_snapshot = self.storage().fetch_snapshot(snapshot_id).await?;
+                let old_snapshot_c = Arc::clone(&old_snapshot);
                 // FIXME: currently only looking for the first manifest
-                let manifest_id = snapshot.iter_arc().find_map(|node| {
+                let manifest_id = old_snapshot_c.iter_arc().find_map(|node| {
                     match node.node_data {
                         NodeData::Array(_, man) => {
                             // TODO: can we avoid clone
@@ -855,13 +862,14 @@ impl Dataset {
                         NodeData::Group => None,
                     }
                 });
-                match manifest_id {
+                let old_manifest = match manifest_id {
                     Some(ref manifest_id) => {
                         self.storage.fetch_manifests(manifest_id).await?
                     }
                     // If there is no previous manifest we create an empty one
                     None => Arc::new(Manifest::default()),
-                }
+                };
+                (Some(old_snapshot), old_manifest)
             }
         };
 
@@ -905,15 +913,22 @@ impl Dataset {
                     .await?;
 
                 let all_nodes = self.updated_nodes(&new_manifest_id).await?;
-                let new_snapshot = all_nodes.collect();
-                let new_snapshot_id = ObjectId::random();
+
+                let new_snapshot = match old_snapshot.as_deref() {
+                    Some(parent) => {
+                        Snapshot::child_from_iter(parent, Some(properties), all_nodes)
+                    }
+                    None => Snapshot::first_from_iter(Some(properties), all_nodes),
+                };
+                let new_snapshot = Arc::new(new_snapshot);
+                let new_snapshot_id = &new_snapshot.metadata.id;
                 self.storage
-                    .write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot))
+                    .write_snapshot(new_snapshot_id.clone(), Arc::clone(&new_snapshot))
                     .await?;
 
                 self.snapshot_id = Some(new_snapshot_id.clone());
                 self.change_set = ChangeSet::default();
-                Ok(new_snapshot_id)
+                Ok(new_snapshot_id.clone())
             }
             Err(_) => Err(DatasetError::OtherFlushError),
         }
@@ -957,7 +972,7 @@ impl Dataset {
         message: &str,
     ) -> DatasetResult<(ObjectId, BranchVersion)> {
         let parent_snaphsot = self.snapshot_id.clone();
-        let new_snapshot = self.flush().await?;
+        let new_snapshot = self.flush(SnapshotProperties::default()).await?;
         let now = Utc::now();
         let properties =
             HashMap::from_iter(vec![("message".to_string(), Value::from(message))]);
@@ -1216,7 +1231,7 @@ mod tests {
             },
         ];
 
-        let snapshot = Arc::new(nodes.iter().cloned().collect());
+        let snapshot = Arc::new(Snapshot::first_from_iter(None, nodes.iter().cloned()));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
         let mut ds = Dataset::update(Arc::new(storage), snapshot_id)
@@ -1461,7 +1476,7 @@ mod tests {
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let snapshot_id = ds.flush().await?;
+        let snapshot_id = ds.flush(SnapshotProperties::default()).await?;
 
         assert_eq!(Some(snapshot_id), ds.snapshot_id);
         assert_eq!(
@@ -1474,7 +1489,7 @@ mod tests {
             })
         );
         ds.add_group("/group".into()).await?;
-        let _snapshot_id = ds.flush().await?;
+        let _snapshot_id = ds.flush(SnapshotProperties::default()).await?;
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
             Some(NodeSnapshot {
@@ -1511,7 +1526,7 @@ mod tests {
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
         // wo commit to test the case of a chunkless array
-        let _snapshot_id = ds.flush().await?;
+        let _snapshot_id = ds.flush(SnapshotProperties::default()).await?;
 
         // we set a chunk in a new array
         ds.set_chunk_ref(
@@ -1521,7 +1536,7 @@ mod tests {
         )
         .await?;
 
-        let _snapshot_id = ds.flush().await?;
+        let _snapshot_id = ds.flush(SnapshotProperties::default()).await?;
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
             Some(NodeSnapshot {
@@ -1571,7 +1586,7 @@ mod tests {
         )
         .await?;
 
-        let previous_snapshot_id = ds.flush().await?;
+        let previous_snapshot_id = ds.flush(SnapshotProperties::default()).await?;
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1596,7 +1611,7 @@ mod tests {
         )
         .await?;
 
-        let snapshot_id = ds.flush().await?;
+        let snapshot_id = ds.flush(SnapshotProperties::default()).await?;
         let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
 
         assert_eq!(
@@ -1676,7 +1691,7 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let snapshot_id = ds.flush().await?;
+        let snapshot_id = ds.flush(SnapshotProperties::default()).await?;
         let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
         let coords = ds
             .all_chunks()
