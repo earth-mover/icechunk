@@ -322,7 +322,7 @@ impl Dataset {
     }
 
     /// Indicates if the dataset has pending changes
-    pub fn has_pending_changes(&self) -> bool {
+    pub fn has_uncomitted_changes(&self) -> bool {
         !self.change_set.is_empty()
     }
 

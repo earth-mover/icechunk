@@ -164,8 +164,8 @@ impl Store {
         self.dataset.snapshot_id()
     }
 
-    pub fn has_pending_changes(&self) -> bool {
-        self.dataset.has_pending_changes()
+    pub fn has_uncomitted_changes(&self) -> bool {
+        self.dataset.has_uncomitted_changes()
     }
 
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
@@ -190,7 +190,7 @@ impl Store {
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
         // Checking out is not allowed if there are uncommitted changes
-        if self.dataset.has_pending_changes() {
+        if self.dataset.has_uncomitted_changes() {
             return Err(StoreError::UncommittedChanges);
         }
 
@@ -221,7 +221,7 @@ impl Store {
         &mut self,
         branch: &str,
     ) -> StoreResult<(ObjectId, BranchVersion)> {
-        if self.dataset.has_pending_changes() {
+        if self.dataset.has_uncomitted_changes() {
             return Err(StoreError::UncommittedChanges);
         }
 
@@ -1531,7 +1531,7 @@ mod tests {
 
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
-        assert_eq!(store.has_pending_changes(), true);
+        assert_eq!(store.has_uncomitted_changes(), true);
 
         let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
         assert!(result.is_err());
