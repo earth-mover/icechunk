@@ -211,6 +211,11 @@ impl DatasetBuilder {
         self
     }
 
+    pub fn with_config(&mut self, config: DatasetConfig) -> &mut Self {
+        self.config = config;
+        self
+    }
+
     pub fn build(&self) -> Dataset {
         Dataset::new(self.config.clone(), self.storage.clone(), self.snapshot_id.clone())
     }
@@ -282,18 +287,10 @@ impl Dataset {
     pub async fn init(
         config: DatasetConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-    ) -> DatasetResult<DatasetBuilder> {
-        let mut temp_dataset = Dataset {
-            snapshot_id: None,
-            config,
-            storage: Arc::clone(&storage),
-            last_node_id: None,
-            change_set: ChangeSet::default(),
-        };
-        let (snapshot_id, _version) =
-            temp_dataset.commit("main", "Store created").await?;
-
-        Ok(Self::update(storage, snapshot_id))
+    ) -> DatasetResult<Dataset> {
+        let mut dataset = Dataset::create(storage).with_config(config).build();
+        dataset.commit("main", "Store created").await?;
+        Ok(dataset)
     }
 
     fn new(
@@ -1011,6 +1008,35 @@ impl Dataset {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub async fn new_branch(&self, branch_name: &str) -> DatasetResult<BranchVersion> {
+        let Some(snapshot_id) = self.snapshot_id.clone() else {
+            return Err(DatasetError::OtherFlushError);
+        };
+
+        let now = Utc::now();
+        let properties = HashMap::new();
+
+        // TODO: The parent snapshot should exist?
+        let version = match update_branch(
+            self.storage.as_ref(),
+            branch_name,
+            snapshot_id,
+            None,
+            now,
+            properties,
+        )
+        .await
+        {
+            Ok(branch_version) => Ok(branch_version),
+            Err(RefError::Conflict { expected_parent, actual_parent }) => {
+                Err(DatasetError::Conflict { expected_parent, actual_parent })
+            }
+            Err(err) => Err(err.into()),
+        }?;
+
+        Ok(version)
     }
 
     pub async fn tag(
@@ -1761,6 +1787,7 @@ mod tests {
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
+        assert_eq!(&Some(new_snapshot_id.clone()), ds.snapshot_id());
 
         ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;

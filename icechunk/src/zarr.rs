@@ -27,7 +27,7 @@ use crate::{
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::BranchVersion,
-    Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
+    Dataset, MemCachingStorage, ObjectStorage, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -225,9 +225,14 @@ impl Store {
             return Err(StoreError::UncommittedChanges);
         }
 
+        let version = self.dataset.new_branch(branch).await?;
+        let Some(snapshot_id) = self.snapshot_id().clone() else {
+            return Err(StoreError::NoSnapshot);
+        };
+
         self.current_branch = Some(branch.to_string());
-        let result = self.commit(format!("Created {branch} branch").as_str()).await?;
-        Ok(result)
+
+        Ok((snapshot_id, version))
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
@@ -571,38 +576,43 @@ async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(Dataset, Option<String>), String> {
-    let (mut builder, branch): (DatasetBuilder, Option<String>) =
-        match &dataset.previous_version {
-            None => {
-                let builder =
-                    Dataset::init(crate::dataset::DatasetConfig::default(), storage)
-                        .await
-                        .map_err(|err| format!("Error initializing dataset: {err}"))?;
-                (builder, Some(String::from("main")))
-            }
-            Some(VersionInfo::SnapshotId(sid)) => {
-                let builder = Dataset::update(storage, sid.clone());
-                (builder, None)
-            }
-            Some(VersionInfo::TagRef(tag)) => {
-                let builder = Dataset::from_tag(storage, tag)
+    let (dataset, branch): (Dataset, Option<String>) = match &dataset.previous_version {
+        None => {
+            let dataset =
+                Dataset::init(crate::dataset::DatasetConfig::default(), storage)
                     .await
-                    .map_err(|err| format!("Error fetching tag: {err}"))?;
-                (builder, None)
+                    .map_err(|err| format!("Error initializing dataset: {err}"))?;
+            (dataset, Some(String::from("main")))
+        }
+        Some(VersionInfo::SnapshotId(sid)) => {
+            let mut builder = Dataset::update(storage, sid.clone());
+            if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
+                builder.with_inline_threshold_bytes(inline_theshold);
             }
-            Some(VersionInfo::BranchTipRef(branch)) => {
-                let builder = Dataset::from_branch_tip(storage, branch)
-                    .await
-                    .map_err(|err| format!("Error fetching branch: {err}"))?;
-                (builder, Some(branch.clone()))
+            (builder.build(), None)
+        }
+        Some(VersionInfo::TagRef(tag)) => {
+            let mut builder = Dataset::from_tag(storage, tag)
+                .await
+                .map_err(|err| format!("Error fetching tag: {err}"))?;
+            if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
+                builder.with_inline_threshold_bytes(inline_theshold);
             }
-        };
+            (builder.build(), None)
+        }
+        Some(VersionInfo::BranchTipRef(branch)) => {
+            let mut builder = Dataset::from_branch_tip(storage, branch)
+                .await
+                .map_err(|err| format!("Error fetching branch: {err}"))?;
+            if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
+                builder.with_inline_threshold_bytes(inline_theshold);
+            }
+            (builder.build(), Some(branch.clone()))
+        }
+    };
 
-    if let Some(thr) = dataset.inline_chunk_threshold_bytes {
-        builder.with_inline_threshold_bytes(thr);
-    }
     // TODO: add error checking, does the previous version exist?
-    Ok((builder.build(), branch))
+    Ok((dataset, branch))
 }
 
 fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
