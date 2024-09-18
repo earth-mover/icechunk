@@ -13,6 +13,7 @@ The most common scenario is for a store to contain a single Zarr group with mult
 However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
 Users of Icechunk should aim to scope their stores only to related arrays and groups that require consistent transactional updates.
 
+Icechunk defines a series of interconnected metadata and data files that together comprise the format.
 All the data and metadata for a store are stored in a directory in object storage or file storage.
 
 ## Goals
@@ -53,7 +54,7 @@ The storage system is not required to support random-access writes. Once written
 Icechunk uses a series of linked metadata files to describe the state of the store.
 
 - The **Snapshot file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files and [optionally] attribute files.
-- **Chunk Manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
+- **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
 - **Reference files** track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by creating the next branch file in a sequence.
@@ -117,6 +118,12 @@ All data and metadata files are stored within a root directory (typically a pref
 - `$ROOT/a/` attribute files
 - `$ROOT/m/` chunk manifests
 - `$ROOT/c/` chunks
+
+### File Formats
+
+> [!WARNING]  
+> The actual file formats used for each type of metadata file are in flux. The spec currently describes the data structures encoded in these files, rather than a specific file format.
+
 
 ### Reference Files
 
@@ -200,67 +207,587 @@ Tags cannot be deleted once created.
 ### Snapshot Files
 
 The snapshot file fully describes the schema of the store, including all arrays and groups.
-
-The snapshot file is a Parquet file.
-Each row of the file represents an individual node (array or group) of the Zarr store. 
  
-The snapshot file has the following Arrow schema:
+The snapshot file has the following JSON schema:
 
-```
-id: uint32 not null
-  -- field metadata --
-  description: 'unique identifier for the node'
-type: string not null
-  -- field metadata --
-  description: 'array or group'
-path: string not null
-  -- field metadata --
-  description: 'path to the node within the store'
-array_metadata: struct<shape: list<item: uint16> not null, data_type: string not null, fill_value: binary, dimension_names: list<item: string>, chunk_grid: struct<name: string not null, configuration: struct<chunk_shape: list<item: uint16> not null> not null>, chunk_key_encoding: struct<name: string not null, configuration: struct<separator: string not null> not null>, codecs: list<item: struct<name: string not null, configuration: binary>>>
-  child 0, shape: list<item: uint16> not null
-      child 0, item: uint16
-  child 1, data_type: string not null
-  child 2, fill_value: binary
-  child 3, dimension_names: list<item: string>
-      child 0, item: string
-  child 4, chunk_grid: struct<name: string not null, configuration: struct<chunk_shape: list<item: uint16> not null> not null>
-      child 0, name: string not null
-      child 1, configuration: struct<chunk_shape: list<item: uint16> not null> not null
-          child 0, chunk_shape: list<item: uint16> not null
-              child 0, item: uint16
-  child 5, chunk_key_encoding: struct<name: string not null, configuration: struct<separator: string not null> not null>
-      child 0, name: string not null
-      child 1, configuration: struct<separator: string not null> not null
-          child 0, separator: string not null
-  child 6, codecs: list<item: struct<name: string not null, configuration: binary>>
-      child 0, item: struct<name: string not null, configuration: binary>
-          child 0, name: string not null
-          child 1, configuration: binary
-  -- field metadata --
-  description: 'All the Zarr array metadata'
-inline_attrs: binary
-  -- field metadata --
-  description: 'user-defined attributes, stored inline with this entry'
-attrs_reference: struct<attrs_file: string not null, row: uint16 not null, flags: uint16>
-  child 0, attrs_file: string not null
-  child 1, row: uint16 not null
-  child 2, flags: uint16
-  -- field metadata --
-  description: 'user-defined attributes, stored in a separate attributes ' + 4
-manifests: list<item: struct<manifest_id: uint16 not null, row: uint16 not null, extent: list<item: fixed_size_list<item: uint16>[2]> not null, flags: uint16>>
-  child 0, item: struct<manifest_id: uint16 not null, row: uint16 not null, extent: list<item: fixed_size_list<item: uint16>[2]> not null, flags: uint16>
-      child 0, manifest_id: uint16 not null
-      child 1, row: uint16 not null
-      child 2, extent: list<item: fixed_size_list<item: uint16>[2]> not null
-          child 0, item: fixed_size_list<item: uint16>[2]
-              child 0, item: uint16
-      child 3, flags: uint16
+<details>
+<summary>JSON Schema for Snapshot File</summary>
+
+```json-schema
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SnapshotTable",
+  "type": "object",
+  "required": [
+    "nodes"
+  ],
+  "properties": {
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/NodeSnapshot"
+      }
+    }
+  },
+  "definitions": {
+    "ChunkIndices": {
+      "description": "An ND index to an element in a chunk grid.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      }
+    },
+    "ChunkKeyEncoding": {
+      "type": "string",
+      "enum": [
+        "Slash",
+        "Dot",
+        "Default"
+      ]
+    },
+    "ChunkShape": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 1.0
+      }
+    },
+    "Codec": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "configuration": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "DataType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "bool",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "float16",
+            "float32",
+            "float64",
+            "complex64",
+            "complex128"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "rawbits"
+          ],
+          "properties": {
+            "rawbits": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "FillValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Bool"
+          ],
+          "properties": {
+            "Bool": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Int8"
+          ],
+          "properties": {
+            "Int8": {
+              "type": "integer",
+              "format": "int8"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Int16"
+          ],
+          "properties": {
+            "Int16": {
+              "type": "integer",
+              "format": "int16"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Int32"
+          ],
+          "properties": {
+            "Int32": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Int64"
+          ],
+          "properties": {
+            "Int64": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "UInt8"
+          ],
+          "properties": {
+            "UInt8": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "UInt16"
+          ],
+          "properties": {
+            "UInt16": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "UInt32"
+          ],
+          "properties": {
+            "UInt32": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "UInt64"
+          ],
+          "properties": {
+            "UInt64": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Float16"
+          ],
+          "properties": {
+            "Float16": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Float32"
+          ],
+          "properties": {
+            "Float32": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Float64"
+          ],
+          "properties": {
+            "Float64": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Complex64"
+          ],
+          "properties": {
+            "Complex64": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "number",
+                  "format": "float"
+                },
+                {
+                  "type": "number",
+                  "format": "float"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Complex128"
+          ],
+          "properties": {
+            "Complex128": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "number",
+                  "format": "double"
+                },
+                {
+                  "type": "number",
+                  "format": "double"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "RawBits"
+          ],
+          "properties": {
+            "RawBits": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Flags": {
+      "type": "array",
+      "items": [],
+      "maxItems": 0,
+      "minItems": 0
+    },
+    "ManifestExtents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ChunkIndices"
+      }
+    },
+    "ManifestRef": {
+      "type": "object",
+      "required": [
+        "extents",
+        "flags",
+        "object_id"
+      ],
+      "properties": {
+        "extents": {
+          "$ref": "#/definitions/ManifestExtents"
+        },
+        "flags": {
+          "$ref": "#/definitions/Flags"
+        },
+        "object_id": {
+          "$ref": "#/definitions/ObjectId"
+        }
+      }
+    },
+    "NodeData": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Group"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "Array"
+          ],
+          "properties": {
+            "Array": {
+              "type": "array",
+              "items": [
+                {
+                  "$ref": "#/definitions/ZarrArrayMetadata"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/ManifestRef"
+                  }
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NodeSnapshot": {
+      "type": "object",
+      "required": [
+        "id",
+        "node_data",
+        "path"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "node_data": {
+          "$ref": "#/definitions/NodeData"
+        },
+        "path": {
+          "type": "string"
+        },
+        "user_attributes": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserAttributesSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ObjectId": {
+      "description": "The id of a file in object store",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0.0
+      },
+      "maxItems": 16,
+      "minItems": 16
+    },
+    "StorageTransformer": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "configuration": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "UserAttributes": {
+      "type": "object"
+    },
+    "UserAttributesRef": {
+      "type": "object",
+      "required": [
+        "flags",
+        "location",
+        "object_id"
+      ],
+      "properties": {
+        "flags": {
+          "$ref": "#/definitions/Flags"
+        },
+        "location": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "object_id": {
+          "$ref": "#/definitions/ObjectId"
+        }
+      }
+    },
+    "UserAttributesSnapshot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Inline"
+          ],
+          "properties": {
+            "Inline": {
+              "$ref": "#/definitions/UserAttributes"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Ref"
+          ],
+          "properties": {
+            "Ref": {
+              "$ref": "#/definitions/UserAttributesRef"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ZarrArrayMetadata": {
+      "type": "object",
+      "required": [
+        "chunk_key_encoding",
+        "chunk_shape",
+        "codecs",
+        "data_type",
+        "fill_value",
+        "shape"
+      ],
+      "properties": {
+        "chunk_key_encoding": {
+          "$ref": "#/definitions/ChunkKeyEncoding"
+        },
+        "chunk_shape": {
+          "$ref": "#/definitions/ChunkShape"
+        },
+        "codecs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Codec"
+          }
+        },
+        "data_type": {
+          "$ref": "#/definitions/DataType"
+        },
+        "dimension_names": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "fill_value": {
+          "$ref": "#/definitions/FillValue"
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          }
+        },
+        "storage_transformers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/StorageTransformer"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
+</details>
 
 ### Attributes Files
 
 Attribute files hold user-defined attributes separately from the snapshot file.
+
+> [!WARNING]  
+> Attribute files have not been implemented.
 
 ### Chunk Manifest Files
 
@@ -268,29 +795,133 @@ A chunk manifest file stores chunk references.
 Chunk references from multiple arrays can be stored in the same chunk manifest.
 The chunks from a single array can also be spread across multiple manifests.
 
-> [!WARNING]  
-> The manifest file format is still under active development.
-> Nothing below here is certain.
+<details>
+<summary>JSON Schema for Chunk Manifest Files</summary>
 
-Chunk manifest files are Parquet files.
-They have the following arrow schema.
-
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ManifestsTable",
+  "type": "object",
+  "required": [
+    "chunks"
+  ],
+  "properties": {
+    "chunks": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/ChunkPayload"
+      }
+    }
+  },
+  "definitions": {
+    "ChunkPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Inline"
+          ],
+          "properties": {
+            "Inline": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Virtual"
+          ],
+          "properties": {
+            "Virtual": {
+              "$ref": "#/definitions/VirtualChunkRef"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Ref"
+          ],
+          "properties": {
+            "Ref": {
+              "$ref": "#/definitions/ChunkRef"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ChunkRef": {
+      "type": "object",
+      "required": [
+        "id",
+        "length",
+        "offset"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ObjectId"
+        },
+        "length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ObjectId": {
+      "description": "The id of a file in object store",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0.0
+      },
+      "maxItems": 16,
+      "minItems": 16
+    },
+    "VirtualChunkRef": {
+      "type": "object",
+      "required": [
+        "length",
+        "location",
+        "offset"
+      ],
+      "properties": {
+        "length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "location": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}
 ```
-array_id: uint32 not null
-coord: binary not null
-inline_data: binary
-chunk_id: binary
-virtual_path: string
-offset: uint64
-length: uint32 not null
-```
 
-- **id** - unique ID for the chunk.
-- **array_id** - ID for the array this is part of
-- **coord** - position of the chunk within the array. See _chunk coord encoding_ for more detail
-- **chunk_file** - the name of the file in which the chunk resides
-- **offset** - offset in bytes
-- **length** - size in bytes
+</details>
 
 #### Chunk Coord Encoding
 
