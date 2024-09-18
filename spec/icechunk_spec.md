@@ -20,7 +20,7 @@ All the data and metadata for a store are stored in a directory in object storag
 The goals of the specification are as follows:
 
 1. **Object storage** - the format is designed around the consistency features and performance characteristics available in modern cloud object storage. No external database or catalog is required.
-1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to arrays will be committed via a single atomic operation and will not be partially visible. Readers will not acquire locks.
+1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to stores will be committed atomically and will not be partially visible. Readers will not acquire locks.
 1. **Time travel** - Previous snapshots of a store remain accessible after new ones have been written.
 1. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
 1. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
@@ -29,13 +29,14 @@ The goals of the specification are as follows:
 
 1. **Low Latency** - Icechunk is designed to support analytical workloads for large stores. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
 1. **No Catalog** - The spec does not extend beyond a single store or provide a way to organize multiple stores into a hierarchy.
+1. **Access Controls** - Access control is the responsibility of the storage medium.
+The spec is not designed to enable fine-grained access restrictions (e.g. only read specific arrays) within a single store.
 
 ### Storage Operations
 
-An explicit goal of 
 Icechunk requires that the storage system support the following operations:
 
-- **In-place write** - Files are not moved or altered once they are written. Strong read-after-write and list-after-write consistency is expected.
+- **In-place write** - Strong read-after-write and list-after-write consistency is expected. Files are not moved or altered once they are written.
 - **Conditional write if-not-exists** - For the commit process to be safe and consistent, the storage system must guard against two files of the same name being created at the same time.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
 - **Deletes** - Delete files that are no longer used (via a garbage-collection operation).
@@ -148,6 +149,7 @@ The process of creating and updating branches is designed to use the limited con
 When a client checks out a branch, it obtains a specific snapshot ID and uses this snapshot as the basis for any changes it creates during its session.
 The client creates a new snapshot and then updates the branch reference to point to the new snapshot (a "commit").
 However, when updating the branch reference, the client must detect whether a _different session_ has updated the branch reference in the interim, possibly retrying or failing the commit if so.
+This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, and conflicts are expected to be infrequent.
 
 The simplest way to do this would be to store the branch reference in a specific file (e.g. `main.json`) and update it via an atomic "compare and swap" operation.
 Unfortunately not all popular object stores support this operation (AWS S3 notably does not).
@@ -165,7 +167,7 @@ When a client checks out a branch, it keeps track of its current sequence number
 When it tries to commit, it attempts to create the file corresponding to sequence number _N + 1_ in an atomic "create if not exists" operation.
 If this succeeds, the commit is successful.
 If this fails (because another client created that file already), the commit fails.
-At this point, the client may choose retry its commit and create sequence number _N + 2_.
+At this point, the client may choose retry its commit (possibly re-reading the updated data) and then create sequence number _N + 2_.
 
 Branch references are stored in the `r/` directory within a subdirectory corresponding to the branch name: `r/$BRANCH_NAME/`.
 Branch names may not contain the `/` character.
