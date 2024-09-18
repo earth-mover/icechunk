@@ -112,8 +112,7 @@ impl ObjectStorage {
     }
 
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
-        path.prefix_match(&ObjectPath::from(format!("{}/{}", self.prefix, prefix)))
-            .map(|it| it.collect())
+        path.prefix_match(&ObjectPath::from(format!("{}", prefix))).map(|it| it.collect())
     }
 
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
