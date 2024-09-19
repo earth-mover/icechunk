@@ -1287,7 +1287,7 @@ mod tests {
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
         let mut ds = store.dataset();
-        let oid = ds.flush(Default::default()).await?;
+        let oid = ds.flush("commit", Default::default()).await?;
 
         let ds = Dataset::update(storage, oid).build();
         let store = Store::from_dataset(ds, None, None);

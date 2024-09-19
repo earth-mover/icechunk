@@ -152,11 +152,11 @@ ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?
     print_nodes(&ds).await?;
 
     println!("## Committing");
-    let v1_id = ds.flush(Default::default()).await?;
+    let v1_id = ds.flush("some message", Default::default()).await?;
     println!(
         r#"
 ```
-ds.flush().await?;
+ds.flush("some message", Default::default()).await?;
 => {v1_id:?}
 ```
  "#
@@ -197,11 +197,11 @@ let chunk = ds.get_chunk_ref(&array1_path, &ChunkIndices(vec![0])).await.unwrap(
 
     println!();
     println!("## Committing");
-    let v2_id = ds.flush(Default::default()).await?;
+    let v2_id = ds.flush("a message", Default::default()).await?;
     println!(
         r#"
 ```
-ds.flush().await?;
+ds.flush("a message", Default::default()).await?;
 => {v2_id:?}
 ```
  "#
@@ -250,11 +250,11 @@ ds.set_chunk(
 
     println!();
     println!("## Committing");
-    let v3_id = ds.flush(Default::default()).await?;
+    let v3_id = ds.flush("commit", Default::default()).await?;
     println!(
         r#"
 ```
-ds.flush().await?;
+ds.flush("commit", Default::default()).await?;
 => {v3_id:?}
 ```
  "#
