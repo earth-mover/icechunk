@@ -232,10 +232,7 @@ impl Store {
 
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
-    pub async fn commit(
-        &mut self,
-        message: &str,
-    ) -> StoreResult<(ObjectId, BranchVersion)> {
+    pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
         if let Some(branch) = &self.current_branch {
             let result = self.dataset.commit(branch, message, None).await?;
             Ok(result)
@@ -245,13 +242,8 @@ impl Store {
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(
-        &mut self,
-        tag: &str,
-        snapshot_id: &ObjectId,
-        message: Option<&str>,
-    ) -> StoreResult<()> {
-        self.dataset.tag(tag, snapshot_id, message).await?;
+    pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
+        self.dataset.tag(tag, snapshot_id).await?;
         Ok(())
     }
 
@@ -1575,12 +1567,11 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
 
-        let (snapshot_id, version) = store.commit("initial commit").await.unwrap();
-        assert_eq!(version.0, 0);
+        let snapshot_id = store.commit("initial commit").await.unwrap();
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
-        let (new_snapshot_id, _version) = store.commit("update").await.unwrap();
+        let new_snapshot_id = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
@@ -1601,7 +1592,7 @@ mod tests {
         // TODO: Create a new branch and do stuff with it
         store.new_branch("dev").await?;
         store.set("array/c/0/1/0", new_data.clone()).await?;
-        let (dev_snapshot_id, _version) = store.commit("update dev branch").await?;
+        let dev_snapshot_id = store.commit("update dev branch").await?;
         store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 

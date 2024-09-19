@@ -18,7 +18,6 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::Either;
-use serde_json::Value;
 use thiserror::Error;
 use tokio::task;
 
@@ -32,8 +31,7 @@ use crate::{
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
-        create_tag, fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version,
-        update_branch, BranchVersion, RefError,
+        create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, RefError,
     },
     Storage, StorageError,
 };
@@ -268,9 +266,8 @@ impl Dataset {
         storage: Arc<dyn Storage + Send + Sync>,
         branch_name: &str,
     ) -> DatasetResult<DatasetBuilder> {
-        let version = last_branch_version(storage.as_ref(), branch_name).await?;
-        let ref_data = fetch_branch(storage.as_ref(), branch_name, &version).await?;
-        Ok(Self::update(storage, ref_data.snapshot))
+        let snapshot_id = fetch_branch_tip(storage.as_ref(), branch_name).await?.snapshot;
+        Ok(Self::update(storage, snapshot_id))
     }
 
     pub async fn from_tag(
@@ -291,6 +288,14 @@ impl Dataset {
         let new_snapshot = Snapshot::empty();
         let new_snapshot_id = ObjectId::random();
         storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
+        update_branch(
+            storage.as_ref(),
+            "main",
+            new_snapshot_id.clone(),
+            None,
+            true, // FIXME: I need this value from somewhere
+        )
+        .await?;
 
         Ok(DatasetBuilder::new(storage, new_snapshot_id))
     }
@@ -955,9 +960,8 @@ impl Dataset {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> DatasetResult<(ObjectId, BranchVersion)> {
+    ) -> DatasetResult<ObjectId> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
-
         match current {
             Err(RefError::RefNotFound(_)) => {
                 self.do_commit(update_branch_name, message, properties).await
@@ -982,25 +986,21 @@ impl Dataset {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> DatasetResult<(ObjectId, BranchVersion)> {
+    ) -> DatasetResult<ObjectId> {
         let parent_snapshot = self.snapshot_id.clone();
         let properties = properties.unwrap_or_default();
-
-        let new_snapshot = self.flush(message, properties.clone()).await?;
-        let now = Utc::now();
+        let new_snapshot = self.flush(message, properties).await?;
 
         match update_branch(
             self.storage.as_ref(),
             update_branch_name,
             new_snapshot.clone(),
             Some(&parent_snapshot),
-            now,
-            properties,
             self.config.unsafe_overwrite_refs,
         )
         .await
         {
-            Ok(branch_version) => Ok((new_snapshot, branch_version)),
+            Ok(_) => Ok(new_snapshot),
             Err(RefError::Conflict { expected_parent, actual_parent }) => {
                 Err(DatasetError::Conflict { expected_parent, actual_parent })
             }
@@ -1009,17 +1009,12 @@ impl Dataset {
     }
 
     pub async fn new_branch(&self, branch_name: &str) -> DatasetResult<BranchVersion> {
-        let now = Utc::now();
-        let properties = HashMap::new();
-
         // TODO: The parent snapshot should exist?
         let version = match update_branch(
             self.storage.as_ref(),
             branch_name,
             self.snapshot_id.clone(),
             None,
-            now,
-            properties,
             self.config.unsafe_overwrite_refs,
         )
         .await
@@ -1034,24 +1029,11 @@ impl Dataset {
         Ok(version)
     }
 
-    pub async fn tag(
-        &self,
-        tag_name: &str,
-        snapshot_id: &ObjectId,
-        message: Option<&str>,
-    ) -> DatasetResult<()> {
-        let now = Utc::now();
-        let mut properties = HashMap::new();
-        if let Some(message) = message {
-            properties.insert(String::from("message"), Value::from(message));
-        }
-
+    pub async fn tag(&self, tag_name: &str, snapshot_id: &ObjectId) -> DatasetResult<()> {
         create_tag(
             self.storage.as_ref(),
             tag_name,
             snapshot_id.clone(),
-            now,
-            properties,
             self.config.unsafe_overwrite_refs,
         )
         .await?;
@@ -1618,7 +1600,6 @@ mod tests {
                 node_data: NodeData::Group
             })
         );
-        dbg!(ds.get_node(&new_array_path).await.unwrap().node_data);
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
@@ -1784,19 +1765,17 @@ mod tests {
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let (new_snapshot_id, version) = ds.commit("main", "first commit", None).await?;
-        assert_eq!(version, BranchVersion(0));
+        let new_snapshot_id = ds.commit("main", "first commit", None).await?;
         assert_eq!(
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
-        ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
+        ds.tag("v1", &new_snapshot_id).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
-        assert_eq!("version 1.0.0", ref_data.properties["message"]);
 
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
@@ -1841,12 +1820,10 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let (new_snapshot_id, version) = ds.commit("main", "second commit", None).await?;
-        assert_eq!(version, BranchVersion(1));
+        let new_snapshot_id = ds.commit("main", "second commit", None).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "main").await?;
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
-        //assert_eq!("second commit", ref_data.properties["message"]);
 
         Ok(())
     }
