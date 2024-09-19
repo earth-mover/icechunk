@@ -264,9 +264,15 @@ impl Storage for ObjectStorage {
             .boxed()
     }
 
-    async fn write_ref(&self, ref_key: &str, bytes: Bytes) -> StorageResult<()> {
+    async fn write_ref(
+        &self,
+        ref_key: &str,
+        overwrite_refs: bool,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
         let key = self.ref_key(ref_key);
-        let opts = PutOptions { mode: PutMode::Create, ..PutOptions::default() };
+        let mode = if overwrite_refs { PutMode::Overwrite } else { PutMode::Create };
+        let opts = PutOptions { mode, ..PutOptions::default() };
 
         self.store
             .put_opts(&key, PutPayload::from_bytes(bytes), opts)
