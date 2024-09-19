@@ -8,6 +8,7 @@ use itertools::Itertools;
 use proptest::bits::u64;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use schemars::JsonSchema;
 use thiserror::Error;
 
 use crate::{zarr::ObjectId, Storage, StorageError};
@@ -96,7 +97,7 @@ impl BranchVersion {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RefData {
     pub snapshot: ObjectId,
     pub timestamp: DateTime<Utc>,
