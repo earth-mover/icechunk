@@ -25,8 +25,8 @@ use crate::{
     format::{
         manifest::{ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef},
         snapshot::{
-            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotProperties,
-            UserAttributesSnapshot,
+            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotMetadata,
+            SnapshotProperties, UserAttributesSnapshot,
         },
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
@@ -350,6 +350,23 @@ impl Dataset {
     /// Indicates if the dataset has pending changes
     pub fn has_uncommitted_changes(&self) -> bool {
         !self.change_set.is_empty()
+    }
+
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    pub async fn ancestry(
+        &self,
+    ) -> DatasetResult<impl Stream<Item = DatasetResult<SnapshotMetadata>>> {
+        // Stream<Item = DatasetResult<SnapshotMetadata>> {
+        let parent = self.storage.fetch_snapshot(self.snapshot_id()).await?;
+        let last = parent.metadata.clone();
+        let it = if parent.short_term_history.len() < parent.total_parents as usize {
+            // TODO: implement splitting of snapshot history
+            Either::Left(parent.local_ancestry().chain(iter::once_with(|| todo!())))
+        } else {
+            Either::Right(parent.local_ancestry())
+        };
+
+        Ok(futures::stream::iter(iter::once(Ok(last)).chain(it.map(Ok))))
     }
 
     /// Add a group to the store.
@@ -1810,9 +1827,8 @@ mod tests {
             })
         );
 
-        let mut ds = Dataset::from_branch_tip(Arc::clone(&storage), Ref::DEFAULT_BRANCH)
-            .await?
-            .build();
+        let mut ds =
+            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
             Some(NodeSnapshot {
@@ -1850,6 +1866,15 @@ mod tests {
             fetch_ref(storage.as_ref(), Ref::DEFAULT_BRANCH).await?;
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
+
+        let parents = ds.ancestry().await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(parents[0].message, "second commit");
+        assert_eq!(parents[1].message, "first commit");
+        assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
+        itertools::assert_equal(
+            parents.iter().sorted_by_key(|m| m.written_at).rev(),
+            parents.iter(),
+        );
 
         Ok(())
     }
