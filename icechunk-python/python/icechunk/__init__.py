@@ -30,15 +30,41 @@ class IcechunkStore(Store, SyncMixin):
         store = await pyicechunk_store_from_json_config(config_str)
         return IcechunkStore(store=store, mode=mode, *args, **kwargs)
 
-    async def checkout(self, snapshot_id: str) -> None:
+    @property
+    def snapshot_id(self) -> str:
+        return self._store.snapshot_id
+
+    @property
+    def branch(self) -> str:
+        return self._store.branch
+
+    async def checkout(self, snapshot_id: str | None = None, branch: str | None = None, tag: str | None = None) -> None:
         '''Checkout a snapshot by its id.
 
         TODO: Support branches and tags.
         '''
-        return await self._store.checkout_snapshot(snapshot_id)
+        if snapshot_id is not None:
+            return await self._store.checkout_snapshot(snapshot_id)
+        if branch is not None:
+            return await self._store.checkout_branch(branch)
+        if tag is not None:
+            return await self._store.checkout_tag(tag)
 
     async def commit(self, message: str) -> str:
         return await self._store.commit(message)
+
+    @property
+    def has_uncommitted_changes(self) -> bool:
+        return self._store.has_uncommitted_changes
+
+    async def reset(self) -> None:
+        return await self._store.reset()
+
+    async def new_branch(self, branch_name: str) -> str:
+        return await self._store.new_branch(branch_name)
+
+    async def tag(self, tag_name: str, snapshot_id: str, messsage: str | None = None) -> None:
+        return await self._store.tag(tag_name, snapshot_id=snapshot_id, message=messsage)
 
     async def empty(self) -> bool:
         return await self._store.empty()
@@ -111,7 +137,7 @@ class IcechunkStore(Store, SyncMixin):
     @property
     def supports_writes(self) -> bool:
         """Does the store support writes?"""
-        return self._store.supports_writes()
+        return self._store.supports_writes
 
     async def set(self, key: str, value: Buffer) -> None:
         """Store a (key, value) pair.
@@ -135,7 +161,7 @@ class IcechunkStore(Store, SyncMixin):
     @property
     def supports_partial_writes(self) -> bool:
         """Does the store support partial writes?"""
-        return self._store.supports_partial_writes()
+        return self._store.supports_partial_writes
 
     async def set_partial_values(
         self, key_start_values: list[tuple[str, int, BytesLike]]
@@ -154,7 +180,7 @@ class IcechunkStore(Store, SyncMixin):
     @property
     def supports_listing(self) -> bool:
         """Does the store support listing?"""
-        return self._store.supports_listing()
+        return self._store.supports_listing
 
     def list(self) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store.

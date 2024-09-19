@@ -57,6 +57,18 @@ impl PyIcechunkStore {
         Ok(())
     }
 
+    pub async fn checkout_branch(&mut self, branch: String) -> PyIcechunkStoreResult<()> {
+        let mut store = self.store.write().await;
+        store.checkout(VersionInfo::BranchTipRef(branch)).await?;
+        Ok(())
+    }
+
+    pub async fn checkout_tag(&mut self, tag: String) -> PyIcechunkStoreResult<()> {
+        let mut store = self.store.write().await;
+        store.checkout(VersionInfo::TagRef(tag)).await?;
+        Ok(())
+    }
+
     #[getter]
     pub fn snapshot_id(&self) -> PyIcechunkStoreResult<String> {
         let store = self.store.blocking_read();
@@ -84,17 +96,17 @@ impl PyIcechunkStore {
     }
 
     #[getter]
-    pub fn current_branch(&self) -> PyIcechunkStoreResult<Option<String>> {
+    pub fn branch(&self) -> PyIcechunkStoreResult<Option<String>> {
         let store = self.store.blocking_read();
         let current_branch = store.current_branch();
         Ok(current_branch.clone())
     }
 
     #[getter]
-    pub fn has_uncomitted_changes(&self) -> PyIcechunkStoreResult<bool> {
+    pub fn has_uncommitted_changes(&self) -> PyIcechunkStoreResult<bool> {
         let store = self.store.blocking_read();
-        let has_uncomitted_changes = store.has_uncomitted_changes();
-        Ok(has_uncomitted_changes)
+        let has_uncommitted_changes = store.has_uncommitted_changes();
+        Ok(has_uncommitted_changes)
     }
 
     pub async fn reset(&self) -> PyIcechunkStoreResult<()> {
@@ -105,7 +117,7 @@ impl PyIcechunkStore {
     pub fn new_branch<'py>(
         &'py self,
         py: Python<'py>,
-        branch: String,
+        branch_name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
@@ -114,7 +126,7 @@ impl PyIcechunkStore {
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let mut writeable_store = store.write().await;
             let (oid, _version) = writeable_store
-                .new_branch(&branch)
+                .new_branch(&branch_name)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(String::from(&oid))
