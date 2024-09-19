@@ -36,7 +36,7 @@ pub use crate::format::ObjectId;
 #[serde(tag = "type")]
 pub enum StorageConfig {
     #[serde(rename = "in_memory")]
-    InMemory,
+    InMemory { prefix: Option<String> },
 
     #[serde(rename = "local_filesystem")]
     LocalFileSystem { root: PathBuf },
@@ -605,7 +605,9 @@ async fn mk_dataset(
 
 fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
     match config {
-        StorageConfig::InMemory => Ok(Arc::new(ObjectStorage::new_in_memory_store())),
+        StorageConfig::InMemory { prefix } => {
+            Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
+        }
         StorageConfig::LocalFileSystem { root } => {
             let storage = ObjectStorage::new_local_store(root)
                 .map_err(|e| format!("Error creating storage: {e}"))?;
@@ -1127,7 +1129,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1170,7 +1172,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
@@ -1210,7 +1212,7 @@ mod tests {
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
@@ -1301,7 +1303,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
@@ -1344,7 +1346,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1408,7 +1410,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1443,7 +1445,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1497,7 +1499,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1556,7 +1558,7 @@ mod tests {
     #[tokio::test]
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
 
         let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
 
@@ -1698,6 +1700,24 @@ mod tests {
         );
 
         let json = r#"
+            {"storage":{"type": "in_memory", "prefix": "prefix"},
+             "dataset": {}
+            }
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    previous_version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                },
+                storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
+                get_partial_values_concurrency: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
             {"storage":{"type": "in_memory"},
              "dataset": {}
             }
@@ -1709,7 +1729,7 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
-                storage: StorageConfig::InMemory,
+                storage: StorageConfig::InMemory { prefix: None },
                 get_partial_values_concurrency: None,
             },
             serde_json::from_str(json)?

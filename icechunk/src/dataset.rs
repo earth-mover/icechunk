@@ -1247,7 +1247,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage = ObjectStorage::new_in_memory_store();
+        let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
 
         let array_id = 2;
         let chunk1 = ChunkInfo {
@@ -1555,7 +1555,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
@@ -1735,7 +1735,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
@@ -1799,7 +1799,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
@@ -2054,7 +2054,7 @@ mod tests {
             fn init_test(
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
-                let storage = ObjectStorage::new_in_memory_store();
+                let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
                 let init_dataset =
                     tokio::runtime::Runtime::new().unwrap().block_on(async {
                         let storage = Arc::new(storage);
