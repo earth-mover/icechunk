@@ -62,6 +62,7 @@ pub struct ObjectStorage {
 
 impl ObjectStorage {
     pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
+        #[allow(clippy::expect_used)]
         let prefix =
             prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
         ObjectStorage { store: Arc::new(InMemory::new()), prefix }
