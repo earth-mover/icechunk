@@ -69,8 +69,8 @@ class IcechunkStore(Store, SyncMixin):
     async def new_branch(self, branch_name: str) -> str:
         return await self._store.new_branch(branch_name)
 
-    async def tag(self, tag_name: str, snapshot_id: str, messsage: str | None = None) -> None:
-        return await self._store.tag(tag_name, snapshot_id=snapshot_id, message=messsage)
+    async def tag(self, tag_name: str, snapshot_id: str) -> None:
+        return await self._store.tag(tag_name, snapshot_id=snapshot_id)
 
     async def empty(self) -> bool:
         return await self._store.empty()
