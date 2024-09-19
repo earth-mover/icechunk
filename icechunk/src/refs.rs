@@ -54,6 +54,8 @@ pub enum Ref {
 }
 
 impl Ref {
+    pub const DEFAULT_BRANCH: &'static str = "main";
+
     fn from_path(path: &str) -> RefResult<Self> {
         match path.strip_prefix("tag:") {
             Some(name) => Ok(Ref::Tag(name.to_string())),
@@ -233,8 +235,13 @@ async fn fetch_branch(
     version: &BranchVersion,
 ) -> RefResult<RefData> {
     let path = version.to_path(name)?;
-    let data = storage.get_ref(path.as_str()).await?;
-    Ok(serde_json::from_slice(data.as_ref())?)
+    match storage.get_ref(path.as_str()).await {
+        Ok(data) => Ok(serde_json::from_slice(data.as_ref())?),
+        Err(StorageError::RefNotFound(..)) => {
+            Err(RefError::RefNotFound(name.to_string()))
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub async fn fetch_branch_tip(

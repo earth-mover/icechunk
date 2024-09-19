@@ -31,7 +31,8 @@ use crate::{
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
-        create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, RefError,
+        create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
+        RefError,
     },
     Storage, StorageError,
 };
@@ -214,6 +215,11 @@ impl DatasetBuilder {
         self
     }
 
+    pub fn with_unsafe_overwrite_refs(&mut self, value: bool) -> &mut Self {
+        self.config.unsafe_overwrite_refs = value;
+        self
+    }
+
     pub fn with_config(&mut self, config: DatasetConfig) -> &mut Self {
         self.config = config;
         self
@@ -248,6 +254,8 @@ pub enum DatasetError {
     Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
+    #[error("the dataset has been initialized already (default branch exists)")]
+    AlreadyInitialized,
 }
 
 type DatasetResult<T> = Result<T, DatasetError>;
@@ -284,20 +292,34 @@ impl Dataset {
     /// when creating datasets.
     pub async fn init(
         storage: Arc<dyn Storage + Send + Sync>,
+        unsafe_overwrite_refs: bool,
     ) -> DatasetResult<DatasetBuilder> {
+        if Self::exists(storage.as_ref()).await? {
+            return Err(DatasetError::AlreadyInitialized);
+        }
         let new_snapshot = Snapshot::empty();
         let new_snapshot_id = ObjectId::random();
         storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
         update_branch(
             storage.as_ref(),
-            "main",
+            Ref::DEFAULT_BRANCH,
             new_snapshot_id.clone(),
             None,
-            true, // FIXME: I need this value from somewhere
+            unsafe_overwrite_refs,
         )
         .await?;
 
+        debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
+
         Ok(DatasetBuilder::new(storage, new_snapshot_id))
+    }
+
+    pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> DatasetResult<bool> {
+        match fetch_branch_tip(storage, Ref::DEFAULT_BRANCH).await {
+            Ok(_) => Ok(true),
+            Err(RefError::RefNotFound(_)) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn new(
@@ -1517,7 +1539,7 @@ mod tests {
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1697,7 +1719,7 @@ mod tests {
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1761,11 +1783,12 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store());
-        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let new_snapshot_id = ds.commit("main", "first commit", None).await?;
+        let new_snapshot_id =
+            ds.commit(Ref::DEFAULT_BRANCH, "first commit", None).await?;
         assert_eq!(
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
@@ -1787,8 +1810,9 @@ mod tests {
             })
         );
 
-        let mut ds =
-            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+        let mut ds = Dataset::from_branch_tip(Arc::clone(&storage), Ref::DEFAULT_BRANCH)
+            .await?
+            .build();
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
             Some(NodeSnapshot {
@@ -1820,8 +1844,10 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let new_snapshot_id = ds.commit("main", "second commit", None).await?;
-        let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "main").await?;
+        let new_snapshot_id =
+            ds.commit(Ref::DEFAULT_BRANCH, "second commit", None).await?;
+        let (ref_name, ref_data) =
+            fetch_ref(storage.as_ref(), Ref::DEFAULT_BRANCH).await?;
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
@@ -2007,7 +2033,7 @@ mod tests {
                 let init_dataset =
                     tokio::runtime::Runtime::new().unwrap().block_on(async {
                         let storage = Arc::new(storage);
-                        Dataset::init(storage).await.unwrap()
+                        Dataset::init(storage, false).await.unwrap()
                     });
                 TestDataset {
                     dataset: init_dataset.build(),
