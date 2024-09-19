@@ -137,10 +137,10 @@ These references point to a specific snapshot of the store.
   After creation, branches may be updated to point to a different snapshot.
 - **Tags** are _immutable_ references to a snapshot.
   A store may contain zero or more tags.
-  After creation, tags may never be updated.
+  After creation, tags may never be updated, unlike in Git.
 
 References are very important in the Icechunk design.
-Creating or updating references is the point at which consistency and isolation of Icechunk transactions is enforced.
+Creating or updating references is the point at which consistency and atomicity of Icechunk transactions is enforced.
 Different client sessions may simultaneously create two inconsistent snapshots; however, only one session may successfully update a reference to that snapshot.
 
 References (both branches and tags) are stored as JSON files with the following structure.
