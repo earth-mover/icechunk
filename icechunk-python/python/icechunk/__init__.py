@@ -44,11 +44,17 @@ class IcechunkStore(Store, SyncMixin):
         TODO: Support branches and tags.
         '''
         if snapshot_id is not None:
+            if branch is not None or tag is not None:
+                raise ValueError("only one of snapshot_id, branch, or tag may be specified")
             return await self._store.checkout_snapshot(snapshot_id)
         if branch is not None:
+            if tag is not None:
+                raise ValueError("only one of snapshot_id, branch, or tag may be specified")
             return await self._store.checkout_branch(branch)
         if tag is not None:
             return await self._store.checkout_tag(tag)
+
+        raise ValueError("a snapshot_id, branch, or tag must be specified")
 
     async def commit(self, message: str) -> str:
         return await self._store.commit(message)
