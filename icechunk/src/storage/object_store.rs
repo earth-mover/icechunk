@@ -2,7 +2,6 @@ use core::fmt;
 use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
@@ -11,8 +10,8 @@ use object_store::{
 };
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ByteRange, ObjectId, Path,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId, Path,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -105,14 +104,10 @@ impl ObjectStorage {
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
-    fn get_path(&self, file_prefix: &str, ObjectId(asu8): &ObjectId) -> ObjectPath {
+    fn get_path(&self, file_prefix: &str, id: &ObjectId) -> ObjectPath {
         // TODO: be careful about allocation here
-        let path = format!(
-            "{}/{}/{}.msgpack",
-            self.prefix,
-            file_prefix,
-            BASE64_URL_SAFE.encode(asu8)
-        );
+        // we serialize the url using crockford
+        let path = format!("{}/{}/{}.msgpack", self.prefix, file_prefix, id);
         ObjectPath::from(path)
     }
 
@@ -134,10 +129,7 @@ impl fmt::Debug for ObjectStorage {
 }
 #[async_trait]
 impl Storage for ObjectStorage {
-    async fn fetch_snapshot(
-        &self,
-        id: &ObjectId,
-    ) -> Result<Arc<SnapshotTable>, StorageError> {
+    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
@@ -155,7 +147,7 @@ impl Storage for ObjectStorage {
     async fn fetch_manifests(
         &self,
         id: &ObjectId,
-    ) -> Result<Arc<ManifestsTable>, StorageError> {
+    ) -> Result<Arc<Manifest>, StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
@@ -166,7 +158,7 @@ impl Storage for ObjectStorage {
     async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<SnapshotTable>,
+        table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(SNAPSHOT_PREFIX, &id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;
@@ -189,7 +181,7 @@ impl Storage for ObjectStorage {
     async fn write_manifests(
         &self,
         id: ObjectId,
-        table: Arc<ManifestsTable>,
+        table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         let path = self.get_path(MANIFEST_PREFIX, &id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;

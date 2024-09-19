@@ -44,11 +44,11 @@ pub struct ChunkInfo {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
-pub struct ManifestsTable {
+pub struct Manifest {
     pub chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
 }
 
-impl ManifestsTable {
+impl Manifest {
     pub fn get_chunk_payload(
         &self,
         node: NodeId,
@@ -80,18 +80,18 @@ impl ManifestsTable {
     }
 }
 
-impl FromIterator<ChunkInfo> for ManifestsTable {
+impl FromIterator<ChunkInfo> for Manifest {
     fn from_iter<T: IntoIterator<Item = ChunkInfo>>(iter: T) -> Self {
         let chunks = iter
             .into_iter()
             .map(|chunk| ((chunk.node, chunk.coord), chunk.payload))
             .collect();
-        ManifestsTable { chunks }
+        Manifest { chunks }
     }
 }
 
 struct PayloadIterator {
-    manifest: Arc<ManifestsTable>,
+    manifest: Arc<Manifest>,
     for_node: NodeId,
     last_key: Option<(NodeId, ChunkIndices)>,
 }

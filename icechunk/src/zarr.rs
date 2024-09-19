@@ -237,7 +237,7 @@ impl Store {
         message: &str,
     ) -> StoreResult<(ObjectId, BranchVersion)> {
         if let Some(branch) = &self.current_branch {
-            let result = self.dataset.commit(branch, message).await?;
+            let result = self.dataset.commit(branch, message, None).await?;
             Ok(result)
         } else {
             Err(StoreError::NotOnBranch)
@@ -1287,7 +1287,7 @@ mod tests {
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
         let mut ds = store.dataset();
-        let oid = ds.flush().await?;
+        let oid = ds.flush("commit", Default::default()).await?;
 
         let ds = Dataset::update(storage, oid).build();
         let store = Store::from_dataset(ds, None, None);
