@@ -57,6 +57,13 @@ impl PyIcechunkStore {
         Ok(())
     }
 
+    #[getter]
+    pub fn snapshot_id(&self) -> PyIcechunkStoreResult<String> {
+        let store = self.store.blocking_read();
+        let snapshot_id = store.snapshot_id();
+        Ok(String::from(snapshot_id))
+    }
+
     pub fn commit<'py>(
         &'py mut self,
         py: Python<'py>,
@@ -73,6 +80,67 @@ impl PyIcechunkStore {
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(String::from(&oid))
+        })
+    }
+
+    #[getter]
+    pub fn current_branch(&self) -> PyIcechunkStoreResult<Option<String>> {
+        let store = self.store.blocking_read();
+        let current_branch = store.current_branch();
+        Ok(current_branch.clone())
+    }
+
+    #[getter]
+    pub fn has_uncomitted_changes(&self) -> PyIcechunkStoreResult<bool> {
+        let store = self.store.blocking_read();
+        let has_uncomitted_changes = store.has_uncomitted_changes();
+        Ok(has_uncomitted_changes)
+    }
+
+    pub async fn reset(&self) -> PyIcechunkStoreResult<()> {
+        self.store.write().await.reset().await?;
+        Ok(())
+    }
+
+    pub fn new_branch<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        // The commit mechanism is async and calls tokio::spawn so we need to use the
+        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut writeable_store = store.write().await;
+            let (oid, _version) = writeable_store
+                .new_branch(&branch)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(String::from(&oid))
+        })
+    }
+
+    pub fn tag<'py>(
+        &'py self,
+        py: Python<'py>,
+        tag: String,
+        snapshot_id: String,
+        message: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        // The commit mechanism is async and calls tokio::spawn so we need to use the
+        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut writeable_store = store.write().await;
+            let oid = ObjectId::try_from(snapshot_id.as_str())
+                .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
+            writeable_store
+                .tag(&tag, &oid, message.as_deref())
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(())
         })
     }
 
@@ -133,6 +201,7 @@ impl PyIcechunkStore {
         Ok(exists)
     }
 
+    #[getter]
     pub fn supports_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_writes = self.store.blocking_read().supports_writes()?;
         Ok(supports_writes)
@@ -167,6 +236,7 @@ impl PyIcechunkStore {
         Ok(())
     }
 
+    #[getter]
     pub fn supports_partial_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_partial_writes =
             self.store.blocking_read().supports_partial_writes()?;
@@ -212,6 +282,7 @@ impl PyIcechunkStore {
         })
     }
 
+    #[getter]
     pub fn supports_listing(&self) -> PyIcechunkStoreResult<bool> {
         let supports_listing = self.store.blocking_read().supports_listing()?;
         Ok(supports_listing)
