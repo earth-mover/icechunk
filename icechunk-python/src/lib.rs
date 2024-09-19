@@ -87,7 +87,7 @@ impl PyIcechunkStore {
         // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let mut writeable_store = store.write().await;
-            let (oid, _version) = writeable_store
+            let oid = writeable_store
                 .commit(&message)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -138,7 +138,6 @@ impl PyIcechunkStore {
         py: Python<'py>,
         tag: String,
         snapshot_id: String,
-        message: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
@@ -148,10 +147,7 @@ impl PyIcechunkStore {
             let mut writeable_store = store.write().await;
             let oid = ObjectId::try_from(snapshot_id.as_str())
                 .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
-            writeable_store
-                .tag(&tag, &oid, message.as_deref())
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
+            writeable_store.tag(&tag, &oid).await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
