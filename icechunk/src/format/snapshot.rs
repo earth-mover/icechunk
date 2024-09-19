@@ -8,6 +8,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use schemars::JsonSchema;
 
 use crate::metadata::{
     ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames, FillValue,
@@ -19,14 +20,14 @@ use super::{
     Path, TableOffset,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UserAttributesRef {
     pub object_id: ObjectId,
     pub location: TableOffset,
     pub flags: Flags,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum UserAttributesSnapshot {
     Inline(UserAttributes),
     Ref(UserAttributesRef),
@@ -38,7 +39,7 @@ pub enum NodeType {
     Array,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ZarrArrayMetadata {
     pub shape: ArrayShape,
     pub data_type: DataType,
@@ -50,13 +51,13 @@ pub struct ZarrArrayMetadata {
     pub dimension_names: Option<DimensionNames>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeData {
     Array(ZarrArrayMetadata, Vec<ManifestRef>),
     Group,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NodeSnapshot {
     pub id: NodeId,
     pub path: Path,
@@ -73,7 +74,7 @@ impl NodeSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SnapshotMetadata {
     pub id: ObjectId,
     pub written_at: DateTime<Utc>,
@@ -82,7 +83,7 @@ pub struct SnapshotMetadata {
 
 pub type SnapshotProperties = HashMap<String, Value>;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Snapshot {
     pub total_parents: u32,
     // we denormalize this field to have it easily available in the serialized file

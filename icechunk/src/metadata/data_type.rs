@@ -1,8 +1,9 @@
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
