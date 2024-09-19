@@ -41,7 +41,7 @@ async def test_timetravel():
     assert store.branch == "feature"
     air_temp[:, :] = 90
     feature_snapshot_id = await store.commit("update air temp")
-    await store.tag("v1.0", feature_snapshot_id, "Feature release")
+    await store.tag("v1.0", feature_snapshot_id)
 
     await store.checkout(tag="v1.0")
     assert store.branch == None

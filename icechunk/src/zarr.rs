@@ -26,7 +26,7 @@ use crate::{
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
-    refs::BranchVersion,
+    refs::{BranchVersion, Ref},
     Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
 };
 
@@ -69,6 +69,7 @@ pub enum VersionInfo {
 pub struct DatasetConfig {
     pub previous_version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
+    pub unsafe_overwrite_refs: Option<bool>,
 }
 
 #[skip_serializing_none]
@@ -232,10 +233,7 @@ impl Store {
 
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
-    pub async fn commit(
-        &mut self,
-        message: &str,
-    ) -> StoreResult<(ObjectId, BranchVersion)> {
+    pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
         if let Some(branch) = &self.current_branch {
             let result = self.dataset.commit(branch, message, None).await?;
             Ok(result)
@@ -245,13 +243,8 @@ impl Store {
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(
-        &mut self,
-        tag: &str,
-        snapshot_id: &ObjectId,
-        message: Option<&str>,
-    ) -> StoreResult<()> {
-        self.dataset.tag(tag, snapshot_id, message).await?;
+    pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
+        self.dataset.tag(tag, snapshot_id).await?;
         Ok(())
     }
 
@@ -571,34 +564,39 @@ async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(Dataset, Option<String>), String> {
-    let (mut builder, branch): (DatasetBuilder, Option<String>) =
-        match &dataset.previous_version {
-            None => {
-                let builder = Dataset::init(storage)
+    let (mut builder, branch): (DatasetBuilder, Option<String>) = match &dataset
+        .previous_version
+    {
+        None => {
+            let builder =
+                Dataset::init(storage, dataset.unsafe_overwrite_refs.unwrap_or(false))
                     .await
                     .map_err(|err| format!("Error initializing dataset: {err}"))?;
-                (builder, Some(String::from("main")))
-            }
-            Some(VersionInfo::SnapshotId(sid)) => {
-                let builder = Dataset::update(storage, sid.clone());
-                (builder, None)
-            }
-            Some(VersionInfo::TagRef(tag)) => {
-                let builder = Dataset::from_tag(storage, tag)
-                    .await
-                    .map_err(|err| format!("Error fetching tag: {err}"))?;
-                (builder, None)
-            }
-            Some(VersionInfo::BranchTipRef(branch)) => {
-                let builder = Dataset::from_branch_tip(storage, branch)
-                    .await
-                    .map_err(|err| format!("Error fetching branch: {err}"))?;
-                (builder, Some(branch.clone()))
-            }
-        };
+            (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
+        }
+        Some(VersionInfo::SnapshotId(sid)) => {
+            let builder = Dataset::update(storage, sid.clone());
+            (builder, None)
+        }
+        Some(VersionInfo::TagRef(tag)) => {
+            let builder = Dataset::from_tag(storage, tag)
+                .await
+                .map_err(|err| format!("Error fetching tag: {err}"))?;
+            (builder, None)
+        }
+        Some(VersionInfo::BranchTipRef(branch)) => {
+            let builder = Dataset::from_branch_tip(storage, branch)
+                .await
+                .map_err(|err| format!("Error fetching branch: {err}"))?;
+            (builder, Some(branch.clone()))
+        }
+    };
 
     if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
         builder.with_inline_threshold_bytes(inline_theshold);
+    }
+    if let Some(value) = dataset.unsafe_overwrite_refs {
+        builder.with_unsafe_overwrite_refs(value);
     }
 
     // TODO: add error checking, does the previous version exist?
@@ -1132,7 +1130,7 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         assert!(matches!(
@@ -1177,7 +1175,7 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
@@ -1217,7 +1215,7 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
@@ -1308,7 +1306,7 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
@@ -1349,7 +1347,7 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         assert!(store.empty().await.unwrap());
@@ -1413,7 +1411,7 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
@@ -1448,7 +1446,7 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
@@ -1502,7 +1500,7 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
         store
@@ -1577,12 +1575,11 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
 
-        let (snapshot_id, version) = store.commit("initial commit").await.unwrap();
-        assert_eq!(version.0, 0);
+        let snapshot_id = store.commit("initial commit").await.unwrap();
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
-        let (new_snapshot_id, _version) = store.commit("update").await.unwrap();
+        let new_snapshot_id = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
@@ -1603,7 +1600,7 @@ mod tests {
         // TODO: Create a new branch and do stuff with it
         store.new_branch("dev").await?;
         store.set("array/c/0/1/0", new_data.clone()).await?;
-        let (dev_snapshot_id, _version) = store.commit("update dev branch").await?;
+        let dev_snapshot_id = store.commit("update dev branch").await?;
         store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
@@ -1634,6 +1631,7 @@ mod tests {
                 previous_version: Some(VersionInfo::SnapshotId(ObjectId([
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
                 ]))),
+                unsafe_overwrite_refs: Some(true),
             },
             get_partial_values_concurrency: Some(100),
         };
@@ -1646,7 +1644,8 @@ mod tests {
                 },
              "dataset": {
                 "previous_version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
-                "inline_chunk_threshold_bytes":128
+                "inline_chunk_threshold_bytes":128,
+                "unsafe_overwrite_refs":true
              },
              "get_partial_values_concurrency": 100
             }
@@ -1661,7 +1660,8 @@ mod tests {
                 },
              "dataset": {
                 "previous_version": null,
-                "inline_chunk_threshold_bytes": null
+                "inline_chunk_threshold_bytes": null,
+                "unsafe_overwrite_refs":null
              }}
         "#;
         assert_eq!(
@@ -1669,6 +1669,7 @@ mod tests {
                 dataset: DatasetConfig {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 get_partial_values_concurrency: None,
                 ..expected.clone()
@@ -1690,6 +1691,7 @@ mod tests {
                 dataset: DatasetConfig {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 get_partial_values_concurrency: None,
                 ..expected.clone()
@@ -1707,6 +1709,7 @@ mod tests {
                 dataset: DatasetConfig {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
                 get_partial_values_concurrency: None,
@@ -1724,6 +1727,7 @@ mod tests {
                 dataset: DatasetConfig {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
                 get_partial_values_concurrency: None,
@@ -1741,6 +1745,7 @@ mod tests {
                 dataset: DatasetConfig {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
@@ -1771,6 +1776,7 @@ mod tests {
                 dataset: DatasetConfig {
                     previous_version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),

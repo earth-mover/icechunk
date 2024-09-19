@@ -18,7 +18,6 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::Either;
-use serde_json::Value;
 use thiserror::Error;
 use tokio::task;
 
@@ -26,14 +25,14 @@ use crate::{
     format::{
         manifest::{ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef},
         snapshot::{
-            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotProperties,
-            UserAttributesSnapshot,
+            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotMetadata,
+            SnapshotProperties, UserAttributesSnapshot,
         },
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
-        create_tag, fetch_branch, fetch_branch_tip, fetch_tag, last_branch_version,
-        update_branch, BranchVersion, RefError,
+        create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
+        RefError,
     },
     Storage, StorageError,
 };
@@ -216,6 +215,11 @@ impl DatasetBuilder {
         self
     }
 
+    pub fn with_unsafe_overwrite_refs(&mut self, value: bool) -> &mut Self {
+        self.config.unsafe_overwrite_refs = value;
+        self
+    }
+
     pub fn with_config(&mut self, config: DatasetConfig) -> &mut Self {
         self.config = config;
         self
@@ -250,6 +254,8 @@ pub enum DatasetError {
     Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
+    #[error("the dataset has been initialized already (default branch exists)")]
+    AlreadyInitialized,
 }
 
 type DatasetResult<T> = Result<T, DatasetError>;
@@ -268,9 +274,8 @@ impl Dataset {
         storage: Arc<dyn Storage + Send + Sync>,
         branch_name: &str,
     ) -> DatasetResult<DatasetBuilder> {
-        let version = last_branch_version(storage.as_ref(), branch_name).await?;
-        let ref_data = fetch_branch(storage.as_ref(), branch_name, &version).await?;
-        Ok(Self::update(storage, ref_data.snapshot))
+        let snapshot_id = fetch_branch_tip(storage.as_ref(), branch_name).await?.snapshot;
+        Ok(Self::update(storage, snapshot_id))
     }
 
     pub async fn from_tag(
@@ -287,12 +292,34 @@ impl Dataset {
     /// when creating datasets.
     pub async fn init(
         storage: Arc<dyn Storage + Send + Sync>,
+        unsafe_overwrite_refs: bool,
     ) -> DatasetResult<DatasetBuilder> {
+        if Self::exists(storage.as_ref()).await? {
+            return Err(DatasetError::AlreadyInitialized);
+        }
         let new_snapshot = Snapshot::empty();
         let new_snapshot_id = ObjectId::random();
         storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
+        update_branch(
+            storage.as_ref(),
+            Ref::DEFAULT_BRANCH,
+            new_snapshot_id.clone(),
+            None,
+            unsafe_overwrite_refs,
+        )
+        .await?;
+
+        debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
         Ok(DatasetBuilder::new(storage, new_snapshot_id))
+    }
+
+    pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> DatasetResult<bool> {
+        match fetch_branch_tip(storage, Ref::DEFAULT_BRANCH).await {
+            Ok(_) => Ok(true),
+            Err(RefError::RefNotFound(_)) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn new(
@@ -323,6 +350,23 @@ impl Dataset {
     /// Indicates if the dataset has pending changes
     pub fn has_uncommitted_changes(&self) -> bool {
         !self.change_set.is_empty()
+    }
+
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    pub async fn ancestry(
+        &self,
+    ) -> DatasetResult<impl Stream<Item = DatasetResult<SnapshotMetadata>>> {
+        // Stream<Item = DatasetResult<SnapshotMetadata>> {
+        let parent = self.storage.fetch_snapshot(self.snapshot_id()).await?;
+        let last = parent.metadata.clone();
+        let it = if parent.short_term_history.len() < parent.total_parents as usize {
+            // TODO: implement splitting of snapshot history
+            Either::Left(parent.local_ancestry().chain(iter::once_with(|| todo!())))
+        } else {
+            Either::Right(parent.local_ancestry())
+        };
+
+        Ok(futures::stream::iter(iter::once(Ok(last)).chain(it.map(Ok))))
     }
 
     /// Add a group to the store.
@@ -955,9 +999,8 @@ impl Dataset {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> DatasetResult<(ObjectId, BranchVersion)> {
+    ) -> DatasetResult<ObjectId> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
-
         match current {
             Err(RefError::RefNotFound(_)) => {
                 self.do_commit(update_branch_name, message, properties).await
@@ -982,25 +1025,21 @@ impl Dataset {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> DatasetResult<(ObjectId, BranchVersion)> {
+    ) -> DatasetResult<ObjectId> {
         let parent_snapshot = self.snapshot_id.clone();
         let properties = properties.unwrap_or_default();
-
-        let new_snapshot = self.flush(message, properties.clone()).await?;
-        let now = Utc::now();
+        let new_snapshot = self.flush(message, properties).await?;
 
         match update_branch(
             self.storage.as_ref(),
             update_branch_name,
             new_snapshot.clone(),
             Some(&parent_snapshot),
-            now,
-            properties,
             self.config.unsafe_overwrite_refs,
         )
         .await
         {
-            Ok(branch_version) => Ok((new_snapshot, branch_version)),
+            Ok(_) => Ok(new_snapshot),
             Err(RefError::Conflict { expected_parent, actual_parent }) => {
                 Err(DatasetError::Conflict { expected_parent, actual_parent })
             }
@@ -1009,17 +1048,12 @@ impl Dataset {
     }
 
     pub async fn new_branch(&self, branch_name: &str) -> DatasetResult<BranchVersion> {
-        let now = Utc::now();
-        let properties = HashMap::new();
-
         // TODO: The parent snapshot should exist?
         let version = match update_branch(
             self.storage.as_ref(),
             branch_name,
             self.snapshot_id.clone(),
             None,
-            now,
-            properties,
             self.config.unsafe_overwrite_refs,
         )
         .await
@@ -1034,24 +1068,11 @@ impl Dataset {
         Ok(version)
     }
 
-    pub async fn tag(
-        &self,
-        tag_name: &str,
-        snapshot_id: &ObjectId,
-        message: Option<&str>,
-    ) -> DatasetResult<()> {
-        let now = Utc::now();
-        let mut properties = HashMap::new();
-        if let Some(message) = message {
-            properties.insert(String::from("message"), Value::from(message));
-        }
-
+    pub async fn tag(&self, tag_name: &str, snapshot_id: &ObjectId) -> DatasetResult<()> {
         create_tag(
             self.storage.as_ref(),
             tag_name,
             snapshot_id.clone(),
-            now,
-            properties,
             self.config.unsafe_overwrite_refs,
         )
         .await?;
@@ -1535,7 +1556,7 @@ mod tests {
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1618,7 +1639,6 @@ mod tests {
                 node_data: NodeData::Group
             })
         );
-        dbg!(ds.get_node(&new_array_path).await.unwrap().node_data);
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
@@ -1716,7 +1736,7 @@ mod tests {
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1780,23 +1800,22 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let mut ds = Dataset::init(Arc::clone(&storage)).await?.build();
+        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
-        let (new_snapshot_id, version) = ds.commit("main", "first commit", None).await?;
-        assert_eq!(version, BranchVersion(0));
+        let new_snapshot_id =
+            ds.commit(Ref::DEFAULT_BRANCH, "first commit", None).await?;
         assert_eq!(
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
-        ds.tag("v1", &new_snapshot_id, Some("version 1.0.0")).await?;
+        ds.tag("v1", &new_snapshot_id).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
-        assert_eq!("version 1.0.0", ref_data.properties["message"]);
 
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
@@ -1841,12 +1860,21 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let (new_snapshot_id, version) = ds.commit("main", "second commit", None).await?;
-        assert_eq!(version, BranchVersion(1));
-        let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "main").await?;
+        let new_snapshot_id =
+            ds.commit(Ref::DEFAULT_BRANCH, "second commit", None).await?;
+        let (ref_name, ref_data) =
+            fetch_ref(storage.as_ref(), Ref::DEFAULT_BRANCH).await?;
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
-        //assert_eq!("second commit", ref_data.properties["message"]);
+
+        let parents = ds.ancestry().await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(parents[0].message, "second commit");
+        assert_eq!(parents[1].message, "first commit");
+        assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
+        itertools::assert_equal(
+            parents.iter().sorted_by_key(|m| m.written_at).rev(),
+            parents.iter(),
+        );
 
         Ok(())
     }
@@ -2030,7 +2058,7 @@ mod tests {
                 let init_dataset =
                     tokio::runtime::Runtime::new().unwrap().block_on(async {
                         let storage = Arc::new(storage);
-                        Dataset::init(storage).await.unwrap()
+                        Dataset::init(storage, false).await.unwrap()
                     });
                 TestDataset {
                     dataset: init_dataset.build(),

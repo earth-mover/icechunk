@@ -1,13 +1,9 @@
-use std::collections::HashMap;
-
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
 use proptest::bits::u64;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
 
 use crate::{zarr::ObjectId, Storage, StorageError};
@@ -58,6 +54,8 @@ pub enum Ref {
 }
 
 impl Ref {
+    pub const DEFAULT_BRANCH: &'static str = "main";
+
     fn from_path(path: &str) -> RefResult<Self> {
         match path.strip_prefix("tag:") {
             Some(name) => Ok(Ref::Tag(name.to_string())),
@@ -99,8 +97,6 @@ impl BranchVersion {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefData {
     pub snapshot: ObjectId,
-    pub timestamp: DateTime<Utc>,
-    pub properties: HashMap<String, Value>,
 }
 
 const TAG_KEY_NAME: &str = "ref.json";
@@ -128,12 +124,10 @@ pub async fn create_tag(
     storage: &(dyn Storage + Send + Sync),
     name: &str,
     snapshot: ObjectId,
-    timestamp: DateTime<Utc>,
-    properties: HashMap<String, Value>,
     overwrite_refs: bool,
 ) -> RefResult<()> {
     let key = tag_key(name)?;
-    let data = RefData { snapshot, timestamp, properties };
+    let data = RefData { snapshot };
     let content = serde_json::to_vec(&data)?;
     storage
         .write_ref(key.as_str(), overwrite_refs, Bytes::copy_from_slice(&content))
@@ -151,10 +145,8 @@ pub async fn create_tag(
 pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     name: &str,
-    snapshot: ObjectId,
-    parent_snapshot: Option<&ObjectId>,
-    timestamp: DateTime<Utc>,
-    properties: HashMap<String, Value>,
+    new_snapshot: ObjectId,
+    current_snapshot: Option<&ObjectId>,
     overwrite_refs: bool,
 ) -> RefResult<BranchVersion> {
     let last_version = last_branch_version(storage, name).await;
@@ -166,9 +158,9 @@ pub async fn update_branch(
         Err(err) => Err(err),
     }?;
     let last_snapshot = last_ref_data.as_ref().map(|d| &d.1.snapshot);
-    if last_snapshot.is_some() && last_snapshot != parent_snapshot {
+    if last_snapshot != current_snapshot {
         return Err(RefError::Conflict {
-            expected_parent: parent_snapshot.cloned(),
+            expected_parent: current_snapshot.cloned(),
             actual_parent: last_snapshot.cloned(),
         });
     }
@@ -178,7 +170,7 @@ pub async fn update_branch(
     };
 
     let key = new_version.to_path(name)?;
-    let data = RefData { snapshot, timestamp, properties };
+    let data = RefData { snapshot: new_snapshot };
     let content = serde_json::to_vec(&data)?;
     match storage
         .write_ref(key.as_str(), overwrite_refs, Bytes::copy_from_slice(&content))
@@ -188,16 +180,8 @@ pub async fn update_branch(
         Err(StorageError::RefAlreadyExists(_)) => {
             // If the branch version already exists, an update happened since we checked
             // we can just try again and the conflict will be reported
-            update_branch(
-                storage,
-                name,
-                data.snapshot,
-                parent_snapshot,
-                data.timestamp,
-                data.properties,
-                overwrite_refs,
-            )
-            .await
+            update_branch(storage, name, data.snapshot, current_snapshot, overwrite_refs)
+                .await
         }
         Err(err) => Err(RefError::Storage(err)),
     }
@@ -208,7 +192,7 @@ pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<R
     all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()
 }
 
-pub async fn branch_history<'a, 'b>(
+async fn branch_history<'a, 'b>(
     storage: &'a (dyn Storage + Send + Sync),
     branch: &'b str,
 ) -> RefResult<impl Stream<Item = RefResult<BranchVersion>> + 'a> {
@@ -222,7 +206,7 @@ pub async fn branch_history<'a, 'b>(
     }))
 }
 
-pub async fn last_branch_version(
+async fn last_branch_version(
     storage: &(dyn Storage + Send + Sync),
     branch: &str,
 ) -> RefResult<BranchVersion> {
@@ -245,14 +229,19 @@ pub async fn fetch_tag(
     }
 }
 
-pub async fn fetch_branch(
+async fn fetch_branch(
     storage: &(dyn Storage + Send + Sync),
     name: &str,
     version: &BranchVersion,
 ) -> RefResult<RefData> {
     let path = version.to_path(name)?;
-    let data = storage.get_ref(path.as_str()).await?;
-    Ok(serde_json::from_slice(data.as_ref())?)
+    match storage.get_ref(path.as_str()).await {
+        Ok(data) => Ok(serde_json::from_slice(data.as_ref())?),
+        Err(StorageError::RefNotFound(..)) => {
+            Err(RefError::RefNotFound(name.to_string()))
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub async fn fetch_branch_tip(
@@ -303,22 +292,16 @@ mod tests {
         let storage = ObjectStorage::new_in_memory_store(Some("foo".into()));
         let s1 = ObjectId::random();
         let s2 = ObjectId::random();
-        let t1 = Utc::now();
-        let t2 = Utc::now();
-        let properties =
-            HashMap::from_iter(vec![("foo".to_string(), serde_json::Value::from(42))]);
 
         let res = fetch_tag(&storage, "tag1").await;
         assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
         assert_eq!(list_refs(&storage).await?, vec![]);
 
-        create_tag(&storage, "tag1", s1.clone(), t1, properties.clone(), false).await?;
-        create_tag(&storage, "tag2", s2.clone(), t2, properties.clone(), false).await?;
+        create_tag(&storage, "tag1", s1.clone(), false).await?;
+        create_tag(&storage, "tag2", s2.clone(), false).await?;
 
         let res = fetch_tag(&storage, "tag1").await?;
         assert_eq!(res.snapshot, s1);
-        assert_eq!(res.timestamp, t1);
-        assert_eq!(res.properties, properties);
 
         assert_eq!(
             fetch_tag(&storage, "tag1").await?,
@@ -327,8 +310,6 @@ mod tests {
 
         let res = fetch_tag(&storage, "tag2").await?;
         assert_eq!(res.snapshot, s2);
-        assert_eq!(res.timestamp, t2);
-        assert_eq!(res.properties, properties);
 
         assert_eq!(
             fetch_tag(&storage, "tag2").await?,
@@ -342,7 +323,7 @@ mod tests {
 
         // attempts to recreate a tag fail
         assert!(matches!(
-            create_tag(&storage, "tag1", s1.clone(), t1, properties.clone(), false).await,
+            create_tag(&storage, "tag1", s1.clone(), false).await,
                 Err(RefError::TagAlreadyExists(name)) if name == *"tag1"
         ));
         assert_eq!(
@@ -351,37 +332,15 @@ mod tests {
         );
 
         // attempting to create a branch that doesn't exist, with a fake parent
-        let res = update_branch(
-            &storage,
-            "branch0",
-            s1.clone(),
-            Some(&s2),
-            t1,
-            properties.clone(),
-            false,
-        )
-        .await;
-        assert!(res.is_ok());
+        let res = update_branch(&storage, "branch0", s1.clone(), Some(&s2), false).await;
+        assert!(res.is_err());
         assert_eq!(
             list_refs(&storage).await?,
-            vec![
-                Ref::Branch("branch0".to_string()),
-                Ref::Tag("tag1".to_string()),
-                Ref::Tag("tag2".to_string())
-            ]
+            vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
         );
 
         // create a branch successfully
-        update_branch(
-            &storage,
-            "branch1",
-            s1.clone(),
-            None,
-            t1,
-            properties.clone(),
-            false,
-        )
-        .await?;
+        update_branch(&storage, "branch1", s1.clone(), None, false).await?;
 
         assert_eq!(
             branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
@@ -390,11 +349,7 @@ mod tests {
         assert_eq!(last_branch_version(&storage, "branch1").await?, BranchVersion(0));
         assert_eq!(
             fetch_branch(&storage, "branch1", &BranchVersion(0)).await?,
-            RefData {
-                snapshot: s1.clone(),
-                timestamp: t1,
-                properties: properties.clone()
-            }
+            RefData { snapshot: s1.clone() }
         );
         assert_eq!(
             fetch_branch(&storage, "branch1", &BranchVersion(0)).await?,
@@ -404,7 +359,6 @@ mod tests {
         assert_eq!(
             list_refs(&storage).await?,
             vec![
-                Ref::Branch("branch0".to_string()),
                 Ref::Branch("branch1".to_string()),
                 Ref::Tag("tag1".to_string()),
                 Ref::Tag("tag2".to_string())
@@ -412,16 +366,7 @@ mod tests {
         );
 
         // update a branch successfully
-        update_branch(
-            &storage,
-            "branch1",
-            s2.clone(),
-            Some(&s1.clone()),
-            t2,
-            properties.clone(),
-            false,
-        )
-        .await?;
+        update_branch(&storage, "branch1", s2.clone(), Some(&s1.clone()), false).await?;
 
         assert_eq!(
             branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
@@ -431,11 +376,7 @@ mod tests {
 
         assert_eq!(
             fetch_branch(&storage, "branch1", &BranchVersion(1)).await?,
-            RefData {
-                snapshot: s2.clone(),
-                timestamp: t2,
-                properties: properties.clone()
-            }
+            RefData { snapshot: s2.clone() }
         );
 
         assert_eq!(
@@ -444,34 +385,15 @@ mod tests {
         );
 
         let sid = ObjectId::random();
-        let time = Utc::now();
         // update a branch with the wrong parent
-        let res = update_branch(
-            &storage,
-            "branch1",
-            sid.clone(),
-            Some(&s1),
-            time,
-            properties.clone(),
-            false,
-        )
-        .await;
+        let res = update_branch(&storage, "branch1", sid.clone(), Some(&s1), false).await;
         assert!(matches!(res,
                 Err(RefError::Conflict { expected_parent, actual_parent })
             if expected_parent == Some(s1.clone()) && actual_parent == Some(s2.clone())
         ));
 
         // update the branch again but now with the right parent
-        update_branch(
-            &storage,
-            "branch1",
-            sid.clone(),
-            Some(&s2),
-            time,
-            properties.clone(),
-            false,
-        )
-        .await?;
+        update_branch(&storage, "branch1", sid.clone(), Some(&s2), false).await?;
 
         assert_eq!(
             branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
@@ -486,14 +408,7 @@ mod tests {
 
         assert_eq!(
             fetch_ref(&storage, "branch1").await?,
-            (
-                Ref::Branch("branch1".to_string()),
-                RefData {
-                    snapshot: sid.clone(),
-                    timestamp: time,
-                    properties: properties.clone()
-                }
-            )
+            (Ref::Branch("branch1".to_string()), RefData { snapshot: sid.clone() })
         );
 
         Ok(())

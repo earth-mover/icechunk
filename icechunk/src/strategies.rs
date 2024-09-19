@@ -25,7 +25,7 @@ pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     let dataset = runtime.block_on(async {
-        Dataset::init(Arc::new(storage))
+        Dataset::init(Arc::new(storage), false)
             .await
             .expect("Failed to initialize dataset")
             .build()
