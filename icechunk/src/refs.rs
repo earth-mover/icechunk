@@ -300,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_refs() -> Result<(), Box<dyn std::error::Error>> {
-        let storage = ObjectStorage::new_in_memory_store();
+        let storage = ObjectStorage::new_in_memory_store("foo");
         let s1 = ObjectId::random();
         let s2 = ObjectId::random();
         let t1 = Utc::now();

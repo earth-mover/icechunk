@@ -607,7 +607,9 @@ async fn mk_dataset(
 
 fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
     match config {
-        StorageConfig::InMemory => Ok(Arc::new(ObjectStorage::new_in_memory_store())),
+        StorageConfig::InMemory => {
+            Ok(Arc::new(ObjectStorage::new_in_memory_store("prefix")))
+        }
         StorageConfig::LocalFileSystem { root } => {
             let storage = ObjectStorage::new_local_store(root)
                 .map_err(|e| format!("Error creating storage: {e}"))?;
@@ -1129,7 +1131,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1172,7 +1174,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
@@ -1212,7 +1214,7 @@ mod tests {
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
@@ -1303,7 +1305,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
@@ -1346,7 +1348,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1410,7 +1412,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1445,7 +1447,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1499,7 +1501,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
         let ds = Dataset::init(Arc::clone(&storage)).await?.build();
         let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
 
@@ -1558,7 +1560,7 @@ mod tests {
     #[tokio::test]
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store("prefix"));
 
         let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
 

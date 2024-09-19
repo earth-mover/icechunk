@@ -21,7 +21,7 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 #[allow(clippy::expect_used)]
 pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
     // FIXME: add storages strategy
-    let storage = ObjectStorage::new_in_memory_store();
+    let storage = ObjectStorage::new_in_memory_store("prefix");
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     let dataset = runtime.block_on(async {

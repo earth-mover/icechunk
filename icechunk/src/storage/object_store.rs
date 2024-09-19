@@ -61,8 +61,8 @@ pub struct ObjectStorage {
 }
 
 impl ObjectStorage {
-    pub fn new_in_memory_store() -> ObjectStorage {
-        ObjectStorage { store: Arc::new(InMemory::new()), prefix: "".into() }
+    pub fn new_in_memory_store(prefix: impl Into<String>) -> ObjectStorage {
+        ObjectStorage { store: Arc::new(InMemory::new()), prefix: prefix.into() }
     }
     pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
         create_dir_all(prefix.as_path())?;
@@ -232,16 +232,15 @@ impl Storage for ObjectStorage {
         // FIXME: i don't think object_store's implementation of list_with_delimiter is any good
         // we need to test if it even works beyond 1k refs
         let prefix = self.ref_key("");
-        let ref_prefix = ObjectPath::from(REF_PREFIX);
 
         Ok(self
             .store
-            .list_with_delimiter(Some(prefix).as_ref())
+            .list_with_delimiter(Some(prefix.clone()).as_ref())
             .await?
             .common_prefixes
             .iter()
             .filter_map(|path| {
-                self.drop_prefix(&ref_prefix, path).map(|path| path.to_string())
+                self.drop_prefix(&prefix, path).map(|path| path.to_string())
             })
             .collect())
     }
