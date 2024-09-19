@@ -213,20 +213,53 @@ The snapshot file has the following JSON schema:
 <details>
 <summary>JSON Schema for Snapshot File</summary>
 
-```json-schema
+```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SnapshotTable",
+  "title": "Snapshot",
   "type": "object",
   "required": [
-    "nodes"
+    "metadata",
+    "nodes",
+    "properties",
+    "short_term_history",
+    "short_term_parents",
+    "started_at",
+    "total_parents"
   ],
   "properties": {
+    "metadata": {
+      "$ref": "#/definitions/SnapshotMetadata"
+    },
     "nodes": {
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/NodeSnapshot"
       }
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "short_term_history": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SnapshotMetadata"
+      }
+    },
+    "short_term_parents": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0.0
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "total_parents": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
     }
   },
   "definitions": {
@@ -646,6 +679,26 @@ The snapshot file has the following JSON schema:
       "maxItems": 16,
       "minItems": 16
     },
+    "SnapshotMetadata": {
+      "type": "object",
+      "required": [
+        "id",
+        "message",
+        "written_at"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ObjectId"
+        },
+        "message": {
+          "type": "string"
+        },
+        "written_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
     "StorageTransformer": {
       "type": "object",
       "required": [
@@ -801,7 +854,7 @@ The chunks from a single array can also be spread across multiple manifests.
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ManifestsTable",
+  "title": "Manifest",
   "type": "object",
   "required": [
     "chunks"
@@ -922,21 +975,6 @@ The chunks from a single array can also be spread across multiple manifests.
 ```
 
 </details>
-
-#### Chunk Coord Encoding
-
-Chunk coords are tuples of positive ints (e.g. `(5, 30, 10)`).
-In normal Zarr, chunk keys are encoded as strings (e.g. `5.30.10`).
-We want an encoding is:
-- efficient (minimal storage size)
-- sortable
-- useable as a predicate in Arrow
-
-The first two requirements rule out string encoding.
-The latter requirement rules out structs or lists.
-
-So we opt for a variable length binary encoding.
-The chunk coord is created by encoding each element of the tuple a big endian `uint16` and then simply concatenating the bytes together in order. For the common case of arrays <= 4 dimensions, this would use 8 bytes or less per chunk coord.
 
 ### Chunk Files
 
