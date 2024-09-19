@@ -2,6 +2,7 @@ use std::{collections::HashMap, num::NonZeroU64};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use test_strategy::Arbitrary;
 
 pub mod data_type;
@@ -17,29 +18,29 @@ pub type ArrayShape = Vec<u64>;
 pub type DimensionName = Option<String>;
 pub type DimensionNames = Vec<DimensionName>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Codec {
     pub name: String,
     pub configuration: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StorageTransformer {
     pub name: String,
     pub configuration: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
 
-#[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum ChunkKeyEncoding {
     Slash,
     Dot,
     Default,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UserAttributes {
     #[serde(flatten)]
     pub parsed: serde_json::Value,

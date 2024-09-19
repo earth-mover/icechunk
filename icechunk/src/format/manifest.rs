@@ -2,34 +2,35 @@ use std::{collections::BTreeMap, mem::size_of, ops::Bound, sync::Arc};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
 use super::{ChunkIndices, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestRef {
     pub object_id: ObjectId,
     pub flags: Flags,
     pub extents: ManifestExtents,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct VirtualChunkRef {
     location: String, // FIXME: better type
     offset: u64,
     length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ChunkRef {
     pub id: ObjectId,
     pub offset: u64,
     pub length: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub enum ChunkPayload {
     Inline(Bytes), // FIXME: optimize copies
     Virtual(VirtualChunkRef),
@@ -43,7 +44,7 @@ pub struct ChunkInfo {
     pub payload: ChunkPayload,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct Manifest {
     pub chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
 }

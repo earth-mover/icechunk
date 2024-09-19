@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use test_strategy::Arbitrary;
 
 use crate::format::IcechunkFormatError;
 
 use super::DataType;
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum FillValue {
     // FIXME: test all json (de)serializations
     Bool(bool),

@@ -11,6 +11,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
+use schemars::JsonSchema;
 
 use crate::metadata::DataType;
 
@@ -23,7 +24,7 @@ pub type Path = PathBuf;
 /// The id of a file in object store
 // FIXME: should this be passed by ref everywhere?
 #[serde_as]
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 pub struct ObjectId(pub [u8; 16]); // FIXME: this doesn't need to be this big
 
 impl ObjectId {
@@ -90,7 +91,7 @@ impl<'de> Deserialize<'de> for ObjectId {
 /// The internal id of an array or group, unique only to a single store version
 pub type NodeId = u32;
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 /// An ND index to an element in a chunk grid.
 pub struct ChunkIndices(pub Vec<u64>);
 
@@ -155,7 +156,7 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Flags(); // FIXME: implement
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
