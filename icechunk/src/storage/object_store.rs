@@ -107,11 +107,23 @@ impl ObjectStorage {
         Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
     }
 
-    fn get_path(&self, file_prefix: &str, id: &ObjectId) -> ObjectPath {
+    fn get_path(&self, file_prefix: &str, extension: &str, id: &ObjectId) -> ObjectPath {
         // TODO: be careful about allocation here
         // we serialize the url using crockford
-        let path = format!("{}/{}/{}.msgpack", self.prefix, file_prefix, id);
+        let path = format!("{}/{}/{}{}", self.prefix, file_prefix, id, extension);
         ObjectPath::from(path)
+    }
+
+    fn get_snapshot_path(&self, id: &ObjectId) -> ObjectPath {
+        self.get_path(SNAPSHOT_PREFIX, ".msgpack", id)
+    }
+
+    fn get_manifest_path(&self, id: &ObjectId) -> ObjectPath {
+        self.get_path(MANIFEST_PREFIX, ".msgpack", id)
+    }
+
+    fn get_chunk_path(&self, id: &ObjectId) -> ObjectPath {
+        self.get_path(CHUNK_PREFIX, "", id)
     }
 
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
@@ -132,7 +144,7 @@ impl fmt::Debug for ObjectStorage {
 #[async_trait]
 impl Storage for ObjectStorage {
     async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
-        let path = self.get_path(SNAPSHOT_PREFIX, id);
+        let path = self.get_snapshot_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
         let res = rmp_serde::from_slice(bytes.as_ref())?;
@@ -150,7 +162,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<Manifest>, StorageError> {
-        let path = self.get_path(MANIFEST_PREFIX, id);
+        let path = self.get_manifest_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
         let res = rmp_serde::from_slice(bytes.as_ref())?;
@@ -162,7 +174,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(SNAPSHOT_PREFIX, &id);
+        let path = self.get_snapshot_path(&id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;
         // FIXME: use multipart
         self.store.put(&path, bytes.into()).await?;
@@ -175,9 +187,6 @@ impl Storage for ObjectStorage {
         _table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         todo!()
-        // let path = ObjectStorage::get_path(ATTRIBUTES_PREFIX, &id);
-        // self.write_parquet(&path, &table.batch).await?;
-        // Ok(())
     }
 
     async fn write_manifests(
@@ -185,7 +194,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(MANIFEST_PREFIX, &id);
+        let path = self.get_manifest_path(&id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;
         // FIXME: use multipart
         self.store.put(&path, bytes.into()).await?;
@@ -197,7 +206,7 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
-        let path = self.get_path(CHUNK_PREFIX, id);
+        let path = self.get_chunk_path(id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
         let options =
@@ -211,7 +220,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(CHUNK_PREFIX, &id);
+        let path = self.get_chunk_path(&id);
         let upload = self.store.put_multipart(&path).await?;
         // TODO: new_with_chunk_size?
         let mut write = object_store::WriteMultipart::new(upload);
