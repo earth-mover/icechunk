@@ -143,12 +143,46 @@ References are very important in the Icechunk design.
 Creating or updating references is the point at which consistency and atomicity of Icechunk transactions is enforced.
 Different client sessions may simultaneously create two inconsistent snapshots; however, only one session may successfully update a reference to that snapshot.
 
-References (both branches and tags) are stored as JSON files with the following structure.
+References (both branches and tags) are stored as JSON files with the following schema
 
-| Name | Required | Type | Description |
-| snapshot-id | YES | str UID | ID for identifying the snapshot pointed by the reference |
-| parent-snapshot-id | YES | str UID or Null | ID of the previous snapshot |
-| timestamp-ms | YES | int | Timestamp at which the reference was created |
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RefData",
+  "type": "object",
+  "required": [
+    "properties",
+    "snapshot",
+    "timestamp"
+  ],
+  "properties": {
+    "properties": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "snapshot": {
+      "$ref": "#/definitions/ObjectId"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "definitions": {
+    "ObjectId": {
+      "description": "The id of a file in object store",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0.0
+      },
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}
+```
 
 #### Creating and Updating Branches
 
