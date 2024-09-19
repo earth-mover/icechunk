@@ -92,7 +92,7 @@ pub type NodeId = u32;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 /// An ND index to an element in a chunk grid.
-pub struct ChunkIndices(pub Vec<u64>);
+pub struct ChunkIndices(pub Vec<u32>);
 
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;

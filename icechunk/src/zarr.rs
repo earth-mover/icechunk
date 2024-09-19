@@ -675,7 +675,7 @@ impl Key {
                         .strip_prefix('/')
                         .ok_or(StoreError::InvalidKey { key: key.to_string() })?
                         .split('/')
-                        .map(|s| s.parse::<u64>())
+                        .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
                         .map(|coords| Key::Chunk {
                             node_path: ["/", path].iter().collect(),
