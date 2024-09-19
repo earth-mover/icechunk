@@ -1,6 +1,13 @@
-use std::{collections::BTreeMap, mem::size_of, ops::Bound, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    mem::size_of,
+    ops::Bound,
+    sync::Arc,
+};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::metadata::{
     ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames, FillValue,
@@ -66,12 +73,112 @@ impl NodeSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotMetadata {
+    pub id: ObjectId,
+    pub written_at: DateTime<Utc>,
+    pub message: String,
+}
+
+pub type SnapshotProperties = HashMap<String, Value>;
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct SnapshotTable {
+pub struct Snapshot {
+    pub total_parents: u32,
+    // we denormalize this field to have it easily available in the serialized file
+    pub short_term_parents: u16,
+    pub short_term_history: Vec<SnapshotMetadata>,
+
+    pub metadata: SnapshotMetadata,
+    pub started_at: DateTime<Utc>,
+    pub properties: SnapshotProperties,
     pub nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
-impl SnapshotTable {
+impl Default for SnapshotMetadata {
+    fn default() -> Self {
+        Self {
+            id: ObjectId::random(),
+            written_at: Utc::now(),
+            message: Default::default(),
+        }
+    }
+}
+
+impl SnapshotMetadata {
+    fn with_message(msg: String) -> Self {
+        Self { message: msg, ..Self::default() }
+    }
+}
+
+impl Snapshot {
+    pub fn new(
+        short_term_history: Vec<SnapshotMetadata>,
+        total_parents: u32,
+        properties: Option<SnapshotProperties>,
+    ) -> Self {
+        let metadata = SnapshotMetadata::default();
+        let short_term_parents = short_term_history.len() as u16;
+        let started_at = Utc::now();
+        let properties = properties.unwrap_or_default();
+        let nodes = BTreeMap::new();
+        Self {
+            total_parents,
+            short_term_parents,
+            short_term_history,
+            metadata,
+            started_at,
+            properties,
+            nodes,
+        }
+    }
+
+    pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
+        short_term_history: Vec<SnapshotMetadata>,
+        total_parents: u32,
+        properties: Option<SnapshotProperties>,
+        iter: T,
+    ) -> Self {
+        let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
+        Self { nodes, ..Self::new(short_term_history, total_parents, properties) }
+    }
+
+    pub fn first(properties: Option<SnapshotProperties>) -> Self {
+        Self::new(vec![], 0, properties)
+    }
+
+    pub fn first_from_iter<T: IntoIterator<Item = NodeSnapshot>>(
+        properties: Option<SnapshotProperties>,
+        iter: T,
+    ) -> Self {
+        Self::from_iter(vec![], 0, properties, iter)
+    }
+
+    pub fn from_parent(
+        parent: &Snapshot,
+        properties: Option<SnapshotProperties>,
+    ) -> Self {
+        let mut history = parent.short_term_history.clone();
+        history.push(parent.metadata.clone());
+        Self::new(history, parent.total_parents + 1, properties)
+    }
+
+    pub fn child_from_iter<T: IntoIterator<Item = NodeSnapshot>>(
+        parent: &Snapshot,
+        properties: Option<SnapshotProperties>,
+        iter: T,
+    ) -> Self {
+        let mut res = Self::from_parent(parent, properties);
+        let with_nodes = Self::first_from_iter(None, iter);
+        res.nodes = with_nodes.nodes;
+        res
+    }
+
+    pub fn empty() -> Self {
+        let metadata = SnapshotMetadata::with_message("Dataset initialized".to_string());
+        Self { metadata, ..Self::first(None) }
+    }
+
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
         self.nodes
             .get(path)
@@ -102,7 +209,7 @@ impl SnapshotTable {
 // We need this complex dance because Rust makes it really hard to put together an object and a
 // reference to it (in the iterator) in a single self-referential struct
 struct NodeIterator {
-    table: Arc<SnapshotTable>,
+    table: Arc<Snapshot>,
     last_key: Option<Path>,
 }
 
@@ -133,13 +240,6 @@ impl Iterator for NodeIterator {
                 }
             }
         }
-    }
-}
-
-impl FromIterator<NodeSnapshot> for SnapshotTable {
-    fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(iter: T) -> Self {
-        let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
-        SnapshotTable { nodes }
     }
 }
 
@@ -263,7 +363,7 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = nodes.into_iter().collect::<SnapshotTable>();
+        let st = Snapshot::first_from_iter(None, nodes);
         assert_eq!(
             st.get_node(&"/nonexistent".into()),
             Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })

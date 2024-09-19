@@ -17,8 +17,8 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::format::{
-    attributes::AttributesTable, manifest::ManifestsTable, snapshot::SnapshotTable,
-    ByteRange, ObjectId, Path,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId, Path,
 };
 
 #[derive(Debug, Error)]
@@ -51,19 +51,19 @@ type StorageResult<A> = Result<A, StorageError>;
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 pub trait Storage: fmt::Debug {
-    async fn fetch_snapshot(&self, id: &ObjectId) -> StorageResult<Arc<SnapshotTable>>;
+    async fn fetch_snapshot(&self, id: &ObjectId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,
         id: &ObjectId,
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
-    async fn fetch_manifests(&self, id: &ObjectId) -> StorageResult<Arc<ManifestsTable>>; // FIXME: format flags
+    async fn fetch_manifests(&self, id: &ObjectId) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
     async fn fetch_chunk(&self, id: &ObjectId, range: &ByteRange)
         -> StorageResult<Bytes>; // FIXME: format flags
 
     async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<SnapshotTable>,
+        table: Arc<Snapshot>,
     ) -> StorageResult<()>;
     async fn write_attributes(
         &self,
@@ -73,12 +73,17 @@ pub trait Storage: fmt::Debug {
     async fn write_manifests(
         &self,
         id: ObjectId,
-        table: Arc<ManifestsTable>,
+        table: Arc<Manifest>,
     ) -> StorageResult<()>;
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> StorageResult<()>;
 
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;
     async fn ref_names(&self) -> StorageResult<Vec<String>>;
     async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>>;
-    async fn write_ref(&self, ref_key: &str, bytes: Bytes) -> StorageResult<()>;
+    async fn write_ref(
+        &self,
+        ref_key: &str,
+        overwrite_refs: bool,
+        bytes: Bytes,
+    ) -> StorageResult<()>;
 }

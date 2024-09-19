@@ -1,5 +1,10 @@
 use core::fmt;
-use std::{fmt::Debug, hash::Hash, ops::Bound, path::PathBuf};
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+    ops::Bound,
+    path::PathBuf,
+};
 
 use bytes::Bytes;
 use itertools::Itertools;
@@ -57,6 +62,12 @@ impl TryFrom<&str> for ObjectId {
 impl From<&ObjectId> for String {
     fn from(value: &ObjectId) -> Self {
         base32::encode(base32::Alphabet::Crockford, &value.0)
+    }
+}
+
+impl Display for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", String::from(self))
     }
 }
 
