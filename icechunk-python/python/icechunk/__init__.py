@@ -35,7 +35,7 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.snapshot_id
 
     @property
-    def branch(self) -> str:
+    def branch(self) -> str | None:
         return self._store.branch
 
     async def checkout(self, snapshot_id: str | None = None, branch: str | None = None, tag: str | None = None) -> None:
