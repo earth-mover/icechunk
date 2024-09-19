@@ -80,5 +80,10 @@ pub trait Storage: fmt::Debug {
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;
     async fn ref_names(&self) -> StorageResult<Vec<String>>;
     async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>>;
-    async fn write_ref(&self, ref_key: &str, bytes: Bytes) -> StorageResult<()>;
+    async fn write_ref(
+        &self,
+        ref_key: &str,
+        overwrite_refs: bool,
+        bytes: Bytes,
+    ) -> StorageResult<()>;
 }
