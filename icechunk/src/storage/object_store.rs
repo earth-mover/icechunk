@@ -61,8 +61,10 @@ pub struct ObjectStorage {
 }
 
 impl ObjectStorage {
-    pub fn new_in_memory_store(prefix: impl Into<String>) -> ObjectStorage {
-        ObjectStorage { store: Arc::new(InMemory::new()), prefix: prefix.into() }
+    pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
+        let prefix =
+            prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
+        ObjectStorage { store: Arc::new(InMemory::new()), prefix }
     }
     pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
         create_dir_all(prefix.as_path())?;
