@@ -130,18 +130,20 @@ pub async fn create_tag(
     snapshot: ObjectId,
     timestamp: DateTime<Utc>,
     properties: HashMap<String, Value>,
+    overwrite_refs: bool,
 ) -> RefResult<()> {
     let key = tag_key(name)?;
     let data = RefData { snapshot, timestamp, properties };
     let content = serde_json::to_vec(&data)?;
-    storage.write_ref(key.as_str(), Bytes::copy_from_slice(&content)).await.map_err(
-        |e| match e {
+    storage
+        .write_ref(key.as_str(), overwrite_refs, Bytes::copy_from_slice(&content))
+        .await
+        .map_err(|e| match e {
             StorageError::RefAlreadyExists(_) => {
                 RefError::TagAlreadyExists(name.to_string())
             }
             err => err.into(),
-        },
-    )?;
+        })?;
     Ok(())
 }
 
@@ -153,6 +155,7 @@ pub async fn update_branch(
     parent_snapshot: Option<&ObjectId>,
     timestamp: DateTime<Utc>,
     properties: HashMap<String, Value>,
+    overwrite_refs: bool,
 ) -> RefResult<BranchVersion> {
     let last_version = last_branch_version(storage, name).await;
     let last_ref_data = match last_version {
@@ -177,7 +180,10 @@ pub async fn update_branch(
     let key = new_version.to_path(name)?;
     let data = RefData { snapshot, timestamp, properties };
     let content = serde_json::to_vec(&data)?;
-    match storage.write_ref(key.as_str(), Bytes::copy_from_slice(&content)).await {
+    match storage
+        .write_ref(key.as_str(), overwrite_refs, Bytes::copy_from_slice(&content))
+        .await
+    {
         Ok(_) => Ok(new_version),
         Err(StorageError::RefAlreadyExists(_)) => {
             // If the branch version already exists, an update happened since we checked
@@ -189,6 +195,7 @@ pub async fn update_branch(
                 parent_snapshot,
                 data.timestamp,
                 data.properties,
+                overwrite_refs,
             )
             .await
         }
@@ -305,8 +312,8 @@ mod tests {
         assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
         assert_eq!(list_refs(&storage).await?, vec![]);
 
-        create_tag(&storage, "tag1", s1.clone(), t1, properties.clone()).await?;
-        create_tag(&storage, "tag2", s2.clone(), t2, properties.clone()).await?;
+        create_tag(&storage, "tag1", s1.clone(), t1, properties.clone(), false).await?;
+        create_tag(&storage, "tag2", s2.clone(), t2, properties.clone(), false).await?;
 
         let res = fetch_tag(&storage, "tag1").await?;
         assert_eq!(res.snapshot, s1);
@@ -335,7 +342,7 @@ mod tests {
 
         // attempts to recreate a tag fail
         assert!(matches!(
-            create_tag(&storage, "tag1", s1.clone(), t1, properties.clone()).await,
+            create_tag(&storage, "tag1", s1.clone(), t1, properties.clone(), false).await,
                 Err(RefError::TagAlreadyExists(name)) if name == *"tag1"
         ));
         assert_eq!(
@@ -351,6 +358,7 @@ mod tests {
             Some(&s2),
             t1,
             properties.clone(),
+            false,
         )
         .await;
         assert!(res.is_ok());
@@ -364,8 +372,16 @@ mod tests {
         );
 
         // create a branch successfully
-        update_branch(&storage, "branch1", s1.clone(), None, t1, properties.clone())
-            .await?;
+        update_branch(
+            &storage,
+            "branch1",
+            s1.clone(),
+            None,
+            t1,
+            properties.clone(),
+            false,
+        )
+        .await?;
 
         assert_eq!(
             branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
@@ -403,6 +419,7 @@ mod tests {
             Some(&s1.clone()),
             t2,
             properties.clone(),
+            false,
         )
         .await?;
 
@@ -436,6 +453,7 @@ mod tests {
             Some(&s1),
             time,
             properties.clone(),
+            false,
         )
         .await;
         assert!(matches!(res,
@@ -451,6 +469,7 @@ mod tests {
             Some(&s2),
             time,
             properties.clone(),
+            false,
         )
         .await?;
 

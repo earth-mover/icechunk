@@ -42,11 +42,16 @@ use crate::{
 pub struct DatasetConfig {
     // Chunks smaller than this will be stored inline in the manifst
     pub inline_threshold_bytes: u16,
+    // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
+    // own risk in object stores for which we don't support write-object-if-not-exists. There is
+    // teh posibility of race conditions if this variable is set to true and there are concurrent
+    // commit attempts.
+    pub unsafe_overwrite_refs: bool,
 }
 
 impl Default for DatasetConfig {
     fn default() -> Self {
-        Self { inline_threshold_bytes: 512 }
+        Self { inline_threshold_bytes: 512, unsafe_overwrite_refs: false }
     }
 }
 
@@ -991,6 +996,7 @@ impl Dataset {
             Some(&parent_snapshot),
             now,
             properties,
+            self.config.unsafe_overwrite_refs,
         )
         .await
         {
@@ -1014,6 +1020,7 @@ impl Dataset {
             None,
             now,
             properties,
+            self.config.unsafe_overwrite_refs,
         )
         .await
         {
@@ -1039,8 +1046,15 @@ impl Dataset {
             properties.insert(String::from("message"), Value::from(message));
         }
 
-        create_tag(self.storage.as_ref(), tag_name, snapshot_id.clone(), now, properties)
-            .await?;
+        create_tag(
+            self.storage.as_ref(),
+            tag_name,
+            snapshot_id.clone(),
+            now,
+            properties,
+            self.config.unsafe_overwrite_refs,
+        )
+        .await?;
         Ok(())
     }
 }
