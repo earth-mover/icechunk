@@ -244,8 +244,8 @@ pub enum DatasetError {
     NotAGroup { node: NodeSnapshot, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
     AlreadyExists { node: NodeSnapshot, message: String },
-    #[error("no changes made to the dataset")]
-    NoChangesToFlush,
+    #[error("cannot commit, no changes made to the dataset")]
+    NoChangesToCommit,
     #[error("unknown flush error")]
     OtherFlushError,
     #[error("ref error: `{0}`")]
@@ -912,6 +912,9 @@ impl Dataset {
         message: &str,
         properties: SnapshotProperties,
     ) -> DatasetResult<ObjectId> {
+        if !self.has_uncommitted_changes() {
+            return Err(DatasetError::NoChangesToCommit);
+        }
         // We search for the current manifest. We are assumming a single one for now
         let old_snapshot = self.storage().fetch_snapshot(&self.snapshot_id).await?;
         let old_snapshot_c = Arc::clone(&old_snapshot);
