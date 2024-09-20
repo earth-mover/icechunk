@@ -14,6 +14,9 @@ class IcechunkStore(Store, SyncMixin):
 
     @classmethod
     async def open(cls, *args: Any, **kwargs: Any) -> Self:
+        """FIXME: Better handle the open method based on the access mode the user passed in along with the kwargs
+        https://github.com/zarr-developers/zarr-python/blob/c878da2a900fc621ff23cc6d84d45cd3cb26cbed/src/zarr/abc/store.py#L24-L30
+        """
         store = await cls.from_config(*args, **kwargs)
 
         # We dont want to call _open() becuase icechunk handles the opening, etc.
@@ -29,6 +32,7 @@ class IcechunkStore(Store, SyncMixin):
         *args: Any,
         **kwargs: Any,
     ):
+        """Create a new IcechunkStore. This should not be called directly, instead use the create or open_existing class methods."""
         super().__init__(mode, *args, **kwargs)
         if store is None:
             raise ValueError("An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods.")
@@ -81,7 +85,8 @@ class IcechunkStore(Store, SyncMixin):
                 "...": "additional storage configuration"
             }
         }
-        
+
+        If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
         """
         config_str = json.dumps(config)
         read_only = mode == "r"
@@ -104,6 +109,8 @@ class IcechunkStore(Store, SyncMixin):
         It is recommended to use the cached storage option for better performance. If cached=True, 
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
+
+        If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
 
         See the from_config method for more information on the storage configuration.
         """
