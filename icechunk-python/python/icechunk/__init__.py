@@ -14,7 +14,7 @@ class IcechunkStore(Store, SyncMixin):
 
     @classmethod
     async def open(cls, *args: Any, **kwargs: Any) -> Self:
-        store = await cls.from_json(*args, **kwargs)
+        store = await cls.from_config(*args, **kwargs)
 
         # We dont want to call _open() becuase icechunk handles the opening, etc.
         # if we have gotten this far we can mark it as open
@@ -35,9 +35,54 @@ class IcechunkStore(Store, SyncMixin):
         self._store = store
 
     @staticmethod
-    async def from_json(
+    async def from_config(
         config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ) -> Self:
+        """Create an IcechunkStore from a given configuration.
+        
+        The configuration should be a dictionary in the following format:
+        {
+            "storage": {
+                "type": "s3, // one of "in_memory", "local_filesystem", "s3", "cached"
+                "...": "additional storage configuration"
+            },
+            "dataset": {
+                // Optional, only required if you want to open an existing dataset
+                "version": {
+                    "branch": "main",
+                },
+                // The threshold at which chunks are stored inline and not written to chunk storage
+                inline_chunk_threshold_bytes: 512,
+            },
+        }
+
+        The following storage types are supported:
+        - in_memory: store data in memory
+        - local_filesystem: store data on the local filesystem
+        - s3: store data on S3 compatible storage
+        - cached: store data in memory with a backing storage
+
+        The following additional configuration options are supported for each storage type:
+        - in_memory: {}
+        - local_filesystem: {"root": "path/to/root/directory"}
+        - s3: {
+            "bucket": "bucket-name",
+            "prefix": "optional-prefix",
+            "endpoint": "optional-end
+            "access_key_id": "optional-access-key-id",
+            "secret_access_key": "optional",
+            "session_token": "optional",
+            "endpoint": "optional"
+        }
+        - cached: {
+            "approx_max_memory_bytes": 1_000_000,
+            "backend": {
+                "type": "s3",
+                "...": "additional storage configuration"
+            }
+        }
+        
+        """
         config_str = json.dumps(config)
         read_only = mode == "r"
         store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
@@ -59,6 +104,8 @@ class IcechunkStore(Store, SyncMixin):
         It is recommended to use the cached storage option for better performance. If cached=True, 
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
+
+        See the from_config method for more information on the storage configuration.
         """
         config = {
             "dataset": {
@@ -77,7 +124,7 @@ class IcechunkStore(Store, SyncMixin):
         else:
             config["storage"] = storage_config
 
-        return await IcechunkStore.from_json(config, mode, *args, **kwargs)
+        return await IcechunkStore.from_config(config, mode, *args, **kwargs)
 
     @staticmethod
     async def create(
@@ -96,6 +143,8 @@ class IcechunkStore(Store, SyncMixin):
         It is recommended to use the cached storage option for better performance. If cached=True,
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
+
+        See the from_config method for more information on the storage configuration.
         """
         config = {
             "dataset": {
@@ -112,7 +161,7 @@ class IcechunkStore(Store, SyncMixin):
         else:
             config["storage"] = storage_config
         
-        return await IcechunkStore.from_json(config, mode, *args, **kwargs)
+        return await IcechunkStore.from_config(config, mode, *args, **kwargs)
 
     @property
     def snapshot_id(self) -> str:

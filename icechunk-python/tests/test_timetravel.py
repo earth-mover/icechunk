@@ -4,7 +4,7 @@ import icechunk
 
 
 async def test_timetravel():
-    store = await icechunk.IcechunkStore.from_json(
+    store = await icechunk.IcechunkStore.from_config(
         config={"storage": {"type": "in_memory"}, "dataset": {}}, mode="w"
     )
 

@@ -43,7 +43,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.fixture(scope="function")
     def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
-        return asyncio.run(IcechunkStore.from_json(**store_kwargs))
+        return asyncio.run(IcechunkStore.from_config(**store_kwargs))
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
