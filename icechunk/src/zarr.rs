@@ -59,16 +59,16 @@ pub enum StorageConfig {
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
     SnapshotId(ObjectId),
-    #[serde(rename = "tag_ref")]
+    #[serde(rename = "tag")]
     TagRef(String),
-    #[serde(rename = "branch_tip_ref")]
+    #[serde(rename = "branch")]
     BranchTipRef(String),
 }
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DatasetConfig {
-    pub previous_version: Option<VersionInfo>,
+    pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
 }
@@ -566,7 +566,7 @@ async fn mk_dataset(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(Dataset, Option<String>), String> {
     let (mut builder, branch): (DatasetBuilder, Option<String>) = match &dataset
-        .previous_version
+        .version
     {
         None => {
             let builder =
@@ -1625,7 +1625,7 @@ mod tests {
             },
             dataset: DatasetConfig {
                 inline_chunk_threshold_bytes: Some(128),
-                previous_version: Some(VersionInfo::SnapshotId(ObjectId([
+                version: Some(VersionInfo::SnapshotId(ObjectId([
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
@@ -1640,7 +1640,7 @@ mod tests {
                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
-                "previous_version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
+                "version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
                 "inline_chunk_threshold_bytes":128,
                 "unsafe_overwrite_refs":true
              },
@@ -1656,7 +1656,7 @@ mod tests {
                  "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
-                "previous_version": null,
+                "version": null,
                 "inline_chunk_threshold_bytes": null,
                 "unsafe_overwrite_refs":null
              }}
@@ -1664,7 +1664,7 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
@@ -1686,7 +1686,7 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
@@ -1704,7 +1704,7 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
@@ -1722,7 +1722,7 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
@@ -1740,7 +1740,7 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
@@ -1772,7 +1772,7 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
