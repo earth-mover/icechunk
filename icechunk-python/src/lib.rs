@@ -19,8 +19,13 @@ struct PyIcechunkStore {
 }
 
 impl PyIcechunkStore {
-    async fn from_json_config(json: &[u8]) -> Result<Self, String> {
-        let store = Store::from_json_config(json).await?;
+    async fn from_json_config(json: &[u8], read_only: bool) -> Result<Self, String> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+        let store = Store::from_json_config(json, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { store, rt })
@@ -30,6 +35,7 @@ impl PyIcechunkStore {
 #[pyfunction]
 fn pyicechunk_store_from_json_config<'py>(
     json: String,
+    read_only: bool,
     py: Python<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let json = json.as_bytes().to_owned();
@@ -37,7 +43,7 @@ fn pyicechunk_store_from_json_config<'py>(
     // The commit mechanism is async and calls tokio::spawn so we need to use the
     // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::from_json_config(&json).await.map_err(PyValueError::new_err)
+        PyIcechunkStore::from_json_config(&json, read_only).await.map_err(PyValueError::new_err)
     })
 }
 

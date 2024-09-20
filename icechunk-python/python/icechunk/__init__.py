@@ -27,7 +27,8 @@ class IcechunkStore(Store, SyncMixin):
     @staticmethod
     async def from_json(config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any) -> Self:
         config_str = json.dumps(config)
-        store = await pyicechunk_store_from_json_config(config_str)
+        read_only = mode == "r"
+        store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
         return IcechunkStore(store=store, mode=mode, *args, **kwargs)
 
     @property
