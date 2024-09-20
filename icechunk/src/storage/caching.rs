@@ -187,7 +187,6 @@ impl Storage for MemCachingStorage {
         table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id.clone(), Arc::clone(&table)).await?;
-        dbg!("inserting", &id);
         self.cache.insert(CacheKey::Manifest(id), CacheValue::Manifest(table));
         Ok(())
     }
