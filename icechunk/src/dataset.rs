@@ -150,6 +150,7 @@ impl ChangeSet {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) {
+        // FIXME: normalize virtual chunk reference paths here
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
