@@ -74,30 +74,33 @@ impl ObjectStorage {
         Ok(ObjectStorage { store, prefix: "".to_string() })
     }
 
-    pub fn new_s3_store_from_env(
+    pub fn new_s3_store(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
-    ) -> Result<ObjectStorage, StorageError> {
-        use object_store::aws::AmazonS3Builder;
-        let store =
-            AmazonS3Builder::from_env().with_bucket_name(bucket_name.into()).build()?;
-        Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
-    }
-
-    pub fn new_s3_store_with_config(
-        bucket_name: impl Into<String>,
-        prefix: impl Into<String>,
-        access_key_id: impl Into<String>,
-        secret_access_key: impl Into<String>,
+        access_key_id: Option<impl Into<String>>,
+        secret_access_key: Option<impl Into<String>>,
+        session_token: Option<impl Into<String>>,
         endpoint: Option<impl Into<String>>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
-        let builder = AmazonS3Builder::new()
-            .with_access_key_id(access_key_id)
-            .with_secret_access_key(secret_access_key);
+
+        let builder = if let (Some(access_key_id), Some(secret_access_key)) =
+            (access_key_id, secret_access_key)
+        {
+            AmazonS3Builder::new()
+                .with_access_key_id(access_key_id)
+                .with_secret_access_key(secret_access_key)
+        } else {
+            AmazonS3Builder::from_env()
+        };
+
+        let builder = if let Some(session_token) = session_token {
+            builder.with_token(session_token)
+        } else {
+            builder
+        };
 
         let builder = if let Some(endpoint) = endpoint {
-            // TODO: Check if HTTP is allowed always or based on endpoint
             builder.with_endpoint(endpoint).with_allow_http(true)
         } else {
             builder

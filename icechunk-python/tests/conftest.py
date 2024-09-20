@@ -6,7 +6,7 @@ import pytest
 
 async def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkStore:
     if store == "local":
-        return await IcechunkStore.from_json(
+        return await IcechunkStore.from_config(
             {
                 "storage": {"type": "local_filesystem", "root": path},
                 "dataset": {},
@@ -14,7 +14,7 @@ async def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkS
             mode="w"
         )
     if store == "memory":
-        return await IcechunkStore.from_json(
+        return await IcechunkStore.from_config(
             {
                 "storage": {"type": "in_memory"},
                 "dataset": {},
