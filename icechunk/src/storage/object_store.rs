@@ -3,9 +3,9 @@ use bytes::Bytes;
 use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory, parse_url,
-    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, ObjectStoreScheme,
-    PutMode, PutOptions, PutPayload,
+    aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
+    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
+    PutPayload,
 };
 use std::{
     collections::HashMap, fs::create_dir_all, future::ready, ops::Bound, sync::Arc,
@@ -314,7 +314,7 @@ impl Storage for ObjectStorage {
 pub trait VirtualChunkResolver {
     async fn get_chunk_from_cached_store(
         &self,
-        cache_key: &String,
+        cache_key: &str,
         path: &ObjectPath,
         options: GetOptions,
     ) -> StorageResult<Bytes>;
@@ -341,15 +341,16 @@ impl ObjectStoreVirtualChunkResolver {
 impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
     async fn get_chunk_from_cached_store(
         &self,
-        cache_key: &String,
+        cache_key: &str,
         path: &ObjectPath,
         options: GetOptions,
     ) -> StorageResult<Bytes> {
         let stores = self.stores.read().await;
+        #[allow(clippy::expect_used)]
         Ok(stores
             .get(cache_key)
             .expect("this should not fail")
-            .get_opts(&path, options)
+            .get_opts(path, options)
             .await?
             .bytes()
             .await?)
@@ -362,7 +363,6 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
     ) -> StorageResult<Bytes> {
         let VirtualChunkLocation::Absolute(location) = location;
         let parsed = url::Url::parse(location)?;
-        dbg!(&parsed);
         let bucket_name = parsed
             .host_str()
             .ok_or(StorageError::VirtualBucketParseError(
@@ -377,12 +377,8 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
         let has_key = self.stores.read().await.contains_key(&cache_key);
         match has_key {
-            true => {
-                dbg!("using cached store");
-                self.get_chunk_from_cached_store(&cache_key, &path, options).await
-            }
+            true => self.get_chunk_from_cached_store(&cache_key, &path, options).await,
             false => {
-                dbg!("creating new store");
                 let builder = match scheme {
                     "s3" => AmazonS3Builder::from_env(),
                     _ => Err(StorageError::UnsupportedScheme(scheme.to_string()))?,

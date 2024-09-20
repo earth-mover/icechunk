@@ -644,7 +644,10 @@ impl Dataset {
             Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
                 Ok(self
                     .virtual_resolver
-                    .fetch_chunk(&location, &ByteRange::bounded(offset, offset + length))
+                    .fetch_chunk(
+                        &location,
+                        &byte_range.or(&ByteRange::from_offset_to_length(offset, length)),
+                    )
                     .await
                     .map(Some)?)
             }
@@ -1140,7 +1143,6 @@ mod tests {
     };
 
     use super::*;
-    use bytes::Buf;
     use itertools::Itertools;
     use object_store::{ObjectStore, PutMode, PutOptions, PutPayload};
     use pretty_assertions::assert_eq;
@@ -1259,6 +1261,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_virtual_refs() -> Result<(), Box<dyn Error>> {
+        // ++++++++++++++++++
+        // First write to chunks
         use object_store::aws::AmazonS3Builder;
         let bucket_name = "testbucket".to_string();
         let store = AmazonS3Builder::new()
@@ -1272,6 +1276,40 @@ mod tests {
         let bytes2 = Bytes::copy_from_slice(b"second0000");
         let path1 = "prefix/path/to/chunk-1".to_string();
         let path2 = "prefix/path/to/chunk-2".to_string();
+        // TODO: Switch to PutMode::Create when object_store supports that
+        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
+        store
+            .put_opts(
+                &path1.clone().into(),
+                PutPayload::from_bytes(bytes1.clone()),
+                opts.clone(),
+            )
+            .await?;
+        store
+            .put_opts(&path2.clone().into(), PutPayload::from_bytes(bytes2.clone()), opts)
+            .await?;
+        // +++++++++++++++++++++++
+
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_s3_store_with_config(
+                "testbucket".to_string(),
+                format!("{:?}", ObjectId::random()),
+                "minio123",
+                "minio123",
+                Some("http://localhost:9000"),
+            )?);
+        let mut ds = Dataset::init(Arc::clone(&storage), true).await?.build();
+
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1, 1, 2],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
         let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::Absolute(format!(
                 "s3://testbucket/{}",
@@ -1285,103 +1323,49 @@ mod tests {
                 "s3://testbucket/{}",
                 path2
             )),
-            offset: 0,
-            length: 6,
+            offset: 1,
+            length: 5,
         });
-        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
-        store
-            .put_opts(&path1.into(), PutPayload::from_bytes(bytes1.clone()), opts.clone())
-            .await?;
-        store
-            .put_opts(&path2.into(), PutPayload::from_bytes(bytes2.clone()), opts)
-            .await?;
 
-        let storage = ObjectStorage::new_s3_store_with_config(
-            "testbucket".to_string(),
-            "prefix".to_string(),
-            "minio123",
-            "minio123",
-            Some("http://localhost:9000"),
-        )?;
+        let new_array_path: PathBuf = "/array".to_string().into();
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
-        let array_id = 0;
-        let chunk1 = ChunkInfo {
-            node: array_id,
-            coord: ChunkIndices(vec![0, 0, 0]),
-            payload: payload1.clone(),
-        };
-
-        let chunk2 = ChunkInfo {
-            node: array_id,
-            coord: ChunkIndices(vec![0, 0, 1]),
-            payload: payload2.clone(),
-        };
-
-        let manifest =
-            Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
-        let manifest_id = ObjectId::random();
-        dbg!("Writing manifests to storage");
-        storage.write_manifests(manifest_id.clone(), manifest).await?;
-        dbg!("Wrote manifests to storage");
-
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![2, 2, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
-
-        let manifest_ref = ManifestRef {
-            object_id: manifest_id,
-            flags: Flags(),
-            extents: ManifestExtents(vec![]),
-        };
-        let array1_path: PathBuf = "/array1".to_string().into();
-        let nodes = vec![
-            NodeSnapshot {
-                path: "/".into(),
-                id: 1,
-                user_attributes: None,
-                node_data: NodeData::Group,
-            },
-            NodeSnapshot {
-                path: array1_path.clone(),
-                id: array_id,
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
-                )),
-                node_data: NodeData::Array(zarr_meta.clone(), vec![manifest_ref]),
-            },
-        ];
-
-        let snapshot = Arc::new(Snapshot::first_from_iter(None, nodes.iter().cloned()));
-        let snapshot_id = ObjectId::random();
-        dbg!("Writing snapshot to storage");
-        storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-        dbg!("Wrote snapshot to storage");
-        let ds = Dataset::update(Arc::new(storage), snapshot_id)
-            .with_inline_threshold_bytes(512)
-            .build();
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 0]),
+            Some(payload1),
+        )
+        .await?;
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 1]),
+            Some(payload2),
+        )
+        .await?;
 
         dbg!("Getting chunk");
         assert_eq!(
-            ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
+            ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
                 .await?,
-            Some(bytes1),
+            Some(bytes1.clone()),
         );
         assert_eq!(
-            ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 1]), &ByteRange::ALL)
+            ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 1]), &ByteRange::ALL)
                 .await?,
-            Some(Bytes::copy_from_slice(&bytes2[..6])),
+            Some(Bytes::copy_from_slice(&bytes2[1..6])),
         );
+
+        for range in vec![
+            ByteRange::bounded(0u64, 3u64),
+            ByteRange::from_offset(2u64),
+            ByteRange::to_offset(4u64),
+        ] {
+            assert_eq!(
+                ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &range)
+                    .await?,
+                Some(range.slice(bytes1.clone()))
+            );
+        }
         Ok(())
     }
 
