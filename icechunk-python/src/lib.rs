@@ -152,9 +152,13 @@ impl PyIcechunkStore {
         })
     }
 
-    pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {
-        let is_empty = self.store.read().await.empty().await?;
-        Ok(is_empty)
+    pub fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let is_empty =
+                store.read().await.empty().await.map_err(PyIcechunkStoreError::from)?;
+            Ok(is_empty)
+        })
     }
 
     pub async fn clear(&mut self) -> PyIcechunkStoreResult<()> {
@@ -162,18 +166,27 @@ impl PyIcechunkStore {
         Ok(())
     }
 
-    pub async fn get(
-        &self,
+    pub fn get<'py>(
+        &'py self,
+        py: Python<'py>,
         key: String,
         byte_range: Option<(Option<ChunkOffset>, Option<ChunkOffset>)>,
-    ) -> PyIcechunkStoreResult<PyObject> {
-        let byte_range = byte_range.unwrap_or((None, None)).into();
-        let data = self.store.read().await.get(&key, &byte_range).await?;
-        let pybytes = Python::with_gil(|py| {
-            let bound_bytes = PyBytes::new_bound(py, &data);
-            bound_bytes.to_object(py)
-        });
-        Ok(pybytes)
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let byte_range = byte_range.unwrap_or((None, None)).into();
+            let data = store
+                .read()
+                .await
+                .get(&key, &byte_range)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            let pybytes = Python::with_gil(|py| {
+                let bound_bytes = PyBytes::new_bound(py, &data);
+                bound_bytes.to_object(py)
+            });
+            Ok(pybytes)
+        })
     }
 
     pub async fn get_partial_values(
