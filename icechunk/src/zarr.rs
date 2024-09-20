@@ -138,7 +138,10 @@ pub struct Store {
 }
 
 impl Store {
-    pub async fn from_config(config: &StoreConfig, mode: AccessMode) -> Result<Self, String> {
+    pub async fn from_config(
+        config: &StoreConfig,
+        mode: AccessMode,
+    ) -> Result<Self, String> {
         let storage = mk_storage(&config.storage)?;
         let (dataset, branch) = mk_dataset(&config.dataset, storage).await?;
         Ok(Self::from_dataset(

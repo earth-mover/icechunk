@@ -30,7 +30,6 @@ class IcechunkStore(Store, SyncMixin):
         **kwargs: Any,
     ):
         super().__init__(mode, *args, **kwargs)
-
         if store is None:
             raise ValueError("An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods.")
         self._store = store
