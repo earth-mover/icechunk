@@ -15,7 +15,11 @@ class IcechunkStore(Store, SyncMixin):
     @classmethod
     async def open(cls, *args: Any, **kwargs: Any) -> Self:
         store = await cls.from_json(*args, **kwargs)
-        await store._open()
+
+        # We dont want to call _open() becuase icechunk handles the opening, etc.
+        # if we have gotten this far we can mark it as open
+        store._is_open = True
+
         return store
 
     def __init__(
@@ -26,6 +30,9 @@ class IcechunkStore(Store, SyncMixin):
         **kwargs: Any,
     ):
         super().__init__(mode, *args, **kwargs)
+
+        if store is None:
+            raise ValueError("An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods.")
         self._store = store
 
     @staticmethod
@@ -142,6 +149,11 @@ class IcechunkStore(Store, SyncMixin):
         raise ValueError("a snapshot_id, branch, or tag must be specified")
 
     async def commit(self, message: str) -> str:
+        """Commit any uncommitted changes to the store.
+
+        This will create a new snapshot on the current branch and return 
+        the snapshot id.
+        """
         return await self._store.commit(message)
 
     @property

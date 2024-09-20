@@ -43,30 +43,58 @@ fn pyicechunk_store_from_json_config<'py>(
 
 #[pymethods]
 impl PyIcechunkStore {
-    pub async fn checkout_snapshot(
-        &mut self,
+    pub fn checkout_snapshot<'py>(
+        &'py mut self,
+        py: Python<'py>,
         snapshot_id: String,
-    ) -> PyIcechunkStoreResult<()> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let snapshot_id = ObjectId::try_from(snapshot_id.as_str()).map_err(|e| {
             PyIcechunkStoreError::UnkownError(format!(
                 "Error checking out snapshot {snapshot_id}: {e}"
             ))
         })?;
-        let mut store = self.store.write().await;
-        store.checkout(VersionInfo::SnapshotId(snapshot_id)).await?;
-        Ok(())
+
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut store = store.write().await;
+            store
+                .checkout(VersionInfo::SnapshotId(snapshot_id))
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
-    pub async fn checkout_branch(&mut self, branch: String) -> PyIcechunkStoreResult<()> {
-        let mut store = self.store.write().await;
-        store.checkout(VersionInfo::BranchTipRef(branch)).await?;
-        Ok(())
+    pub fn checkout_branch<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        branch: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut store = store.write().await;
+            store
+                .checkout(VersionInfo::BranchTipRef(branch))
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
-    pub async fn checkout_tag(&mut self, tag: String) -> PyIcechunkStoreResult<()> {
-        let mut store = self.store.write().await;
-        store.checkout(VersionInfo::TagRef(tag)).await?;
-        Ok(())
+    pub fn checkout_tag<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        tag: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut store = store.write().await;
+            store
+                .checkout(VersionInfo::TagRef(tag))
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
     #[getter]
@@ -109,9 +137,18 @@ impl PyIcechunkStore {
         Ok(has_uncommitted_changes)
     }
 
-    pub async fn reset(&self) -> PyIcechunkStoreResult<()> {
-        self.store.write().await.reset().await?;
-        Ok(())
+    pub fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            store
+                .write()
+                .await
+                .reset()
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
     pub fn new_branch<'py>(
@@ -161,9 +198,12 @@ impl PyIcechunkStore {
         })
     }
 
-    pub async fn clear(&mut self) -> PyIcechunkStoreResult<()> {
-        self.store.write().await.clear().await?;
-        Ok(())
+    pub fn clear<'py>(&'py mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
     }
 
     pub fn get<'py>(
@@ -189,37 +229,54 @@ impl PyIcechunkStore {
         })
     }
 
-    pub async fn get_partial_values(
-        &self,
+    pub fn get_partial_values<'py>(
+        &'py self,
+        py: Python<'py>,
         key_ranges: Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>,
-    ) -> PyIcechunkStoreResult<Vec<Option<PyObject>>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let iter = key_ranges.into_iter().map(|r| (r.0, r.1.into()));
-        let result = self
-            .store
-            .read()
-            .await
-            .get_partial_values(iter)
-            .await?
-            .into_iter()
-            // If we want to error instead of returning None we can collect into
-            // a Result<Vec<_>, _> and short circuit
-            .map(|x| {
-                x.map(|x| {
-                    Python::with_gil(|py| {
-                        let bound_bytes = PyBytes::new_bound(py, &x);
-                        bound_bytes.to_object(py)
-                    })
-                })
-                .ok()
-            })
-            .collect();
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let readable_store = store.read().await;
+            let partial_values_stream = readable_store
+                .get_partial_values(iter)
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
 
-        Ok(result)
+            let result = partial_values_stream
+                .into_iter()
+                // If we want to error instead of returning None we can collect into
+                // a Result<Vec<_>, _> and short circuit
+                .map(|x| {
+                    x.map(|x| {
+                        Python::with_gil(|py| {
+                            let bound_bytes = PyBytes::new_bound(py, &x);
+                            bound_bytes.to_object(py)
+                        })
+                    })
+                    .ok()
+                })
+                .collect::<Vec<_>>();
+
+            Ok(result)
+        })
     }
 
-    pub async fn exists<'a>(&self, key: String) -> PyIcechunkStoreResult<bool> {
-        let exists = self.store.read().await.exists(&key).await?;
-        Ok(exists)
+    pub fn exists<'py>(
+        &'py self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let exists = store
+                .read()
+                .await
+                .exists(&key)
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(exists)
+        })
     }
 
     #[getter]
@@ -252,9 +309,22 @@ impl PyIcechunkStore {
         })
     }
 
-    pub async fn delete(&mut self, key: String) -> PyIcechunkStoreResult<()> {
-        self.store.write().await.delete(&key).await?;
-        Ok(())
+    pub fn delete<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            store
+                .write()
+                .await
+                .delete(&key)
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
     #[getter]
