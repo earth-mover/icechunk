@@ -565,9 +565,7 @@ async fn mk_dataset(
     dataset: &DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(Dataset, Option<String>), String> {
-    let (mut builder, branch): (DatasetBuilder, Option<String>) = match &dataset
-        .version
-    {
+    let (mut builder, branch): (DatasetBuilder, Option<String>) = match &dataset.version {
         None => {
             let builder =
                 Dataset::init(storage, dataset.unsafe_overwrite_refs.unwrap_or(false))
