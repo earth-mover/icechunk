@@ -47,6 +47,7 @@ pub enum StorageConfig {
         prefix: String,
         access_key_id: Option<String>,
         secret_access_key: Option<String>,
+        session_token: Option<String>,
         endpoint: Option<String>,
     },
 
@@ -618,21 +619,17 @@ fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, 
             prefix,
             access_key_id,
             secret_access_key,
+            session_token,
             endpoint,
         } => {
-            let storage = if let (Some(access_key_id), Some(secret_access_key)) =
-                (access_key_id, secret_access_key)
-            {
-                ObjectStorage::new_s3_store_with_config(
-                    bucket,
-                    prefix,
-                    access_key_id,
-                    secret_access_key,
-                    endpoint.clone(),
-                )
-            } else {
-                ObjectStorage::new_s3_store_from_env(bucket, prefix)
-            }
+            let storage = ObjectStorage::new_s3_store(
+                bucket,
+                prefix,
+                access_key_id.clone(),
+                secret_access_key.clone(),
+                session_token.clone(),
+                endpoint.clone(),
+            )
             .map_err(|e| format!("Error creating storage: {e}"))?;
             Ok(Arc::new(storage))
         }
@@ -1752,6 +1749,7 @@ mod tests {
                     prefix: String::from("root"),
                     access_key_id: None,
                     secret_access_key: None,
+                    session_token: None,
                     endpoint: None
                 },
                 get_partial_values_concurrency: None,
@@ -1783,6 +1781,7 @@ mod tests {
                     prefix: String::from("root"),
                     access_key_id: Some(String::from("my-key")),
                     secret_access_key: Some(String::from("my-secret-key")),
+                    session_token: None,
                     endpoint: Some(String::from("http://localhost:9000"))
                 },
                 get_partial_values_concurrency: None,
