@@ -16,10 +16,16 @@ pub struct ManifestRef {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum VirtualChunkLocation {
+    Absolute(String),
+    // Relative(prefix_id, String)
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkRef {
-    location: String, // FIXME: better type
-    offset: u64,
-    length: u64,
+    pub location: VirtualChunkLocation,
+    pub offset: u64,
+    pub length: u64,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

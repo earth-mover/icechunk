@@ -37,6 +37,14 @@ pub enum StorageError {
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
+    #[error("error parsing virtual ref URL {0}")]
+    VirtualUrlError(#[from] url::ParseError),
+    #[error("error parsing bucket name from virtual ref URL {0}")]
+    VirtualBucketParseError(String),
+    #[error("error parsing path using object_store {0}")]
+    VirtualPathParseError(#[from] ::object_store::path::Error),
+    #[error("unsupported scheme for virtual chunk refs: {0}")]
+    UnsupportedScheme(String),
     #[error("generic storage error: {0}")]
     OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),
     #[error("unknown storage error: {0}")]

@@ -23,7 +23,9 @@ use tokio::task;
 
 use crate::{
     format::{
-        manifest::{ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef},
+        manifest::{
+            ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef, VirtualChunkRef,
+        },
         snapshot::{
             NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotMetadata,
             SnapshotProperties, UserAttributesSnapshot,
@@ -34,6 +36,7 @@ use crate::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
         RefError,
     },
+    storage::object_store::{ObjectStoreVirtualChunkResolver, VirtualChunkResolver},
     Storage, StorageError,
 };
 
@@ -61,6 +64,7 @@ pub struct Dataset {
     snapshot_id: ObjectId,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
+    virtual_resolver: ObjectStoreVirtualChunkResolver,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -333,6 +337,7 @@ impl Dataset {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
+            virtual_resolver: ObjectStoreVirtualChunkResolver::new(),
         }
     }
 
@@ -636,8 +641,13 @@ impl Dataset {
                 Ok(self.storage.fetch_chunk(&id, byte_range).await.map(Some)?)
             }
             Some(ChunkPayload::Inline(bytes)) => Ok(Some(byte_range.slice(bytes))),
-            //FIXME: implement virtual fetch
-            Some(ChunkPayload::Virtual(_)) => todo!(),
+            Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
+                Ok(self
+                    .virtual_resolver
+                    .fetch_chunk(&location, &ByteRange::bounded(offset, offset + length))
+                    .await
+                    .map(Some)?)
+            }
             None => Ok(None),
         }
     }
@@ -1120,7 +1130,7 @@ mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        format::manifest::ChunkInfo,
+        format::manifest::{ChunkInfo, VirtualChunkLocation, VirtualChunkRef},
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
@@ -1130,7 +1140,9 @@ mod tests {
     };
 
     use super::*;
+    use bytes::Buf;
     use itertools::Itertools;
+    use object_store::{ObjectStore, PutMode, PutOptions, PutPayload};
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use test_strategy::proptest;
@@ -1243,6 +1255,134 @@ mod tests {
         );
         prop_assert!(matches);
         prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_dataset_with_virtual_refs() -> Result<(), Box<dyn Error>> {
+        use object_store::aws::AmazonS3Builder;
+        let bucket_name = "testbucket".to_string();
+        let store = AmazonS3Builder::new()
+            .with_access_key_id("minio123")
+            .with_secret_access_key("minio123")
+            .with_endpoint("http://localhost:9000")
+            .with_allow_http(true)
+            .with_bucket_name(bucket_name)
+            .build()?;
+        let bytes1 = Bytes::copy_from_slice(b"first");
+        let bytes2 = Bytes::copy_from_slice(b"second0000");
+        let path1 = "prefix/path/to/chunk-1".to_string();
+        let path2 = "prefix/path/to/chunk-2".to_string();
+        let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::Absolute(format!(
+                "s3://testbucket/{}",
+                path1
+            )),
+            offset: 0,
+            length: 5,
+        });
+        let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::Absolute(format!(
+                "s3://testbucket/{}",
+                path2
+            )),
+            offset: 0,
+            length: 6,
+        });
+        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
+        store
+            .put_opts(&path1.into(), PutPayload::from_bytes(bytes1.clone()), opts.clone())
+            .await?;
+        store
+            .put_opts(&path2.into(), PutPayload::from_bytes(bytes2.clone()), opts)
+            .await?;
+
+        let storage = ObjectStorage::new_s3_store_with_config(
+            "testbucket".to_string(),
+            "prefix".to_string(),
+            "minio123",
+            "minio123",
+            Some("http://localhost:9000"),
+        )?;
+
+        let array_id = 0;
+        let chunk1 = ChunkInfo {
+            node: array_id,
+            coord: ChunkIndices(vec![0, 0, 0]),
+            payload: payload1.clone(),
+        };
+
+        let chunk2 = ChunkInfo {
+            node: array_id,
+            coord: ChunkIndices(vec![0, 0, 1]),
+            payload: payload2.clone(),
+        };
+
+        let manifest =
+            Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
+        let manifest_id = ObjectId::random();
+        dbg!("Writing manifests to storage");
+        storage.write_manifests(manifest_id.clone(), manifest).await?;
+        dbg!("Wrote manifests to storage");
+
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![2, 2, 2],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+            ]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let manifest_ref = ManifestRef {
+            object_id: manifest_id,
+            flags: Flags(),
+            extents: ManifestExtents(vec![]),
+        };
+        let array1_path: PathBuf = "/array1".to_string().into();
+        let nodes = vec![
+            NodeSnapshot {
+                path: "/".into(),
+                id: 1,
+                user_attributes: None,
+                node_data: NodeData::Group,
+            },
+            NodeSnapshot {
+                path: array1_path.clone(),
+                id: array_id,
+                user_attributes: Some(UserAttributesSnapshot::Inline(
+                    UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
+                )),
+                node_data: NodeData::Array(zarr_meta.clone(), vec![manifest_ref]),
+            },
+        ];
+
+        let snapshot = Arc::new(Snapshot::first_from_iter(None, nodes.iter().cloned()));
+        let snapshot_id = ObjectId::random();
+        dbg!("Writing snapshot to storage");
+        storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
+        dbg!("Wrote snapshot to storage");
+        let ds = Dataset::update(Arc::new(storage), snapshot_id)
+            .with_inline_threshold_bytes(512)
+            .build();
+
+        dbg!("Getting chunk");
+        assert_eq!(
+            ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
+                .await?,
+            Some(bytes1),
+        );
+        assert_eq!(
+            ds.get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 1]), &ByteRange::ALL)
+                .await?,
+            Some(Bytes::copy_from_slice(&bytes2[..6])),
+        );
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]

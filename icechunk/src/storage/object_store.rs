@@ -1,17 +1,23 @@
-use core::fmt;
-use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
-
 use async_trait::async_trait;
 use bytes::Bytes;
+use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
-    GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
+    aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory, parse_url,
+    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, ObjectStoreScheme,
+    PutMode, PutOptions, PutPayload,
 };
+use std::{
+    collections::HashMap, fs::create_dir_all, future::ready, ops::Bound, sync::Arc,
+};
+use tokio::sync::RwLock;
+use url;
 
 use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId, Path,
+    attributes::AttributesTable,
+    manifest::{Manifest, VirtualChunkLocation},
+    snapshot::Snapshot,
+    ByteRange, ObjectId, Path,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -66,6 +72,13 @@ impl ObjectStorage {
         let prefix =
             prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
         ObjectStorage { store: Arc::new(InMemory::new()), prefix }
+    }
+
+    pub fn from_store_and_prefix(
+        store: impl ObjectStore,
+        prefix: String,
+    ) -> ObjectStorage {
+        ObjectStorage { store: Arc::new(store), prefix }
     }
     pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
         create_dir_all(prefix.as_path())?;
@@ -294,5 +307,92 @@ impl Storage for ObjectStorage {
                 _ => e.into(),
             })
             .map(|_| ())
+    }
+}
+
+#[async_trait]
+pub trait VirtualChunkResolver {
+    async fn get_chunk_from_cached_store(
+        &self,
+        cache_key: &String,
+        path: &ObjectPath,
+        options: GetOptions,
+    ) -> StorageResult<Bytes>;
+
+    async fn fetch_chunk(
+        &self,
+        location: &VirtualChunkLocation,
+        range: &ByteRange,
+    ) -> StorageResult<Bytes>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ObjectStoreVirtualChunkResolver {
+    stores: Arc<RwLock<HashMap<String, Box<dyn ObjectStore>>>>,
+}
+
+impl ObjectStoreVirtualChunkResolver {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+#[async_trait]
+impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
+    async fn get_chunk_from_cached_store(
+        &self,
+        cache_key: &String,
+        path: &ObjectPath,
+        options: GetOptions,
+    ) -> StorageResult<Bytes> {
+        let stores = self.stores.read().await;
+        Ok(stores
+            .get(cache_key)
+            .expect("this should not fail")
+            .get_opts(&path, options)
+            .await?
+            .bytes()
+            .await?)
+    }
+
+    async fn fetch_chunk(
+        &self,
+        location: &VirtualChunkLocation,
+        range: &ByteRange,
+    ) -> StorageResult<Bytes> {
+        let VirtualChunkLocation::Absolute(location) = location;
+        let parsed = url::Url::parse(location)?;
+        dbg!(&parsed);
+        let bucket_name = parsed
+            .host_str()
+            .ok_or(StorageError::VirtualBucketParseError(
+                "error parsing bucket name".into(),
+            ))?
+            .to_string();
+        let path = ObjectPath::parse(parsed.path())?;
+        let scheme = parsed.scheme();
+        let cache_key = format!("{}://{}", scheme, bucket_name);
+
+        let options =
+            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+        let has_key = self.stores.read().await.contains_key(&cache_key);
+        match has_key {
+            true => {
+                dbg!("using cached store");
+                self.get_chunk_from_cached_store(&cache_key, &path, options).await
+            }
+            false => {
+                dbg!("creating new store");
+                let builder = match scheme {
+                    "s3" => AmazonS3Builder::from_env(),
+                    _ => Err(StorageError::UnsupportedScheme(scheme.to_string()))?,
+                };
+                let new_store = Box::new(builder.with_bucket_name(bucket_name).build()?);
+                {
+                    self.stores.write().await.insert(cache_key.clone(), new_store);
+                }
+                self.get_chunk_from_cached_store(&cache_key, &path, options).await
+            }
+        }
     }
 }
