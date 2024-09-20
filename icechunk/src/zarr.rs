@@ -81,6 +81,14 @@ pub struct StoreConfig {
     get_partial_values_concurrency: Option<u16>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AccessMode {
+    #[serde(rename = "r")]
+    ReadOnly,
+    #[serde(rename = "rw")]
+    ReadWrite,
+}
+
 pub type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -111,6 +119,8 @@ pub enum StoreError {
     BadKeyPrefix(String),
     #[error("error during parallel execution of get_partial_values")]
     PartialValuesPanic,
+    #[error("cannot write to read-only store")]
+    ReadOnly,
     #[error(
         "uncommitted changes in dataset, commit changes or reset dataset and try again."
     )]
@@ -122,37 +132,45 @@ pub enum StoreError {
 #[derive(Debug, Clone)]
 pub struct Store {
     dataset: Dataset,
+    mode: AccessMode,
     current_branch: Option<String>,
     get_partial_values_concurrency: u16,
 }
 
 impl Store {
-    pub async fn from_config(config: &StoreConfig) -> Result<Self, String> {
+    pub async fn from_config(config: &StoreConfig, mode: AccessMode) -> Result<Self, String> {
         let storage = mk_storage(&config.storage)?;
         let (dataset, branch) = mk_dataset(&config.dataset, storage).await?;
-        Ok(Self::from_dataset(dataset, branch, config.get_partial_values_concurrency))
+        Ok(Self::from_dataset(
+            dataset,
+            mode,
+            branch,
+            config.get_partial_values_concurrency,
+        ))
     }
 
-    pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
+    pub async fn from_json_config(json: &[u8], mode: AccessMode) -> Result<Self, String> {
         let config: StoreConfig =
             serde_json::from_slice(json).map_err(|e| e.to_string())?;
-        Self::from_config(&config).await
+        Self::from_config(&config, mode).await
     }
 
     pub async fn new_from_storage(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> Result<Self, String> {
         let (dataset, branch) = mk_dataset(&DatasetConfig::default(), storage).await?;
-        Ok(Self::from_dataset(dataset, branch, None))
+        Ok(Self::from_dataset(dataset, AccessMode::ReadWrite, branch, None))
     }
 
     pub fn from_dataset(
         dataset: Dataset,
+        mode: AccessMode,
         current_branch: Option<String>,
         get_partial_values_concurrency: Option<u16>,
     ) -> Self {
         Store {
             dataset,
+            mode,
             current_branch,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
         }
@@ -351,6 +369,10 @@ impl Store {
     }
 
     pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
@@ -372,6 +394,10 @@ impl Store {
     }
 
     pub async fn delete(&mut self, key: &str) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         let ds = &mut self.dataset;
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
@@ -397,6 +423,10 @@ impl Store {
         &mut self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         Err(StoreError::Unimplemented("set_partial_values"))
     }
 
@@ -1126,7 +1156,12 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1171,7 +1206,12 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1211,7 +1251,12 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .set(
@@ -1285,7 +1330,7 @@ mod tests {
         let oid = ds.flush("commit", Default::default()).await?;
 
         let ds = Dataset::update(storage, oid).build();
-        let store = Store::from_dataset(ds, None, None);
+        let store = Store::from_dataset(ds, AccessMode::ReadWrite, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1302,7 +1347,12 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .set(
@@ -1343,7 +1393,12 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1407,7 +1462,12 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .borrow_mut()
@@ -1442,7 +1502,12 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .borrow_mut()
@@ -1496,7 +1561,12 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .borrow_mut()
@@ -1601,6 +1671,7 @@ mod tests {
 
         let new_store_from_snapshot = Store::from_dataset(
             Dataset::update(Arc::clone(&storage), snapshot_id).build(),
+            AccessMode::ReadWrite,
             None,
             None,
         );
