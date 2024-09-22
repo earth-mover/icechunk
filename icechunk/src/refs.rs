@@ -269,9 +269,12 @@ pub async fn fetch_ref(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::iter::once;
+    use std::{iter::once, sync::Arc};
 
+    use futures::Future;
     use pretty_assertions::assert_eq;
+    use rand::distributions::{Alphanumeric, DistString};
+    use tempfile::{tempdir, TempDir};
 
     use crate::ObjectStorage;
 
@@ -287,130 +290,189 @@ mod tests {
         Ok(())
     }
 
+    /// Execute the passed block with all test implementations of Storage.
+    ///
+    /// Currently this function executes agains the in-memory and local filesystem object_store
+    /// implementations.
+    async fn with_test_storages<
+        R,
+        Fut: Future<Output = R>,
+        F: FnMut(Arc<dyn Storage + Send + Sync>) -> Fut,
+    >(
+        mut f: F,
+    ) -> ((Arc<ObjectStorage>, R), (Arc<ObjectStorage>, R, TempDir)) {
+        let prefix: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 10);
+        let mem_storage = Arc::new(ObjectStorage::new_in_memory_store(Some(prefix)));
+        let res1 = f(Arc::clone(&mem_storage) as Arc<dyn Storage + Send + Sync>).await;
+
+        let dir = tempdir().expect("cannot create temp dir");
+        let local_storage = Arc::new(
+            ObjectStorage::new_local_store(dir.path())
+                .expect("Cannot create local Storage"),
+        );
+
+        let res2 = f(Arc::clone(&local_storage) as Arc<dyn Storage + Send + Sync>).await;
+        ((mem_storage, res1), (local_storage, res2, dir))
+    }
+
     #[tokio::test]
     async fn test_refs() -> Result<(), Box<dyn std::error::Error>> {
-        let storage = ObjectStorage::new_in_memory_store(Some("foo".into()));
-        let s1 = ObjectId::random();
-        let s2 = ObjectId::random();
+        let ((_,res1),(_,res2,_)) = with_test_storages::<Result<(), Box<dyn std::error::Error>>, _, _>(|storage|  async move {
+            let s1 = ObjectId::random();
+            let s2 = ObjectId::random();
 
-        let res = fetch_tag(&storage, "tag1").await;
-        assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
-        assert_eq!(list_refs(&storage).await?, vec![]);
+            let res = fetch_tag(storage.as_ref(), "tag1").await;
+            assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
+            assert_eq!(list_refs(storage.as_ref()).await?, vec![]);
 
-        create_tag(&storage, "tag1", s1.clone(), false).await?;
-        create_tag(&storage, "tag2", s2.clone(), false).await?;
+            create_tag(storage.as_ref(), "tag1", s1.clone(), false).await?;
+            create_tag(storage.as_ref(), "tag2", s2.clone(), false).await?;
 
-        let res = fetch_tag(&storage, "tag1").await?;
-        assert_eq!(res.snapshot, s1);
+            let res = fetch_tag(storage.as_ref(), "tag1").await?;
+            assert_eq!(res.snapshot, s1);
 
-        assert_eq!(
-            fetch_tag(&storage, "tag1").await?,
-            fetch_ref(&storage, "tag1").await?.1
-        );
+            assert_eq!(
+                fetch_tag(storage.as_ref(), "tag1").await?,
+                fetch_ref(storage.as_ref(), "tag1").await?.1
+            );
 
-        let res = fetch_tag(&storage, "tag2").await?;
-        assert_eq!(res.snapshot, s2);
+            let res = fetch_tag(storage.as_ref(), "tag2").await?;
+            assert_eq!(res.snapshot, s2);
 
-        assert_eq!(
-            fetch_tag(&storage, "tag2").await?,
-            fetch_ref(&storage, "tag2").await?.1
-        );
+            assert_eq!(
+                fetch_tag(storage.as_ref(), "tag2").await?,
+                fetch_ref(storage.as_ref(), "tag2").await?.1
+            );
 
-        assert_eq!(
-            list_refs(&storage).await?,
-            vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
-        );
+            assert_eq!(
+                list_refs(storage.as_ref()).await?,
+                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+            );
 
-        // attempts to recreate a tag fail
-        assert!(matches!(
-            create_tag(&storage, "tag1", s1.clone(), false).await,
-                Err(RefError::TagAlreadyExists(name)) if name == *"tag1"
-        ));
-        assert_eq!(
-            list_refs(&storage).await?,
-            vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
-        );
+            // attempts to recreate a tag fail
+            assert!(matches!(
+                create_tag(storage.as_ref(), "tag1", s1.clone(), false).await,
+                    Err(RefError::TagAlreadyExists(name)) if name == *"tag1"
+            ));
+            assert_eq!(
+                list_refs(storage.as_ref()).await?,
+                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+            );
 
-        // attempting to create a branch that doesn't exist, with a fake parent
-        let res = update_branch(&storage, "branch0", s1.clone(), Some(&s2), false).await;
-        assert!(res.is_err());
-        assert_eq!(
-            list_refs(&storage).await?,
-            vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
-        );
+            // attempting to create a branch that doesn't exist, with a fake parent
+            let res =
+                update_branch(storage.as_ref(), "branch0", s1.clone(), Some(&s2), false)
+                    .await;
+            assert!(res.is_err());
+            assert_eq!(
+                list_refs(storage.as_ref()).await?,
+                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+            );
 
-        // create a branch successfully
-        update_branch(&storage, "branch1", s1.clone(), None, false).await?;
+            // create a branch successfully
+            update_branch(storage.as_ref(), "branch1", s1.clone(), None, false).await?;
 
-        assert_eq!(
-            branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
-            vec![BranchVersion(0)]
-        );
-        assert_eq!(last_branch_version(&storage, "branch1").await?, BranchVersion(0));
-        assert_eq!(
-            fetch_branch(&storage, "branch1", &BranchVersion(0)).await?,
-            RefData { snapshot: s1.clone() }
-        );
-        assert_eq!(
-            fetch_branch(&storage, "branch1", &BranchVersion(0)).await?,
-            fetch_ref(&storage, "branch1").await?.1
-        );
+            assert_eq!(
+                branch_history(storage.as_ref(), "branch1")
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?,
+                vec![BranchVersion(0)]
+            );
+            assert_eq!(
+                last_branch_version(storage.as_ref(), "branch1").await?,
+                BranchVersion(0)
+            );
+            assert_eq!(
+                fetch_branch(storage.as_ref(), "branch1", &BranchVersion(0)).await?,
+                RefData { snapshot: s1.clone() }
+            );
+            assert_eq!(
+                fetch_branch(storage.as_ref(), "branch1", &BranchVersion(0)).await?,
+                fetch_ref(storage.as_ref(), "branch1").await?.1
+            );
 
-        assert_eq!(
-            list_refs(&storage).await?,
-            vec![
-                Ref::Branch("branch1".to_string()),
-                Ref::Tag("tag1".to_string()),
-                Ref::Tag("tag2".to_string())
-            ]
-        );
+            assert_eq!(
+                list_refs(storage.as_ref()).await?,
+                vec![
+                    Ref::Branch("branch1".to_string()),
+                    Ref::Tag("tag1".to_string()),
+                    Ref::Tag("tag2".to_string())
+                ]
+            );
 
-        // update a branch successfully
-        update_branch(&storage, "branch1", s2.clone(), Some(&s1.clone()), false).await?;
+            // update a branch successfully
+            update_branch(
+                storage.as_ref(),
+                "branch1",
+                s2.clone(),
+                Some(&s1.clone()),
+                false,
+            )
+            .await?;
 
-        assert_eq!(
-            branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
-            vec![BranchVersion(1), BranchVersion(0)]
-        );
-        assert_eq!(last_branch_version(&storage, "branch1").await?, BranchVersion(1));
+            assert_eq!(
+                branch_history(storage.as_ref(), "branch1")
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?,
+                vec![BranchVersion(1), BranchVersion(0)]
+            );
+            assert_eq!(
+                last_branch_version(storage.as_ref(), "branch1").await?,
+                BranchVersion(1)
+            );
 
-        assert_eq!(
-            fetch_branch(&storage, "branch1", &BranchVersion(1)).await?,
-            RefData { snapshot: s2.clone() }
-        );
+            assert_eq!(
+                fetch_branch(storage.as_ref(), "branch1", &BranchVersion(1)).await?,
+                RefData { snapshot: s2.clone() }
+            );
 
-        assert_eq!(
-            fetch_branch(&storage, "branch1", &BranchVersion(1)).await?,
-            fetch_ref(&storage, "branch1").await?.1
-        );
+            assert_eq!(
+                fetch_branch(storage.as_ref(), "branch1", &BranchVersion(1)).await?,
+                fetch_ref(storage.as_ref(), "branch1").await?.1
+            );
 
-        let sid = ObjectId::random();
-        // update a branch with the wrong parent
-        let res = update_branch(&storage, "branch1", sid.clone(), Some(&s1), false).await;
-        assert!(matches!(res,
-                Err(RefError::Conflict { expected_parent, actual_parent })
-            if expected_parent == Some(s1.clone()) && actual_parent == Some(s2.clone())
-        ));
+            let sid = ObjectId::random();
+            // update a branch with the wrong parent
+            let res =
+                update_branch(storage.as_ref(), "branch1", sid.clone(), Some(&s1), false)
+                    .await;
+            assert!(matches!(res,
+                    Err(RefError::Conflict { expected_parent, actual_parent })
+                if expected_parent == Some(s1.clone()) && actual_parent == Some(s2.clone())
+            ));
 
-        // update the branch again but now with the right parent
-        update_branch(&storage, "branch1", sid.clone(), Some(&s2), false).await?;
+            // update the branch again but now with the right parent
+            update_branch(storage.as_ref(), "branch1", sid.clone(), Some(&s2), false)
+                .await?;
 
-        assert_eq!(
-            branch_history(&storage, "branch1").await?.try_collect::<Vec<_>>().await?,
-            vec![BranchVersion(2), BranchVersion(1), BranchVersion(0)]
-        );
-        assert_eq!(last_branch_version(&storage, "branch1").await?, BranchVersion(2));
+            assert_eq!(
+                branch_history(storage.as_ref(), "branch1")
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?,
+                vec![BranchVersion(2), BranchVersion(1), BranchVersion(0)]
+            );
+            assert_eq!(
+                last_branch_version(storage.as_ref(), "branch1").await?,
+                BranchVersion(2)
+            );
 
-        assert_eq!(
-            fetch_branch(&storage, "branch1", &BranchVersion(2)).await?,
-            fetch_ref(&storage, "branch1").await?.1
-        );
+            assert_eq!(
+                fetch_branch(storage.as_ref(), "branch1", &BranchVersion(2)).await?,
+                fetch_ref(storage.as_ref(), "branch1").await?.1
+            );
 
-        assert_eq!(
-            fetch_ref(&storage, "branch1").await?,
-            (Ref::Branch("branch1".to_string()), RefData { snapshot: sid.clone() })
-        );
+            assert_eq!(
+                fetch_ref(storage.as_ref(), "branch1").await?,
+                (Ref::Branch("branch1".to_string()), RefData { snapshot: sid.clone() })
+            );
 
+            Ok(())
+        }).await;
+        res1?;
+        res2?;
         Ok(())
     }
 }
