@@ -34,7 +34,7 @@ use crate::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
         RefError,
     },
-    Storage, StorageError,
+    MemCachingStorage, Storage, StorageError,
 };
 
 #[derive(Clone, Debug)]
@@ -320,6 +320,15 @@ impl Dataset {
             Err(RefError::RefNotFound(_)) => Ok(false),
             Err(err) => Err(err.into()),
         }
+    }
+
+    /// Provide a reasonable amount of caching for snapshots, manifests and other assets.
+    /// We recommend always using some level of asset caching.
+    pub fn add_in_mem_asset_caching(
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Arc<dyn Storage + Send + Sync> {
+        // TODO: allow tuning once we experiment with different configurations
+        Arc::new(MemCachingStorage::new(storage, 2, 2, 2, 0))
     }
 
     fn new(
@@ -1128,7 +1137,7 @@ mod tests {
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
         refs::{fetch_ref, Ref},
-        storage::ObjectStorage,
+        storage::{logging::LoggingStorage, ObjectStorage},
         strategies::*,
     };
 
@@ -1558,8 +1567,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
+        let backend: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Dataset::add_in_mem_asset_caching(Arc::clone(&logging_c));
+
         let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
@@ -1732,6 +1746,9 @@ mod tests {
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
+
+        // since we write every asset and we are using a caching storage, we should never need to fetch them
+        assert!(logging.fetch_operations().is_empty());
 
         Ok(())
     }

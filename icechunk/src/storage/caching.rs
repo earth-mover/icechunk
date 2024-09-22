@@ -3,10 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use quick_cache::{
-    sync::{Cache, DefaultLifecycle},
-    DefaultHashBuilder, OptionsBuilder, Weighter,
-};
+use quick_cache::sync::Cache;
 
 use crate::format::{
     attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
@@ -15,86 +12,42 @@ use crate::format::{
 
 use super::{Storage, StorageError, StorageResult};
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-enum CacheKey {
-    Snapshot(ObjectId),
-    Attributes(ObjectId),
-    Manifest(ObjectId),
-    Chunk(ObjectId, ByteRange),
-}
-
-#[derive(Clone, Debug)]
-enum CacheValue {
-    Snapshot(Arc<Snapshot>),
-    Attributes(Arc<AttributesTable>),
-    Manifest(Arc<Manifest>),
-    Chunk(Bytes),
-}
-
-#[derive(Debug, Clone)]
-struct CacheWeighter;
-
 #[derive(Debug)]
 pub struct MemCachingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
-    // We keep all objects in a single cache so we can effictively limit total memory usage while
-    // maintaining the LRU semantics
-    cache: Cache<CacheKey, CacheValue, CacheWeighter>,
-}
-
-/// FIXME: this is not a good idea, with the new serialization formats can no longer estimate the
-/// size of objects. Also, the storage layer doesn't know enough about the format to know what to
-/// cache and not cache.
-impl Weighter<CacheKey, CacheValue> for CacheWeighter {
-    fn weight(&self, _key: &CacheKey, val: &CacheValue) -> u64 {
-        // We ignore the keys weigth
-        match val {
-            CacheValue::Snapshot(table) => table.estimated_size_bytes() as u64,
-            CacheValue::Attributes(_) => 1,
-            CacheValue::Manifest(table) => table.estimated_size_bytes() as u64,
-            CacheValue::Chunk(bytes) => bytes.len() as u64,
-        }
-    }
+    snapshot_cache: Cache<ObjectId, Arc<Snapshot>>,
+    manifest_cache: Cache<ObjectId, Arc<Manifest>>,
+    attributes_cache: Cache<ObjectId, Arc<AttributesTable>>,
+    chunk_cache: Cache<(ObjectId, ByteRange), Bytes>,
 }
 
 impl MemCachingStorage {
     pub fn new(
         backend: Arc<dyn Storage + Send + Sync>,
-        approx_max_memory_bytes: u64,
+        num_snapshots: u16,
+        num_manifests: u16,
+        num_attributes: u16,
+        num_chunks: u16,
     ) -> Self {
-        let cache = Cache::with_options(
-            // build only fails if estimated_items_capacity or
-            // weight_capacity are not set
-            #[allow(clippy::expect_used)]
-            OptionsBuilder::new()
-                // TODO: estimate this capacity
-                .estimated_items_capacity(0)
-                .weight_capacity(approx_max_memory_bytes)
-                .build()
-                .expect("Bug in MemCachingStorage"),
-            CacheWeighter,
-            DefaultHashBuilder::default(),
-            DefaultLifecycle::default(),
-        );
-        MemCachingStorage { backend, cache }
+        MemCachingStorage {
+            backend,
+            snapshot_cache: Cache::new(num_snapshots as usize),
+            manifest_cache: Cache::new(num_manifests as usize),
+            attributes_cache: Cache::new(num_attributes as usize),
+            chunk_cache: Cache::new(num_chunks as usize),
+        }
     }
 }
 
 #[async_trait]
 impl Storage for MemCachingStorage {
     async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
-        let key = CacheKey::Snapshot(id.clone());
-        match self.cache.get_value_or_guard_async(&key).await {
-            Ok(CacheValue::Snapshot(table)) => Ok(table),
+        match self.snapshot_cache.get_value_or_guard_async(id).await {
+            Ok(snapshot) => Ok(snapshot),
             Err(guard) => {
-                let table = self.backend.fetch_snapshot(id).await?;
-                let _fail_is_ok = guard.insert(CacheValue::Snapshot(Arc::clone(&table)));
-                Ok(table)
-            }
-            Ok(_) => {
-                debug_assert!(false, "Logic bug in MemCachingStorage");
-                self.cache.remove(&key);
-                self.fetch_snapshot(id).await
+                let snapshot = self.backend.fetch_snapshot(id).await?;
+                let _fail_is_ok = guard.insert(Arc::clone(&snapshot));
+                Ok(snapshot)
             }
         }
     }
@@ -103,19 +56,12 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
-        let key = CacheKey::Attributes(id.clone());
-        match self.cache.get_value_or_guard_async(&key).await {
-            Ok(CacheValue::Attributes(table)) => Ok(table),
+        match self.attributes_cache.get_value_or_guard_async(id).await {
+            Ok(table) => Ok(table),
             Err(guard) => {
                 let table = self.backend.fetch_attributes(id).await?;
-                let _fail_is_ok =
-                    guard.insert(CacheValue::Attributes(Arc::clone(&table)));
+                let _fail_is_ok = guard.insert(Arc::clone(&table));
                 Ok(table)
-            }
-            Ok(_) => {
-                debug_assert!(false, "Logic bug in MemCachingStorage");
-                self.cache.remove(&key);
-                self.fetch_attributes(id).await
             }
         }
     }
@@ -124,18 +70,12 @@ impl Storage for MemCachingStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<Manifest>, StorageError> {
-        let key = CacheKey::Manifest(id.clone());
-        match self.cache.get_value_or_guard_async(&key).await {
-            Ok(CacheValue::Manifest(table)) => Ok(table),
+        match self.manifest_cache.get_value_or_guard_async(id).await {
+            Ok(manifest) => Ok(manifest),
             Err(guard) => {
-                let table = self.backend.fetch_manifests(id).await?;
-                let _fail_is_ok = guard.insert(CacheValue::Manifest(Arc::clone(&table)));
-                Ok(table)
-            }
-            Ok(_) => {
-                debug_assert!(false, "Logic bug in MemCachingStorage");
-                self.cache.remove(&key);
-                self.fetch_manifests(id).await
+                let manifest = self.backend.fetch_manifests(id).await?;
+                let _fail_is_ok = guard.insert(Arc::clone(&manifest));
+                Ok(manifest)
             }
         }
     }
@@ -145,18 +85,13 @@ impl Storage for MemCachingStorage {
         id: &ObjectId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
-        let key = CacheKey::Chunk(id.clone(), range.clone());
-        match self.cache.get_value_or_guard_async(&key).await {
-            Ok(CacheValue::Chunk(table)) => Ok(table),
+        let key = (id.clone(), range.clone());
+        match self.chunk_cache.get_value_or_guard_async(&key).await {
+            Ok(bytes) => Ok(bytes),
             Err(guard) => {
                 let bytes = self.backend.fetch_chunk(id, range).await?;
-                let _fail_is_ok = guard.insert(CacheValue::Chunk(bytes.clone()));
+                let _fail_is_ok = guard.insert(bytes.clone());
                 Ok(bytes)
-            }
-            Ok(_) => {
-                debug_assert!(false, "Logic bug in MemCachingStorage");
-                self.cache.remove(&key);
-                self.fetch_chunk(id, range).await
             }
         }
     }
@@ -164,10 +99,10 @@ impl Storage for MemCachingStorage {
     async fn write_snapshot(
         &self,
         id: ObjectId,
-        table: Arc<Snapshot>,
+        snapshot: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
-        self.backend.write_snapshot(id.clone(), Arc::clone(&table)).await?;
-        self.cache.insert(CacheKey::Snapshot(id), CacheValue::Snapshot(table));
+        self.backend.write_snapshot(id.clone(), Arc::clone(&snapshot)).await?;
+        self.snapshot_cache.insert(id, snapshot);
         Ok(())
     }
 
@@ -177,24 +112,23 @@ impl Storage for MemCachingStorage {
         table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         self.backend.write_attributes(id.clone(), Arc::clone(&table)).await?;
-        self.cache.insert(CacheKey::Attributes(id), CacheValue::Attributes(table));
+        self.attributes_cache.insert(id, table);
         Ok(())
     }
 
     async fn write_manifests(
         &self,
         id: ObjectId,
-        table: Arc<Manifest>,
+        manifest: Arc<Manifest>,
     ) -> Result<(), StorageError> {
-        self.backend.write_manifests(id.clone(), Arc::clone(&table)).await?;
-        self.cache.insert(CacheKey::Manifest(id), CacheValue::Manifest(table));
+        self.backend.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
+        self.manifest_cache.insert(id, manifest);
         Ok(())
     }
 
     async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id.clone(), bytes.clone()).await?;
-        // TODO: we could add the chunk also with its full range (0, size)
-        self.cache.insert(CacheKey::Chunk(id, ByteRange::ALL), CacheValue::Chunk(bytes));
+        // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         Ok(())
     }
 
@@ -249,40 +183,46 @@ mod test {
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
         let pre_existing_id = ObjectId::random();
-        let pre_exiting_table = Arc::new(vec![ci1].into_iter().collect());
+        let pre_exiting_manifest = Arc::new(vec![ci1].into_iter().collect());
         backend
-            .write_manifests(pre_existing_id.clone(), Arc::clone(&pre_exiting_table))
+            .write_manifests(pre_existing_id.clone(), Arc::clone(&pre_exiting_manifest))
             .await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 100_000_000);
+        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 0, 2, 0, 0);
 
-        let table = Arc::new(vec![ci2].into_iter().collect());
+        let manifest = Arc::new(vec![ci2].into_iter().collect());
         let id = ObjectId::random();
-        caching.write_manifests(id.clone(), Arc::clone(&table)).await?;
+        caching.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
 
-        assert_eq!(caching.fetch_manifests(&id).await?, table);
-        assert_eq!(caching.fetch_manifests(&id).await?, table);
+        assert_eq!(caching.fetch_manifests(&id).await?, manifest);
+        assert_eq!(caching.fetch_manifests(&id).await?, manifest);
         // when we insert we cache, so no fetches
         assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
-        assert_eq!(caching.fetch_manifests(&pre_existing_id).await?, pre_exiting_table);
+        assert_eq!(
+            caching.fetch_manifests(&pre_existing_id).await?,
+            pre_exiting_manifest
+        );
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
         );
 
         // only calls backend once
-        assert_eq!(caching.fetch_manifests(&pre_existing_id).await?, pre_exiting_table);
+        assert_eq!(
+            caching.fetch_manifests(&pre_existing_id).await?,
+            pre_exiting_manifest
+        );
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
         );
 
         // other walues still cached
-        assert_eq!(caching.fetch_manifests(&id).await?, table);
+        assert_eq!(caching.fetch_manifests(&id).await?, manifest);
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
@@ -323,8 +263,11 @@ mod test {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let caching = MemCachingStorage::new(
             Arc::clone(&logging_c),
-            // the cache can only fit 2 tables. TODO: This number was manually tuned
-            900,
+            // the cache can only fit 2 manifests.
+            0,
+            2,
+            0,
+            0,
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2

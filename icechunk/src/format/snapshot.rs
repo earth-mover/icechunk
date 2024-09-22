@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    mem::size_of,
     ops::Bound,
     sync::Arc,
 };
@@ -194,18 +193,6 @@ impl Snapshot {
 
     pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeSnapshot> {
         NodeIterator { table: self, last_key: None }
-    }
-
-    pub fn estimated_size_bytes(&self) -> usize {
-        // FIXME: this is really bad
-        self.nodes.len()
-            * (
-                size_of::<Path>() //keys
-                + size_of::<NodeSnapshot>()  //values
-                + 20 * size_of::<char>()  // estimated size of path
-        + 200
-                // estimated dynamic size of metadata
-            )
     }
 
     pub fn local_ancestry(self: Arc<Self>) -> impl Iterator<Item = SnapshotMetadata> {

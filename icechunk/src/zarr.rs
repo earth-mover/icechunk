@@ -52,7 +52,13 @@ pub enum StorageConfig {
     },
 
     #[serde(rename = "cached")]
-    Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
+    Cached {
+        approx_cached_snapshots: u16,
+        approx_cached_manifests: u16,
+        approx_cached_attribute_files: u16,
+        approx_cached_chunks: u16,
+        backend: Box<StorageConfig>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -664,9 +670,21 @@ fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, 
             .map_err(|e| format!("Error creating storage: {e}"))?;
             Ok(Arc::new(storage))
         }
-        StorageConfig::Cached { approx_max_memory_bytes, backend } => {
+        StorageConfig::Cached {
+            approx_cached_snapshots,
+            approx_cached_manifests,
+            approx_cached_attribute_files,
+            approx_cached_chunks,
+            backend,
+        } => {
             let backend = mk_storage(backend)?;
-            let storage = MemCachingStorage::new(backend, *approx_max_memory_bytes);
+            let storage = MemCachingStorage::new(
+                backend,
+                *approx_cached_snapshots,
+                *approx_cached_manifests,
+                *approx_cached_attribute_files,
+                *approx_cached_chunks,
+            );
             Ok(Arc::new(storage))
         }
     }
@@ -1690,7 +1708,10 @@ mod tests {
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
             storage: StorageConfig::Cached {
-                approx_max_memory_bytes: 1_000_000,
+                approx_cached_snapshots: 2,
+                approx_cached_manifests: 3,
+                approx_cached_attribute_files: 4,
+                approx_cached_chunks: 5,
                 backend: Box::new(StorageConfig::LocalFileSystem {
                     root: "/tmp/test".into(),
                 }),
@@ -1708,7 +1729,10 @@ mod tests {
         let json = r#"
             {"storage": {
                 "type": "cached",
-                "approx_max_memory_bytes":1000000,
+                "approx_cached_snapshots": 2,
+                "approx_cached_manifests": 3,
+                "approx_cached_attribute_files": 4,
+                "approx_cached_chunks": 5,
                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
@@ -1724,7 +1748,10 @@ mod tests {
         let json = r#"
             {"storage":
                 {"type": "cached",
-                 "approx_max_memory_bytes":1000000,
+                 "approx_cached_snapshots": 2,
+                 "approx_cached_manifests": 3,
+                 "approx_cached_attribute_files": 4,
+                 "approx_cached_chunks": 5,
                  "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {
@@ -1749,7 +1776,10 @@ mod tests {
         let json = r#"
             {"storage":
                 {"type": "cached",
-                 "approx_max_memory_bytes":1000000,
+                 "approx_cached_snapshots": 2,
+                 "approx_cached_manifests": 3,
+                 "approx_cached_attribute_files": 4,
+                 "approx_cached_chunks": 5,
                  "backend":{"type": "local_filesystem", "root":"/tmp/test"}
                 },
              "dataset": {}
