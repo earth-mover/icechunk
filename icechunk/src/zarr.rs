@@ -64,8 +64,11 @@ pub enum StorageConfig {
 impl StorageConfig {
     pub fn into_cached(self) -> StorageConfig {
         StorageConfig::Cached {
-            approx_max_memory_bytes: 1_000_000,
             backend: Box::new(self),
+            approx_cached_snapshots: 2,
+            approx_cached_manifests: 2,
+            approx_cached_attribute_files: 2,
+            approx_cached_chunks: 0,
         }
     }
 }

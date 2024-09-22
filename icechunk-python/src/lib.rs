@@ -8,7 +8,10 @@ use ::icechunk::{format::ChunkOffset, zarr::StoreError, Store};
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
-use icechunk::zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo};
+use icechunk::{
+    refs::Ref,
+    zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo},
+};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use storage::PyStorage;
 use streams::PyAsyncStringGenerator;
@@ -31,8 +34,9 @@ impl PyIcechunkStore {
             icechunk::zarr::AccessMode::ReadWrite
         };
         let cached_storage = storage.into_cached();
-        let dataset =
-            DatasetConfig::existing(VersionInfo::BranchTipRef("main".to_string()));
+        let dataset = DatasetConfig::existing(VersionInfo::BranchTipRef(
+            Ref::DEFAULT_BRANCH.to_string(),
+        ));
         let config = StoreConfig {
             storage: cached_storage,
             dataset,
