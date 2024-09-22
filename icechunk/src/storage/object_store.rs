@@ -1,5 +1,7 @@
 use core::fmt;
-use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
+use std::{
+    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,7 +13,7 @@ use object_store::{
 
 use crate::format::{
     attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId, Path,
+    ObjectId,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -58,20 +60,38 @@ const REF_PREFIX: &str = "r";
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    // We need this because object_store's local file implementation doesn't sort refs. Since this
+    // implementation is used only for tests, it's OK to sort in memory.
+    artificially_sort_refs_in_mem: bool,
 }
 
 impl ObjectStorage {
+    /// Create an in memory Storage implementantion
+    ///
+    /// This implementation should not be used in production code.
     pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
         #[allow(clippy::expect_used)]
         let prefix =
             prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
-        ObjectStorage { store: Arc::new(InMemory::new()), prefix }
+        ObjectStorage {
+            store: Arc::new(InMemory::new()),
+            prefix,
+            artificially_sort_refs_in_mem: false,
+        }
     }
-    pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
-        create_dir_all(prefix.as_path())?;
+
+    /// Create an local filesystem Storage implementantion
+    ///
+    /// This implementation should not be used in production code.
+    pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, std::io::Error> {
+        create_dir_all(prefix)?;
         let prefix = prefix.display().to_string();
         let store = Arc::new(LocalFileSystem::new_with_prefix(prefix.clone())?);
-        Ok(ObjectStorage { store, prefix: "".to_string() })
+        Ok(ObjectStorage {
+            store,
+            prefix: "".to_string(),
+            artificially_sort_refs_in_mem: true,
+        })
     }
 
     pub fn new_s3_store(
@@ -107,7 +127,11 @@ impl ObjectStorage {
         };
 
         let store = builder.with_bucket_name(bucket_name.into()).build()?;
-        Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
+        Ok(ObjectStorage {
+            store: Arc::new(store),
+            prefix: prefix.into(),
+            artificially_sort_refs_in_mem: false,
+        })
     }
 
     fn get_path(&self, file_prefix: &str, extension: &str, id: &ObjectId) -> ObjectPath {
@@ -136,6 +160,23 @@ impl ObjectStorage {
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
         // ObjectPath knows how to deal with empty path parts: bar//foo
         ObjectPath::from(format!("{}/{}/{}", self.prefix.as_str(), REF_PREFIX, ref_key))
+    }
+
+    async fn do_ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+        let prefix = self.ref_key(ref_name);
+        self.store
+            .list(Some(prefix.clone()).as_ref())
+            .map_err(|e| e.into())
+            .and_then(move |meta| {
+                ready(
+                    self.drop_prefix(&prefix, &meta.location)
+                        .map(|path| path.to_string())
+                        .ok_or(StorageError::Other(
+                            "Bug in ref prefix logic".to_string(),
+                        )),
+                )
+            })
+            .boxed()
     }
 }
 
@@ -261,20 +302,19 @@ impl Storage for ObjectStorage {
     }
 
     async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
-        let prefix = self.ref_key(ref_name);
-        self.store
-            .list(Some(prefix.clone()).as_ref())
-            .map_err(|e| e.into())
-            .and_then(move |meta| {
-                ready(
-                    self.drop_prefix(&prefix, &meta.location)
-                        .map(|path| path.to_string())
-                        .ok_or(StorageError::Other(
-                            "Bug in ref prefix logic".to_string(),
-                        )),
-                )
-            })
-            .boxed()
+        let res = self.do_ref_versions(ref_name).await;
+        if self.artificially_sort_refs_in_mem {
+            #[allow(clippy::expect_used)]
+            // This branch is used for local tests, not in production. We don't expect the size of
+            // these streams to be large, so we can collect in memory and fail early if there is an
+            // error
+            let mut all =
+                res.try_collect::<Vec<_>>().await.expect("Error fetching ref versions");
+            all.sort();
+            futures::stream::iter(all.into_iter().map(Ok)).boxed()
+        } else {
+            res
+        }
     }
 
     async fn write_ref(
