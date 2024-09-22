@@ -55,6 +55,15 @@ pub enum StorageConfig {
     Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
 }
 
+impl StorageConfig {
+    pub fn into_cached(self) -> StorageConfig {
+        StorageConfig::Cached {
+            approx_max_memory_bytes: 1_000_000,
+            backend: Box::new(self),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
@@ -73,12 +82,32 @@ pub struct DatasetConfig {
     pub unsafe_overwrite_refs: Option<bool>,
 }
 
+impl DatasetConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn existing(version: VersionInfo) -> Self {
+        Self { version: Some(version), ..Self::default() }
+    }
+
+    pub fn with_inline_chunk_threshold_bytes(mut self, threshold: u16) -> Self {
+        self.inline_chunk_threshold_bytes = Some(threshold);
+        self
+    }
+
+    pub fn with_unsafe_overwrite_refs(mut self, unsafe_overwrite_refs: bool) -> Self {
+        self.unsafe_overwrite_refs = Some(unsafe_overwrite_refs);
+        self
+    }
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoreConfig {
-    storage: StorageConfig,
-    dataset: DatasetConfig,
-    get_partial_values_concurrency: Option<u16>,
+    pub storage: StorageConfig,
+    pub dataset: DatasetConfig,
+    pub get_partial_values_concurrency: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

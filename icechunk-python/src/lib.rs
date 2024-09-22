@@ -1,4 +1,5 @@
 mod errors;
+mod storage;
 mod streams;
 
 use std::{pin::Pin, sync::Arc};
@@ -7,8 +8,9 @@ use ::icechunk::{format::ChunkOffset, zarr::StoreError, Store};
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
-use icechunk::zarr::{ObjectId, VersionInfo};
+use icechunk::zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
+use storage::PyStorage;
 use streams::PyAsyncStringGenerator;
 use tokio::sync::{Mutex, RwLock};
 
@@ -19,6 +21,46 @@ struct PyIcechunkStore {
 }
 
 impl PyIcechunkStore {
+    async fn open_existing(
+        storage: StorageConfig,
+        read_only: bool,
+    ) -> Result<Self, String> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+        let cached_storage = storage.into_cached();
+        let dataset =
+            DatasetConfig::existing(VersionInfo::BranchTipRef("main".to_string()));
+        let config = StoreConfig {
+            storage: cached_storage,
+            dataset,
+            get_partial_values_concurrency: None,
+        };
+
+        let store = Store::from_config(&config, access_mode).await?;
+        let store = Arc::new(RwLock::new(store));
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
+    }
+
+    async fn create(storage: StorageConfig) -> Result<Self, String> {
+        let cached_storage = storage.into_cached();
+        let dataset = DatasetConfig::new();
+        let config = StoreConfig {
+            storage: cached_storage,
+            dataset,
+            get_partial_values_concurrency: None,
+        };
+
+        let store =
+            Store::from_config(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
+        let store = Arc::new(RwLock::new(store));
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
+    }
+
     async fn from_json_config(json: &[u8], read_only: bool) -> Result<Self, String> {
         let access_mode = if read_only {
             icechunk::zarr::AccessMode::ReadOnly
@@ -46,6 +88,31 @@ fn pyicechunk_store_from_json_config<'py>(
         PyIcechunkStore::from_json_config(&json, read_only)
             .await
             .map_err(PyValueError::new_err)
+    })
+}
+
+#[pyfunction]
+fn pyicechunk_store_open_existing<'py>(
+    storage: &'py PyStorage,
+    read_only: bool,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage = storage.into();
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::open_existing(storage, read_only)
+            .await
+            .map_err(PyValueError::new_err)
+    })
+}
+
+#[pyfunction]
+fn pyicechunk_store_create<'py>(
+    storage: &'py PyStorage,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage = storage.into();
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::create(storage).await.map_err(PyValueError::new_err)
     })
 }
 
@@ -438,7 +505,10 @@ fn pin_extend_stream<'a>(
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyStorage>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_open_existing, m)?)?;
     Ok(())
 }

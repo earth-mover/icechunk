@@ -3,10 +3,11 @@ import asyncio
 
 import pytest
 
+from zarr.abc.store import AccessMode
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.testing.store import StoreTests
 
-from icechunk import IcechunkStore
+from icechunk import IcechunkStore, Storage
 
 
 DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
@@ -36,18 +37,32 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         self, request: pytest.FixtureRequest
     ) -> dict[str, str | None | dict[str, Buffer]]:
         kwargs = {
-            "config": {"storage": {"type": "in_memory"}, "dataset": {}},
+            "storage": Storage.memory(""),
             "mode": "r+",
         }
         return kwargs
 
     @pytest.fixture(scope="function")
-    def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
-        return asyncio.run(IcechunkStore.from_config(**store_kwargs))
+    async def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
+        return await IcechunkStore.open(**store_kwargs)
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
         super().test_store_repr(store)
+
+    async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
+        create_kwargs = {**store_kwargs, "mode": "r"}
+        with pytest.raises(ValueError):
+            store = await self.store_cls.open(**create_kwargs)
+
+        # TODO
+        # set
+        # with pytest.raises(ValueError):
+        #     await store.set("foo", self.buffer_cls.from_bytes(b"bar"))
+
+        # # delete
+        # with pytest.raises(ValueError):
+        #     await store.delete("foo")
 
     def test_store_supports_writes(self, store: IcechunkStore) -> None:
         assert store.supports_writes
