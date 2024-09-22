@@ -1137,6 +1137,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use test_strategy::proptest;
+    use tokio::sync::Barrier;
 
     #[proptest(async = "tokio")]
     async fn test_add_delete_group(
@@ -1879,6 +1880,60 @@ mod tests {
             parents.iter(),
         );
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let _ = Dataset::init(Arc::clone(&storage), false).await?;
+        let mut ds1 =
+            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+        let mut ds2 =
+            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+
+        ds1.add_group("a".into()).await?;
+        ds2.add_group("b".into()).await?;
+
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_c = Arc::clone(&barrier);
+        let barrier_cc = Arc::clone(&barrier);
+        let handle1 = tokio::spawn(async move {
+            let _ = barrier_c.wait().await;
+            ds1.commit("main", "from 1", None).await
+        });
+
+        let handle2 = tokio::spawn(async move {
+            let _ = barrier_cc.wait().await;
+            ds2.commit("main", "from 2", None).await
+        });
+
+        let res1 = handle1.await.unwrap();
+        let res2 = handle2.await.unwrap();
+
+        // We check there is one error and one success, and that the error points to the right
+        // conflicting commit
+        let ok = match (&res1, &res2) {
+            (
+                Ok(new_snap),
+                Err(DatasetError::Conflict { expected_parent: _, actual_parent }),
+            ) if Some(new_snap) == actual_parent.as_ref() => true,
+            (
+                Err(DatasetError::Conflict { expected_parent: _, actual_parent }),
+                Ok(new_snap),
+            ) if Some(new_snap) == actual_parent.as_ref() => true,
+            _ => false,
+        };
+        assert!(ok);
+
+        let ds = Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+        let parents = ds.ancestry().await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(parents.len(), 2);
+        let msg = parents[0].message.as_str();
+        assert!(msg == "from 1" || msg == "from 2");
+
+        assert_eq!(parents[1].message.as_str(), Snapshot::INITIAL_COMMIT_MESSAGE);
         Ok(())
     }
 
