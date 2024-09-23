@@ -324,7 +324,7 @@ struct StoreCacheKey(String, String);
 
 #[derive(Clone, Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
-    stores: Arc<RwLock<HashMap<StoreCacheKey, Box<dyn ObjectStore>>>>,
+    stores: Arc<RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>>,
 }
 
 impl ObjectStoreVirtualChunkResolver {
@@ -337,9 +337,11 @@ impl ObjectStoreVirtualChunkResolver {
         path: &ObjectPath,
         options: GetOptions,
     ) -> StorageResult<Bytes> {
-        let stores = self.stores.read().await;
-        #[allow(clippy::expect_used)]
-        let store = stores.get(cache_key).expect("this should not fail");
+        let store = {
+            let stores = self.stores.read().await;
+            #[allow(clippy::expect_used)]
+            stores.get(cache_key).expect("this should not fail").clone()
+        };
         Ok(store.get_opts(path, options).await?.bytes().await?)
     }
 }
@@ -373,7 +375,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
                     "s3" => AmazonS3Builder::from_env(),
                     _ => Err(StorageError::UnsupportedScheme(scheme.to_string()))?,
                 };
-                let new_store = Box::new(builder.with_bucket_name(&cache_key.1).build()?);
+                let new_store = Arc::new(builder.with_bucket_name(&cache_key.1).build()?);
                 {
                     self.stores.write().await.insert(cache_key.clone(), new_store);
                 }
