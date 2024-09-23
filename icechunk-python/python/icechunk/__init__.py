@@ -1,7 +1,7 @@
 # module
 import json
 from typing import Any, AsyncGenerator, Self
-from ._icechunk_python import PyIcechunkStore, pyicechunk_store_create, pyicechunk_store_from_json_config, Storage, pyicechunk_store_open_existing
+from ._icechunk_python import PyIcechunkStore, pyicechunk_store_create, pyicechunk_store_from_json_config, Storage, pyicechunk_store_open_existing, pyicechunk_store_exists
 
 from zarr.abc.store import AccessMode, Store
 from zarr.core.buffer import Buffer, BufferPrototype
@@ -30,6 +30,9 @@ class IcechunkStore(Store, SyncMixin):
             raise ValueError("Storage configuration is required. Pass a Storage object to construct an IcechunkStore")
 
         if access_mode.overwrite:
+            store_exists = await pyicechunk_store_exists(storage)
+            if store_exists:
+                raise ValueError("Store already exists and overwrite is not allowed for IcechunkStore")
             store = await cls.create(storage, mode, *args, **kwargs)
         elif access_mode.create or access_mode.update:
             try:

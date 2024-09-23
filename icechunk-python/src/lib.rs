@@ -11,6 +11,7 @@ use futures::Stream;
 use icechunk::{
     refs::Ref,
     zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo},
+    Dataset,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use storage::PyStorage;
@@ -24,6 +25,13 @@ struct PyIcechunkStore {
 }
 
 impl PyIcechunkStore {
+    async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
+        let storage =
+            storage.make_cached_storage().map_err(PyIcechunkStoreError::UnkownError)?;
+        let exists = Dataset::exists(storage.as_ref()).await?;
+        Ok(exists)
+    }
+
     async fn open_existing(
         storage: StorageConfig,
         read_only: bool,
@@ -33,15 +41,11 @@ impl PyIcechunkStore {
         } else {
             icechunk::zarr::AccessMode::ReadWrite
         };
-        let cached_storage = storage.into_cached();
         let dataset = DatasetConfig::existing(VersionInfo::BranchTipRef(
             Ref::DEFAULT_BRANCH.to_string(),
         ));
-        let config = StoreConfig {
-            storage: cached_storage,
-            dataset,
-            get_partial_values_concurrency: None,
-        };
+        let config =
+            StoreConfig { storage, dataset, get_partial_values_concurrency: None };
 
         let store = Store::from_config(&config, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
@@ -50,13 +54,9 @@ impl PyIcechunkStore {
     }
 
     async fn create(storage: StorageConfig) -> Result<Self, String> {
-        let cached_storage = storage.into_cached();
         let dataset = DatasetConfig::new();
-        let config = StoreConfig {
-            storage: cached_storage,
-            dataset,
-            get_partial_values_concurrency: None,
-        };
+        let config =
+            StoreConfig { storage, dataset, get_partial_values_concurrency: None };
 
         let store =
             Store::from_config(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
@@ -106,6 +106,17 @@ fn pyicechunk_store_open_existing<'py>(
         PyIcechunkStore::open_existing(storage, read_only)
             .await
             .map_err(PyValueError::new_err)
+    })
+}
+
+#[pyfunction]
+fn pyicechunk_store_exists<'py>(
+    storage: &'py PyStorage,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage = storage.into();
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::store_exists(storage).await.map_err(PyErr::from)
     })
 }
 
@@ -512,6 +523,7 @@ fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorage>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_open_existing, m)?)?;
     Ok(())
