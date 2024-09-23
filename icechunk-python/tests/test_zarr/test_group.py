@@ -315,7 +315,7 @@ def test_group_subgroups(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     subgroups_expected = tuple(group.create_group(k) for k in keys)
     # create a sub-array as well
     _ = group.create_array("array", shape=(10,))
-    subgroups_observed = tuple(group.groups())
+    subgroups_observed = tuple(a[1] for a in group.groups())
     assert set(group.group_keys()) == set(keys)
     assert len(subgroups_observed) == len(subgroups_expected)
     assert all(a in subgroups_observed for a in subgroups_expected)
@@ -330,7 +330,7 @@ def test_group_subarrays(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     subarrays_expected = tuple(group.create_array(k, shape=(10,)) for k in keys)
     # create a sub-group as well
     _ = group.create_group("group")
-    subarrays_observed = tuple(group.arrays())
+    subarrays_observed = tuple(a[1] for a in group.arrays())
     assert set(group.array_keys()) == set(keys)
     assert len(subarrays_observed) == len(subarrays_expected)
     assert all(a in subarrays_observed for a in subarrays_expected)
