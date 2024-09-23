@@ -1,4 +1,6 @@
+use itertools::Itertools;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
+use thiserror::Error;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -15,10 +17,51 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
+#[derive(Debug, Error)]
+pub enum VirtualReferenceError {
+    #[error("error parsing virtual ref URL {0}")]
+    CannotParseUrl(#[from] url::ParseError),
+    #[error("virtual reference has no path segments {0}")]
+    NoPathSegments(String),
+    #[error("unsupported scheme for virtual chunk refs: {0}")]
+    UnsupportedScheme(String),
+    #[error("error parsing bucket name from virtual ref URL {0}")]
+    CannotParseBucketName(String),
+    #[error("error parsing path using object_store {0}")]
+    CannotParsePath(#[from] ::object_store::path::Error),
+}
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum VirtualChunkLocation {
     Absolute(String),
     // Relative(prefix_id, String)
+}
+
+impl VirtualChunkLocation {
+    pub fn from_absolute_path(
+        path: &str,
+    ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        // make sure we can parse the provided URL before creating the enum
+        // TODO: consider other validation here.
+        let url = url::Url::parse(path)?;
+        let new_path: String = url
+            .path_segments()
+            .ok_or(VirtualReferenceError::NoPathSegments(path.into()))?
+            // strip empty segments here, object_store cannot handle them.
+            .filter(|x| !x.is_empty())
+            .join("/");
+
+        if !url.has_host() {
+            Err(VirtualReferenceError::CannotParseBucketName(path.into()))
+        } else {
+            #[allow(clippy::expect_used)]
+            Ok(VirtualChunkLocation::Absolute(format!(
+                "{}://{}/{}",
+                url.scheme(),
+                url.host().expect("cannot be absent."),
+                new_path,
+            )))
+        }
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

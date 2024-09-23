@@ -6,7 +6,7 @@ use std::{
 
 use crate::format::{
     attributes::AttributesTable,
-    manifest::{Manifest, VirtualChunkLocation},
+    manifest::{Manifest, VirtualChunkLocation, VirtualReferenceError},
     snapshot::Snapshot,
     ByteRange, ObjectId,
 };
@@ -381,14 +381,16 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
         let VirtualChunkLocation::Absolute(location) = location;
-        let parsed = url::Url::parse(location)?;
+        let parsed = url::Url::parse(location)
+            .map_err(VirtualReferenceError::CannotParseUrl)?;
         let bucket_name = parsed
             .host_str()
-            .ok_or(StorageError::VirtualBucketParseError(
+            .ok_or(VirtualReferenceError::CannotParseBucketName(
                 "error parsing bucket name".into(),
             ))?
             .to_string();
-        let path = ObjectPath::parse(parsed.path())?;
+        let path = ObjectPath::parse(parsed.path())
+            .map_err(VirtualReferenceError::CannotParsePath)?;
         let scheme = parsed.scheme();
         let cache_key = StoreCacheKey(scheme.into(), bucket_name);
 
@@ -400,7 +402,9 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             false => {
                 let builder = match scheme {
                     "s3" => AmazonS3Builder::from_env(),
-                    _ => Err(StorageError::UnsupportedScheme(scheme.to_string()))?,
+                    _ => {
+                        Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
+                    }
                 };
                 let new_store = Arc::new(builder.with_bucket_name(&cache_key.1).build()?);
                 {

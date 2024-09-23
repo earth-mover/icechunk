@@ -8,7 +8,11 @@ use std::{
 
 use crate::storage::virtual_ref::VirtualChunkResolver;
 pub use crate::{
-    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
+    format::{
+        manifest::{ChunkPayload, VirtualChunkLocation},
+        snapshot::ZarrArrayMetadata,
+        ChunkIndices, Path,
+    },
     metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
         DimensionNames, FillValue, StorageTransformer, UserAttributes,
@@ -150,7 +154,6 @@ impl ChangeSet {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) {
-        // FIXME: normalize virtual chunk reference paths here
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
@@ -1146,7 +1149,9 @@ mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        format::manifest::{ChunkInfo, VirtualChunkLocation, VirtualChunkRef},
+        format::manifest::{
+            ChunkInfo, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+        },
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
@@ -1326,21 +1331,33 @@ mod tests {
             dimension_names: None,
         };
         let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::Absolute(format!(
-                "s3://testbucket/{}",
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                // intentional extra '/'
+                "s3://testbucket///{}",
                 path1
-            )),
+            ))?,
             offset: 0,
             length: 5,
         });
         let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::Absolute(format!(
+            location: VirtualChunkLocation::from_absolute_path(&format!(
                 "s3://testbucket/{}",
                 path2
-            )),
+            ))?,
             offset: 1,
             length: 5,
         });
+
+        // bad relative chunk location
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("abcdef"),
+            Err(VirtualReferenceError::CannotParseUrl(_)),
+        ));
+        // extra / prevents bucket name detection
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
+            Err(VirtualReferenceError::CannotParseBucketName(_)),
+        ));
 
         let new_array_path: PathBuf = "/array".to_string().into();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
