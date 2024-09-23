@@ -1,0 +1,45 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+  push:
+    branches:
+      - main
+      - test/ci-with-minio
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest"]
+        python-version: ['3.11']
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stand up MinIO
+        run: |
+          docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for i in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Use Python ${{ matrix.python-version }}
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
