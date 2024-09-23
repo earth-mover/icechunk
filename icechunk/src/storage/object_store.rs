@@ -4,6 +4,13 @@ use std::{
     path::Path as StdPath, sync::Arc,
 };
 
+use crate::format::{
+    attributes::AttributesTable,
+    manifest::{Manifest, VirtualChunkLocation},
+    snapshot::Snapshot,
+    ByteRange, ObjectId,
+};
+use crate::storage::virtual_ref::VirtualChunkResolver;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
@@ -14,13 +21,6 @@ use object_store::{
 };
 use tokio::sync::RwLock;
 use url;
-
-use crate::format::{
-    attributes::AttributesTable,
-    manifest::{Manifest, VirtualChunkLocation},
-    snapshot::Snapshot,
-    ByteRange, ObjectId,
-};
 
 use super::{Storage, StorageError, StorageResult};
 
@@ -344,15 +344,6 @@ impl Storage for ObjectStorage {
             })
             .map(|_| ())
     }
-}
-
-#[async_trait]
-pub trait VirtualChunkResolver {
-    async fn fetch_chunk(
-        &self,
-        location: &VirtualChunkLocation,
-        range: &ByteRange,
-    ) -> StorageResult<Bytes>;
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]

@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::storage::virtual_ref::VirtualChunkResolver;
 pub use crate::{
     format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
     metadata::{
@@ -13,7 +14,6 @@ pub use crate::{
         DimensionNames, FillValue, StorageTransformer, UserAttributes,
     },
 };
-
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
@@ -36,7 +36,7 @@ use crate::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
         RefError,
     },
-    storage::object_store::{ObjectStoreVirtualChunkResolver, VirtualChunkResolver},
+    storage::object_store::ObjectStoreVirtualChunkResolver,
     MemCachingStorage, Storage, StorageError,
 };
 
