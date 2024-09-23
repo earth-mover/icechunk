@@ -1,4 +1,5 @@
 mod errors;
+mod storage;
 mod streams;
 
 use std::{pin::Pin, sync::Arc};
@@ -7,8 +8,13 @@ use ::icechunk::{format::ChunkOffset, zarr::StoreError, Store};
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::Stream;
-use icechunk::zarr::{ObjectId, VersionInfo};
+use icechunk::{
+    refs::Ref,
+    zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo},
+    Dataset,
+};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
+use storage::PyStorage;
 use streams::PyAsyncStringGenerator;
 use tokio::sync::{Mutex, RwLock};
 
@@ -19,8 +25,53 @@ struct PyIcechunkStore {
 }
 
 impl PyIcechunkStore {
-    async fn from_json_config(json: &[u8]) -> Result<Self, String> {
-        let store = Store::from_json_config(json).await?;
+    async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
+        let storage =
+            storage.make_cached_storage().map_err(PyIcechunkStoreError::UnkownError)?;
+        let exists = Dataset::exists(storage.as_ref()).await?;
+        Ok(exists)
+    }
+
+    async fn open_existing(
+        storage: StorageConfig,
+        read_only: bool,
+    ) -> Result<Self, String> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+        let dataset = DatasetConfig::existing(VersionInfo::BranchTipRef(
+            Ref::DEFAULT_BRANCH.to_string(),
+        ));
+        let config =
+            StoreConfig { storage, dataset, get_partial_values_concurrency: None };
+
+        let store = Store::from_config(&config, access_mode).await?;
+        let store = Arc::new(RwLock::new(store));
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
+    }
+
+    async fn create(storage: StorageConfig) -> Result<Self, String> {
+        let dataset = DatasetConfig::new();
+        let config =
+            StoreConfig { storage, dataset, get_partial_values_concurrency: None };
+
+        let store =
+            Store::from_config(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
+        let store = Arc::new(RwLock::new(store));
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
+    }
+
+    async fn from_json_config(json: &[u8], read_only: bool) -> Result<Self, String> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+        let store = Store::from_json_config(json, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { store, rt })
@@ -30,6 +81,7 @@ impl PyIcechunkStore {
 #[pyfunction]
 fn pyicechunk_store_from_json_config<'py>(
     json: String,
+    read_only: bool,
     py: Python<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let json = json.as_bytes().to_owned();
@@ -37,36 +89,102 @@ fn pyicechunk_store_from_json_config<'py>(
     // The commit mechanism is async and calls tokio::spawn so we need to use the
     // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::from_json_config(&json).await.map_err(PyValueError::new_err)
+        PyIcechunkStore::from_json_config(&json, read_only)
+            .await
+            .map_err(PyValueError::new_err)
+    })
+}
+
+#[pyfunction]
+fn pyicechunk_store_open_existing<'py>(
+    storage: &'py PyStorage,
+    read_only: bool,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage = storage.into();
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::open_existing(storage, read_only)
+            .await
+            .map_err(PyValueError::new_err)
+    })
+}
+
+#[pyfunction]
+fn pyicechunk_store_exists<'py>(
+    storage: &'py PyStorage,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage = storage.into();
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::store_exists(storage).await.map_err(PyErr::from)
+    })
+}
+
+#[pyfunction]
+fn pyicechunk_store_create<'py>(
+    storage: &'py PyStorage,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage = storage.into();
+    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        PyIcechunkStore::create(storage).await.map_err(PyValueError::new_err)
     })
 }
 
 #[pymethods]
 impl PyIcechunkStore {
-    pub async fn checkout_snapshot(
-        &mut self,
+    pub fn checkout_snapshot<'py>(
+        &'py mut self,
+        py: Python<'py>,
         snapshot_id: String,
-    ) -> PyIcechunkStoreResult<()> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let snapshot_id = ObjectId::try_from(snapshot_id.as_str()).map_err(|e| {
             PyIcechunkStoreError::UnkownError(format!(
                 "Error checking out snapshot {snapshot_id}: {e}"
             ))
         })?;
-        let mut store = self.store.write().await;
-        store.checkout(VersionInfo::SnapshotId(snapshot_id)).await?;
-        Ok(())
+
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut store = store.write().await;
+            store
+                .checkout(VersionInfo::SnapshotId(snapshot_id))
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
-    pub async fn checkout_branch(&mut self, branch: String) -> PyIcechunkStoreResult<()> {
-        let mut store = self.store.write().await;
-        store.checkout(VersionInfo::BranchTipRef(branch)).await?;
-        Ok(())
+    pub fn checkout_branch<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        branch: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut store = store.write().await;
+            store
+                .checkout(VersionInfo::BranchTipRef(branch))
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
-    pub async fn checkout_tag(&mut self, tag: String) -> PyIcechunkStoreResult<()> {
-        let mut store = self.store.write().await;
-        store.checkout(VersionInfo::TagRef(tag)).await?;
-        Ok(())
+    pub fn checkout_tag<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        tag: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut store = store.write().await;
+            store
+                .checkout(VersionInfo::TagRef(tag))
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
     #[getter]
@@ -87,7 +205,7 @@ impl PyIcechunkStore {
         // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let mut writeable_store = store.write().await;
-            let (oid, _version) = writeable_store
+            let oid = writeable_store
                 .commit(&message)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -109,9 +227,18 @@ impl PyIcechunkStore {
         Ok(has_uncommitted_changes)
     }
 
-    pub async fn reset(&self) -> PyIcechunkStoreResult<()> {
-        self.store.write().await.reset().await?;
-        Ok(())
+    pub fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            store
+                .write()
+                .await
+                .reset()
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
     pub fn new_branch<'py>(
@@ -138,7 +265,6 @@ impl PyIcechunkStore {
         py: Python<'py>,
         tag: String,
         snapshot_id: String,
-        message: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
@@ -148,69 +274,99 @@ impl PyIcechunkStore {
             let mut writeable_store = store.write().await;
             let oid = ObjectId::try_from(snapshot_id.as_str())
                 .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
-            writeable_store
-                .tag(&tag, &oid, message.as_deref())
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
+            writeable_store.tag(&tag, &oid).await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
 
-    pub async fn empty(&self) -> PyIcechunkStoreResult<bool> {
-        let is_empty = self.store.read().await.empty().await?;
-        Ok(is_empty)
+    pub fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let is_empty =
+                store.read().await.empty().await.map_err(PyIcechunkStoreError::from)?;
+            Ok(is_empty)
+        })
     }
 
-    pub async fn clear(&mut self) -> PyIcechunkStoreResult<()> {
-        self.store.write().await.clear().await?;
-        Ok(())
+    pub fn clear<'py>(&'py mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
     }
 
-    pub async fn get(
-        &self,
+    pub fn get<'py>(
+        &'py self,
+        py: Python<'py>,
         key: String,
         byte_range: Option<(Option<ChunkOffset>, Option<ChunkOffset>)>,
-    ) -> PyIcechunkStoreResult<PyObject> {
-        let byte_range = byte_range.unwrap_or((None, None)).into();
-        let data = self.store.read().await.get(&key, &byte_range).await?;
-        let pybytes = Python::with_gil(|py| {
-            let bound_bytes = PyBytes::new_bound(py, &data);
-            bound_bytes.to_object(py)
-        });
-        Ok(pybytes)
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let byte_range = byte_range.unwrap_or((None, None)).into();
+            let data = store
+                .read()
+                .await
+                .get(&key, &byte_range)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            let pybytes = Python::with_gil(|py| {
+                let bound_bytes = PyBytes::new_bound(py, &data);
+                bound_bytes.to_object(py)
+            });
+            Ok(pybytes)
+        })
     }
 
-    pub async fn get_partial_values(
-        &self,
+    pub fn get_partial_values<'py>(
+        &'py self,
+        py: Python<'py>,
         key_ranges: Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>,
-    ) -> PyIcechunkStoreResult<Vec<Option<PyObject>>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let iter = key_ranges.into_iter().map(|r| (r.0, r.1.into()));
-        let result = self
-            .store
-            .read()
-            .await
-            .get_partial_values(iter)
-            .await?
-            .into_iter()
-            // If we want to error instead of returning None we can collect into
-            // a Result<Vec<_>, _> and short circuit
-            .map(|x| {
-                x.map(|x| {
-                    Python::with_gil(|py| {
-                        let bound_bytes = PyBytes::new_bound(py, &x);
-                        bound_bytes.to_object(py)
-                    })
-                })
-                .ok()
-            })
-            .collect();
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let readable_store = store.read().await;
+            let partial_values_stream = readable_store
+                .get_partial_values(iter)
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
 
-        Ok(result)
+            let result = partial_values_stream
+                .into_iter()
+                // If we want to error instead of returning None we can collect into
+                // a Result<Vec<_>, _> and short circuit
+                .map(|x| {
+                    x.map(|x| {
+                        Python::with_gil(|py| {
+                            let bound_bytes = PyBytes::new_bound(py, &x);
+                            bound_bytes.to_object(py)
+                        })
+                    })
+                    .ok()
+                })
+                .collect::<Vec<_>>();
+
+            Ok(result)
+        })
     }
 
-    pub async fn exists<'a>(&self, key: String) -> PyIcechunkStoreResult<bool> {
-        let exists = self.store.read().await.exists(&key).await?;
-        Ok(exists)
+    pub fn exists<'py>(
+        &'py self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let exists = store
+                .read()
+                .await
+                .exists(&key)
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(exists)
+        })
     }
 
     #[getter]
@@ -243,9 +399,22 @@ impl PyIcechunkStore {
         })
     }
 
-    pub async fn delete(&mut self, key: String) -> PyIcechunkStoreResult<()> {
-        self.store.write().await.delete(&key).await?;
-        Ok(())
+    pub fn delete<'py>(
+        &'py mut self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            store
+                .write()
+                .await
+                .delete(&key)
+                .await
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            Ok(())
+        })
     }
 
     #[getter]
@@ -351,7 +520,11 @@ fn pin_extend_stream<'a>(
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyStorage>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_open_existing, m)?)?;
     Ok(())
 }

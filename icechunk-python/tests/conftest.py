@@ -1,25 +1,17 @@
 from typing import Literal
 
-from icechunk import IcechunkStore
+from icechunk import IcechunkStore, Storage
 import pytest
 
 
 async def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkStore:
     if store == "local":
-        return await IcechunkStore.from_json(
-            {
-                "storage": {"type": "local_filesystem", "root": path},
-                "dataset": {},
-            }, 
-            mode="w"
+        return await IcechunkStore.create(
+            storage=Storage.filesystem(path),
         )
     if store == "memory":
-        return await IcechunkStore.from_json(
-            {
-                "storage": {"type": "in_memory"},
-                "dataset": {},
-            }, 
-            mode="w"
+        return await IcechunkStore.create(
+            storage=Storage.memory(path),
         )
 
 

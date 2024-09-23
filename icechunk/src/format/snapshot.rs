@@ -1,6 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
-    mem::size_of,
+    collections::{BTreeMap, HashMap, VecDeque},
     ops::Bound,
     sync::Arc,
 };
@@ -87,7 +86,7 @@ pub struct Snapshot {
     pub total_parents: u32,
     // we denormalize this field to have it easily available in the serialized file
     pub short_term_parents: u16,
-    pub short_term_history: Vec<SnapshotMetadata>,
+    pub short_term_history: VecDeque<SnapshotMetadata>,
 
     pub metadata: SnapshotMetadata,
     pub started_at: DateTime<Utc>,
@@ -112,8 +111,10 @@ impl SnapshotMetadata {
 }
 
 impl Snapshot {
+    pub const INITIAL_COMMIT_MESSAGE: &'static str = "Dataset initialized";
+
     pub fn new(
-        short_term_history: Vec<SnapshotMetadata>,
+        short_term_history: VecDeque<SnapshotMetadata>,
         total_parents: u32,
         properties: Option<SnapshotProperties>,
     ) -> Self {
@@ -134,7 +135,7 @@ impl Snapshot {
     }
 
     pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        short_term_history: Vec<SnapshotMetadata>,
+        short_term_history: VecDeque<SnapshotMetadata>,
         total_parents: u32,
         properties: Option<SnapshotProperties>,
         iter: T,
@@ -144,14 +145,14 @@ impl Snapshot {
     }
 
     pub fn first(properties: Option<SnapshotProperties>) -> Self {
-        Self::new(vec![], 0, properties)
+        Self::new(VecDeque::new(), 0, properties)
     }
 
     pub fn first_from_iter<T: IntoIterator<Item = NodeSnapshot>>(
         properties: Option<SnapshotProperties>,
         iter: T,
     ) -> Self {
-        Self::from_iter(vec![], 0, properties, iter)
+        Self::from_iter(VecDeque::new(), 0, properties, iter)
     }
 
     pub fn from_parent(
@@ -159,7 +160,7 @@ impl Snapshot {
         properties: Option<SnapshotProperties>,
     ) -> Self {
         let mut history = parent.short_term_history.clone();
-        history.push(parent.metadata.clone());
+        history.push_front(parent.metadata.clone());
         Self::new(history, parent.total_parents + 1, properties)
     }
 
@@ -175,7 +176,8 @@ impl Snapshot {
     }
 
     pub fn empty() -> Self {
-        let metadata = SnapshotMetadata::with_message("Dataset initialized".to_string());
+        let metadata =
+            SnapshotMetadata::with_message(Self::INITIAL_COMMIT_MESSAGE.to_string());
         Self { metadata, ..Self::first(None) }
     }
 
@@ -193,16 +195,9 @@ impl Snapshot {
         NodeIterator { table: self, last_key: None }
     }
 
-    pub fn estimated_size_bytes(&self) -> usize {
-        // FIXME: this is really bad
-        self.nodes.len()
-            * (
-                size_of::<Path>() //keys
-                + size_of::<NodeSnapshot>()  //values
-                + 20 * size_of::<char>()  // estimated size of path
-        + 200
-                // estimated dynamic size of metadata
-            )
+    pub fn local_ancestry(self: Arc<Self>) -> impl Iterator<Item = SnapshotMetadata> {
+        (0..self.short_term_history.len())
+            .map(move |ix| self.short_term_history[ix].clone())
     }
 }
 

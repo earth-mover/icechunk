@@ -4,9 +4,7 @@ import icechunk
 
 
 async def test_timetravel():
-    store = await icechunk.IcechunkStore.from_json(
-        config={"storage": {"type": "in_memory"}, "dataset": {}}, mode="w"
-    )
+    store = await icechunk.IcechunkStore.create(storage=icechunk.Storage.memory("test"))
 
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array("air_temp", shape=(1000, 1000), chunk_shape=(100, 100), dtype="i4")
@@ -41,7 +39,7 @@ async def test_timetravel():
     assert store.branch == "feature"
     air_temp[:, :] = 90
     feature_snapshot_id = await store.commit("update air temp")
-    await store.tag("v1.0", feature_snapshot_id, "Feature release")
+    await store.tag("v1.0", feature_snapshot_id)
 
     await store.checkout(tag="v1.0")
     assert store.branch == None

@@ -1,5 +1,7 @@
 use core::fmt;
-use std::{fs::create_dir_all, future::ready, ops::Bound, sync::Arc};
+use std::{
+    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,7 +13,7 @@ use object_store::{
 
 use crate::format::{
     attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId, Path,
+    ObjectId,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -58,67 +60,123 @@ const REF_PREFIX: &str = "r";
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    // We need this because object_store's local file implementation doesn't sort refs. Since this
+    // implementation is used only for tests, it's OK to sort in memory.
+    artificially_sort_refs_in_mem: bool,
 }
 
 impl ObjectStorage {
-    pub fn new_in_memory_store() -> ObjectStorage {
-        ObjectStorage { store: Arc::new(InMemory::new()), prefix: "".into() }
+    /// Create an in memory Storage implementantion
+    ///
+    /// This implementation should not be used in production code.
+    pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
+        #[allow(clippy::expect_used)]
+        let prefix =
+            prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
+        ObjectStorage {
+            store: Arc::new(InMemory::new()),
+            prefix,
+            artificially_sort_refs_in_mem: false,
+        }
     }
-    pub fn new_local_store(prefix: &Path) -> Result<ObjectStorage, std::io::Error> {
-        create_dir_all(prefix.as_path())?;
+
+    /// Create an local filesystem Storage implementantion
+    ///
+    /// This implementation should not be used in production code.
+    pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, std::io::Error> {
+        create_dir_all(prefix)?;
         let prefix = prefix.display().to_string();
         let store = Arc::new(LocalFileSystem::new_with_prefix(prefix.clone())?);
-        Ok(ObjectStorage { store, prefix: "".to_string() })
+        Ok(ObjectStorage {
+            store,
+            prefix: "".to_string(),
+            artificially_sort_refs_in_mem: true,
+        })
     }
 
-    pub fn new_s3_store_from_env(
+    pub fn new_s3_store(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
-    ) -> Result<ObjectStorage, StorageError> {
-        use object_store::aws::AmazonS3Builder;
-        let store =
-            AmazonS3Builder::from_env().with_bucket_name(bucket_name.into()).build()?;
-        Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
-    }
-
-    pub fn new_s3_store_with_config(
-        bucket_name: impl Into<String>,
-        prefix: impl Into<String>,
-        access_key_id: impl Into<String>,
-        secret_access_key: impl Into<String>,
+        access_key_id: Option<impl Into<String>>,
+        secret_access_key: Option<impl Into<String>>,
+        session_token: Option<impl Into<String>>,
         endpoint: Option<impl Into<String>>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
-        let builder = AmazonS3Builder::new()
-            .with_access_key_id(access_key_id)
-            .with_secret_access_key(secret_access_key);
+
+        let builder = if let (Some(access_key_id), Some(secret_access_key)) =
+            (access_key_id, secret_access_key)
+        {
+            AmazonS3Builder::new()
+                .with_access_key_id(access_key_id)
+                .with_secret_access_key(secret_access_key)
+        } else {
+            AmazonS3Builder::from_env()
+        };
+
+        let builder = if let Some(session_token) = session_token {
+            builder.with_token(session_token)
+        } else {
+            builder
+        };
 
         let builder = if let Some(endpoint) = endpoint {
-            // TODO: Check if HTTP is allowed always or based on endpoint
             builder.with_endpoint(endpoint).with_allow_http(true)
         } else {
             builder
         };
 
         let store = builder.with_bucket_name(bucket_name.into()).build()?;
-        Ok(ObjectStorage { store: Arc::new(store), prefix: prefix.into() })
+        Ok(ObjectStorage {
+            store: Arc::new(store),
+            prefix: prefix.into(),
+            artificially_sort_refs_in_mem: false,
+        })
     }
 
-    fn get_path(&self, file_prefix: &str, id: &ObjectId) -> ObjectPath {
+    fn get_path(&self, file_prefix: &str, extension: &str, id: &ObjectId) -> ObjectPath {
         // TODO: be careful about allocation here
         // we serialize the url using crockford
-        let path = format!("{}/{}/{}.msgpack", self.prefix, file_prefix, id);
+        let path = format!("{}/{}/{}{}", self.prefix, file_prefix, id, extension);
         ObjectPath::from(path)
     }
 
+    fn get_snapshot_path(&self, id: &ObjectId) -> ObjectPath {
+        self.get_path(SNAPSHOT_PREFIX, ".msgpack", id)
+    }
+
+    fn get_manifest_path(&self, id: &ObjectId) -> ObjectPath {
+        self.get_path(MANIFEST_PREFIX, ".msgpack", id)
+    }
+
+    fn get_chunk_path(&self, id: &ObjectId) -> ObjectPath {
+        self.get_path(CHUNK_PREFIX, "", id)
+    }
+
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
-        path.prefix_match(&ObjectPath::from(format!("{}/{}", self.prefix, prefix)))
-            .map(|it| it.collect())
+        path.prefix_match(&ObjectPath::from(format!("{}", prefix))).map(|it| it.collect())
     }
 
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
         // ObjectPath knows how to deal with empty path parts: bar//foo
         ObjectPath::from(format!("{}/{}/{}", self.prefix.as_str(), REF_PREFIX, ref_key))
+    }
+
+    async fn do_ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+        let prefix = self.ref_key(ref_name);
+        self.store
+            .list(Some(prefix.clone()).as_ref())
+            .map_err(|e| e.into())
+            .and_then(move |meta| {
+                ready(
+                    self.drop_prefix(&prefix, &meta.location)
+                        .map(|path| path.to_string())
+                        .ok_or(StorageError::Other(
+                            "Bug in ref prefix logic".to_string(),
+                        )),
+                )
+            })
+            .boxed()
     }
 }
 
@@ -130,7 +188,7 @@ impl fmt::Debug for ObjectStorage {
 #[async_trait]
 impl Storage for ObjectStorage {
     async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
-        let path = self.get_path(SNAPSHOT_PREFIX, id);
+        let path = self.get_snapshot_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
         let res = rmp_serde::from_slice(bytes.as_ref())?;
@@ -148,7 +206,7 @@ impl Storage for ObjectStorage {
         &self,
         id: &ObjectId,
     ) -> Result<Arc<Manifest>, StorageError> {
-        let path = self.get_path(MANIFEST_PREFIX, id);
+        let path = self.get_manifest_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
         let res = rmp_serde::from_slice(bytes.as_ref())?;
@@ -160,7 +218,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(SNAPSHOT_PREFIX, &id);
+        let path = self.get_snapshot_path(&id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;
         // FIXME: use multipart
         self.store.put(&path, bytes.into()).await?;
@@ -173,9 +231,6 @@ impl Storage for ObjectStorage {
         _table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         todo!()
-        // let path = ObjectStorage::get_path(ATTRIBUTES_PREFIX, &id);
-        // self.write_parquet(&path, &table.batch).await?;
-        // Ok(())
     }
 
     async fn write_manifests(
@@ -183,7 +238,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(MANIFEST_PREFIX, &id);
+        let path = self.get_manifest_path(&id);
         let bytes = rmp_serde::to_vec(table.as_ref())?;
         // FIXME: use multipart
         self.store.put(&path, bytes.into()).await?;
@@ -195,7 +250,7 @@ impl Storage for ObjectStorage {
         id: &ObjectId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
-        let path = self.get_path(CHUNK_PREFIX, id);
+        let path = self.get_chunk_path(id);
         // TODO: shall we split `range` into multiple ranges and use get_ranges?
         // I can't tell that `get_range` does splitting
         let options =
@@ -209,7 +264,7 @@ impl Storage for ObjectStorage {
         id: ObjectId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
-        let path = self.get_path(CHUNK_PREFIX, &id);
+        let path = self.get_chunk_path(&id);
         let upload = self.store.put_multipart(&path).await?;
         // TODO: new_with_chunk_size?
         let mut write = object_store::WriteMultipart::new(upload);
@@ -233,35 +288,33 @@ impl Storage for ObjectStorage {
         // FIXME: i don't think object_store's implementation of list_with_delimiter is any good
         // we need to test if it even works beyond 1k refs
         let prefix = self.ref_key("");
-        let ref_prefix = ObjectPath::from(REF_PREFIX);
 
         Ok(self
             .store
-            .list_with_delimiter(Some(prefix).as_ref())
+            .list_with_delimiter(Some(prefix.clone()).as_ref())
             .await?
             .common_prefixes
             .iter()
             .filter_map(|path| {
-                self.drop_prefix(&ref_prefix, path).map(|path| path.to_string())
+                self.drop_prefix(&prefix, path).map(|path| path.to_string())
             })
             .collect())
     }
 
     async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
-        let prefix = self.ref_key(ref_name);
-        self.store
-            .list(Some(prefix.clone()).as_ref())
-            .map_err(|e| e.into())
-            .and_then(move |meta| {
-                ready(
-                    self.drop_prefix(&prefix, &meta.location)
-                        .map(|path| path.to_string())
-                        .ok_or(StorageError::Other(
-                            "Bug in ref prefix logic".to_string(),
-                        )),
-                )
-            })
-            .boxed()
+        let res = self.do_ref_versions(ref_name).await;
+        if self.artificially_sort_refs_in_mem {
+            #[allow(clippy::expect_used)]
+            // This branch is used for local tests, not in production. We don't expect the size of
+            // these streams to be large, so we can collect in memory and fail early if there is an
+            // error
+            let mut all =
+                res.try_collect::<Vec<_>>().await.expect("Error fetching ref versions");
+            all.sort();
+            futures::stream::iter(all.into_iter().map(Ok)).boxed()
+        } else {
+            res
+        }
     }
 
     async fn write_ref(

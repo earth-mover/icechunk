@@ -9,17 +9,16 @@ use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_config_json = br#"
         {"storage":
-            {"type": "cached",
-                "approx_max_memory_bytes":100000000,
-                "backend":{"type": "in_memory"}
-            },
+            {"type": "in_memory"},
             "dataset": {
                 "previous_version": null,
                 "inline_chunk_threshold_bytes":128
             }}
     "#;
 
-    let store = Store::from_json_config(store_config_json).await?;
+    let store =
+        Store::from_json_config(store_config_json, icechunk::zarr::AccessMode::ReadWrite)
+            .await?;
     let store = Arc::new(RwLock::new(store));
 
     store

@@ -26,8 +26,8 @@ use crate::{
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
-    refs::BranchVersion,
-    Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
+    refs::{BranchVersion, Ref},
+    Dataset, DatasetBuilder, ObjectStorage, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -36,7 +36,7 @@ pub use crate::format::ObjectId;
 #[serde(tag = "type")]
 pub enum StorageConfig {
     #[serde(rename = "in_memory")]
-    InMemory,
+    InMemory { prefix: Option<String> },
 
     #[serde(rename = "local_filesystem")]
     LocalFileSystem { root: PathBuf },
@@ -47,36 +47,145 @@ pub enum StorageConfig {
         prefix: String,
         access_key_id: Option<String>,
         secret_access_key: Option<String>,
+        session_token: Option<String>,
         endpoint: Option<String>,
     },
+}
 
-    #[serde(rename = "cached")]
-    Cached { approx_max_memory_bytes: u64, backend: Box<StorageConfig> },
+impl StorageConfig {
+    pub fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+        match self {
+            StorageConfig::InMemory { prefix } => {
+                Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
+            }
+            StorageConfig::LocalFileSystem { root } => {
+                let storage = ObjectStorage::new_local_store(root)
+                    .map_err(|e| format!("Error creating storage: {e}"))?;
+                Ok(Arc::new(storage))
+            }
+            StorageConfig::S3ObjectStore {
+                bucket,
+                prefix,
+                access_key_id,
+                secret_access_key,
+                session_token,
+                endpoint,
+            } => {
+                let storage = ObjectStorage::new_s3_store(
+                    bucket,
+                    prefix,
+                    access_key_id.clone(),
+                    secret_access_key.clone(),
+                    session_token.clone(),
+                    endpoint.clone(),
+                )
+                .map_err(|e| format!("Error creating storage: {e}"))?;
+                Ok(Arc::new(storage))
+            }
+        }
+    }
+
+    pub fn make_cached_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+        let storage = self.make_storage()?;
+        let cached_storage = Dataset::add_in_mem_asset_caching(storage);
+        Ok(cached_storage)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
     SnapshotId(ObjectId),
-    #[serde(rename = "tag_ref")]
+    #[serde(rename = "tag")]
     TagRef(String),
-    #[serde(rename = "branch_tip_ref")]
+    #[serde(rename = "branch")]
     BranchTipRef(String),
 }
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DatasetConfig {
-    pub previous_version: Option<VersionInfo>,
+    pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
+    pub unsafe_overwrite_refs: Option<bool>,
+}
+
+impl DatasetConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn existing(version: VersionInfo) -> Self {
+        Self { version: Some(version), ..Self::default() }
+    }
+
+    pub fn with_inline_chunk_threshold_bytes(mut self, threshold: u16) -> Self {
+        self.inline_chunk_threshold_bytes = Some(threshold);
+        self
+    }
+
+    pub fn with_unsafe_overwrite_refs(mut self, unsafe_overwrite_refs: bool) -> Self {
+        self.unsafe_overwrite_refs = Some(unsafe_overwrite_refs);
+        self
+    }
+
+    pub async fn make_dataset(
+        &self,
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Result<(Dataset, Option<String>), String> {
+        let (mut builder, branch): (DatasetBuilder, Option<String>) = match &self.version
+        {
+            None => {
+                let builder =
+                    Dataset::init(storage, self.unsafe_overwrite_refs.unwrap_or(false))
+                        .await
+                        .map_err(|err| format!("Error initializing dataset: {err}"))?;
+                (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
+            }
+            Some(VersionInfo::SnapshotId(sid)) => {
+                let builder = Dataset::update(storage, sid.clone());
+                (builder, None)
+            }
+            Some(VersionInfo::TagRef(tag)) => {
+                let builder = Dataset::from_tag(storage, tag)
+                    .await
+                    .map_err(|err| format!("Error fetching tag: {err}"))?;
+                (builder, None)
+            }
+            Some(VersionInfo::BranchTipRef(branch)) => {
+                let builder = Dataset::from_branch_tip(storage, branch)
+                    .await
+                    .map_err(|err| format!("Error fetching branch: {err}"))?;
+                (builder, Some(branch.clone()))
+            }
+        };
+
+        if let Some(inline_theshold) = self.inline_chunk_threshold_bytes {
+            builder.with_inline_threshold_bytes(inline_theshold);
+        }
+        if let Some(value) = self.unsafe_overwrite_refs {
+            builder.with_unsafe_overwrite_refs(value);
+        }
+
+        // TODO: add error checking, does the previous version exist?
+        Ok((builder.build(), branch))
+    }
 }
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoreConfig {
-    storage: StorageConfig,
-    dataset: DatasetConfig,
-    get_partial_values_concurrency: Option<u16>,
+    pub storage: StorageConfig,
+    pub dataset: DatasetConfig,
+    pub get_partial_values_concurrency: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AccessMode {
+    #[serde(rename = "r")]
+    ReadOnly,
+    #[serde(rename = "rw")]
+    ReadWrite,
 }
 
 pub type StoreResult<A> = Result<A, StoreError>;
@@ -109,6 +218,8 @@ pub enum StoreError {
     BadKeyPrefix(String),
     #[error("error during parallel execution of get_partial_values")]
     PartialValuesPanic,
+    #[error("cannot write to read-only store")]
+    ReadOnly,
     #[error(
         "uncommitted changes in dataset, commit changes or reset dataset and try again."
     )]
@@ -120,37 +231,48 @@ pub enum StoreError {
 #[derive(Debug, Clone)]
 pub struct Store {
     dataset: Dataset,
+    mode: AccessMode,
     current_branch: Option<String>,
     get_partial_values_concurrency: u16,
 }
 
 impl Store {
-    pub async fn from_config(config: &StoreConfig) -> Result<Self, String> {
-        let storage = mk_storage(&config.storage)?;
-        let (dataset, branch) = mk_dataset(&config.dataset, storage).await?;
-        Ok(Self::from_dataset(dataset, branch, config.get_partial_values_concurrency))
+    pub async fn from_config(
+        config: &StoreConfig,
+        mode: AccessMode,
+    ) -> Result<Self, String> {
+        let storage = config.storage.make_cached_storage()?;
+        let (dataset, branch) = config.dataset.make_dataset(storage).await?;
+        Ok(Self::from_dataset(
+            dataset,
+            mode,
+            branch,
+            config.get_partial_values_concurrency,
+        ))
     }
 
-    pub async fn from_json_config(json: &[u8]) -> Result<Self, String> {
+    pub async fn from_json_config(json: &[u8], mode: AccessMode) -> Result<Self, String> {
         let config: StoreConfig =
             serde_json::from_slice(json).map_err(|e| e.to_string())?;
-        Self::from_config(&config).await
+        Self::from_config(&config, mode).await
     }
 
     pub async fn new_from_storage(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> Result<Self, String> {
-        let (dataset, branch) = mk_dataset(&DatasetConfig::default(), storage).await?;
-        Ok(Self::from_dataset(dataset, branch, None))
+        let (dataset, branch) = DatasetConfig::default().make_dataset(storage).await?;
+        Ok(Self::from_dataset(dataset, AccessMode::ReadWrite, branch, None))
     }
 
     pub fn from_dataset(
         dataset: Dataset,
+        mode: AccessMode,
         current_branch: Option<String>,
         get_partial_values_concurrency: Option<u16>,
     ) -> Self {
         Store {
             dataset,
+            mode,
             current_branch,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
         }
@@ -232,10 +354,7 @@ impl Store {
 
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
-    pub async fn commit(
-        &mut self,
-        message: &str,
-    ) -> StoreResult<(ObjectId, BranchVersion)> {
+    pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
         if let Some(branch) = &self.current_branch {
             let result = self.dataset.commit(branch, message, None).await?;
             Ok(result)
@@ -245,13 +364,8 @@ impl Store {
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(
-        &mut self,
-        tag: &str,
-        snapshot_id: &ObjectId,
-        message: Option<&str>,
-    ) -> StoreResult<()> {
-        self.dataset.tag(tag, snapshot_id, message).await?;
+    pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
+        self.dataset.tag(tag, snapshot_id).await?;
         Ok(())
     }
 
@@ -357,6 +471,10 @@ impl Store {
     }
 
     pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
@@ -378,6 +496,10 @@ impl Store {
     }
 
     pub async fn delete(&mut self, key: &str) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         let ds = &mut self.dataset;
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
@@ -403,6 +525,10 @@ impl Store {
         &mut self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         Err(StoreError::Unimplemented("set_partial_values"))
     }
 
@@ -567,83 +693,6 @@ impl Store {
     }
 }
 
-async fn mk_dataset(
-    dataset: &DatasetConfig,
-    storage: Arc<dyn Storage + Send + Sync>,
-) -> Result<(Dataset, Option<String>), String> {
-    let (mut builder, branch): (DatasetBuilder, Option<String>) =
-        match &dataset.previous_version {
-            None => {
-                let builder = Dataset::init(storage)
-                    .await
-                    .map_err(|err| format!("Error initializing dataset: {err}"))?;
-                (builder, Some(String::from("main")))
-            }
-            Some(VersionInfo::SnapshotId(sid)) => {
-                let builder = Dataset::update(storage, sid.clone());
-                (builder, None)
-            }
-            Some(VersionInfo::TagRef(tag)) => {
-                let builder = Dataset::from_tag(storage, tag)
-                    .await
-                    .map_err(|err| format!("Error fetching tag: {err}"))?;
-                (builder, None)
-            }
-            Some(VersionInfo::BranchTipRef(branch)) => {
-                let builder = Dataset::from_branch_tip(storage, branch)
-                    .await
-                    .map_err(|err| format!("Error fetching branch: {err}"))?;
-                (builder, Some(branch.clone()))
-            }
-        };
-
-    if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
-        builder.with_inline_threshold_bytes(inline_theshold);
-    }
-
-    // TODO: add error checking, does the previous version exist?
-    Ok((builder.build(), branch))
-}
-
-fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
-    match config {
-        StorageConfig::InMemory => Ok(Arc::new(ObjectStorage::new_in_memory_store())),
-        StorageConfig::LocalFileSystem { root } => {
-            let storage = ObjectStorage::new_local_store(root)
-                .map_err(|e| format!("Error creating storage: {e}"))?;
-            Ok(Arc::new(storage))
-        }
-        StorageConfig::S3ObjectStore {
-            bucket,
-            prefix,
-            access_key_id,
-            secret_access_key,
-            endpoint,
-        } => {
-            let storage = if let (Some(access_key_id), Some(secret_access_key)) =
-                (access_key_id, secret_access_key)
-            {
-                ObjectStorage::new_s3_store_with_config(
-                    bucket,
-                    prefix,
-                    access_key_id,
-                    secret_access_key,
-                    endpoint.clone(),
-                )
-            } else {
-                ObjectStorage::new_s3_store_from_env(bucket, prefix)
-            }
-            .map_err(|e| format!("Error creating storage: {e}"))?;
-            Ok(Arc::new(storage))
-        }
-        StorageConfig::Cached { approx_max_memory_bytes, backend } => {
-            let backend = mk_storage(backend)?;
-            let storage = MemCachingStorage::new(backend, *approx_max_memory_bytes);
-            Ok(Arc::new(storage))
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Metadata { node_path: Path },
@@ -675,7 +724,7 @@ impl Key {
                         .strip_prefix('/')
                         .ok_or(StoreError::InvalidKey { key: key.to_string() })?
                         .split('/')
-                        .map(|s| s.parse::<u64>())
+                        .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
                         .map(|coords| Key::Chunk {
                             node_path: ["/", path].iter().collect(),
@@ -1129,9 +1178,14 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1172,11 +1226,16 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1212,11 +1271,16 @@ mod tests {
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .set(
@@ -1290,7 +1354,7 @@ mod tests {
         let oid = ds.flush("commit", Default::default()).await?;
 
         let ds = Dataset::update(storage, oid).build();
-        let store = Store::from_dataset(ds, None, None);
+        let store = Store::from_dataset(ds, AccessMode::ReadWrite, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1303,11 +1367,16 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .set(
@@ -1346,9 +1415,14 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         assert!(store.empty().await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1410,9 +1484,14 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .borrow_mut()
@@ -1445,9 +1524,14 @@ mod tests {
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .borrow_mut()
@@ -1499,9 +1583,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
-        let ds = Dataset::init(Arc::clone(&storage)).await?.build();
-        let mut store = Store::from_dataset(ds, Some("main".to_string()), None);
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_dataset(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
 
         store
             .borrow_mut()
@@ -1558,7 +1647,7 @@ mod tests {
     #[tokio::test]
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store());
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
 
         let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
 
@@ -1575,12 +1664,11 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
 
-        let (snapshot_id, version) = store.commit("initial commit").await.unwrap();
-        assert_eq!(version.0, 0);
+        let snapshot_id = store.commit("initial commit").await.unwrap();
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
-        let (new_snapshot_id, _version) = store.commit("update").await.unwrap();
+        let new_snapshot_id = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
@@ -1601,12 +1689,13 @@ mod tests {
         // TODO: Create a new branch and do stuff with it
         store.new_branch("dev").await?;
         store.set("array/c/0/1/0", new_data.clone()).await?;
-        let (dev_snapshot_id, _version) = store.commit("update dev branch").await?;
+        let dev_snapshot_id = store.commit("update dev branch").await?;
         store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_store_from_snapshot = Store::from_dataset(
             Dataset::update(Arc::clone(&storage), snapshot_id).build(),
+            AccessMode::ReadWrite,
             None,
             None,
         );
@@ -1621,30 +1710,23 @@ mod tests {
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
-            storage: StorageConfig::Cached {
-                approx_max_memory_bytes: 1_000_000,
-                backend: Box::new(StorageConfig::LocalFileSystem {
-                    root: "/tmp/test".into(),
-                }),
-            },
+            storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
             dataset: DatasetConfig {
                 inline_chunk_threshold_bytes: Some(128),
-                previous_version: Some(VersionInfo::SnapshotId(ObjectId([
+                version: Some(VersionInfo::SnapshotId(ObjectId([
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
                 ]))),
+                unsafe_overwrite_refs: Some(true),
             },
             get_partial_values_concurrency: Some(100),
         };
 
         let json = r#"
-            {"storage": {
-                "type": "cached",
-                "approx_max_memory_bytes":1000000,
-                "backend":{"type": "local_filesystem", "root":"/tmp/test"}
-                },
+            {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
              "dataset": {
-                "previous_version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
-                "inline_chunk_threshold_bytes":128
+                "version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
+                "inline_chunk_threshold_bytes":128,
+                "unsafe_overwrite_refs":true
              },
              "get_partial_values_concurrency": 100
             }
@@ -1653,20 +1735,19 @@ mod tests {
 
         let json = r#"
             {"storage":
-                {"type": "cached",
-                 "approx_max_memory_bytes":1000000,
-                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
-                },
+                {"type": "local_filesystem", "root":"/tmp/test"},
              "dataset": {
-                "previous_version": null,
-                "inline_chunk_threshold_bytes": null
+                "version": null,
+                "inline_chunk_threshold_bytes": null,
+                "unsafe_overwrite_refs":null
              }}
         "#;
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 get_partial_values_concurrency: None,
                 ..expected.clone()
@@ -1676,21 +1757,37 @@ mod tests {
 
         let json = r#"
             {"storage":
-                {"type": "cached",
-                 "approx_max_memory_bytes":1000000,
-                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
-                },
+                {"type": "local_filesystem", "root":"/tmp/test"},
              "dataset": {}
             }
         "#;
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 get_partial_values_concurrency: None,
                 ..expected.clone()
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":{"type": "in_memory", "prefix": "prefix"},
+             "dataset": {}
+            }
+        "#;
+        assert_eq!(
+            StoreConfig {
+                dataset: DatasetConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                },
+                storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
+                get_partial_values_concurrency: None,
             },
             serde_json::from_str(json)?
         );
@@ -1703,10 +1800,11 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
-                storage: StorageConfig::InMemory,
+                storage: StorageConfig::InMemory { prefix: None },
                 get_partial_values_concurrency: None,
             },
             serde_json::from_str(json)?
@@ -1720,14 +1818,16 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
                     access_key_id: None,
                     secret_access_key: None,
+                    session_token: None,
                     endpoint: None
                 },
                 get_partial_values_concurrency: None,
@@ -1750,14 +1850,16 @@ mod tests {
         assert_eq!(
             StoreConfig {
                 dataset: DatasetConfig {
-                    previous_version: None,
+                    version: None,
                     inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
                     access_key_id: Some(String::from("my-key")),
                     secret_access_key: Some(String::from("my-secret-key")),
+                    session_token: None,
                     endpoint: Some(String::from("http://localhost:9000"))
                 },
                 get_partial_values_concurrency: None,
