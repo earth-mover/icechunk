@@ -340,7 +340,7 @@ class IcechunkStore(Store, SyncMixin):
 
     @property
     def supports_deletes(self) -> bool:
-        return self._store.supports_deletes()
+        return self._store.supports_deletes
 
     def list(self) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store.

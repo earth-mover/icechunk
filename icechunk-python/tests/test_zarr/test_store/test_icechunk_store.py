@@ -72,6 +72,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # with pytest.raises(ValueError):
         #     await store.delete("foo")
 
+    def test_store_supports_deletes(self, store: IcechunkStore) -> None:
+        assert store.supports_deletes
+
     def test_store_supports_writes(self, store: IcechunkStore) -> None:
         assert store.supports_writes
 

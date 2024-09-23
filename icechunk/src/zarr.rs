@@ -470,6 +470,10 @@ impl Store {
         Ok(true)
     }
 
+    pub fn supports_deletes(&self) -> StoreResult<bool> {
+        Ok(true)
+    }
+
     pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
