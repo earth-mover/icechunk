@@ -72,6 +72,30 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # with pytest.raises(ValueError):
         #     await store.delete("foo")
 
+    async def test_set_many(self, store: S) -> None:
+        """
+        Test that a dict of key : value pairs can be inserted into the store via the
+        `_set_many` method.
+        """
+        keys = [
+            "zarr.json",
+            "c/0",
+            # icechunk does not allow v2 keys
+            # "foo/c/0.0",
+            # "foo/0/0"
+        ]
+        # icechunk strictly checks metadata?
+        data_buf = [
+            self.buffer_cls.from_bytes(
+                k.encode() if k != "zarr.json" else DEFAULT_GROUP_METADATA
+            )
+            for k in keys
+        ]
+        store_dict = dict(zip(keys, data_buf, strict=True))
+        await store._set_many(store_dict.items())
+        for k, v in store_dict.items():
+            assert (await self.get(store, k)).to_bytes() == v.to_bytes()
+
     def test_store_supports_deletes(self, store: IcechunkStore) -> None:
         assert store.supports_deletes
 
