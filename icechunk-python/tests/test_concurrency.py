@@ -9,28 +9,24 @@ N = 10
 async def write_to_store(array, x, y, barrier):
     await barrier.wait()
     await asyncio.sleep(random.uniform(0,0.5))
-    print(f"writing {x},{y}")
+    # print(f"writing {x},{y}")
     array[x,y] = x*y
     await asyncio.sleep(0)
 
 async def read_store(array, x, y, barrier):
     await barrier.wait()
-    print("start reads")
     while True:
-        print(f"reading {x},{y}")
+        #print(f"reading {x},{y}")
         value = array[x,y]
-        print(f"got {value}")
         if value == x*y:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(random.uniform(0,0.2))
 
 async def list_store(store, barrier):
     expected = set(['zarr.json', 'array/zarr.json'] + [f"array/c/{x}/{y}" for x in range(N) for y in range(N)])
     await barrier.wait()
-    print("start list")
     while True:
         current = set([k async for k in store.list_prefix("")])
-        print(current)
         if current == expected:
             break
         await asyncio.sleep(0)
@@ -55,6 +51,15 @@ async def test_concurrency():
         for x in range(N):
             for y in range(N):
                 write_task = tg.create_task(write_to_store(array, x, y, barrier), name=f"write {x},{y}")
+
+    res=await store.commit("commit")
+
+    array = group["array"]
+
+    for x in range(N):
+        for y in range(N):
+            assert array[x,y] == x*y
+            
 
     # FIXME: add assertions
     print("done")
