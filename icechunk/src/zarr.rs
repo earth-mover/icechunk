@@ -770,7 +770,7 @@ impl Key {
 }
 
 #[serde_as]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ArrayMetadata {
     zarr_format: u8,
     #[serde(deserialize_with = "validate_array_node_type")]
@@ -855,9 +855,39 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
                     FillValue::UInt16(n) => n.into(),
                     FillValue::UInt32(n) => n.into(),
                     FillValue::UInt64(n) => n.into(),
-                    FillValue::Float16(f) => f.into(),
-                    FillValue::Float32(f) => f.into(),
-                    FillValue::Float64(f) => f.into(),
+                    FillValue::Float16(f) => {
+                        if f.is_nan() {
+                            FillValue::NAN_STR.into()
+                        } else if f == f32::INFINITY {
+                            FillValue::INF_STR.into()
+                        } else if f == f32::NEG_INFINITY {
+                            FillValue::NEG_INF_STR.into()
+                        } else {
+                            f.into()
+                        }
+                    }
+                    FillValue::Float32(f) => {
+                        if f.is_nan() {
+                            FillValue::NAN_STR.into()
+                        } else if f == f32::INFINITY {
+                            FillValue::INF_STR.into()
+                        } else if f == f32::NEG_INFINITY {
+                            FillValue::NEG_INF_STR.into()
+                        } else {
+                            f.into()
+                        }
+                    }
+                    FillValue::Float64(f) => {
+                        if f.is_nan() {
+                            FillValue::NAN_STR.into()
+                        } else if f == f64::INFINITY {
+                            FillValue::INF_STR.into()
+                        } else if f == f64::NEG_INFINITY {
+                            FillValue::NEG_INF_STR.into()
+                        } else {
+                            f.into()
+                        }
+                    }
                     FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
                     FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
                     FillValue::RawBits(r) => r.into(),
@@ -1155,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_deserialization() {
+    fn test_metadata_serialization() {
         assert!(serde_json::from_str::<GroupMetadata>(
             r#"{"zarr_format":3, "node_type":"group"}"#
         )
@@ -1173,6 +1203,90 @@ mod tests {
             r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
         )
         .is_err());
+
+        // deserialize with nan
+        assert!(matches!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float16(n) if n.is_nan()
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float32(n) if n.is_nan()
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float64(n) if n.is_nan()
+        ));
+
+        // deserialize with infinity
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float16(f32::INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float32(f32::INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float64(f64::INFINITY)
+        );
+
+        // deserialize with -infinity
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float16(f32::NEG_INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float32(f32::NEG_INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float64(f64::NEG_INFINITY)
+        );
+
+        // infinity roundtrip
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1, 1, 2],
+            data_type: DataType::Float16,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Float16(f32::NEG_INFINITY),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
+            dimension_names: Some(vec![Some("t".to_string())]),
+        };
+        let zarr_meta = ArrayMetadata::new(None, zarr_meta);
+
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                serde_json::to_string(&zarr_meta).unwrap().as_str()
+            )
+            .unwrap(),
+            zarr_meta,
+        )
     }
 
     #[tokio::test]
