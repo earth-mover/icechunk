@@ -106,8 +106,12 @@ storage = Storage.memory("test")
 store = await IcechunkStore.open(storage=storage, mode='w')
 
 # Example using file store
+storage = Storage.filesystem("/path/to/root")
+store = await IcechunkStore.open(storage=storage, mode='w')
 
 # Example using S3
+s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-dataset")
+store = await IcechunkStore.open(storage=storage, mode='r')
 ```
 
 ## Snapshots, Branches, and Tags
