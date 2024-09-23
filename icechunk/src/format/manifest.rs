@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, mem::size_of, ops::Bound, sync::Arc};
+use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -71,18 +71,6 @@ impl Manifest {
         node: &NodeId,
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
         PayloadIterator { manifest: self, for_node: *node, last_key: None }
-    }
-
-    pub fn estimated_size_bytes(&self) -> usize {
-        // FIXME: this is really bad
-        self.chunks.len()
-            * (
-                size_of::<(NodeId, ChunkIndices)>() //keys
-                + size_of::<ChunkPayload>()  //values
-                + 3 * size_of::<u64>()  // estimated number of coordinates
-        + 20
-                // estimated dynamic size of payload
-            )
     }
 }
 

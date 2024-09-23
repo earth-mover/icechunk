@@ -7,13 +7,13 @@ publish = false
 
 [dependencies]
 async-trait = "0.1.82"
-bytes = { version = "1.7.1", features = ["serde"] }
+bytes = { version = "1.7.2", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.30"
 itertools = "0.13.0"
 object_store = { version = "0.11.0", features = ["aws"] }
 rand = "0.8.5"
-thiserror = "1.0.63"
+thiserror = "1.0.64"
 serde_json = "1.0.128"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_with = { version = "3.9.0", features = ["hex"] }
@@ -30,6 +30,7 @@ url = "2.5.2"
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 proptest-state-machine = "0.3.0"
+tempfile = "3.12.0"
 
 [lints]
 workspace = true
