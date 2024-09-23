@@ -29,15 +29,16 @@ class IcechunkStore(Store, SyncMixin):
         else:
             raise ValueError("Storage configuration is required. Pass a Storage object to construct an IcechunkStore")
 
+        store_exists = await pyicechunk_store_exists(storage)
+
         if access_mode.overwrite:
-            store_exists = await pyicechunk_store_exists(storage)
             if store_exists:
                 raise ValueError("Store already exists and overwrite is not allowed for IcechunkStore")
             store = await cls.create(storage, mode, *args, **kwargs)
         elif access_mode.create or access_mode.update:
-            try:
+            if store_exists:
                 store = await cls.open_existing(storage, mode, *args, **kwargs)
-            except Exception:
+            else:
                 store = await cls.create(storage, mode, *args, **kwargs)
         else:
             store = await cls.open_existing(storage, mode, *args, **kwargs)
