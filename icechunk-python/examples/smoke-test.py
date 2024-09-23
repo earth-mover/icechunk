@@ -154,7 +154,7 @@ async def create_icechunk_store(*, storage: Storage) -> IcechunkStore:
     return await IcechunkStore.open(storage=storage, mode="r+")
 
 
-async def create_zarr_store(*, kind: Literal["memory", "local", "s3"]) -> Store:
+async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store:
     if store == "local":
         return await LocalStore.open(f"/tmp/{rdms(6)}", mode="w")
     if store == "memory":
@@ -183,5 +183,5 @@ if __name__ == "__main__":
     asyncio.run(run(store))
 
     print("Zarr store")
-    zarr_store = asyncio.run(create_zarr_store(kind="memory"))
+    zarr_store = asyncio.run(create_zarr_store(store="memory"))
     asyncio.run(run(zarr_store))
