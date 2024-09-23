@@ -1619,11 +1619,19 @@ mod tests {
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("/array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("/array/zarr.json", &ByteRange::ALL).await?,
+            zarr_meta.clone()
+        );
+
+        store.set("0/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(store.get("0/zarr.json", &ByteRange::ALL).await?, zarr_meta.clone());
+
         store.set("/0/zarr.json", zarr_meta.clone()).await?;
-        store.set("0/zarr.json", zarr_meta).await?;
-        // store.get("/array/zarr.json").await?;
+        assert_eq!(store.get("/0/zarr.json", &ByteRange::ALL).await?, zarr_meta);
         Ok(())
     }
+
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
