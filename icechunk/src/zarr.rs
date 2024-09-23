@@ -1629,6 +1629,10 @@ mod tests {
 
         store.set("/0/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(store.get("/0/zarr.json", &ByteRange::ALL).await?, zarr_meta);
+
+        // store.set("c/0", zarr_meta.clone()).await?;
+        // assert_eq!(store.get("c/0", &ByteRange::ALL).await?, zarr_meta);
+
         Ok(())
     }
 
