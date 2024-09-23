@@ -370,6 +370,12 @@ impl PyIcechunkStore {
     }
 
     #[getter]
+    pub fn supports_deletes(&self) -> PyIcechunkStoreResult<bool> {
+        let supports_deletes = self.store.blocking_read().supports_deletes()?;
+        Ok(supports_deletes)
+    }
+
+    #[getter]
     pub fn supports_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_writes = self.store.blocking_read().supports_writes()?;
         Ok(supports_writes)

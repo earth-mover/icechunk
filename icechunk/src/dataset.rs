@@ -245,7 +245,7 @@ pub enum DatasetError {
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
     #[error("node not found at `{path}`: {message}")]
-    NotFound { path: Path, message: String },
+    NodeNotFound { path: Path, message: String },
     #[error("there is not an array at `{node:?}`: {message}")]
     NotAnArray { node: NodeSnapshot, message: String },
     #[error("there is not a group at `{node:?}`: {message}")]
@@ -392,7 +392,7 @@ impl Dataset {
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
     pub async fn add_group(&mut self, path: Path) -> DatasetResult<()> {
         match self.get_node(&path).await {
-            Err(DatasetError::NotFound { .. }) => {
+            Err(DatasetError::NodeNotFound { .. }) => {
                 let id = self.reserve_node_id().await?;
                 self.change_set.add_group(path.clone(), id);
                 Ok(())
@@ -420,7 +420,7 @@ impl Dataset {
         metadata: ZarrArrayMetadata,
     ) -> DatasetResult<()> {
         match self.get_node(&path).await {
-            Err(DatasetError::NotFound { .. }) => {
+            Err(DatasetError::NodeNotFound { .. }) => {
                 let id = self.reserve_node_id().await?;
                 self.change_set.add_array(path, id, metadata);
                 Ok(())
@@ -506,7 +506,7 @@ impl Dataset {
                 if self.change_set.deleted_groups.contains(&node.id)
                     || self.change_set.deleted_arrays.contains(&node.id)
                 {
-                    Err(DatasetError::NotFound {
+                    Err(DatasetError::NodeNotFound {
                         path: path.clone(),
                         message: "getting node".to_string(),
                     })
@@ -547,7 +547,7 @@ impl Dataset {
         let node = snapshot.get_node(path).map_err(|err| match err {
             // A missing node here is not really a format error, so we need to
             // generate the correct error for datasets
-            IcechunkFormatError::NodeNotFound { path } => DatasetError::NotFound {
+            IcechunkFormatError::NodeNotFound { path } => DatasetError::NodeNotFound {
                 path,
                 message: "existing node not found".to_string(),
             },
@@ -685,7 +685,7 @@ impl Dataset {
                 self.change_set.set_chunk_ref(node.id, coord.clone(), Some(payload));
                 Ok(())
             }
-            Err(_) => Err(DatasetError::NotFound {
+            Err(_) => Err(DatasetError::NodeNotFound {
                 path: path.clone(),
                 message: "setting chunk".to_string(),
             }),
@@ -1199,7 +1199,7 @@ mod tests {
         // deleting twice must fail
         let matches = matches!(
             dataset.delete_group(path.clone()).await.unwrap_err(),
-            DatasetError::NotFound{path: reported_path, ..} if reported_path == path
+            DatasetError::NodeNotFound{path: reported_path, ..} if reported_path == path
         );
         prop_assert!(matches);
 
@@ -1231,7 +1231,7 @@ mod tests {
         // deleting twice must fail
         let matches = matches!(
             dataset.delete_array(path.clone()).await.unwrap_err(),
-            DatasetError::NotFound{path: reported_path, ..} if reported_path == path
+            DatasetError::NodeNotFound{path: reported_path, ..} if reported_path == path
         );
         prop_assert!(matches);
 
@@ -1754,10 +1754,10 @@ mod tests {
         );
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
+            data_type: DataType::Float16,
             chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
+            fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
             storage_transformers: Some(vec![StorageTransformer {
                 name: "mytransformer".to_string(),

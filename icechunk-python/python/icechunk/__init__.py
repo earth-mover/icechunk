@@ -338,6 +338,10 @@ class IcechunkStore(Store, SyncMixin):
         """Does the store support listing?"""
         return self._store.supports_listing
 
+    @property
+    def supports_deletes(self) -> bool:
+        return self._store.supports_deletes
+
     def list(self) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store.
 
@@ -383,3 +387,8 @@ class IcechunkStore(Store, SyncMixin):
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_dir(prefix)
+
+    def __eq__(self, other) -> bool:
+        if other is self:
+            return True
+        raise NotImplementedError
