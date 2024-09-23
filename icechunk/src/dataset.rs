@@ -61,7 +61,7 @@ impl Default for DatasetConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Dataset {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
@@ -350,7 +350,7 @@ impl Dataset {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
-            virtual_resolver: ObjectStoreVirtualChunkResolver::new(),
+            virtual_resolver: ObjectStoreVirtualChunkResolver::default(),
         }
     }
 

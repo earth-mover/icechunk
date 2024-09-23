@@ -228,7 +228,7 @@ pub enum StoreError {
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Store {
     dataset: Dataset,
     mode: AccessMode,

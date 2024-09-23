@@ -18,8 +18,12 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
     any::<PathBuf>()
 }
 
-#[allow(clippy::expect_used)]
-pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
+prop_compose! {
+    #[allow(clippy::expect_used)]
+    pub fn empty_datasets()(_id in any::<u32>()) -> Dataset {
+    // _id is used as a hack to avoid using prop_oneof![Just(dataset)]
+    // Using just requires Dataset impl Clone, which we do not want
+
     // FIXME: add storages strategy
     let storage = ObjectStorage::new_in_memory_store(None);
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -30,7 +34,8 @@ pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
             .expect("Failed to initialize dataset")
             .build()
     });
-    prop_oneof![Just(dataset)]
+    dataset
+}
 }
 
 pub fn codecs() -> impl Strategy<Value = Vec<Codec>> {

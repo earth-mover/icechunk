@@ -364,15 +364,12 @@ impl Storage for ObjectStorage {
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
 struct StoreCacheKey(String, String);
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
     stores: Arc<RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>>,
 }
 
 impl ObjectStoreVirtualChunkResolver {
-    pub fn new() -> Self {
-        Default::default()
-    }
     async fn get_chunk_from_cached_store(
         &self,
         cache_key: &StoreCacheKey,

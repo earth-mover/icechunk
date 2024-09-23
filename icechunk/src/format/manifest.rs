@@ -50,17 +50,15 @@ impl VirtualChunkLocation {
             .filter(|x| !x.is_empty())
             .join("/");
 
-        if !url.has_host() {
-            Err(VirtualReferenceError::CannotParseBucketName(path.into()))
-        } else {
-            #[allow(clippy::expect_used)]
-            Ok(VirtualChunkLocation::Absolute(format!(
-                "{}://{}/{}",
-                url.scheme(),
-                url.host().expect("cannot be absent."),
-                new_path,
-            )))
-        }
+        let host = url
+            .host()
+            .ok_or_else(|| VirtualReferenceError::CannotParseBucketName(path.into()))?;
+        Ok(VirtualChunkLocation::Absolute(format!(
+            "{}://{}/{}",
+            url.scheme(),
+            host,
+            new_path,
+        )))
     }
 }
 
