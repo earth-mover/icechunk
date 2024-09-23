@@ -49,7 +49,7 @@ def test_group_init(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
     Test that initializing a group from an asyncgroup works.
     """
-    agroup = sync(AsyncGroup.create(store=store, zarr_format=zarr_format))
+    agroup = sync(AsyncGroup.from_store(store=store, zarr_format=zarr_format))
     group = Group(agroup)
     assert group._async_group == agroup
 
@@ -58,7 +58,7 @@ def test_group_name_properties(store: IcechunkStore, zarr_format: ZarrFormat) ->
     """
     Test basic properties of groups
     """
-    root = Group.create(store=store, zarr_format=zarr_format)
+    root = Group.from_store(store=store, zarr_format=zarr_format)
     assert root.path == ""
     assert root.name == "/"
     assert root.basename == ""
