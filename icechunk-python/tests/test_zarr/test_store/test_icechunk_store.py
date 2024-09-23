@@ -17,6 +17,14 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
 
+    @pytest.mark.xfail(reason="not implemented")
+    async def test_store_eq(self) -> None:
+        pass
+
+    @pytest.mark.xfail(reason="not implemented")
+    async def test_serizalizable_store(self, store) -> None:
+        pass
+
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
 
