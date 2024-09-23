@@ -13,7 +13,7 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
-    "zarr==3.0.0a4"
+    "zarr==3.0.0a5"
 ]
 
 [project.optional-dependencies]
