@@ -312,13 +312,6 @@ impl Storage for ObjectStorage {
 
 #[async_trait]
 pub trait VirtualChunkResolver {
-    async fn get_chunk_from_cached_store(
-        &self,
-        cache_key: &str,
-        path: &ObjectPath,
-        options: GetOptions,
-    ) -> StorageResult<Bytes>;
-
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
@@ -326,36 +319,33 @@ pub trait VirtualChunkResolver {
     ) -> StorageResult<Bytes>;
 }
 
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
+struct StoreCacheKey(String, String);
+
 #[derive(Clone, Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
-    stores: Arc<RwLock<HashMap<String, Box<dyn ObjectStore>>>>,
+    stores: Arc<RwLock<HashMap<StoreCacheKey, Box<dyn ObjectStore>>>>,
 }
 
 impl ObjectStoreVirtualChunkResolver {
     pub fn new() -> Self {
         Default::default()
     }
-}
-
-#[async_trait]
-impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
     async fn get_chunk_from_cached_store(
         &self,
-        cache_key: &str,
+        cache_key: &StoreCacheKey,
         path: &ObjectPath,
         options: GetOptions,
     ) -> StorageResult<Bytes> {
         let stores = self.stores.read().await;
         #[allow(clippy::expect_used)]
-        Ok(stores
-            .get(cache_key)
-            .expect("this should not fail")
-            .get_opts(path, options)
-            .await?
-            .bytes()
-            .await?)
+        let store = stores.get(cache_key).expect("this should not fail");
+        Ok(store.get_opts(path, options).await?.bytes().await?)
     }
+}
 
+#[async_trait]
+impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
@@ -371,7 +361,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             .to_string();
         let path = ObjectPath::parse(parsed.path())?;
         let scheme = parsed.scheme();
-        let cache_key = format!("{}://{}", scheme, bucket_name);
+        let cache_key = StoreCacheKey(scheme.into(), bucket_name);
 
         let options =
             GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
@@ -383,7 +373,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
                     "s3" => AmazonS3Builder::from_env(),
                     _ => Err(StorageError::UnsupportedScheme(scheme.to_string()))?,
                 };
-                let new_store = Box::new(builder.with_bucket_name(bucket_name).build()?);
+                let new_store = Box::new(builder.with_bucket_name(&cache_key.1).build()?);
                 {
                     self.stores.write().await.insert(cache_key.clone(), new_store);
                 }
