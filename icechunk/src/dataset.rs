@@ -1612,10 +1612,10 @@ mod tests {
         );
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
+            data_type: DataType::Float16,
             chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
+            fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
             storage_transformers: Some(vec![StorageTransformer {
                 name: "mytransformer".to_string(),
