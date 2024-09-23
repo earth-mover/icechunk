@@ -63,20 +63,62 @@ Using it today requires installing the [still unreleased] Zarr Python V3 branch.
 
 To set up an Icechunk development environment, follow these steps
 
+Activate your preferred virtual environment (here we use `virtualenv`):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
-TODO
+
+Alternatively, create a conda environment
+
+```bash
+mamba create -n icechunk rust python=3.12
+conda activate icechunk
 ```
+
+Install `maturin`:
+
+```bash
+pip install maturin
+```
+
+Build the project in dev mode:
+
+```bash
+maturin develop
+```
+
+or build the project in editable mode:
+
+```bash
+pip install -e icechunk@.
+```
+
+> [!WARNING]  
+> This only makes the python source code editable, the rust will need to 
+> be recompiled when it changes
 
 ### Basic Usage
 
 Once you have everything installed, here's an example of how to use Icechunk.
 
 ```python
+from icechunk import IcechunkStore, Storage
+from zarr import Array, Group
+
+
 # Example using memory store
+storage = Storage.memory("test")
+store = await IcechunkStore.open(storage=storage, mode='r+')
 
 # Example using file store
+storage = Storage.filesystem("/path/to/root")
+store = await IcechunkStore.open(storage=storage, mode='r+')
 
 # Example using S3
+s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-dataset")
+store = await IcechunkStore.open(storage=storage, mode='r+')
 ```
 
 ## Snapshots, Branches, and Tags
