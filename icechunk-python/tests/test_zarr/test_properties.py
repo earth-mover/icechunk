@@ -9,13 +9,14 @@ import hypothesis.extra.numpy as npst  # noqa
 import hypothesis.strategies as st  # noqa
 from hypothesis import given, settings  # noqa
 from zarr.testing.strategies import arrays, np_arrays, basic_indices  # noqa
-import icechunk
+from icechunk import IcechunkStore, Storage
 
-icechunk_stores = st.builds(icechunk.IcechunkStore.from_json,
-                            config=st.just({"storage": {"type": "in_memory"}, "dataset": {}}),
+icechunk_stores = st.builds(IcechunkStore.open,
+                            storage=st.builds(Storage.memory),
                             mode=st.just("w")).map(lambda x: sync(x))
 
 from hypothesis import settings
+
 @settings(report_multiple_bugs=False)
 @given(st.data())
 def test_roundtrip(data: st.DataObject) -> None:
