@@ -321,7 +321,7 @@ def test_group_subgroups(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     assert all(a in subgroups_observed for a in subgroups_expected)
 
 
-async def test_group_subarrays(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
+def test_group_subarrays(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
     Test the behavior of `Group` methods for accessing subgroups, namely `Group.group_keys` and `Group.groups`
     """
