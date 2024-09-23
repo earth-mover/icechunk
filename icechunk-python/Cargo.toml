@@ -10,7 +10,7 @@ name = "_icechunk_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-bytes = "1.7.1"
+bytes = "1.7.2"
 futures = "0.3.30"
 icechunk = { path = "../icechunk", version = "0.1.0" }
 pyo3 = { version = "0.21", features = [
@@ -18,7 +18,7 @@ pyo3 = { version = "0.21", features = [
   "experimental-async",
 ] }
 pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
-thiserror = "1.0.63"
+thiserror = "1.0.64"
 tokio = "1.40"
 
 [lints]
