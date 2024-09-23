@@ -381,8 +381,8 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
         let VirtualChunkLocation::Absolute(location) = location;
-        let parsed = url::Url::parse(location)
-            .map_err(VirtualReferenceError::CannotParseUrl)?;
+        let parsed =
+            url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
         let bucket_name = parsed
             .host_str()
             .ok_or(VirtualReferenceError::CannotParseBucketName(
