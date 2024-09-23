@@ -27,7 +27,7 @@ use crate::{
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::{BranchVersion, Ref},
-    Dataset, DatasetBuilder, MemCachingStorage, ObjectStorage, Storage,
+    Dataset, DatasetBuilder, ObjectStorage, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -50,15 +50,46 @@ pub enum StorageConfig {
         session_token: Option<String>,
         endpoint: Option<String>,
     },
+}
 
-    #[serde(rename = "cached")]
-    Cached {
-        approx_cached_snapshots: u16,
-        approx_cached_manifests: u16,
-        approx_cached_attribute_files: u16,
-        approx_cached_chunks: u16,
-        backend: Box<StorageConfig>,
-    },
+impl StorageConfig {
+    pub fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+        match self {
+            StorageConfig::InMemory { prefix } => {
+                Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
+            }
+            StorageConfig::LocalFileSystem { root } => {
+                let storage = ObjectStorage::new_local_store(root)
+                    .map_err(|e| format!("Error creating storage: {e}"))?;
+                Ok(Arc::new(storage))
+            }
+            StorageConfig::S3ObjectStore {
+                bucket,
+                prefix,
+                access_key_id,
+                secret_access_key,
+                session_token,
+                endpoint,
+            } => {
+                let storage = ObjectStorage::new_s3_store(
+                    bucket,
+                    prefix,
+                    access_key_id.clone(),
+                    secret_access_key.clone(),
+                    session_token.clone(),
+                    endpoint.clone(),
+                )
+                .map_err(|e| format!("Error creating storage: {e}"))?;
+                Ok(Arc::new(storage))
+            }
+        }
+    }
+
+    pub fn make_cached_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+        let storage = self.make_storage()?;
+        let cached_storage = Dataset::add_in_mem_asset_caching(storage);
+        Ok(cached_storage)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,12 +110,74 @@ pub struct DatasetConfig {
     pub unsafe_overwrite_refs: Option<bool>,
 }
 
+impl DatasetConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn existing(version: VersionInfo) -> Self {
+        Self { version: Some(version), ..Self::default() }
+    }
+
+    pub fn with_inline_chunk_threshold_bytes(mut self, threshold: u16) -> Self {
+        self.inline_chunk_threshold_bytes = Some(threshold);
+        self
+    }
+
+    pub fn with_unsafe_overwrite_refs(mut self, unsafe_overwrite_refs: bool) -> Self {
+        self.unsafe_overwrite_refs = Some(unsafe_overwrite_refs);
+        self
+    }
+
+    pub async fn make_dataset(
+        &self,
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Result<(Dataset, Option<String>), String> {
+        let (mut builder, branch): (DatasetBuilder, Option<String>) = match &self.version
+        {
+            None => {
+                let builder =
+                    Dataset::init(storage, self.unsafe_overwrite_refs.unwrap_or(false))
+                        .await
+                        .map_err(|err| format!("Error initializing dataset: {err}"))?;
+                (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
+            }
+            Some(VersionInfo::SnapshotId(sid)) => {
+                let builder = Dataset::update(storage, sid.clone());
+                (builder, None)
+            }
+            Some(VersionInfo::TagRef(tag)) => {
+                let builder = Dataset::from_tag(storage, tag)
+                    .await
+                    .map_err(|err| format!("Error fetching tag: {err}"))?;
+                (builder, None)
+            }
+            Some(VersionInfo::BranchTipRef(branch)) => {
+                let builder = Dataset::from_branch_tip(storage, branch)
+                    .await
+                    .map_err(|err| format!("Error fetching branch: {err}"))?;
+                (builder, Some(branch.clone()))
+            }
+        };
+
+        if let Some(inline_theshold) = self.inline_chunk_threshold_bytes {
+            builder.with_inline_threshold_bytes(inline_theshold);
+        }
+        if let Some(value) = self.unsafe_overwrite_refs {
+            builder.with_unsafe_overwrite_refs(value);
+        }
+
+        // TODO: add error checking, does the previous version exist?
+        Ok((builder.build(), branch))
+    }
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoreConfig {
-    storage: StorageConfig,
-    dataset: DatasetConfig,
-    get_partial_values_concurrency: Option<u16>,
+    pub storage: StorageConfig,
+    pub dataset: DatasetConfig,
+    pub get_partial_values_concurrency: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -148,8 +241,8 @@ impl Store {
         config: &StoreConfig,
         mode: AccessMode,
     ) -> Result<Self, String> {
-        let storage = mk_storage(&config.storage)?;
-        let (dataset, branch) = mk_dataset(&config.dataset, storage).await?;
+        let storage = config.storage.make_cached_storage()?;
+        let (dataset, branch) = config.dataset.make_dataset(storage).await?;
         Ok(Self::from_dataset(
             dataset,
             mode,
@@ -167,7 +260,7 @@ impl Store {
     pub async fn new_from_storage(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> Result<Self, String> {
-        let (dataset, branch) = mk_dataset(&DatasetConfig::default(), storage).await?;
+        let (dataset, branch) = DatasetConfig::default().make_dataset(storage).await?;
         Ok(Self::from_dataset(dataset, AccessMode::ReadWrite, branch, None))
     }
 
@@ -597,96 +690,6 @@ impl Store {
                 .to_string()
                 .and_then(|key| if key.starts_with(prefix) { Some(key) } else { None }))
         }))
-    }
-}
-
-async fn mk_dataset(
-    dataset: &DatasetConfig,
-    storage: Arc<dyn Storage + Send + Sync>,
-) -> Result<(Dataset, Option<String>), String> {
-    let (mut builder, branch): (DatasetBuilder, Option<String>) = match &dataset.version {
-        None => {
-            let builder =
-                Dataset::init(storage, dataset.unsafe_overwrite_refs.unwrap_or(false))
-                    .await
-                    .map_err(|err| format!("Error initializing dataset: {err}"))?;
-            (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
-        }
-        Some(VersionInfo::SnapshotId(sid)) => {
-            let builder = Dataset::update(storage, sid.clone());
-            (builder, None)
-        }
-        Some(VersionInfo::TagRef(tag)) => {
-            let builder = Dataset::from_tag(storage, tag)
-                .await
-                .map_err(|err| format!("Error fetching tag: {err}"))?;
-            (builder, None)
-        }
-        Some(VersionInfo::BranchTipRef(branch)) => {
-            let builder = Dataset::from_branch_tip(storage, branch)
-                .await
-                .map_err(|err| format!("Error fetching branch: {err}"))?;
-            (builder, Some(branch.clone()))
-        }
-    };
-
-    if let Some(inline_theshold) = dataset.inline_chunk_threshold_bytes {
-        builder.with_inline_threshold_bytes(inline_theshold);
-    }
-    if let Some(value) = dataset.unsafe_overwrite_refs {
-        builder.with_unsafe_overwrite_refs(value);
-    }
-
-    // TODO: add error checking, does the previous version exist?
-    Ok((builder.build(), branch))
-}
-
-fn mk_storage(config: &StorageConfig) -> Result<Arc<dyn Storage + Send + Sync>, String> {
-    match config {
-        StorageConfig::InMemory { prefix } => {
-            Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
-        }
-        StorageConfig::LocalFileSystem { root } => {
-            let storage = ObjectStorage::new_local_store(root)
-                .map_err(|e| format!("Error creating storage: {e}"))?;
-            Ok(Arc::new(storage))
-        }
-        StorageConfig::S3ObjectStore {
-            bucket,
-            prefix,
-            access_key_id,
-            secret_access_key,
-            session_token,
-            endpoint,
-        } => {
-            let storage = ObjectStorage::new_s3_store(
-                bucket,
-                prefix,
-                access_key_id.clone(),
-                secret_access_key.clone(),
-                session_token.clone(),
-                endpoint.clone(),
-            )
-            .map_err(|e| format!("Error creating storage: {e}"))?;
-            Ok(Arc::new(storage))
-        }
-        StorageConfig::Cached {
-            approx_cached_snapshots,
-            approx_cached_manifests,
-            approx_cached_attribute_files,
-            approx_cached_chunks,
-            backend,
-        } => {
-            let backend = mk_storage(backend)?;
-            let storage = MemCachingStorage::new(
-                backend,
-                *approx_cached_snapshots,
-                *approx_cached_manifests,
-                *approx_cached_attribute_files,
-                *approx_cached_chunks,
-            );
-            Ok(Arc::new(storage))
-        }
     }
 }
 
@@ -1707,15 +1710,7 @@ mod tests {
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
-            storage: StorageConfig::Cached {
-                approx_cached_snapshots: 2,
-                approx_cached_manifests: 3,
-                approx_cached_attribute_files: 4,
-                approx_cached_chunks: 5,
-                backend: Box::new(StorageConfig::LocalFileSystem {
-                    root: "/tmp/test".into(),
-                }),
-            },
+            storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
             dataset: DatasetConfig {
                 inline_chunk_threshold_bytes: Some(128),
                 version: Some(VersionInfo::SnapshotId(ObjectId([
@@ -1727,14 +1722,7 @@ mod tests {
         };
 
         let json = r#"
-            {"storage": {
-                "type": "cached",
-                "approx_cached_snapshots": 2,
-                "approx_cached_manifests": 3,
-                "approx_cached_attribute_files": 4,
-                "approx_cached_chunks": 5,
-                "backend":{"type": "local_filesystem", "root":"/tmp/test"}
-                },
+            {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
              "dataset": {
                 "version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
                 "inline_chunk_threshold_bytes":128,
@@ -1747,13 +1735,7 @@ mod tests {
 
         let json = r#"
             {"storage":
-                {"type": "cached",
-                 "approx_cached_snapshots": 2,
-                 "approx_cached_manifests": 3,
-                 "approx_cached_attribute_files": 4,
-                 "approx_cached_chunks": 5,
-                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
-                },
+                {"type": "local_filesystem", "root":"/tmp/test"},
              "dataset": {
                 "version": null,
                 "inline_chunk_threshold_bytes": null,
@@ -1775,13 +1757,7 @@ mod tests {
 
         let json = r#"
             {"storage":
-                {"type": "cached",
-                 "approx_cached_snapshots": 2,
-                 "approx_cached_manifests": 3,
-                 "approx_cached_attribute_files": 4,
-                 "approx_cached_chunks": 5,
-                 "backend":{"type": "local_filesystem", "root":"/tmp/test"}
-                },
+                {"type": "local_filesystem", "root":"/tmp/test"},
              "dataset": {}
             }
         "#;

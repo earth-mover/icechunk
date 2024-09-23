@@ -38,8 +38,59 @@ class PyIcechunkStore:
     def list_prefix(self, prefix: str) -> PyAsyncStringGenerator: ...
     def list_dir(self, prefix: str) -> PyAsyncStringGenerator: ...
 
+
 class PyAsyncStringGenerator(AsyncGenerator[str | None]):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str | None: ...
 
+
+class Storage:
+    """Storage configuration for an IcechunkStore
+
+    Currently supports memory, filesystem, and S3 storage backends.
+    Use the class methods to create a Storage object with the desired backend.
+
+    Ex:
+    ```
+    storage = Storage.memory("prefix")
+    storage = Storage.filesystem("/path/to/root")
+    storage = Storage.s3_from_env("bucket", "prefix")
+    storage = Storage.s3_from_creds("bucket", "prefix",
+    ```
+    """
+    class Memory:
+        """An in-memory storage backend"""
+        prefix: str
+
+    class Filesystem:
+        """A local filesystem storage backend"""
+        root: str
+
+    class S3:
+        """An S3 Object Storage compatible storage backend"""
+        bucket: str
+        prefix: str
+        access_key_id: str | None
+        secret_access_key: str | None
+        session_token: str | None
+        endpoint_url: str | None
+
+    def __init__(self, storage: Memory | Filesystem | S3): ...
+
+    @classmethod
+    def memory(cls, prefix: str) -> Storage: ...
+
+    @classmethod
+    def filesystem(cls, root: str) -> Storage: ...
+
+    @classmethod
+    def s3_from_env(cls, bucket: str, prefix: str) -> Storage: ...
+
+    @classmethod
+    def s3_from_creds(cls, bucket: str, prefix: str, access_key_id: str, secret_access_key: str, session_token: str | None, endpoint_url: str | None) -> Storage: ...
+
+
+async def pyicechunk_store_exists(storage: Storage) -> bool: ...
+async def pyicechunk_store_create(storage: Storage) -> PyIcechunkStore: ...
+async def pyicechunk_store_open_existing(storage: Storage, read_only: bool) -> PyIcechunkStore: ...
 async def pyicechunk_store_from_json_config(config: str, read_only: bool) -> PyIcechunkStore: ...

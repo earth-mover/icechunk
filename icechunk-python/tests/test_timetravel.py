@@ -4,9 +4,7 @@ import icechunk
 
 
 async def test_timetravel():
-    store = await icechunk.IcechunkStore.from_config(
-        config={"storage": {"type": "in_memory"}, "dataset": {}}, mode="w"
-    )
+    store = await icechunk.IcechunkStore.create(storage=icechunk.Storage.memory("test"))
 
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array("air_temp", shape=(1000, 1000), chunk_shape=(100, 100), dtype="i4")

@@ -9,13 +9,7 @@ use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_config_json = br#"
         {"storage":
-            {"type": "cached",
-                "approx_cached_snapshots": 1,
-                "approx_cached_manifests": 2,
-                "approx_cached_attribute_files": 0,
-                "approx_cached_chunks": 0,
-                "backend":{"type": "in_memory"}
-            },
+            {"type": "in_memory"},
             "dataset": {
                 "previous_version": null,
                 "inline_chunk_threshold_bytes":128

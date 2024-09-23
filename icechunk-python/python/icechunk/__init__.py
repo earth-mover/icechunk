@@ -1,9 +1,9 @@
 # module
 import json
 from typing import Any, AsyncGenerator, Self
-from ._icechunk_python import PyIcechunkStore, pyicechunk_store_from_json_config
+from ._icechunk_python import PyIcechunkStore, pyicechunk_store_create, pyicechunk_store_from_json_config, Storage, pyicechunk_store_open_existing, pyicechunk_store_exists
 
-from zarr.abc.store import Store
+from zarr.abc.store import AccessMode, Store
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
@@ -17,7 +17,31 @@ class IcechunkStore(Store, SyncMixin):
         """FIXME: Better handle the open method based on the access mode the user passed in along with the kwargs
         https://github.com/zarr-developers/zarr-python/blob/c878da2a900fc621ff23cc6d84d45cd3cb26cbed/src/zarr/abc/store.py#L24-L30
         """
-        store = await cls.from_config(*args, **kwargs)
+        if "mode" in kwargs:
+            mode = kwargs.pop("mode")
+        else :
+            mode = "r"
+
+        access_mode = AccessMode.from_literal(mode)
+
+        if "storage" in kwargs:
+            storage = kwargs.pop("storage")
+        else:
+            raise ValueError("Storage configuration is required. Pass a Storage object to construct an IcechunkStore")
+
+        store_exists = await pyicechunk_store_exists(storage)
+
+        if access_mode.overwrite:
+            if store_exists:
+                raise ValueError("Store already exists and overwrite is not allowed for IcechunkStore")
+            store = await cls.create(storage, mode, *args, **kwargs)
+        elif access_mode.create or access_mode.update:
+            if store_exists:
+                store = await cls.open_existing(storage, mode, *args, **kwargs)
+            else:
+                store = await cls.create(storage, mode, *args, **kwargs)
+        else:
+            store = await cls.open_existing(storage, mode, *args, **kwargs)
 
         # We dont want to call _open() becuase icechunk handles the opening, etc.
         # if we have gotten this far we can mark it as open
@@ -38,12 +62,15 @@ class IcechunkStore(Store, SyncMixin):
             raise ValueError("An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods.")
         self._store = store
 
-    @staticmethod
+    @classmethod
     async def from_config(
+        cls,
         config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ) -> Self:
         """Create an IcechunkStore from a given configuration.
-        
+
+        NOTE: This is deprecated and will be removed in a future release. Use the open_existing or create methods instead.
+
         The configuration should be a dictionary in the following format:
         {
             "storage": {
@@ -91,84 +118,48 @@ class IcechunkStore(Store, SyncMixin):
         config_str = json.dumps(config)
         read_only = mode == "r"
         store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
-        return IcechunkStore(store=store, mode=mode, *args, **kwargs)
-    
-    @staticmethod
+        return cls(store=store, mode=mode, *args, **kwargs)
+
+    @classmethod
     async def open_existing(
-        storage_config: dict,
-        cached: bool = True,
-        approx_max_memory_bytes: int = 1_000_000,
+        cls,
+        storage: Storage,
         mode: AccessModeLiteral = "r",
         *args: Any,
         **kwargs: Any,
     ) -> Self:
-        """Open an existing IcechunkStore from the given storage. 
-        
+        """Open an existing IcechunkStore from the given storage.
+
         If there is not store at the given location, an error will be raised.
-
-        It is recommended to use the cached storage option for better performance. If cached=True, 
-        this will be configured automatically with the provided storage_config as the underlying
-        storage backend.
-
-        If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
-
-        See the from_config method for more information on the storage configuration.
-        """
-        config = {
-            "dataset": {
-                "version": {
-                    "branch": "main",
-                }
-            }
-        }
-
-        if cached and storage_config.get("type", None) != "cached":
-            config["storage"] = {
-                "type": "cached",
-                "approx_max_memory_bytes": approx_max_memory_bytes,
-                "backend": storage_config,
-            }
-        else:
-            config["storage"] = storage_config
-
-        return await IcechunkStore.from_config(config, mode, *args, **kwargs)
-
-    @staticmethod
-    async def create(
-        storage_config: dict,
-        cached: bool = True,
-        approx_max_memory_bytes: int = 1_000_000,
-        inline_chunk_threshold=512,
-        mode: AccessModeLiteral = "w",
-        *args: Any,
-        **kwargs: Any,
-    ) -> Self:
-        """Create a new IcechunkStore with the given storage configuration.
-        
-        If a store already exists at the given location, an error will be raised.
 
         It is recommended to use the cached storage option for better performance. If cached=True,
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
 
-        See the from_config method for more information on the storage configuration.
+        If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
         """
-        config = {
-            "dataset": {
-                "inline_chunk_threshold_bytes": inline_chunk_threshold,
-            }
-        }
+        read_only = mode == "r"
+        store = await pyicechunk_store_open_existing(storage, read_only=read_only)
+        return cls(store=store, mode=mode, *args, **kwargs)
 
-        if cached and storage_config.get("type", None) != "cached":
-            config["storage"] = {
-                "type": "cached",
-                "approx_max_memory_bytes": approx_max_memory_bytes,
-                "backend": storage_config,
-            }
-        else:
-            config["storage"] = storage_config
-        
-        return await IcechunkStore.from_config(config, mode, *args, **kwargs)
+    @classmethod
+    async def create(
+        cls,
+        storage: Storage,
+        mode: AccessModeLiteral = "w",
+        *args: Any,
+        **kwargs: Any,
+    ) -> Self:
+        """Create a new IcechunkStore with the given storage configuration.
+
+        If a store already exists at the given location, an error will be raised.
+
+        It is recommended to use the cached storage option for better performance. If cached=True,
+        this will be configured automatically with the provided storage_config as the underlying
+        storage backend.
+        """
+        store = await pyicechunk_store_create(storage)
+        return cls(store=store, mode=mode, *args, **kwargs)
 
     @property
     def snapshot_id(self) -> str:
@@ -207,7 +198,7 @@ class IcechunkStore(Store, SyncMixin):
     async def commit(self, message: str) -> str:
         """Commit any uncommitted changes to the store.
 
-        This will create a new snapshot on the current branch and return 
+        This will create a new snapshot on the current branch and return
         the snapshot id.
         """
         return await self._store.commit(message)
