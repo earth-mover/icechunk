@@ -389,4 +389,6 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.list_dir(prefix)
 
     def __eq__(self, other) -> bool:
+        if other is self:
+            return True
         raise NotImplementedError
