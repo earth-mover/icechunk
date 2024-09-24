@@ -27,9 +27,10 @@ pub enum VirtualReferenceError {
     UnsupportedScheme(String),
     #[error("error parsing bucket name from virtual ref URL {0}")]
     CannotParseBucketName(String),
-    #[error("error parsing path using object_store {0}")]
-    CannotParsePath(#[from] ::object_store::path::Error),
+    #[error("error parsing virtual reference {0}")]
+    OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum VirtualChunkLocation {
     Absolute(String),

@@ -45,7 +45,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             ))?
             .to_string();
         let path = ObjectPath::parse(parsed.path())
-            .map_err(VirtualReferenceError::CannotParsePath)?;
+            .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
         let scheme = parsed.scheme();
         let cache_key = StoreCacheKey(scheme.into(), bucket_name);
 
