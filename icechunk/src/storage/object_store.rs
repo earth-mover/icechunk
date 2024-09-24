@@ -1,26 +1,18 @@
-use core::fmt;
-use std::{
-    collections::HashMap, fs::create_dir_all, future::ready, ops::Bound,
-    path::Path as StdPath, sync::Arc,
-};
-
 use crate::format::{
-    attributes::AttributesTable,
-    manifest::{Manifest, VirtualChunkLocation, VirtualReferenceError},
-    snapshot::Snapshot,
-    ByteRange, ObjectId,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId,
 };
-use crate::storage::virtual_ref::VirtualChunkResolver;
 use async_trait::async_trait;
 use bytes::Bytes;
+use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
-    PutPayload,
+    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
+    GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
-use tokio::sync::RwLock;
-use url;
+use std::{
+    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+};
 
 use super::{Storage, StorageError, StorageResult};
 
@@ -358,64 +350,5 @@ impl Storage for ObjectStorage {
                 _ => e.into(),
             })
             .map(|_| ())
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
-struct StoreCacheKey(String, String);
-
-#[derive(Debug, Default)]
-pub struct ObjectStoreVirtualChunkResolver {
-    stores: Arc<RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>>,
-}
-
-#[async_trait]
-impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
-    async fn fetch_chunk(
-        &self,
-        location: &VirtualChunkLocation,
-        range: &ByteRange,
-    ) -> StorageResult<Bytes> {
-        let VirtualChunkLocation::Absolute(location) = location;
-        let parsed =
-            url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
-        let bucket_name = parsed
-            .host_str()
-            .ok_or(VirtualReferenceError::CannotParseBucketName(
-                "error parsing bucket name".into(),
-            ))?
-            .to_string();
-        let path = ObjectPath::parse(parsed.path())
-            .map_err(VirtualReferenceError::CannotParsePath)?;
-        let scheme = parsed.scheme();
-        let cache_key = StoreCacheKey(scheme.into(), bucket_name);
-
-        let options =
-            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
-        let store = {
-            let stores = self.stores.read().await;
-            #[allow(clippy::expect_used)]
-            stores.get(&cache_key).map(|x| Arc::clone(x))
-        };
-        match store {
-            Some(store) => Ok(store.get_opts(&path, options).await?.bytes().await?),
-            None => {
-                let builder = match scheme {
-                    "s3" => AmazonS3Builder::from_env(),
-                    _ => {
-                        Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
-                    }
-                };
-                let new_store: Arc<dyn ObjectStore> =
-                    Arc::new(builder.with_bucket_name(&cache_key.1).build()?);
-                {
-                    self.stores
-                        .write()
-                        .await
-                        .insert(cache_key.clone(), Arc::clone(&new_store));
-                }
-                Ok(new_store.get_opts(&path, options).await?.bytes().await?)
-            }
-        }
     }
 }

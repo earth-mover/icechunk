@@ -40,7 +40,7 @@ use crate::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
         RefError,
     },
-    storage::object_store::ObjectStoreVirtualChunkResolver,
+    storage::virtual_ref::ObjectStoreVirtualChunkResolver,
     MemCachingStorage, Storage, StorageError,
 };
 
