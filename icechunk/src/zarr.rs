@@ -1097,9 +1097,7 @@ mod tests {
     use std::borrow::BorrowMut;
 
     use super::*;
-    use crate::{dataset::VirtualChunkLocation, format::manifest::VirtualChunkRef};
-    use object_store::ObjectStore;
-    use object_store::{PutMode, PutOptions, PutPayload};
+
     use pretty_assertions::assert_eq;
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -1405,98 +1403,6 @@ mod tests {
         ));
         store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_virtual_refs_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
-        // ++++++++++++++++++
-        // First write to chunks
-        use object_store::aws::AmazonS3Builder;
-        let bucket_name = "testbucket".to_string();
-        let store = AmazonS3Builder::new()
-            .with_access_key_id("minio123")
-            .with_secret_access_key("minio123")
-            .with_endpoint("http://localhost:9000")
-            .with_allow_http(true)
-            .with_bucket_name(bucket_name)
-            .build()?;
-        let bytes1 = Bytes::copy_from_slice(b"first");
-        let bytes2 = Bytes::copy_from_slice(b"second0000");
-        let path1 = "prefix/path/to/chunk-1".to_string();
-        let path2 = "prefix/path/to/chunk-2".to_string();
-        // TODO: Switch to PutMode::Create when object_store supports that
-        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
-        store
-            .put_opts(
-                &path1.clone().into(),
-                PutPayload::from_bytes(bytes1.clone()),
-                opts.clone(),
-            )
-            .await?;
-        store
-            .put_opts(&path2.clone().into(), PutPayload::from_bytes(bytes2.clone()), opts)
-            .await?;
-        // +++++++++++++++++++++++
-
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_s3_store(
-                "testbucket".to_string(),
-                format!("{:?}", ObjectId::random()),
-                Some("minio123"),
-                Some("minio123"),
-                None::<String>,
-                Some("http://localhost:9000"),
-            )?);
-        let ds = Dataset::init(Arc::clone(&storage), true).await?.build();
-        let mut store = Store::from_dataset(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
-        );
-
-        store
-            .set(
-                "zarr.json",
-                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
-            )
-            .await?;
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
-        store.set("array/zarr.json", zarr_meta.clone()).await?;
-        assert_eq!(
-            store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
-            zarr_meta
-        );
-
-        let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path(&format!(
-                // intentional extra '/'
-                "s3://testbucket///{}",
-                path1
-            ))?,
-            offset: 0,
-            length: 5,
-        });
-        let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path(&format!(
-                "s3://testbucket/{}",
-                path2
-            ))?,
-            offset: 1,
-            length: 5,
-        });
-        store.set_virtual_ref("array/c/0/0/0", payload1).await?;
-        store.set_virtual_ref("array/c/0/0/1", payload2).await?;
-
-        assert_eq!(
-            store.get("array/c/0/0/0", &ByteRange::ALL).await?,
-            bytes1,
-        );
-        assert_eq!(
-            store.get("array/c/0/0/1", &ByteRange::ALL).await?,
-            Bytes::copy_from_slice(&bytes2[1..6]),
-        );
         Ok(())
     }
 

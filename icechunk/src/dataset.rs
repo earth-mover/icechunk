@@ -1151,9 +1151,7 @@ mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use crate::{
-        format::manifest::{
-            ChunkInfo, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
-        },
+        format::manifest::ChunkInfo,
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
@@ -1164,7 +1162,6 @@ mod tests {
 
     use super::*;
     use itertools::Itertools;
-    use object_store::{ObjectStore, PutMode, PutOptions, PutPayload};
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use test_strategy::proptest;
@@ -1278,133 +1275,6 @@ mod tests {
         );
         prop_assert!(matches);
         prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_dataset_with_virtual_refs() -> Result<(), Box<dyn Error>> {
-        // ++++++++++++++++++
-        // First write to chunks
-        use object_store::aws::AmazonS3Builder;
-        let bucket_name = "testbucket".to_string();
-        let store = AmazonS3Builder::new()
-            .with_access_key_id("minio123")
-            .with_secret_access_key("minio123")
-            .with_endpoint("http://localhost:9000")
-            .with_allow_http(true)
-            .with_bucket_name(bucket_name)
-            .build()?;
-        let bytes1 = Bytes::copy_from_slice(b"first");
-        let bytes2 = Bytes::copy_from_slice(b"second0000");
-        let path1 = "prefix/path/to/chunk-1".to_string();
-        let path2 = "prefix/path/to/chunk-2".to_string();
-        // TODO: Switch to PutMode::Create when object_store supports that
-        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
-        store
-            .put_opts(
-                &path1.clone().into(),
-                PutPayload::from_bytes(bytes1.clone()),
-                opts.clone(),
-            )
-            .await?;
-        store
-            .put_opts(&path2.clone().into(), PutPayload::from_bytes(bytes2.clone()), opts)
-            .await?;
-        // +++++++++++++++++++++++
-
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_s3_store(
-                "testbucket".to_string(),
-                format!("{:?}", ObjectId::random()),
-                Some("minio123"),
-                Some("minio123"),
-                None::<String>,
-                Some("http://localhost:9000"),
-            )?);
-        let mut ds = Dataset::init(Arc::clone(&storage), true).await?.build();
-
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
-        let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path(&format!(
-                // intentional extra '/'
-                "s3://testbucket///{}",
-                path1
-            ))?,
-            offset: 0,
-            length: 5,
-        });
-        let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path(&format!(
-                "s3://testbucket/{}",
-                path2
-            ))?,
-            offset: 1,
-            length: 5,
-        });
-
-        // bad relative chunk location
-        assert!(matches!(
-            VirtualChunkLocation::from_absolute_path("abcdef"),
-            Err(VirtualReferenceError::CannotParseUrl(_)),
-        ));
-        // extra / prevents bucket name detection
-        assert!(matches!(
-            VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
-            Err(VirtualReferenceError::CannotParseBucketName(_)),
-        ));
-
-        let new_array_path: PathBuf = "/array".to_string().into();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
-
-        ds.set_chunk_ref(
-            new_array_path.clone(),
-            ChunkIndices(vec![0, 0, 0]),
-            Some(payload1),
-        )
-        .await
-        .unwrap();
-        ds.set_chunk_ref(
-            new_array_path.clone(),
-            ChunkIndices(vec![0, 0, 1]),
-            Some(payload2),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
-                .await
-                .unwrap(),
-            Some(bytes1.clone()),
-        );
-        assert_eq!(
-            ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 1]), &ByteRange::ALL)
-                .await
-                .unwrap(),
-            Some(Bytes::copy_from_slice(&bytes2[1..6])),
-        );
-
-        for range in [
-            ByteRange::bounded(0u64, 3u64),
-            ByteRange::from_offset(2u64),
-            ByteRange::to_offset(4u64),
-        ] {
-            assert_eq!(
-                ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &range)
-                    .await
-                    .unwrap(),
-                Some(range.slice(bytes1.clone()))
-            );
-        }
-        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
