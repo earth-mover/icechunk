@@ -56,8 +56,8 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             #[allow(clippy::expect_used)]
             stores.get(&cache_key).map(|x| Arc::clone(x))
         };
-        match store {
-            Some(store) => Ok(store.get_opts(&path, options).await?.bytes().await?),
+        let store = match store {
+            Some(store) => store,
             None => {
                 let builder = match scheme {
                     "s3" => AmazonS3Builder::from_env(),
@@ -73,8 +73,9 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
                         .await
                         .insert(cache_key.clone(), Arc::clone(&new_store));
                 }
-                Ok(new_store.get_opts(&path, options).await?.bytes().await?)
+                new_store
             }
-        }
+        };
+        Ok(store.get_opts(&path, options).await?.bytes().await?)
     }
 }
