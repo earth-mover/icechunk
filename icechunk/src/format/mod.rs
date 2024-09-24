@@ -119,7 +119,7 @@ impl ByteRange {
 
     pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
 
-    pub fn or(&self, other: &ByteRange) -> Self {
+    pub fn replace_unbounded_with(&self, other: &ByteRange) -> Self {
         let first = match self.0 {
             Bound::Unbounded => other.0,
             _ => self.0,

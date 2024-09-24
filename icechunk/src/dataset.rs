@@ -659,7 +659,9 @@ impl Dataset {
                     .virtual_resolver
                     .fetch_chunk(
                         &location,
-                        &byte_range.or(&ByteRange::from_offset_to_length(offset, length)),
+                        &byte_range.replace_unbounded_with(
+                            &ByteRange::from_offset_to_length(offset, length),
+                        ),
                     )
                     .await
                     .map(Some)?)
