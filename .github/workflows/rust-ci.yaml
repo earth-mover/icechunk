@@ -44,6 +44,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - name: Stand up MinIO
+        run: |
+          docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for i in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
       - name: Install Just
         run: sudo snap install --edge --classic just
 

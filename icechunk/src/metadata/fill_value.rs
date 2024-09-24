@@ -26,6 +26,10 @@ pub enum FillValue {
 }
 
 impl FillValue {
+    pub const NAN_STR: &'static str = "NaN";
+    pub const INF_STR: &'static str = "Infinity";
+    pub const NEG_INF_STR: &'static str = "-Infinity";
+
     pub fn from_data_type_and_json(
         dt: &DataType,
         value: &serde_json::Value,
@@ -91,17 +95,64 @@ impl FillValue {
                     n.as_f64().expect("bug in from_data_type_and_json") as f32,
                 ))
             }
+            (DataType::Float16, serde_json::Value::String(s))
+                if s.as_str() == FillValue::NAN_STR =>
+            {
+                Ok(FillValue::Float16(f32::NAN))
+            }
+            (DataType::Float16, serde_json::Value::String(s))
+                if s.as_str() == FillValue::INF_STR =>
+            {
+                Ok(FillValue::Float16(f32::INFINITY))
+            }
+            (DataType::Float16, serde_json::Value::String(s))
+                if s.as_str() == FillValue::NEG_INF_STR =>
+            {
+                Ok(FillValue::Float16(f32::NEG_INFINITY))
+            }
+
             (DataType::Float32, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
                 // FIXME: limits logic
                 Ok(FillValue::Float32(
                     n.as_f64().expect("bug in from_data_type_and_json") as f32,
                 ))
             }
+            (DataType::Float32, serde_json::Value::String(s))
+                if s.as_str() == FillValue::NAN_STR =>
+            {
+                Ok(FillValue::Float32(f32::NAN))
+            }
+            (DataType::Float32, serde_json::Value::String(s))
+                if s.as_str() == FillValue::INF_STR =>
+            {
+                Ok(FillValue::Float32(f32::INFINITY))
+            }
+            (DataType::Float32, serde_json::Value::String(s))
+                if s.as_str() == FillValue::NEG_INF_STR =>
+            {
+                Ok(FillValue::Float32(f32::NEG_INFINITY))
+            }
+
             (DataType::Float64, serde_json::Value::Number(n)) if n.as_f64().is_some() => {
                 // FIXME: limits logic
                 Ok(FillValue::Float64(
                     n.as_f64().expect("bug in from_data_type_and_json"),
                 ))
+            }
+            (DataType::Float64, serde_json::Value::String(s))
+                if s.as_str() == FillValue::NAN_STR =>
+            {
+                Ok(FillValue::Float64(f64::NAN))
+            }
+            (DataType::Float64, serde_json::Value::String(s))
+                if s.as_str() == FillValue::INF_STR =>
+            {
+                Ok(FillValue::Float64(f64::INFINITY))
+            }
+            (DataType::Float64, serde_json::Value::String(s))
+                if s.as_str() == FillValue::NEG_INF_STR =>
+            {
+                Ok(FillValue::Float64(f64::NEG_INFINITY))
             }
             (DataType::Complex64, serde_json::Value::Array(arr)) if arr.len() == 2 => {
                 let r = FillValue::from_data_type_and_json(&DataType::Float32, &arr[0])?;
@@ -151,166 +202,6 @@ impl FillValue {
         }
     }
 
-    pub fn from_data_type_and_value(
-        dt: &DataType,
-        value: &[u8],
-    ) -> Result<Self, IcechunkFormatError> {
-        use IcechunkFormatError::FillValueDecodeError;
-
-        match dt {
-            DataType::Bool => {
-                if value.len() != 1 {
-                    Err(FillValueDecodeError {
-                        found_size: value.len(),
-                        target_size: 1,
-                        target_type: DataType::Bool,
-                    })
-                } else {
-                    Ok(FillValue::Bool(value[0] != 0))
-                }
-            }
-            DataType::Int8 => value
-                .try_into()
-                .map(|x| FillValue::Int8(i8::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 1,
-                    target_type: DataType::Int8,
-                }),
-            DataType::Int16 => value
-                .try_into()
-                .map(|x| FillValue::Int16(i16::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 2,
-                    target_type: DataType::Int16,
-                }),
-            DataType::Int32 => value
-                .try_into()
-                .map(|x| FillValue::Int32(i32::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 4,
-                    target_type: DataType::Int32,
-                }),
-            DataType::Int64 => value
-                .try_into()
-                .map(|x| FillValue::Int64(i64::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 8,
-                    target_type: DataType::Int64,
-                }),
-            DataType::UInt8 => value
-                .try_into()
-                .map(|x| FillValue::UInt8(u8::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 1,
-                    target_type: DataType::UInt8,
-                }),
-            DataType::UInt16 => value
-                .try_into()
-                .map(|x| FillValue::UInt16(u16::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 2,
-                    target_type: DataType::UInt16,
-                }),
-            DataType::UInt32 => value
-                .try_into()
-                .map(|x| FillValue::UInt32(u32::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 4,
-                    target_type: DataType::UInt32,
-                }),
-            DataType::UInt64 => value
-                .try_into()
-                .map(|x| FillValue::UInt64(u64::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 8,
-                    target_type: DataType::UInt64,
-                }),
-            DataType::Float16 => value
-                .try_into()
-                .map(|x| FillValue::Float16(f32::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 4,
-                    target_type: DataType::Float16,
-                }),
-            DataType::Float32 => value
-                .try_into()
-                .map(|x| FillValue::Float32(f32::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 4,
-                    target_type: DataType::Float32,
-                }),
-            DataType::Float64 => value
-                .try_into()
-                .map(|x| FillValue::Float64(f64::from_be_bytes(x)))
-                .map_err(|_| FillValueDecodeError {
-                    found_size: value.len(),
-                    target_size: 8,
-                    target_type: DataType::Float64,
-                }),
-            DataType::Complex64 => {
-                if value.len() != 8 {
-                    Err(FillValueDecodeError {
-                        found_size: value.len(),
-                        target_size: 8,
-                        target_type: DataType::Complex64,
-                    })
-                } else {
-                    let r = value[..4].try_into().map(f32::from_be_bytes).map_err(|_| {
-                        FillValueDecodeError {
-                            found_size: value.len(),
-                            target_size: 4,
-                            target_type: DataType::Complex64,
-                        }
-                    });
-                    let i = value[4..].try_into().map(f32::from_be_bytes).map_err(|_| {
-                        FillValueDecodeError {
-                            found_size: value.len(),
-                            target_size: 4,
-                            target_type: DataType::Complex64,
-                        }
-                    });
-                    Ok(FillValue::Complex64(r?, i?))
-                }
-            }
-            DataType::Complex128 => {
-                if value.len() != 16 {
-                    Err(FillValueDecodeError {
-                        found_size: value.len(),
-                        target_size: 16,
-                        target_type: DataType::Complex128,
-                    })
-                } else {
-                    let r = value[..8].try_into().map(f64::from_be_bytes).map_err(|_| {
-                        FillValueDecodeError {
-                            found_size: value.len(),
-                            target_size: 8,
-                            target_type: DataType::Complex128,
-                        }
-                    });
-                    let i = value[8..].try_into().map(f64::from_be_bytes).map_err(|_| {
-                        FillValueDecodeError {
-                            found_size: value.len(),
-                            target_size: 8,
-                            target_type: DataType::Complex128,
-                        }
-                    });
-                    Ok(FillValue::Complex128(r?, i?))
-                }
-            }
-            DataType::RawBits(_) => Ok(FillValue::RawBits(value.to_owned())),
-        }
-    }
-
     pub fn get_data_type(&self) -> DataType {
         match self {
             FillValue::Bool(_) => DataType::Bool,
@@ -330,28 +221,48 @@ impl FillValue {
             FillValue::RawBits(v) => DataType::RawBits(v.len()),
         }
     }
+}
 
-    pub fn to_be_bytes(&self) -> Vec<u8> {
-        match self {
-            FillValue::Bool(v) => vec![if v.to_owned() { 1 } else { 0 }],
-            FillValue::Int8(v) => v.to_be_bytes().into(),
-            FillValue::Int16(v) => v.to_be_bytes().into(),
-            FillValue::Int32(v) => v.to_be_bytes().into(),
-            FillValue::Int64(v) => v.to_be_bytes().into(),
-            FillValue::UInt8(v) => v.to_be_bytes().into(),
-            FillValue::UInt16(v) => v.to_be_bytes().into(),
-            FillValue::UInt32(v) => v.to_be_bytes().into(),
-            FillValue::UInt64(v) => v.to_be_bytes().into(),
-            FillValue::Float16(v) => v.to_be_bytes().into(),
-            FillValue::Float32(v) => v.to_be_bytes().into(),
-            FillValue::Float64(v) => v.to_be_bytes().into(),
-            FillValue::Complex64(r, i) => {
-                r.to_be_bytes().into_iter().chain(i.to_be_bytes()).collect()
-            }
-            FillValue::Complex128(r, i) => {
-                r.to_be_bytes().into_iter().chain(i.to_be_bytes()).collect()
-            }
-            FillValue::RawBits(v) => v.to_owned(),
-        }
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nan_inf_parsing() {
+        assert_eq!(
+            FillValue::from_data_type_and_json(&DataType::Float64, &55f64.into())
+                .unwrap(),
+            FillValue::Float64(55.0)
+        );
+
+        assert_eq!(
+            FillValue::from_data_type_and_json(&DataType::Float64, &55.into()).unwrap(),
+            FillValue::Float64(55.0)
+        );
+
+        assert!(matches!(FillValue::from_data_type_and_json(
+            &DataType::Float64,
+            &"NaN".into()
+        )
+        .unwrap(),
+            FillValue::Float64(n) if n.is_nan()
+        ));
+
+        assert!(matches!(FillValue::from_data_type_and_json(
+            &DataType::Float64,
+            &"Infinity".into()
+        )
+        .unwrap(),
+            FillValue::Float64(n) if n == f64::INFINITY
+        ));
+
+        assert!(matches!(FillValue::from_data_type_and_json(
+            &DataType::Float64,
+            &"-Infinity".into()
+        )
+        .unwrap(),
+            FillValue::Float64(n) if n == f64::NEG_INFINITY
+        ));
     }
 }

@@ -63,6 +63,10 @@ pub struct ObjectStorage {
     // We need this because object_store's local file implementation doesn't sort refs. Since this
     // implementation is used only for tests, it's OK to sort in memory.
     artificially_sort_refs_in_mem: bool,
+
+    // We need this because object_store's hasn't implemented support for create-if-not-exists in
+    // S3 yet. We'll delete this after they do.
+    supports_create_if_not_exists: bool,
 }
 
 impl ObjectStorage {
@@ -77,6 +81,7 @@ impl ObjectStorage {
             store: Arc::new(InMemory::new()),
             prefix,
             artificially_sort_refs_in_mem: false,
+            supports_create_if_not_exists: true,
         }
     }
 
@@ -91,6 +96,7 @@ impl ObjectStorage {
             store,
             prefix: "".to_string(),
             artificially_sort_refs_in_mem: true,
+            supports_create_if_not_exists: true,
         })
     }
 
@@ -131,6 +137,8 @@ impl ObjectStorage {
             store: Arc::new(store),
             prefix: prefix.into(),
             artificially_sort_refs_in_mem: false,
+            // FIXME: this will go away once object_store supports create-if-not-exist on S3
+            supports_create_if_not_exists: false,
         })
     }
 
@@ -324,7 +332,11 @@ impl Storage for ObjectStorage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.ref_key(ref_key);
-        let mode = if overwrite_refs { PutMode::Overwrite } else { PutMode::Create };
+        let mode = if overwrite_refs || !self.supports_create_if_not_exists {
+            PutMode::Overwrite
+        } else {
+            PutMode::Create
+        };
         let opts = PutOptions { mode, ..PutOptions::default() };
 
         self.store

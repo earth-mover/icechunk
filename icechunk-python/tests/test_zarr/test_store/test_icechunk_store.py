@@ -11,11 +11,25 @@ from icechunk import IcechunkStore, Storage
 
 
 DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
+ARRAY_METADATA = (
+    b'{"zarr_format":3,"node_type":"array","attributes":{"foo":42},'
+    b'"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},'
+    b'"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,'
+    b'"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}'
+)
 
 
 class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
+
+    @pytest.mark.xfail(reason="not implemented")
+    async def test_store_eq(self) -> None:
+        pass
+
+    @pytest.mark.xfail(reason="not implemented")
+    async def test_serizalizable_store(self, store) -> None:
+        pass
 
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
@@ -43,14 +57,18 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return kwargs
 
     @pytest.fixture(scope="function")
-    async def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
+    async def store(
+        self, store_kwargs: str | None | dict[str, Buffer]
+    ) -> IcechunkStore:
         return await IcechunkStore.open(**store_kwargs)
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
         super().test_store_repr(store)
 
-    async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
+    async def test_not_writable_store_raises(
+        self, store_kwargs: dict[str, Any]
+    ) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
         with pytest.raises(ValueError):
             store = await self.store_cls.open(**create_kwargs)
@@ -63,6 +81,36 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # # delete
         # with pytest.raises(ValueError):
         #     await store.delete("foo")
+
+    async def test_set_many(self, store: S) -> None:
+        """
+        Test that a dict of key : value pairs can be inserted into the store via the
+        `_set_many` method.
+        """
+        # This test won't work without initializing the array first
+        await store.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        keys = [
+            "zarr.json",
+            "c/0",
+            # icechunk does not allow v2 keys
+            # "foo/c/0.0",
+            # "foo/0/0"
+        ]
+        # icechunk strictly checks metadata?
+        data_buf = [
+            self.buffer_cls.from_bytes(
+                k.encode() if k != "zarr.json" else ARRAY_METADATA
+            )
+            for k in keys
+        ]
+        store_dict = dict(zip(keys, data_buf, strict=True))
+        await store._set_many(store_dict.items())
+        for k, v in store_dict.items():
+            assert (await self.get(store, k)).to_bytes() == v.to_bytes()
+
+    def test_store_supports_deletes(self, store: IcechunkStore) -> None:
+        assert store.supports_deletes
 
     def test_store_supports_writes(self, store: IcechunkStore) -> None:
         assert store.supports_writes

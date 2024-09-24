@@ -1,0 +1,25 @@
+volumes:
+  minio_data:
+
+services:
+  minio:
+    container_name: minio
+    image: quay.io/minio/minio
+    entrypoint: |
+        /bin/sh -c '
+        for bucket in testbucket externalbucket arraylake-repo-bucket
+        do
+          echo creating bucket "$$bucket";
+          mkdir -p /data/"$$bucket"
+        done;
+
+        /usr/bin/minio server --console-address ":9001" /data
+        '
+    environment:
+      - MINIO_ROOT_USER=minio123
+      - MINIO_ROOT_PASSWORD=minio123
+    volumes:
+      - minio_data:/data
+    ports:
+      - '9000:9000'
+      - '9001:9001'
