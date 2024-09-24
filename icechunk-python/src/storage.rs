@@ -50,8 +50,13 @@ impl PyStorage {
     }
 
     #[classmethod]
-    fn s3_from_env(_cls: &Bound<'_, PyType>, bucket: String, prefix: String) -> Self {
-        PyStorage::S3 { bucket, prefix, credentials: None, endpoint_url: None }
+    fn s3_from_env(
+        _cls: &Bound<'_, PyType>,
+        bucket: String,
+        prefix: String,
+        endpoint_url: Option<String>,
+    ) -> Self {
+        PyStorage::S3 { bucket, prefix, credentials: None, endpoint_url }
     }
 
     #[classmethod]
