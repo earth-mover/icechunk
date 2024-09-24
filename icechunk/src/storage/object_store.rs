@@ -369,22 +369,6 @@ pub struct ObjectStoreVirtualChunkResolver {
     stores: Arc<RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>>,
 }
 
-impl ObjectStoreVirtualChunkResolver {
-    async fn get_chunk_from_cached_store(
-        &self,
-        cache_key: &StoreCacheKey,
-        path: &ObjectPath,
-        options: GetOptions,
-    ) -> StorageResult<Bytes> {
-        let store = {
-            let stores = self.stores.read().await;
-            #[allow(clippy::expect_used)]
-            stores.get(cache_key).expect("this should not fail").clone()
-        };
-        Ok(store.get_opts(path, options).await?.bytes().await?)
-    }
-}
-
 #[async_trait]
 impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
     async fn fetch_chunk(
@@ -408,21 +392,29 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
 
         let options =
             GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
-        let has_key = self.stores.read().await.contains_key(&cache_key);
-        match has_key {
-            true => self.get_chunk_from_cached_store(&cache_key, &path, options).await,
-            false => {
+        let store = {
+            let stores = self.stores.read().await;
+            #[allow(clippy::expect_used)]
+            stores.get(&cache_key).map(|x| Arc::clone(x))
+        };
+        match store {
+            Some(store) => Ok(store.get_opts(&path, options).await?.bytes().await?),
+            None => {
                 let builder = match scheme {
                     "s3" => AmazonS3Builder::from_env(),
                     _ => {
                         Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
                     }
                 };
-                let new_store = Arc::new(builder.with_bucket_name(&cache_key.1).build()?);
+                let new_store: Arc<dyn ObjectStore> =
+                    Arc::new(builder.with_bucket_name(&cache_key.1).build()?);
                 {
-                    self.stores.write().await.insert(cache_key.clone(), new_store);
+                    self.stores
+                        .write()
+                        .await
+                        .insert(cache_key.clone(), Arc::clone(&new_store));
                 }
-                self.get_chunk_from_cached_store(&cache_key, &path, options).await
+                Ok(new_store.get_opts(&path, options).await?.bytes().await?)
             }
         }
     }
