@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use url;
 
 #[async_trait]
-pub trait VirtualChunkResolver : Debug {
+pub trait VirtualChunkResolver: Debug {
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
