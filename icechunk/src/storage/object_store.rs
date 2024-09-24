@@ -110,6 +110,16 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
 
+        if access_key_id.is_some() || secret_access_key.is_none() {
+            return Err(StorageError::MissingCredentials(
+                "secret access key was not provided".to_string(),
+            ));
+        } else if secret_access_key.is_some() && access_key_id.is_none() {
+            return Err(StorageError::MissingCredentials(
+                "access key id was not provided".to_string(),
+            ));
+        }
+
         let builder = if let (Some(access_key_id), Some(secret_access_key)) =
             (access_key_id, secret_access_key)
         {

@@ -37,6 +37,8 @@ pub enum StorageError {
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
+    #[error("missing credentials: {0}")]
+    MissingCredentials(String),
     #[error("generic storage error: {0}")]
     OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),
     #[error("unknown storage error: {0}")]
