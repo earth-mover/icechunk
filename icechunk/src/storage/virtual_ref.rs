@@ -54,7 +54,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         let store = {
             let stores = self.stores.read().await;
             #[allow(clippy::expect_used)]
-            stores.get(&cache_key).map(|x| Arc::clone(x))
+            stores.get(&cache_key).map(Arc::clone)
         };
         let store = match store {
             Some(store) => store,

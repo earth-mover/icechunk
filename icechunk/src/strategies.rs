@@ -28,13 +28,12 @@ prop_compose! {
     let storage = ObjectStorage::new_in_memory_store(None);
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
-    let dataset = runtime.block_on(async {
+    runtime.block_on(async {
         Dataset::init(Arc::new(storage), false)
             .await
             .expect("Failed to initialize dataset")
             .build()
-    });
-    dataset
+    })
 }
 }
 
