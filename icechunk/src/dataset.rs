@@ -1362,29 +1362,33 @@ mod tests {
         ));
 
         let new_array_path: PathBuf = "/array".to_string().into();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
 
         ds.set_chunk_ref(
             new_array_path.clone(),
             ChunkIndices(vec![0, 0, 0]),
             Some(payload1),
         )
-        .await?;
+        .await
+        .unwrap();
         ds.set_chunk_ref(
             new_array_path.clone(),
             ChunkIndices(vec![0, 0, 1]),
             Some(payload2),
         )
-        .await?;
+        .await
+        .unwrap();
 
         assert_eq!(
             ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
-                .await?,
+                .await
+                .unwrap(),
             Some(bytes1.clone()),
         );
         assert_eq!(
             ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 1]), &ByteRange::ALL)
-                .await?,
+                .await
+                .unwrap(),
             Some(Bytes::copy_from_slice(&bytes2[1..6])),
         );
 
@@ -1395,7 +1399,8 @@ mod tests {
         ] {
             assert_eq!(
                 ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &range)
-                    .await?,
+                    .await
+                    .unwrap(),
                 Some(range.slice(bytes1.clone()))
             );
         }
