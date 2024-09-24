@@ -15,7 +15,7 @@ ARRAY_METADATA = (
     b'{"zarr_format":3,"node_type":"array","attributes":{"foo":42},'
     b'"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},'
     b'"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,'
-    b'"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"'
+    b'"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}'
 )
 
 
@@ -82,7 +82,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # with pytest.raises(ValueError):
         #     await store.delete("foo")
 
-    @pytest.mark.xfail
     async def test_set_many(self, store: S) -> None:
         """
         Test that a dict of key : value pairs can be inserted into the store via the
