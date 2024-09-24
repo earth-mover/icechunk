@@ -1097,7 +1097,6 @@ mod tests {
     use std::borrow::BorrowMut;
 
     use super::*;
-
     use pretty_assertions::assert_eq;
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {

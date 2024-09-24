@@ -31,6 +31,7 @@ mod tests {
             )
             .expect("Creating minio storage failed"),
         );
+        dbg!(&storage);
         Dataset::init(Arc::clone(&storage), true)
             .await
             .expect("building dataset failed")
@@ -114,6 +115,8 @@ mod tests {
             VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
             Err(VirtualReferenceError::CannotParseBucketName(_)),
         ));
+
+        dbg!(&ds);
 
         let new_array_path: PathBuf = "/array".to_string().into();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
