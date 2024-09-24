@@ -472,8 +472,9 @@ impl PyIcechunkStore {
     }
 
     pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = pyo3_asyncio_0_21::tokio::get_runtime().block_on(self.store.read());
-        let list = pyo3_asyncio_0_21::tokio::get_runtime().block_on(store.list())?;
+        let runtime = pyo3_asyncio_0_21::tokio::get_runtime();
+        let store = runtime.block_on(self.store.read());
+        let list = runtime.block_on(store.list())?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
@@ -482,9 +483,9 @@ impl PyIcechunkStore {
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = pyo3_asyncio_0_21::tokio::get_runtime().block_on(self.store.read());
-        let list = pyo3_asyncio_0_21::tokio::get_runtime()
-            .block_on(store.list_prefix(&prefix))?;
+        let runtime = pyo3_asyncio_0_21::tokio::get_runtime();
+        let store = runtime.block_on(self.store.read());
+        let list = runtime.block_on(store.list_prefix(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
@@ -493,9 +494,9 @@ impl PyIcechunkStore {
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = pyo3_asyncio_0_21::tokio::get_runtime().block_on(self.store.read());
-        let list =
-            pyo3_asyncio_0_21::tokio::get_runtime().block_on(store.list_dir(&prefix))?;
+        let runtime = pyo3_asyncio_0_21::tokio::get_runtime();
+        let store = runtime.block_on(self.store.read());
+        let list = runtime.block_on(store.list_dir(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
