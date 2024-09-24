@@ -131,6 +131,7 @@ impl ObjectStorage {
         };
 
         let store = builder.with_bucket_name(bucket_name.into()).build()?;
+        dbg!(&store);
         Ok(ObjectStorage {
             store: Arc::new(store),
             prefix: prefix.into(),
