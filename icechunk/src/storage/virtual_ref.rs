@@ -13,18 +13,12 @@ use tokio::sync::RwLock;
 use url;
 
 #[async_trait]
-pub trait VirtualChunkResolver {
+pub trait VirtualChunkResolver : Debug {
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
         range: &ByteRange,
     ) -> StorageResult<Bytes>;
-}
-
-impl Debug for dyn VirtualChunkResolver + Send + Sync {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "VirtualChunkResolver")
-    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
