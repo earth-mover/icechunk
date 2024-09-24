@@ -5,7 +5,10 @@ use thiserror::Error;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{ChunkIndices, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId};
+use super::{
+    ChunkIndices, ChunkLength, ChunkOffset, Flags, IcechunkFormatError, IcechunkResult,
+    NodeId, ObjectId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
@@ -66,15 +69,15 @@ impl VirtualChunkLocation {
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkRef {
     pub location: VirtualChunkLocation,
-    pub offset: u64,
-    pub length: u64,
+    pub offset: ChunkOffset,
+    pub length: ChunkLength,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkRef {
     pub id: ObjectId,
-    pub offset: u64,
-    pub length: u64,
+    pub offset: ChunkOffset,
+    pub length: ChunkLength,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
