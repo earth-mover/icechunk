@@ -68,7 +68,7 @@ pub struct Dataset {
     snapshot_id: ObjectId,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
-    virtual_resolver: ObjectStoreVirtualChunkResolver,
+    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -350,7 +350,7 @@ impl Dataset {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
-            virtual_resolver: ObjectStoreVirtualChunkResolver::default(),
+            virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::default()),
         }
     }
 

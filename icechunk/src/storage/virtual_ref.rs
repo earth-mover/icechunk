@@ -7,6 +7,7 @@ use object_store::{
     aws::AmazonS3Builder, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore,
 };
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use url;
@@ -18,6 +19,12 @@ pub trait VirtualChunkResolver {
         location: &VirtualChunkLocation,
         range: &ByteRange,
     ) -> StorageResult<Bytes>;
+}
+
+impl Debug for dyn VirtualChunkResolver + Send + Sync {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "VirtualChunkResolver")
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
