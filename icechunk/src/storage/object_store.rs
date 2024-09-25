@@ -10,6 +10,7 @@ use object_store::{
     local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
     GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::format::{
     attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
@@ -57,6 +58,13 @@ const MANIFEST_PREFIX: &str = "m/";
 const CHUNK_PREFIX: &str = "c/";
 const REF_PREFIX: &str = "r";
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct S3Credentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
     prefix: String,
@@ -103,27 +111,23 @@ impl ObjectStorage {
     pub fn new_s3_store(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
-        access_key_id: Option<impl Into<String>>,
-        secret_access_key: Option<impl Into<String>>,
-        session_token: Option<impl Into<String>>,
+        credentials: Option<S3Credentials>,
         endpoint: Option<impl Into<String>>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
 
-        let builder = if let (Some(access_key_id), Some(secret_access_key)) =
-            (access_key_id, secret_access_key)
-        {
-            AmazonS3Builder::new()
-                .with_access_key_id(access_key_id)
-                .with_secret_access_key(secret_access_key)
+        let builder = if let Some(credentials) = credentials {
+            let builder = AmazonS3Builder::new()
+                .with_access_key_id(credentials.access_key_id)
+                .with_secret_access_key(credentials.secret_access_key);
+
+            if let Some(token) = credentials.session_token {
+                builder.with_token(token)
+            } else {
+                builder
+            }
         } else {
             AmazonS3Builder::from_env()
-        };
-
-        let builder = if let Some(session_token) = session_token {
-            builder.with_token(session_token)
-        } else {
-            builder
         };
 
         let builder = if let Some(endpoint) = endpoint {

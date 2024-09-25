@@ -73,9 +73,7 @@ class Storage:
         """An S3 Object Storage compatible storage backend"""
         bucket: str
         prefix: str
-        access_key_id: str | None
-        secret_access_key: str | None
-        session_token: str | None
+        credentials: S3Credentials
         endpoint_url: str | None
 
     def __init__(self, storage: Memory | Filesystem | S3): ...
@@ -87,10 +85,16 @@ class Storage:
     def filesystem(cls, root: str) -> Storage: ...
 
     @classmethod
-    def s3_from_env(cls, bucket: str, prefix: str) -> Storage: ...
+    def s3_from_env(cls, bucket: str, prefix: str, endpoint_url: str | None = None) -> Storage: ...
 
     @classmethod
-    def s3_from_creds(cls, bucket: str, prefix: str, access_key_id: str, secret_access_key: str, session_token: str | None, endpoint_url: str | None) -> Storage: ...
+    def s3_from_creds(cls, bucket: str, prefix: str, credentials: S3Credentials, endpoint_url: str | None) -> Storage: ...
+
+
+class S3Credentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None
 
 
 async def pyicechunk_store_exists(storage: Storage) -> bool: ...

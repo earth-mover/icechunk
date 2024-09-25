@@ -27,6 +27,7 @@ use crate::{
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::{BranchVersion, Ref},
+    storage::object_store::S3Credentials,
     Dataset, DatasetBuilder, ObjectStorage, Storage,
 };
 
@@ -45,9 +46,7 @@ pub enum StorageConfig {
     S3ObjectStore {
         bucket: String,
         prefix: String,
-        access_key_id: Option<String>,
-        secret_access_key: Option<String>,
-        session_token: Option<String>,
+        credentials: Option<S3Credentials>,
         endpoint: Option<String>,
     },
 }
@@ -63,20 +62,11 @@ impl StorageConfig {
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
-            StorageConfig::S3ObjectStore {
-                bucket,
-                prefix,
-                access_key_id,
-                secret_access_key,
-                session_token,
-                endpoint,
-            } => {
+            StorageConfig::S3ObjectStore { bucket, prefix, credentials, endpoint } => {
                 let storage = ObjectStorage::new_s3_store(
                     bucket,
                     prefix,
-                    access_key_id.clone(),
-                    secret_access_key.clone(),
-                    session_token.clone(),
+                    credentials.clone(),
                     endpoint.clone(),
                 )
                 .map_err(|e| format!("Error creating storage: {e}"))?;
@@ -1980,9 +1970,7 @@ mod tests {
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    access_key_id: None,
-                    secret_access_key: None,
-                    session_token: None,
+                    credentials: None,
                     endpoint: None
                 },
                 get_partial_values_concurrency: None,
@@ -1995,9 +1983,11 @@ mod tests {
              "type": "s3",
              "bucket":"test",
              "prefix":"root",
-             "access_key_id":"my-key",
-             "secret_access_key":"my-secret-key",
-             "endpoint": "http://localhost:9000"
+             "credentials":{
+                 "access_key_id":"my-key",
+                 "secret_access_key":"my-secret-key"
+             },
+             "endpoint":"http://localhost:9000"
          },
          "dataset": {}
         }
@@ -2012,9 +2002,11 @@ mod tests {
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    access_key_id: Some(String::from("my-key")),
-                    secret_access_key: Some(String::from("my-secret-key")),
-                    session_token: None,
+                    credentials: Some(S3Credentials {
+                        access_key_id: String::from("my-key"),
+                        secret_access_key: String::from("my-secret-key"),
+                        session_token: None,
+                    }),
                     endpoint: Some(String::from("http://localhost:9000"))
                 },
                 get_partial_values_concurrency: None,
