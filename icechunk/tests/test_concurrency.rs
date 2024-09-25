@@ -2,10 +2,10 @@
 use bytes::Bytes;
 use icechunk::{
     dataset::{
-        ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, FillValue,
-        StorageTransformer, ZarrArrayMetadata,
+        get_chunk, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
+        FillValue, StorageTransformer, ZarrArrayMetadata,
     },
-    format::{ChunkIndices, Path},
+    format::{ByteRange, ChunkIndices, Path},
     Dataset, ObjectStorage, Storage,
 };
 use pretty_assertions::assert_eq;
@@ -93,15 +93,17 @@ async fn write_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32) {
     };
     sleep(Duration::from_millis(random_sleep)).await;
 
+    let payload = {
+        let guard = ds.read().await;
+        let writer = guard.get_chunk_writer();
+        writer(bytes).await.expect("Failed to write chunk")
+    };
+
     ds.write()
         .await
-        .set_chunk_ref(
-            "/array".into(),
-            ChunkIndices(vec![x, y]),
-            Some(ChunkPayload::Inline(bytes)),
-        )
+        .set_chunk_ref("/array".into(), ChunkIndices(vec![x, y]), Some(payload))
         .await
-        .expect("set_chunk failed");
+        .expect("Failed to write chunk ref");
 }
 
 async fn read_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32, barrier: Arc<Barrier>) {
@@ -109,16 +111,23 @@ async fn read_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32, barrier: Arc<Barrie
     let expected_bytes = Bytes::copy_from_slice(&value.to_be_bytes());
     barrier.wait().await;
     loop {
-        let actual_bytes = ds
-            .read()
+        let readable_ds = ds.read().await;
+        let chunk_reader = readable_ds
+            .get_chunk_reader(
+                &"/array".into(),
+                &ChunkIndices(vec![x, y]),
+                &ByteRange::ALL,
+            )
             .await
-            .get_chunk_ref(&"/array".into(), &ChunkIndices(vec![x, y]))
-            .await
-            .expect("get_chunk failed");
+            .expect("Failed to get chunk reader");
+
+        let actual_bytes =
+            get_chunk(chunk_reader).await.expect("Failed to getch chunk payload");
+
         //dbg!(&actual_bytes);
         match &actual_bytes {
             Some(bytes) => {
-                if bytes == &ChunkPayload::Inline(expected_bytes.clone()) {
+                if bytes == &expected_bytes {
                     break;
                 }
             }
