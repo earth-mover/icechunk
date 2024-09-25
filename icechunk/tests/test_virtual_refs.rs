@@ -182,7 +182,7 @@ mod tests {
             zarr_meta
         );
 
-        let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
+        let ref1 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
                 // intentional extra '/'
                 "s3://testbucket///{}",
@@ -190,17 +190,17 @@ mod tests {
             ))?,
             offset: 0,
             length: 5,
-        });
-        let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
+        };
+        let ref2 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
                 "s3://testbucket/{}",
                 chunks[1].0
             ))?,
             offset: 1,
             length: 5,
-        });
-        store.set_virtual_ref("array/c/0/0/0", payload1).await?;
-        store.set_virtual_ref("array/c/0/0/1", payload2).await?;
+        };
+        store.set_virtual_ref("array/c/0/0/0", ref1).await?;
+        store.set_virtual_ref("array/c/0/0/1", ref2).await?;
 
         assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes1,);
         assert_eq!(
