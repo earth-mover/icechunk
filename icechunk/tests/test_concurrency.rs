@@ -2,10 +2,10 @@
 use bytes::Bytes;
 use icechunk::{
     dataset::{
-        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-        ZarrArrayMetadata,
+        ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, FillValue,
+        StorageTransformer, ZarrArrayMetadata,
     },
-    format::{ByteRange, ChunkIndices, Path},
+    format::{ChunkIndices, Path},
     Dataset, ObjectStorage, Storage,
 };
 use pretty_assertions::assert_eq;
@@ -95,7 +95,11 @@ async fn write_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32) {
 
     ds.write()
         .await
-        .set_chunk(&"/array".into(), &ChunkIndices(vec![x, y]), bytes)
+        .set_chunk_ref(
+            "/array".into(),
+            ChunkIndices(vec![x, y]),
+            Some(ChunkPayload::Inline(bytes)),
+        )
         .await
         .expect("set_chunk failed");
 }
@@ -108,13 +112,13 @@ async fn read_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32, barrier: Arc<Barrie
         let actual_bytes = ds
             .read()
             .await
-            .get_chunk(&"/array".into(), &ChunkIndices(vec![x, y]), &ByteRange::ALL)
+            .get_chunk_ref(&"/array".into(), &ChunkIndices(vec![x, y]))
             .await
             .expect("get_chunk failed");
         //dbg!(&actual_bytes);
         match &actual_bytes {
             Some(bytes) => {
-                if bytes == &expected_bytes {
+                if bytes == &ChunkPayload::Inline(expected_bytes.clone()) {
                     break;
                 }
             }
