@@ -42,10 +42,10 @@ impl From<&ByteRange> for Option<GetRange> {
                 Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
             }
             (Bound::Unbounded, Bound::Excluded(end)) => {
-                Some(GetRange::Suffix(end as usize))
+                Some(GetRange::Bounded(0..end as usize))
             }
             (Bound::Unbounded, Bound::Included(end)) => {
-                Some(GetRange::Suffix(end as usize + 1))
+                Some(GetRange::Bounded(0..end as usize + 1))
             }
             (Bound::Unbounded, Bound::Unbounded) => None,
         }

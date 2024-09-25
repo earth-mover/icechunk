@@ -21,6 +21,18 @@ impl From<&PyS3Credentials> for S3Credentials {
     }
 }
 
+#[pymethods]
+impl PyS3Credentials {
+    #[new]
+    fn new(
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    ) -> Self {
+        PyS3Credentials { access_key_id, secret_access_key, session_token }
+    }
+}
+
 #[pyclass(name = "Storage")]
 pub enum PyStorage {
     Memory {
