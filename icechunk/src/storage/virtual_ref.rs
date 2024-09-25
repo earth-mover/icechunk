@@ -136,13 +136,15 @@ mod tests {
 
     #[proptest]
     fn test_properties_construct_valid_byte_range(
-        #[strategy(0..1000u64)] offset: u64,
-        #[strategy(1..1000u64)] length: u64,
+        #[strategy(0..10u64)] offset: u64,
+        // TODO: generate valid offsets using offset, length as input
+        #[strategy(3..100u64)] length: u64,
+        #[strategy(0..=2u64)] request_offset: u64,
     ) {
-        let request_offset = 100;
         // no request can go past this
         let max_end = offset + length;
-        // TODO: potential property test:
+
+        // TODO: more property tests:
         // inputs: (1) chunk_ref: offset, length
         //         (2) requested_range
         // properties: output.length() <= actual_range.length()
