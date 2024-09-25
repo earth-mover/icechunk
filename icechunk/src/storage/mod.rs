@@ -18,10 +18,8 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::format::{
-    attributes::AttributesTable,
-    manifest::Manifest,
-    snapshot::Snapshot,
-    ByteRange, ObjectId, Path,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId, Path,
 };
 
 #[derive(Debug, Error)]
