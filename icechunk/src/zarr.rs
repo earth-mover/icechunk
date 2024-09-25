@@ -196,6 +196,8 @@ pub enum KeyNotFoundError {
 pub enum StoreError {
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
+    #[error("this operation is not allowed: {0}")]
+    NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful dataset operation: `{0}`")]
@@ -523,10 +525,10 @@ impl Store {
         }
 
         match Key::parse(key)? {
-            Key::Metadata { .. } => {
-                // I think we want people to use `.set` to set metadata
-                Err(StoreError::InvalidKey { key: key.into() })
-            }
+            Key::Metadata { .. } => Err(StoreError::NotAllowed(format!(
+                "use .set to modify metadata for key {}",
+                key
+            ))),
             Key::Chunk { node_path, coords } => {
                 self.dataset
                     .write()
