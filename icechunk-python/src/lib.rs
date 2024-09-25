@@ -14,7 +14,7 @@ use icechunk::{
     Dataset,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
-use storage::PyStorage;
+use storage::{PyS3Credentials, PyStorage};
 use streams::PyAsyncStringGenerator;
 use tokio::sync::{Mutex, RwLock};
 
@@ -134,7 +134,7 @@ fn pyicechunk_store_create<'py>(
 #[pymethods]
 impl PyIcechunkStore {
     pub fn checkout_snapshot<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         snapshot_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -156,7 +156,7 @@ impl PyIcechunkStore {
     }
 
     pub fn checkout_branch<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         branch: String,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -172,7 +172,7 @@ impl PyIcechunkStore {
     }
 
     pub fn checkout_tag<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         tag: String,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -190,12 +190,12 @@ impl PyIcechunkStore {
     #[getter]
     pub fn snapshot_id(&self) -> PyIcechunkStoreResult<String> {
         let store = self.store.blocking_read();
-        let snapshot_id = store.snapshot_id();
-        Ok(String::from(snapshot_id))
+        let snapshot_id = self.rt.block_on(store.snapshot_id());
+        Ok(snapshot_id.to_string())
     }
 
     pub fn commit<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         message: String,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -223,7 +223,7 @@ impl PyIcechunkStore {
     #[getter]
     pub fn has_uncommitted_changes(&self) -> PyIcechunkStoreResult<bool> {
         let store = self.store.blocking_read();
-        let has_uncommitted_changes = store.has_uncommitted_changes();
+        let has_uncommitted_changes = self.rt.block_on(store.has_uncommitted_changes());
         Ok(has_uncommitted_changes)
     }
 
@@ -288,7 +288,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn clear<'py>(&'py mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    pub fn clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
@@ -382,7 +382,7 @@ impl PyIcechunkStore {
     }
 
     pub fn set<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         key: String,
         value: Vec<u8>,
@@ -396,17 +396,17 @@ impl PyIcechunkStore {
         // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut writeable_store = store.write().await;
-            let result = writeable_store
+            let store = store.read().await;
+            store
                 .set(&key, Bytes::from(value))
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
-            Ok(result)
+            Ok(())
         })
     }
 
     pub fn delete<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         key: String,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -414,7 +414,7 @@ impl PyIcechunkStore {
 
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             store
-                .write()
+                .read()
                 .await
                 .delete(&key)
                 .await
@@ -431,7 +431,7 @@ impl PyIcechunkStore {
     }
 
     pub fn set_partial_values<'py>(
-        &'py mut self,
+        &'py self,
         py: Python<'py>,
         key_start_values: Vec<(String, ChunkOffset, Vec<u8>)>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -453,7 +453,7 @@ impl PyIcechunkStore {
         // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut writeable_store = store.write().await;
+            let store = store.read().await;
 
             let mapped_to_bytes = key_start_values.into_iter().enumerate().map(
                 |(i, (_key, offset, value))| {
@@ -461,11 +461,11 @@ impl PyIcechunkStore {
                 },
             );
 
-            let result = writeable_store
+            store
                 .set_partial_values(mapped_to_bytes)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
-            Ok(result)
+            Ok(())
         })
     }
 
@@ -528,6 +528,7 @@ fn pin_extend_stream<'a>(
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorage>()?;
     m.add_class::<PyIcechunkStore>()?;
+    m.add_class::<PyS3Credentials>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;

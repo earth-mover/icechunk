@@ -1,7 +1,7 @@
 # module
 import json
 from typing import Any, AsyncGenerator, Self
-from ._icechunk_python import PyIcechunkStore, pyicechunk_store_create, pyicechunk_store_from_json_config, Storage, pyicechunk_store_open_existing, pyicechunk_store_exists
+from ._icechunk_python import PyIcechunkStore, S3Credentials, pyicechunk_store_create, pyicechunk_store_from_json_config, Storage, pyicechunk_store_open_existing, pyicechunk_store_exists
 
 from zarr.abc.store import AccessMode, Store
 from zarr.core.buffer import Buffer, BufferPrototype

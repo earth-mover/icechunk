@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     iter,
     num::NonZeroU64,
+    ops::DerefMut,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -9,17 +10,19 @@ use std::{
     },
 };
 
+use async_stream::try_stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, skip_serializing_none, TryFromInto};
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use crate::{
     dataset::{
-        ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec, DataType,
-        DatasetError, DimensionNames, FillValue, Path, StorageTransformer,
+        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec,
+        DataType, DatasetError, DimensionNames, FillValue, Path, StorageTransformer,
         UserAttributes, ZarrArrayMetadata,
     },
     format::{
@@ -195,7 +198,7 @@ pub enum StoreError {
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful dataset operation: `{0}`")]
-    CannotUpdate(#[from] DatasetError),
+    DatasetError(#[from] DatasetError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("all commits must be made on a branch")]
@@ -218,9 +221,9 @@ pub enum StoreError {
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Store {
-    dataset: Dataset,
+    dataset: Arc<RwLock<Dataset>>,
     mode: AccessMode,
     current_branch: Option<String>,
     get_partial_values_concurrency: u16,
@@ -261,7 +264,7 @@ impl Store {
         get_partial_values_concurrency: Option<u16>,
     ) -> Self {
         Store {
-            dataset,
+            dataset: Arc::new(RwLock::new(dataset)),
             mode,
             current_branch,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
@@ -272,21 +275,24 @@ impl Store {
         &self.current_branch
     }
 
-    pub fn snapshot_id(&self) -> &ObjectId {
-        self.dataset.snapshot_id()
+    pub async fn snapshot_id(&self) -> ObjectId {
+        self.dataset.read().await.snapshot_id().clone()
     }
 
-    pub fn has_uncommitted_changes(&self) -> bool {
-        self.dataset.has_uncommitted_changes()
+    pub async fn has_uncommitted_changes(&self) -> bool {
+        self.dataset.read().await.has_uncommitted_changes()
     }
 
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
     pub async fn reset(&mut self) -> StoreResult<()> {
-        let head_snapshot = self.snapshot_id();
-        self.dataset =
-            Dataset::update(Arc::clone(self.dataset.storage()), head_snapshot.clone())
-                .build();
+        let guard = self.dataset.read().await;
+        // carefully avoid the deadlock if we were to call self.snapshot_id()
+        let head_snapshot = guard.snapshot_id().clone();
+        let storage = Arc::clone(guard.storage());
+        let new_dataset = Dataset::update(storage, head_snapshot).build();
+        drop(guard);
+        self.dataset = Arc::new(RwLock::new(new_dataset));
 
         Ok(())
     }
@@ -298,12 +304,16 @@ impl Store {
     ///
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
-        // Checking out is not allowed if there are uncommitted changes
-        if self.dataset.has_uncommitted_changes() {
-            return Err(StoreError::UncommittedChanges);
-        }
+        // this needs to be done carefully to avoid deadlocks and race conditions
+        let storage = {
+            let guard = self.dataset.read().await;
+            // Checking out is not allowed if there are uncommitted changes
+            if guard.has_uncommitted_changes() {
+                return Err(StoreError::UncommittedChanges);
+            }
+            guard.storage().clone()
+        };
 
-        let storage = self.dataset.storage().clone();
         let dataset = match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
@@ -320,7 +330,7 @@ impl Store {
         }
         .build();
 
-        self.dataset = dataset;
+        self.dataset = Arc::new(RwLock::new(dataset));
         Ok(())
     }
 
@@ -330,12 +340,13 @@ impl Store {
         &mut self,
         branch: &str,
     ) -> StoreResult<(ObjectId, BranchVersion)> {
-        if self.dataset.has_uncommitted_changes() {
+        // this needs to be done carefully to avoid deadlocks and race conditions
+        let guard = self.dataset.write().await;
+        if guard.has_uncommitted_changes() {
             return Err(StoreError::UncommittedChanges);
         }
-
-        let version = self.dataset.new_branch(branch).await?;
-        let snapshot_id = self.snapshot_id().clone();
+        let version = guard.new_branch(branch).await?;
+        let snapshot_id = guard.snapshot_id().clone();
 
         self.current_branch = Some(branch.to_string());
 
@@ -346,7 +357,13 @@ impl Store {
     /// on a branch, this will return an error.
     pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
         if let Some(branch) = &self.current_branch {
-            let result = self.dataset.commit(branch, message, None).await?;
+            let result = self
+                .dataset
+                .write()
+                .await
+                .deref_mut()
+                .commit(branch, message, None)
+                .await?;
             Ok(result)
         } else {
             Err(StoreError::NotOnBranch)
@@ -355,16 +372,12 @@ impl Store {
 
     /// Tag the given snapshot with a specified tag
     pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
-        self.dataset.tag(tag, snapshot_id).await?;
+        self.dataset.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
 
-    pub fn dataset(self) -> Dataset {
-        self.dataset
-    }
-
     pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.dataset.list_nodes().await?.next().is_none();
+        let res = self.dataset.read().await.list_nodes().await?.next().is_none();
         Ok(res)
     }
 
@@ -464,7 +477,7 @@ impl Store {
         Ok(true)
     }
 
-    pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
+    pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
         }
@@ -482,31 +495,49 @@ impl Store {
                     }
                 }
             }
-            Key::Chunk { ref node_path, ref coords } => {
-                self.dataset.set_chunk(node_path, coords, value).await?;
+            Key::Chunk { node_path, coords } => {
+                // we only lock the dataset to get the writer
+                let writer = self.dataset.read().await.get_chunk_writer();
+                // then we can write the bytes without holding the lock
+                let payload = writer(value).await?;
+                // and finally we lock for write and update the reference
+                self.dataset
+                    .write()
+                    .await
+                    .set_chunk_ref(node_path, coords, Some(payload))
+                    .await?;
                 Ok(())
             }
         }
     }
 
-    pub async fn delete(&mut self, key: &str) -> StoreResult<()> {
+    pub async fn delete(&self, key: &str) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
         }
 
-        let ds = &mut self.dataset;
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                let node = ds.get_node(&node_path).await.map_err(|_| {
+                // we need to hold the lock while we do the node search and the write
+                // to avoid race conditions with other writers
+                // (remember this method takes &self and not &mut self)
+                let mut guard = self.dataset.write().await;
+                let node = guard.get_node(&node_path).await.map_err(|_| {
                     KeyNotFoundError::NodeNotFound { path: node_path.clone() }
                 })?;
                 match node.node_data {
-                    NodeData::Array(_, _) => Ok(ds.delete_array(node_path).await?),
-                    NodeData::Group => Ok(ds.delete_group(node_path).await?),
+                    NodeData::Array(_, _) => {
+                        Ok(guard.deref_mut().delete_array(node_path).await?)
+                    }
+                    NodeData::Group => {
+                        Ok(guard.deref_mut().delete_group(node_path).await?)
+                    }
                 }
             }
             Key::Chunk { node_path, coords } => {
-                Ok(ds.set_chunk_ref(node_path, coords, None).await?)
+                let mut guard = self.dataset.write().await;
+                let dataset = guard.deref_mut();
+                Ok(dataset.set_chunk_ref(node_path, coords, None).await?)
             }
         }
     }
@@ -516,7 +547,7 @@ impl Store {
     }
 
     pub async fn set_partial_values(
-        &mut self,
+        &self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
@@ -536,20 +567,20 @@ impl Store {
         self.list_prefix("/").await
     }
 
-    pub async fn list_prefix<'a>(
+    pub async fn list_prefix<'a, 'b: 'a>(
         &'a self,
-        prefix: &'a str,
+        prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        let meta = self.list_metadata_prefix(prefix).await?.map(Ok);
+        let meta = self.list_metadata_prefix(prefix).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
         Ok(meta.chain(chunks))
     }
 
-    pub async fn list_dir<'a>(
+    pub async fn list_dir<'a, 'b: 'a>(
         &'a self,
-        prefix: &'a str,
+        prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -583,7 +614,16 @@ impl Store {
         coords: ChunkIndices,
         byte_range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let chunk = self.dataset.get_chunk(&path, &coords, byte_range).await?;
+        // we only lock the dataset while we get the reader
+        let reader = self
+            .dataset
+            .read()
+            .await
+            .get_chunk_reader(&path, &coords, byte_range)
+            .await?;
+
+        // then we can fetch the bytes without holding the lock
+        let chunk = get_chunk(reader).await?;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
             key: key.to_string(),
             path,
@@ -597,7 +637,7 @@ impl Store {
         path: &Path,
         range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let node = self.dataset.get_node(path).await.map_err(|_| {
+        let node = self.dataset.read().await.get_node(path).await.map_err(|_| {
             StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
         })?;
         let user_attributes = match node.user_attributes {
@@ -619,71 +659,94 @@ impl Store {
     }
 
     async fn set_array_meta(
-        &mut self,
+        &self,
         path: Path,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
-        if self.dataset.get_array(&path).await.is_ok() {
+        // we need to hold the lock while we search the array and do the update to avoid race
+        // conditions with other writers (notice we don't take &mut self)
+
+        let mut guard = self.dataset.write().await;
+        if guard.get_array(&path).await.is_ok() {
             // TODO: we don't necessarily need to update both
-            self.dataset.set_user_attributes(path.clone(), array_meta.attributes).await?;
-            self.dataset.update_array(path, array_meta.zarr_metadata).await?;
+            let dataset = guard.deref_mut();
+            dataset.set_user_attributes(path.clone(), array_meta.attributes).await?;
+            dataset.update_array(path, array_meta.zarr_metadata).await?;
             Ok(())
         } else {
-            self.dataset.add_array(path.clone(), array_meta.zarr_metadata).await?;
-            self.dataset.set_user_attributes(path, array_meta.attributes).await?;
+            let dataset = guard.deref_mut();
+            dataset.add_array(path.clone(), array_meta.zarr_metadata).await?;
+            dataset.set_user_attributes(path, array_meta.attributes).await?;
             Ok(())
         }
     }
 
     async fn set_group_meta(
-        &mut self,
+        &self,
         path: Path,
         group_meta: GroupMetadata,
     ) -> Result<(), StoreError> {
-        if self.dataset.get_group(&path).await.is_ok() {
-            self.dataset.set_user_attributes(path, group_meta.attributes).await?;
+        // we need to hold the lock while we search the group and do the update to avoid race
+        // conditions with other writers (notice we don't take &mut self)
+        //
+        let mut guard = self.dataset.write().await;
+        if guard.get_group(&path).await.is_ok() {
+            let dataset = guard.deref_mut();
+            dataset.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         } else {
-            self.dataset.add_group(path.clone()).await?;
-            self.dataset.set_user_attributes(path, group_meta.attributes).await?;
+            let dataset = guard.deref_mut();
+            dataset.add_group(path.clone()).await?;
+            dataset.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         }
     }
 
-    async fn list_metadata_prefix<'a>(
+    async fn list_metadata_prefix<'a, 'b: 'a>(
         &'a self,
-        prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = String> + 'a> {
-        let prefix = prefix.trim_end_matches('/');
-
-        let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
-        // TODO: handle non-utf8?
-        Ok(nodes.filter_map(move |node| async move {
-            Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
-                if key.starts_with(prefix) {
-                    Some(key)
-                } else {
-                    None
-                }
-            })
-        }))
-    }
-
-    async fn list_chunks_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
+        prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
+        let res = try_stream! {
+            let dataset = Arc::clone(&self.dataset).read_owned().await;
+            for node in dataset.list_nodes().await? {
+                // TODO: handle non-utf8?
+                let meta_key = Key::Metadata { node_path: node.path }.to_string();
+                if let Some(key) = meta_key {
+                    if key.starts_with(prefix) {
+                        yield key;
+                    }
+                }
+            }
+        };
+        Ok(res)
+    }
 
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
-        let chunks = self.dataset.all_chunks().await?;
-        Ok(chunks.map_err(|e| e.into()).try_filter_map(move |(path, chunk)| async move {
-            //FIXME: utf handling
-            Ok(Key::Chunk { node_path: path, coords: chunk.coord }
-                .to_string()
-                .and_then(|key| if key.starts_with(prefix) { Some(key) } else { None }))
-        }))
+    async fn list_chunks_prefix<'a, 'b: 'a>(
+        &'a self,
+        prefix: &'b str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+        let prefix = prefix.trim_end_matches('/');
+        let res = try_stream! {
+            let dataset = Arc::clone(&self.dataset).read_owned().await;
+            // TODO: this is inefficient because it filters based on the prefix, instead of only
+            // generating items that could potentially match
+            for await maybe_path_chunk in  dataset.all_chunks().await.map_err(StoreError::DatasetError)? {
+                // FIXME: utf8 handling
+                match maybe_path_chunk {
+                    Ok((path,chunk)) => {
+                        let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
+                        if let Some(key) = chunk_key {
+                            if key.starts_with(prefix) {
+                                yield key;
+                            }
+                        }
+                    }
+                    Err(err) => Err(err)?
+                }
+            }
+        };
+        Ok(res)
     }
 }
 
@@ -1286,7 +1349,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let store = Store::from_dataset(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1336,7 +1399,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let store = Store::from_dataset(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1456,8 +1519,7 @@ mod tests {
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
-        let mut ds = store.dataset();
-        let oid = ds.flush("commit", Default::default()).await?;
+        let oid = store.commit("commit").await?;
 
         let ds = Dataset::update(storage, oid).build();
         let store = Store::from_dataset(ds, AccessMode::ReadWrite, None, None);
@@ -1477,7 +1539,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let store = Store::from_dataset(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1823,7 +1885,7 @@ mod tests {
 
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
-        assert_eq!(store.has_uncommitted_changes(), true);
+        assert_eq!(store.has_uncommitted_changes().await, true);
 
         let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
         assert!(result.is_err());

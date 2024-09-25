@@ -9,7 +9,7 @@ import time
 
 from zarr.abc.store import Store
 
-from icechunk import IcechunkStore, Storage
+from icechunk import IcechunkStore, Storage, S3Credentials
 import random
 import string
 
@@ -61,6 +61,7 @@ def create_array(*, group, name, size, dtype, fill_value) -> np.ndarray:
 
 
 async def run(store: Store) -> None:
+    write_start = time.time()
     group = zarr.group(store=store, overwrite=True)
     group.attrs["foo"] = "foo"
     print(group)
@@ -96,7 +97,6 @@ async def run(store: Store) -> None:
         else:
             raise ValueError("should have conflicted")
 
-    if isinstance(store, IcechunkStore):
         await store.reset()  # FIXME: WHY
         await store.checkout(branch="main")
 
@@ -104,7 +104,6 @@ async def run(store: Store) -> None:
     if isinstance(store, IcechunkStore):
         third_commit = await store.commit("new attr 2")
 
-    if isinstance(store, IcechunkStore):
         try:
             await store.commit("rewrote array")
         except ValueError:
@@ -138,39 +137,46 @@ async def run(store: Store) -> None:
     if isinstance(store, IcechunkStore):
         fourth_commit = await store.commit("added groups and arrays")
 
+
+    print(f"Write done in {time.time() - write_start} secs")
+
+    read_start = time.time()
+
     root_group = zarr.group(store=store)
     for key, value in expected.items():
         print(key)
-        tic = time.time()
         array = root_group[key]
         print(
             f"numchunks: {math.prod(s // c for s, c in zip(array.shape, array.chunks))}"
         )
         np.testing.assert_array_equal(array[:], value)
-        print(time.time() - tic)
+
+    print(f"Read done in {time.time() - read_start} secs")
 
 
 async def create_icechunk_store(*, storage: Storage) -> IcechunkStore:
-    return await IcechunkStore.open(storage=storage, mode="r+")
+    return await IcechunkStore.create(storage=storage, mode="r+")
 
 
 async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store:
     if store == "local":
-        return await LocalStore.open(f"/tmp/{rdms(6)}", mode="w")
+        return LocalStore.open(f"/tmp/{rdms(6)}", mode="w")
     if store == "memory":
-        return await MemoryStore.open(mode="w")
+        return MemoryStore.open(mode="w")
     if store == "s3":
-        return await RemoteStore.open(url="bah", mode="w")
+        return RemoteStore.from_url("s3://testbucket/root-zarr", mode="w", storage_options= {"endpoint_url":"http://localhost:9000"})
 
 
 if __name__ == "__main__":
     MEMORY = Storage.memory("new")
     MINIO = Storage.s3_from_credentials(
-        bucket="test",
-        prefix="root",
-        access_key_id="minio123",
-        secret_access_key="minio123",
-        session_token=None,
+        bucket="testbucket",
+        prefix="root-icechunk",
+        credentials=S3Credentials(
+            access_key_id="minio123",
+            secret_access_key="minio123",
+            session_token=None,
+        ),
         endpoint_url="http://localhost:9000",
     )
     S3 = Storage.s3_from_env(
@@ -179,9 +185,9 @@ if __name__ == "__main__":
     )
 
     print("Icechunk store")
-    store = asyncio.run(create_icechunk_store(storage=MEMORY))
+    store = asyncio.run(create_icechunk_store(storage=MINIO))
     asyncio.run(run(store))
 
     print("Zarr store")
-    zarr_store = asyncio.run(create_zarr_store(store="memory"))
+    zarr_store = asyncio.run(create_zarr_store(store="s3"))
     asyncio.run(run(zarr_store))
