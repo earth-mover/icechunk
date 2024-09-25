@@ -3,6 +3,7 @@ use std::{
     iter::{self},
     mem::take,
     path::PathBuf,
+    pin::Pin,
     sync::Arc,
 };
 
@@ -20,7 +21,7 @@ pub use crate::{
 };
 use bytes::Bytes;
 use chrono::Utc;
-use futures::{future::ready, Stream, StreamExt, TryStreamExt};
+use futures::{future::ready, Future, FutureExt, Stream, StreamExt, TryStreamExt};
 use itertools::Either;
 use thiserror::Error;
 use tokio::task;
@@ -642,18 +643,52 @@ impl Dataset {
         }
     }
 
-    pub async fn get_chunk(
+    /// Get a future that reads the the payload of a chunk from object store
+    ///
+    /// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
+    /// than needed. We want the bytes to be pulled from object store without holding a ref to the
+    /// [`Dataset`], that way, writes can happen concurrently.
+    ///
+    /// The result of calling this function is None, if the chunk reference is not present in the
+    /// dataset, or a [`Future`] that will fetch the bytes, possibly failing.
+    ///
+    /// Example usage:
+    /// ```ignore
+    /// get_chunk(
+    ///     ds.get_chunk_reader(
+    ///         &path,
+    ///         &ChunkIndices(vec![0, 0, 0]),
+    ///         &ByteRange::ALL,
+    ///     )
+    ///     .await
+    ///     .unwrap(),
+    /// ).await?
+    /// ```
+    ///
+    /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
+    /// the bytes.
+    pub async fn get_chunk_reader(
         &self,
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> DatasetResult<Option<Bytes>> {
+    ) -> DatasetResult<Option<Pin<Box<dyn Future<Output = DatasetResult<Bytes>> + Send>>>>
+    {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
-                // TODO: we don't have a way to distinguish if we want to pass a range or not
-                Ok(self.storage.fetch_chunk(&id, byte_range).await.map(Some)?)
+                let storage = Arc::clone(&self.storage);
+                let byte_range = byte_range.clone();
+                Ok(Some(
+                    async move {
+                        // TODO: we don't have a way to distinguish if we want to pass a range or not
+                        storage.fetch_chunk(&id, &byte_range).await.map_err(|e| e.into())
+                    }
+                    .boxed(),
+                ))
             }
-            Some(ChunkPayload::Inline(bytes)) => Ok(Some(byte_range.slice(bytes))),
+            Some(ChunkPayload::Inline(bytes)) => {
+                Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
+            }
             Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
                 Ok(self
                     .virtual_resolver
@@ -662,33 +697,41 @@ impl Dataset {
                         &construct_valid_byte_range(byte_range, offset, length),
                     )
                     .await
-                    .map(Some)?)
+                    .map(|bytes| Some(ready(Ok(bytes)).boxed()))?)
             }
             None => Ok(None),
         }
     }
 
-    pub async fn set_chunk(
-        &mut self,
-        path: &Path,
-        coord: &ChunkIndices,
-        data: Bytes,
-    ) -> DatasetResult<()> {
-        match self.get_array(path).await {
-            Ok(node) => {
-                let payload = if data.len() > self.config.inline_threshold_bytes as usize
-                {
-                    new_materialized_chunk(self.storage.as_ref(), data).await?
+    /// Returns a function that can be used to asynchronously write chunk bytes to object store
+    ///
+    /// The reason to use this design, instead of simple pass the [`Bytes`] is to avoid holding a
+    /// reference to the dataset while the payload is uploaded to object store. This way, the
+    /// reference is hold very briefly, and then an owned object is obtained which can do the actual
+    /// upload without holding any Dataset refernces.
+    ///
+    /// Example usage:
+    /// ```ignore
+    /// dataset.get_chunk_writer()(Bytes::copy_from_slice(b"hello")).await?
+    /// ```
+    ///
+    /// As shown, the result of the returned function must be awaited to finish the upload.
+    pub fn get_chunk_writer(
+        &self,
+    ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = DatasetResult<ChunkPayload>> + Send>>
+    {
+        let threshold = self.config.inline_threshold_bytes as usize;
+        let storage = Arc::clone(&self.storage);
+        move |data: Bytes| {
+            async move {
+                let payload = if data.len() > threshold {
+                    new_materialized_chunk(storage.as_ref(), data).await?
                 } else {
                     new_inline_chunk(data)
                 };
-                self.change_set.set_chunk_ref(node.id, coord.clone(), Some(payload));
-                Ok(())
+                Ok(payload)
             }
-            Err(_) => Err(DatasetError::NodeNotFound {
-                path: path.clone(),
-                message: "setting chunk".to_string(),
-            }),
+            .boxed()
         }
     }
 
@@ -1142,6 +1185,15 @@ fn update_manifest(
     }
 }
 
+pub async fn get_chunk(
+    reader: Option<Pin<Box<dyn Future<Output = DatasetResult<Bytes>> + Send>>>,
+) -> DatasetResult<Option<Bytes>> {
+    match reader {
+        Some(reader) => Ok(Some(reader.await?)),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1420,12 +1472,9 @@ mod tests {
             }),
         );
 
-        ds.set_chunk(
-            &new_array_path,
-            &ChunkIndices(vec![0]),
-            Bytes::copy_from_slice(b"foo"),
-        )
-        .await?;
+        let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
 
         let chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
         assert_eq!(chunk, Some(ChunkPayload::Inline("foo".into())));
@@ -1464,11 +1513,20 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        ds.set_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), data.clone()).await?;
-
-        let chunk = ds
-            .get_chunk(&array1_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
+        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0, 0, 0]), Some(payload))
             .await?;
+
+        let chunk = get_chunk(
+            ds.get_chunk_reader(
+                &array1_path,
+                &ChunkIndices(vec![0, 0, 0]),
+                &ByteRange::ALL,
+            )
+            .await
+            .unwrap(),
+        )
+        .await?;
         assert_eq!(chunk, Some(data));
 
         let path: Path = "/group/array2".into();

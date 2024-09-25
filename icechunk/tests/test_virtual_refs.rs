@@ -2,13 +2,13 @@
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used, clippy::expect_fun_call)]
 mod tests {
     use icechunk::{
-        dataset::{ChunkPayload, ZarrArrayMetadata},
+        dataset::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         format::{
             manifest::{VirtualChunkLocation, VirtualChunkRef},
             ByteRange, ChunkIndices,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-        storage::ObjectStorage,
+        storage::{object_store::S3Credentials, ObjectStorage},
         zarr::{AccessMode, ObjectId},
         Dataset, Storage, Store,
     };
@@ -24,9 +24,11 @@ mod tests {
             ObjectStorage::new_s3_store(
                 "testbucket".to_string(),
                 format!("{:?}", ObjectId::random()),
-                Some("minio123"),
-                Some("minio123"),
-                None::<String>,
+                Some(S3Credentials {
+                    access_key_id: "minio123".into(),
+                    secret_access_key: "minio123".into(),
+                    session_token: None,
+                }),
                 Some("http://localhost:9000"),
             )
             .expect("Creating minio storage failed"),
@@ -123,15 +125,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &ByteRange::ALL)
+            get_chunk(
+                ds.get_chunk_reader(
+                    &new_array_path,
+                    &ChunkIndices(vec![0, 0, 0]),
+                    &ByteRange::ALL
+                )
                 .await
-                .unwrap(),
+                .unwrap()
+            )
+            .await
+            .unwrap(),
             Some(bytes1.clone()),
         );
         assert_eq!(
-            ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 1]), &ByteRange::ALL)
+            get_chunk(
+                ds.get_chunk_reader(
+                    &new_array_path,
+                    &ChunkIndices(vec![0, 0, 1]),
+                    &ByteRange::ALL
+                )
                 .await
-                .unwrap(),
+                .unwrap()
+            )
+            .await
+            .unwrap(),
             Some(Bytes::copy_from_slice(&bytes2[1..6])),
         );
 
@@ -141,9 +159,17 @@ mod tests {
             ByteRange::to_offset(4u64),
         ] {
             assert_eq!(
-                ds.get_chunk(&new_array_path, &ChunkIndices(vec![0, 0, 0]), &range)
+                get_chunk(
+                    ds.get_chunk_reader(
+                        &new_array_path,
+                        &ChunkIndices(vec![0, 0, 0]),
+                        &range
+                    )
                     .await
-                    .unwrap(),
+                    .unwrap()
+                )
+                .await
+                .unwrap(),
                 Some(range.slice(bytes1.clone()))
             );
         }
