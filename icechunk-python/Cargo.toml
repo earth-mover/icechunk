@@ -20,6 +20,7 @@ pyo3 = { version = "0.21", features = [
 pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
 thiserror = "1.0.64"
 tokio = "1.40"
+async-stream = "0.3.5"
 
 [lints]
 workspace = true
