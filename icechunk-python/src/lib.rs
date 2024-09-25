@@ -21,6 +21,7 @@ use tokio::sync::{Mutex, RwLock};
 #[pyclass]
 struct PyIcechunkStore {
     store: Arc<RwLock<Store>>,
+    rt: tokio::runtime::Runtime,
 }
 
 impl PyIcechunkStore {
@@ -48,7 +49,8 @@ impl PyIcechunkStore {
 
         let store = Store::from_config(&config, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
-        Ok(Self { store })
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
     }
 
     async fn create(storage: StorageConfig) -> Result<Self, String> {
@@ -59,7 +61,8 @@ impl PyIcechunkStore {
         let store =
             Store::from_config(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
         let store = Arc::new(RwLock::new(store));
-        Ok(Self { store })
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
     }
 
     async fn from_json_config(json: &[u8], read_only: bool) -> Result<Self, String> {
@@ -70,7 +73,8 @@ impl PyIcechunkStore {
         };
         let store = Store::from_json_config(json, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
-        Ok(Self { store })
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        Ok(Self { store, rt })
     }
 }
 
@@ -472,9 +476,8 @@ impl PyIcechunkStore {
     }
 
     pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let runtime = pyo3_asyncio_0_21::tokio::get_runtime();
-        let store = runtime.block_on(self.store.read());
-        let list = runtime.block_on(store.list())?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list())?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
@@ -483,9 +486,8 @@ impl PyIcechunkStore {
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let runtime = pyo3_asyncio_0_21::tokio::get_runtime();
-        let store = runtime.block_on(self.store.read());
-        let list = runtime.block_on(store.list_prefix(&prefix))?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list_prefix(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
@@ -494,9 +496,8 @@ impl PyIcechunkStore {
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let runtime = pyo3_asyncio_0_21::tokio::get_runtime();
-        let store = runtime.block_on(self.store.read());
-        let list = runtime.block_on(store.list_dir(&prefix))?;
+        let store = self.rt.block_on(self.store.read());
+        let list = self.rt.block_on(store.list_dir(&prefix))?;
         let prepared_list = pin_extend_stream(list);
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
