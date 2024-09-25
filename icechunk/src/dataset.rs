@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::storage::virtual_ref::VirtualChunkResolver;
+use crate::storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver};
 pub use crate::{
     format::{
         manifest::{ChunkPayload, VirtualChunkLocation},
@@ -659,9 +659,7 @@ impl Dataset {
                     .virtual_resolver
                     .fetch_chunk(
                         &location,
-                        &byte_range.replace_unbounded_with(
-                            &ByteRange::from_offset_to_length(offset, length),
-                        ),
+                        &construct_valid_byte_range(byte_range, offset, length),
                     )
                     .await
                     .map(Some)?)

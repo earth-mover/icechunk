@@ -23,7 +23,9 @@ use crate::{
         UserAttributes, ZarrArrayMetadata,
     },
     format::{
-        manifest::VirtualChunkRef, snapshot::{NodeData, UserAttributesSnapshot}, ByteRange, ChunkOffset, IcechunkFormatError
+        manifest::VirtualChunkRef,
+        snapshot::{NodeData, UserAttributesSnapshot},
+        ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::{BranchVersion, Ref},
     Dataset, DatasetBuilder, ObjectStorage, Storage,
@@ -514,7 +516,13 @@ impl Store {
                 Err(StoreError::InvalidKey { key: key.into() })
             }
             Key::Chunk { node_path, coords } => {
-                self.dataset.set_chunk_ref(node_path, coords, Some(ChunkPayload::Virtual(reference))).await?;
+                self.dataset
+                    .set_chunk_ref(
+                        node_path,
+                        coords,
+                        Some(ChunkPayload::Virtual(reference)),
+                    )
+                    .await?;
                 Ok(())
             }
         }

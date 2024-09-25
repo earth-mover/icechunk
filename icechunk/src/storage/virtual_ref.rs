@@ -6,8 +6,10 @@ use bytes::Bytes;
 use object_store::{
     aws::AmazonS3Builder, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore,
 };
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Bound;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use url;
@@ -27,6 +29,35 @@ struct StoreCacheKey(String, String);
 #[derive(Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
     stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
+}
+
+// Converts the requested ByteRange to a valid ByteRange appropriate
+// to the chunk reference of known `offset` and `length`.
+pub fn construct_valid_byte_range(
+    request: &ByteRange,
+    offset: u64,
+    length: u64,
+) -> ByteRange {
+    // TODO: error for offset<0
+    // TODO: error if request.start > offset + length
+    // FIXME: we allow creating a ByteRange(start, end) where end < start
+    let new_offset = match request.0 {
+        Bound::Unbounded => offset,
+        Bound::Included(start) => max(start, 0) + offset,
+        Bound::Excluded(start) => max(start, 0) + offset + 1,
+    };
+    let range = request.length().map_or(
+        ByteRange(Bound::Included(new_offset), Bound::Excluded(offset + length)),
+        |reqlen| {
+            ByteRange(
+                Bound::Included(new_offset),
+                // no request can go past offset + length, so clamp it
+                Bound::Excluded(min(new_offset + reqlen, offset + length)),
+            )
+        },
+    );
+    dbg!(&request.length(), &request, &range);
+    range
 }
 
 #[async_trait]
@@ -84,6 +115,9 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prop_assert_eq;
+    use test_strategy::proptest;
+
     use super::*;
 
     #[test]
@@ -98,5 +132,60 @@ mod tests {
             VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
             Err(VirtualReferenceError::CannotParseBucketName(_)),
         ));
+    }
+
+    #[proptest]
+    fn test_properties_construct_valid_byte_range(
+        #[strategy(0..1000u64)] offset: u64,
+        #[strategy(1..1000u64)] length: u64,
+    ) {
+        let request_offset = 100;
+        // no request can go past this
+        let max_end = offset + length;
+        // TODO: potential property test:
+        // inputs: (1) chunk_ref: offset, length
+        //         (2) requested_range
+        // properties: output.length() <= actual_range.length()
+        //             output.length() == requested.length()
+        //             output.0 >= chunk_ref.offset
+        prop_assert_eq!(
+            construct_valid_byte_range(
+                &ByteRange(Bound::Included(0), Bound::Excluded(length)),
+                offset,
+                length,
+            ),
+            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(
+                &ByteRange(Bound::Unbounded, Bound::Excluded(length)),
+                offset,
+                length
+            ),
+            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(
+                &ByteRange(Bound::Included(request_offset), Bound::Excluded(max_end)),
+                offset,
+                length
+            ),
+            ByteRange(Bound::Included(request_offset + offset), Bound::Excluded(max_end))
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::ALL, offset, length),
+            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(
+                &ByteRange(Bound::Excluded(request_offset), Bound::Unbounded),
+                offset,
+                length
+            ),
+            ByteRange(
+                Bound::Included(offset + request_offset + 1),
+                Bound::Excluded(max_end)
+            )
+        );
     }
 }

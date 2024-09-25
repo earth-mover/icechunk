@@ -105,7 +105,7 @@ impl ByteRange {
         Self(Bound::Included(offset), Bound::Unbounded)
     }
 
-    pub fn from_offset_to_length(offset: ChunkOffset, length: ChunkOffset) -> Self {
+    pub fn from_offset_with_length(offset: ChunkOffset, length: ChunkOffset) -> Self {
         Self(Bound::Included(offset), Bound::Excluded(offset + length))
     }
 
@@ -117,19 +117,20 @@ impl ByteRange {
         Self(Bound::Included(start), Bound::Excluded(end))
     }
 
+    pub fn length(&self) -> Option<u64> {
+        match (self.0, self.1) {
+            (_, Bound::Unbounded) => None,
+            (Bound::Unbounded, Bound::Excluded(end)) => Some(end),
+            (Bound::Unbounded, Bound::Included(end)) => Some(end + 1),
+            (Bound::Included(start), Bound::Excluded(end)) => Some(end - start),
+            (Bound::Excluded(start), Bound::Included(end)) => Some(end - start),
+            (Bound::Included(start), Bound::Included(end)) => Some(end - start + 1),
+            (Bound::Excluded(start), Bound::Excluded(end)) => Some(end - start - 1),
+        }
+    }
+
     pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
 
-    pub fn replace_unbounded_with(&self, other: &ByteRange) -> Self {
-        let first = match self.0 {
-            Bound::Unbounded => other.0,
-            _ => self.0,
-        };
-        let second = match self.1 {
-            Bound::Unbounded => other.1,
-            _ => self.1,
-        };
-        ByteRange(first, second)
-    }
     pub fn slice(&self, bytes: Bytes) -> Bytes {
         match (self.0, self.1) {
             (Bound::Included(start), Bound::Excluded(end)) => {
