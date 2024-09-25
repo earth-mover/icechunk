@@ -525,9 +525,9 @@ fn pin_extend_stream<'a>(
     mutexed_stream
 }
 
-async fn static_list_stream(
+async fn static_list_stream<'a>(
     store_guard: OwnedRwLockReadGuard<Store>,
-) -> impl Stream<Item = Result<String, StoreError>> + 'static + Send {
+) -> impl Stream<Item = Result<String, StoreError>> + 'a + Send {
     async_stream::try_stream! {
         let stream = store_guard.list().await?;
         pin_mut!(stream);
