@@ -4,7 +4,7 @@ mod tests {
     use icechunk::{
         dataset::{ChunkPayload, ZarrArrayMetadata},
         format::{
-            manifest::{VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError},
+            manifest::{VirtualChunkLocation, VirtualChunkRef},
             ByteRange, ChunkIndices,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
@@ -103,17 +103,6 @@ mod tests {
             offset: 1,
             length: 5,
         });
-
-        // bad relative chunk location
-        assert!(matches!(
-            VirtualChunkLocation::from_absolute_path("abcdef"),
-            Err(VirtualReferenceError::CannotParseUrl(_)),
-        ));
-        // extra / prevents bucket name detection
-        assert!(matches!(
-            VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
-            Err(VirtualReferenceError::CannotParseBucketName(_)),
-        ));
 
         let new_array_path: PathBuf = "/array".to_string().into();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();

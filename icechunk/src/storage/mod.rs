@@ -40,7 +40,7 @@ pub enum StorageError {
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
-    #[error("error parsing virtual reference {0}")]
+    #[error("error when handling virtual reference {0}")]
     VirtualReferenceError(#[from] VirtualReferenceError),
     #[error("generic storage error: {0}")]
     OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),

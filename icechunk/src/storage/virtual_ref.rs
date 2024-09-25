@@ -21,12 +21,12 @@ pub trait VirtualChunkResolver: Debug {
     ) -> StorageResult<Bytes>;
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 struct StoreCacheKey(String, String);
 
 #[derive(Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
-    stores: Arc<RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>>,
+    stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
 }
 
 #[async_trait]
@@ -61,6 +61,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             Some(store) => store,
             None => {
                 let builder = match scheme {
+                    // FIXME: allow configuring auth for virtual references
                     "s3" => AmazonS3Builder::from_env(),
                     _ => {
                         Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
@@ -78,5 +79,24 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             }
         };
         Ok(store.get_opts(&path, options).await?.bytes().await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_chunk_location_bad() {
+        // errors relative chunk location
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("abcdef"),
+            Err(VirtualReferenceError::CannotParseUrl(_)),
+        ));
+        // extra / prevents bucket name detection
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
+            Err(VirtualReferenceError::CannotParseBucketName(_)),
+        ));
     }
 }
