@@ -19,7 +19,7 @@ pub use object_store::ObjectStorage;
 
 use crate::format::{
     attributes::AttributesTable,
-    manifest::{Manifest, VirtualReferenceError},
+    manifest::Manifest,
     snapshot::Snapshot,
     ByteRange, ObjectId, Path,
 };
@@ -40,8 +40,6 @@ pub enum StorageError {
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
-    #[error("error when handling virtual reference {0}")]
-    VirtualReferenceError(#[from] VirtualReferenceError),
     #[error("generic storage error: {0}")]
     OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),
     #[error("unknown storage error: {0}")]

@@ -7,7 +7,10 @@ use std::{
     sync::Arc,
 };
 
-use crate::storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver};
+use crate::{
+    format::manifest::VirtualReferenceError,
+    storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
+};
 pub use crate::{
     format::{
         manifest::{ChunkPayload, VirtualChunkLocation},
@@ -265,6 +268,8 @@ pub enum DatasetError {
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
     #[error("the dataset has been initialized already (default branch exists)")]
     AlreadyInitialized,
+    #[error("error when handling virtual reference {0}")]
+    VirtualReferenceError(#[from] VirtualReferenceError),
 }
 
 type DatasetResult<T> = Result<T, DatasetError>;

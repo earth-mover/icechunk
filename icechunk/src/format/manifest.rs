@@ -30,6 +30,8 @@ pub enum VirtualReferenceError {
     UnsupportedScheme(String),
     #[error("error parsing bucket name from virtual ref URL {0}")]
     CannotParseBucketName(String),
+    #[error("error fetching virtual reference {0}")]
+    FetchError(Box<dyn std::error::Error + Send + Sync>),
     #[error("error parsing virtual reference {0}")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

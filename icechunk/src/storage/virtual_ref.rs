@@ -1,6 +1,5 @@
 use crate::format::manifest::{VirtualChunkLocation, VirtualReferenceError};
 use crate::format::ByteRange;
-use crate::storage::StorageResult;
 use async_trait::async_trait;
 use bytes::Bytes;
 use object_store::{
@@ -20,7 +19,7 @@ pub trait VirtualChunkResolver: Debug {
         &self,
         location: &VirtualChunkLocation,
         range: &ByteRange,
-    ) -> StorageResult<Bytes>;
+    ) -> Result<Bytes, VirtualReferenceError>;
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -66,7 +65,7 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         &self,
         location: &VirtualChunkLocation,
         range: &ByteRange,
-    ) -> StorageResult<Bytes> {
+    ) -> Result<Bytes, VirtualReferenceError> {
         let VirtualChunkLocation::Absolute(location) = location;
         let parsed =
             url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
@@ -98,8 +97,12 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
                         Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
                     }
                 };
-                let new_store: Arc<dyn ObjectStore> =
-                    Arc::new(builder.with_bucket_name(&cache_key.1).build()?);
+                let new_store: Arc<dyn ObjectStore> = Arc::new(
+                    builder
+                        .with_bucket_name(&cache_key.1)
+                        .build()
+                        .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?,
+                );
                 {
                     self.stores
                         .write()
@@ -109,7 +112,13 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
                 new_store
             }
         };
-        Ok(store.get_opts(&path, options).await?.bytes().await?)
+        Ok(store
+            .get_opts(&path, options)
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .bytes()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?)
     }
 }
 
