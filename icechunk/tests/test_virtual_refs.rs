@@ -4,12 +4,12 @@ mod tests {
     use icechunk::{
         format::{
             manifest::{VirtualChunkLocation, VirtualChunkRef},
-            ByteRange, ChunkIndices,
+            ByteRange, ChunkId, ChunkIndices,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         storage::{object_store::S3Credentials, ObjectStorage},
-        zarr::{AccessMode, ObjectId},
+        zarr::AccessMode,
         Repository, Storage, Store,
     };
     use std::sync::Arc;
@@ -23,7 +23,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_s3_store(
                 "testbucket".to_string(),
-                format!("{:?}", ObjectId::random()),
+                format!("{:?}", ChunkId::random()),
                 Some(S3Credentials {
                     access_key_id: "minio123".into(),
                     secret_access_key: "minio123".into(),

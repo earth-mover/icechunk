@@ -6,8 +6,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChunkIndices, ChunkLength, ChunkOffset, Flags, IcechunkFormatError, IcechunkResult,
-    NodeId, ObjectId,
+    ChunkId, ChunkIndices, ChunkLength, ChunkOffset, Flags, IcechunkFormatError,
+    IcechunkResult, ManifestId, NodeId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,7 +15,7 @@ pub struct ManifestExtents(pub Vec<ChunkIndices>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRef {
-    pub object_id: ObjectId,
+    pub object_id: ManifestId,
     pub flags: Flags,
     pub extents: ManifestExtents,
 }
@@ -77,7 +77,7 @@ pub struct VirtualChunkRef {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkRef {
-    pub id: ObjectId,
+    pub id: ChunkId,
     pub offset: ChunkOffset,
     pub length: ChunkLength,
 }

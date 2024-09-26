@@ -2,11 +2,10 @@ use async_recursion::async_recursion;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
-use proptest::bits::u64;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{zarr::ObjectId, Storage, StorageError};
+use crate::{format::SnapshotId, Storage, StorageError};
 
 fn crock_encode_int(n: u64) -> String {
     base32::encode(base32::Alphabet::Crockford, &n.to_be_bytes())
@@ -42,7 +41,7 @@ pub enum RefError {
     Serialization(#[from] serde_json::Error),
 
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
-    Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
+    Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
 }
 
 pub type RefResult<A> = Result<A, RefError>;
@@ -96,7 +95,7 @@ impl BranchVersion {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefData {
-    pub snapshot: ObjectId,
+    pub snapshot: SnapshotId,
 }
 
 const TAG_KEY_NAME: &str = "ref.json";
@@ -123,7 +122,7 @@ fn branch_key(branch_name: &str, version_id: &str) -> RefResult<String> {
 pub async fn create_tag(
     storage: &(dyn Storage + Send + Sync),
     name: &str,
-    snapshot: ObjectId,
+    snapshot: SnapshotId,
     overwrite_refs: bool,
 ) -> RefResult<()> {
     let key = tag_key(name)?;
@@ -145,8 +144,8 @@ pub async fn create_tag(
 pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     name: &str,
-    new_snapshot: ObjectId,
-    current_snapshot: Option<&ObjectId>,
+    new_snapshot: SnapshotId,
+    current_snapshot: Option<&SnapshotId>,
     overwrite_refs: bool,
 ) -> RefResult<BranchVersion> {
     let last_version = last_branch_version(storage, name).await;
@@ -318,8 +317,8 @@ mod tests {
     #[tokio::test]
     async fn test_refs() -> Result<(), Box<dyn std::error::Error>> {
         let ((_,res1),(_,res2,_)) = with_test_storages::<Result<(), Box<dyn std::error::Error>>, _, _>(|storage|  async move {
-            let s1 = ObjectId::random();
-            let s2 = ObjectId::random();
+            let s1 = SnapshotId::random();
+            let s2 = SnapshotId::random();
 
             let res = fetch_tag(storage.as_ref(), "tag1").await;
             assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
@@ -433,7 +432,7 @@ mod tests {
                 fetch_ref(storage.as_ref(), "branch1").await?.1
             );
 
-            let sid = ObjectId::random();
+            let sid = SnapshotId::random();
             // update a branch with the wrong parent
             let res =
                 update_branch(storage.as_ref(), "branch1", sid.clone(), Some(&s1), false)

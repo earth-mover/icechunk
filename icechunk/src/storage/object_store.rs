@@ -1,6 +1,6 @@
 use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
+    ByteRange, ChunkId, ManifestId, ObjectId, SnapshotId,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -144,22 +144,27 @@ impl ObjectStorage {
         })
     }
 
-    fn get_path(&self, file_prefix: &str, extension: &str, id: &ObjectId) -> ObjectPath {
+    fn get_path<const SIZE: usize, T>(
+        &self,
+        file_prefix: &str,
+        extension: &str,
+        id: &ObjectId<SIZE, T>,
+    ) -> ObjectPath {
         // TODO: be careful about allocation here
         // we serialize the url using crockford
         let path = format!("{}/{}/{}{}", self.prefix, file_prefix, id, extension);
         ObjectPath::from(path)
     }
 
-    fn get_snapshot_path(&self, id: &ObjectId) -> ObjectPath {
+    fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
         self.get_path(SNAPSHOT_PREFIX, ".msgpack", id)
     }
 
-    fn get_manifest_path(&self, id: &ObjectId) -> ObjectPath {
+    fn get_manifest_path(&self, id: &ManifestId) -> ObjectPath {
         self.get_path(MANIFEST_PREFIX, ".msgpack", id)
     }
 
-    fn get_chunk_path(&self, id: &ObjectId) -> ObjectPath {
+    fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
         self.get_path(CHUNK_PREFIX, "", id)
     }
 
@@ -197,7 +202,10 @@ impl fmt::Debug for ObjectStorage {
 }
 #[async_trait]
 impl Storage for ObjectStorage {
-    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
+    async fn fetch_snapshot(
+        &self,
+        id: &SnapshotId,
+    ) -> Result<Arc<Snapshot>, StorageError> {
         let path = self.get_snapshot_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
@@ -207,14 +215,14 @@ impl Storage for ObjectStorage {
 
     async fn fetch_attributes(
         &self,
-        _id: &ObjectId,
+        _id: &AttributesId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
         todo!();
     }
 
     async fn fetch_manifests(
         &self,
-        id: &ObjectId,
+        id: &ManifestId,
     ) -> Result<Arc<Manifest>, StorageError> {
         let path = self.get_manifest_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
@@ -225,7 +233,7 @@ impl Storage for ObjectStorage {
 
     async fn write_snapshot(
         &self,
-        id: ObjectId,
+        id: SnapshotId,
         table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         let path = self.get_snapshot_path(&id);
@@ -237,7 +245,7 @@ impl Storage for ObjectStorage {
 
     async fn write_attributes(
         &self,
-        _id: ObjectId,
+        _id: AttributesId,
         _table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         todo!()
@@ -245,7 +253,7 @@ impl Storage for ObjectStorage {
 
     async fn write_manifests(
         &self,
-        id: ObjectId,
+        id: ManifestId,
         table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         let path = self.get_manifest_path(&id);
@@ -257,7 +265,7 @@ impl Storage for ObjectStorage {
 
     async fn fetch_chunk(
         &self,
-        id: &ObjectId,
+        id: &ChunkId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_chunk_path(id);
@@ -271,7 +279,7 @@ impl Storage for ObjectStorage {
 
     async fn write_chunk(
         &self,
-        id: ObjectId,
+        id: ChunkId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let path = self.get_chunk_path(&id);

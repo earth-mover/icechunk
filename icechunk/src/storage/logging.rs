@@ -6,14 +6,14 @@ use futures::stream::BoxStream;
 
 use super::{Storage, StorageError, StorageResult};
 use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
+    ByteRange, ChunkId, ManifestId, SnapshotId,
 };
 
 #[derive(Debug)]
 pub struct LoggingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
-    fetch_log: Mutex<Vec<(String, ObjectId)>>,
+    fetch_log: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 #[cfg(test)]
@@ -23,7 +23,7 @@ impl LoggingStorage {
     }
 
     #[allow(clippy::expect_used)] // this implementation is intended for tests only
-    pub fn fetch_operations(&self) -> Vec<(String, ObjectId)> {
+    pub fn fetch_operations(&self) -> Vec<(String, Vec<u8>)> {
         self.fetch_log.lock().expect("poison lock").clone()
     }
 }
@@ -31,51 +31,54 @@ impl LoggingStorage {
 #[async_trait]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
-    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
+    async fn fetch_snapshot(
+        &self,
+        id: &SnapshotId,
+    ) -> Result<Arc<Snapshot>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_snapshot".to_string(), id.clone()));
+            .push(("fetch_snapshot".to_string(), id.0.to_vec()));
         self.backend.fetch_snapshot(id).await
     }
 
     async fn fetch_attributes(
         &self,
-        id: &ObjectId,
+        id: &AttributesId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_attributes".to_string(), id.clone()));
+            .push(("fetch_attributes".to_string(), id.0.to_vec()));
         self.backend.fetch_attributes(id).await
     }
 
     async fn fetch_manifests(
         &self,
-        id: &ObjectId,
+        id: &ManifestId,
     ) -> Result<Arc<Manifest>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_manifests".to_string(), id.clone()));
+            .push(("fetch_manifests".to_string(), id.0.to_vec()));
         self.backend.fetch_manifests(id).await
     }
 
     async fn fetch_chunk(
         &self,
-        id: &ObjectId,
+        id: &ChunkId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_chunk".to_string(), id.clone()));
+            .push(("fetch_chunk".to_string(), id.0.to_vec()));
         self.backend.fetch_chunk(id, range).await
     }
 
     async fn write_snapshot(
         &self,
-        id: ObjectId,
+        id: SnapshotId,
         table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         self.backend.write_snapshot(id, table).await
@@ -83,7 +86,7 @@ impl Storage for LoggingStorage {
 
     async fn write_attributes(
         &self,
-        id: ObjectId,
+        id: AttributesId,
         table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         self.backend.write_attributes(id, table).await
@@ -91,13 +94,13 @@ impl Storage for LoggingStorage {
 
     async fn write_manifests(
         &self,
-        id: ObjectId,
+        id: ManifestId,
         table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id, table).await
     }
 
-    async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
+    async fn write_chunk(&self, id: ChunkId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id, bytes).await
     }
 
