@@ -3,15 +3,15 @@ import random
 import zarr
 
 import icechunk
+import time
 
-N = 2
+N = 15
 
 async def write_to_store(array, x, y, barrier):
     await barrier.wait()
     await asyncio.sleep(random.uniform(0,0.5))
-    # print(f"writing {x},{y}")
     array[x,y] = x*y
-    await asyncio.sleep(0)
+    #await asyncio.sleep(0)
 
 async def read_store(array, x, y, barrier):
     await barrier.wait()
@@ -20,7 +20,7 @@ async def read_store(array, x, y, barrier):
         value = array[x,y]
         if value == x*y:
             break
-        await asyncio.sleep(random.uniform(0,0.2))
+        await asyncio.sleep(random.uniform(0,0.1))
 
 async def list_store(store, barrier):
     expected = set(['zarr.json', 'array/zarr.json'] + [f"array/c/{x}/{y}" for x in range(N) for y in range(N)])
@@ -29,7 +29,8 @@ async def list_store(store, barrier):
         current = set([k async for k in store.list_prefix("")])
         if current == expected:
             break
-        await asyncio.sleep(0)
+        current = None
+        await asyncio.sleep(0.1)
 
 async def test_concurrency():
     store = await icechunk.IcechunkStore.from_config(
