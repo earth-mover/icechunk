@@ -72,4 +72,7 @@ docs/_build/
 .python-version
 
 # ruff
-.ruff-cache/
+.ruff_cache/
+
+# mypy
+.mypy_cache/

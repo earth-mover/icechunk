@@ -1,3 +1,4 @@
+import abc
 from typing import AsyncGenerator
 
 class PyIcechunkStore:
@@ -42,9 +43,9 @@ class PyIcechunkStore:
     def __eq__(self, other) -> bool: ...
 
 
-class PyAsyncStringGenerator(AsyncGenerator[str | None]):
+class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
-    async def __anext__(self) -> str | None: ...
+    async def __anext__(self) -> str: ...
 
 
 class Storage:

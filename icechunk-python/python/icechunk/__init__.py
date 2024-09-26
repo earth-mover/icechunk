@@ -133,7 +133,7 @@ class IcechunkStore(Store, SyncMixin):
         config_str = json.dumps(config)
         read_only = mode == "r"
         store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
-        return cls(store=store, mode=mode, *args, **kwargs)
+        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
     async def open_existing(
@@ -155,7 +155,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         read_only = mode == "r"
         store = await pyicechunk_store_open_existing(storage, read_only=read_only)
-        return cls(store=store, mode=mode, *args, **kwargs)
+        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
     async def create(
@@ -174,7 +174,7 @@ class IcechunkStore(Store, SyncMixin):
         storage backend.
         """
         store = await pyicechunk_store_create(storage)
-        return cls(store=store, mode=mode, *args, **kwargs)
+        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @property
     def snapshot_id(self) -> str:
