@@ -6,8 +6,8 @@ use futures::stream::BoxStream;
 use quick_cache::sync::Cache;
 
 use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
+    ByteRange, ChunkId, ManifestId, SnapshotId,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -15,10 +15,10 @@ use super::{Storage, StorageError, StorageResult};
 #[derive(Debug)]
 pub struct MemCachingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
-    snapshot_cache: Cache<ObjectId, Arc<Snapshot>>,
-    manifest_cache: Cache<ObjectId, Arc<Manifest>>,
-    attributes_cache: Cache<ObjectId, Arc<AttributesTable>>,
-    chunk_cache: Cache<(ObjectId, ByteRange), Bytes>,
+    snapshot_cache: Cache<SnapshotId, Arc<Snapshot>>,
+    manifest_cache: Cache<ManifestId, Arc<Manifest>>,
+    attributes_cache: Cache<AttributesId, Arc<AttributesTable>>,
+    chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
 }
 
 impl MemCachingStorage {
@@ -41,7 +41,10 @@ impl MemCachingStorage {
 
 #[async_trait]
 impl Storage for MemCachingStorage {
-    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
+    async fn fetch_snapshot(
+        &self,
+        id: &SnapshotId,
+    ) -> Result<Arc<Snapshot>, StorageError> {
         match self.snapshot_cache.get_value_or_guard_async(id).await {
             Ok(snapshot) => Ok(snapshot),
             Err(guard) => {
@@ -54,7 +57,7 @@ impl Storage for MemCachingStorage {
 
     async fn fetch_attributes(
         &self,
-        id: &ObjectId,
+        id: &AttributesId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
         match self.attributes_cache.get_value_or_guard_async(id).await {
             Ok(table) => Ok(table),
@@ -68,7 +71,7 @@ impl Storage for MemCachingStorage {
 
     async fn fetch_manifests(
         &self,
-        id: &ObjectId,
+        id: &ManifestId,
     ) -> Result<Arc<Manifest>, StorageError> {
         match self.manifest_cache.get_value_or_guard_async(id).await {
             Ok(manifest) => Ok(manifest),
@@ -82,7 +85,7 @@ impl Storage for MemCachingStorage {
 
     async fn fetch_chunk(
         &self,
-        id: &ObjectId,
+        id: &ChunkId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let key = (id.clone(), range.clone());
@@ -98,7 +101,7 @@ impl Storage for MemCachingStorage {
 
     async fn write_snapshot(
         &self,
-        id: ObjectId,
+        id: SnapshotId,
         snapshot: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         self.backend.write_snapshot(id.clone(), Arc::clone(&snapshot)).await?;
@@ -108,7 +111,7 @@ impl Storage for MemCachingStorage {
 
     async fn write_attributes(
         &self,
-        id: ObjectId,
+        id: AttributesId,
         table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         self.backend.write_attributes(id.clone(), Arc::clone(&table)).await?;
@@ -118,7 +121,7 @@ impl Storage for MemCachingStorage {
 
     async fn write_manifests(
         &self,
-        id: ObjectId,
+        id: ManifestId,
         manifest: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
@@ -126,7 +129,7 @@ impl Storage for MemCachingStorage {
         Ok(())
     }
 
-    async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> Result<(), StorageError> {
+    async fn write_chunk(&self, id: ChunkId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id.clone(), bytes.clone()).await?;
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         Ok(())
@@ -157,8 +160,9 @@ impl Storage for MemCachingStorage {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
-    use itertools::Itertools;
     use std::sync::Arc;
+
+    use itertools::Itertools;
 
     use super::*;
     use crate::{
@@ -182,7 +186,7 @@ mod test {
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
-        let pre_existing_id = ObjectId::random();
+        let pre_existing_id = ManifestId::random();
         let pre_exiting_manifest = Arc::new(vec![ci1].into_iter().collect());
         backend
             .write_manifests(pre_existing_id.clone(), Arc::clone(&pre_exiting_manifest))
@@ -193,7 +197,7 @@ mod test {
         let caching = MemCachingStorage::new(Arc::clone(&logging_c), 0, 2, 0, 0);
 
         let manifest = Arc::new(vec![ci2].into_iter().collect());
-        let id = ObjectId::random();
+        let id = ManifestId::random();
         caching.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
 
         assert_eq!(caching.fetch_manifests(&id).await?, manifest);
@@ -208,7 +212,7 @@ mod test {
         );
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
+            vec![("fetch_manifests".to_string(), pre_existing_id.0.to_vec())]
         );
 
         // only calls backend once
@@ -218,14 +222,14 @@ mod test {
         );
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
+            vec![("fetch_manifests".to_string(), pre_existing_id.0.to_vec())]
         );
 
         // other walues still cached
         assert_eq!(caching.fetch_manifests(&id).await?, manifest);
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifests".to_string(), pre_existing_id.clone())]
+            vec![("fetch_manifests".to_string(), pre_existing_id.0.to_vec())]
         );
         Ok(())
     }
@@ -249,13 +253,13 @@ mod test {
         let ci8 = ChunkInfo { node: 8, ..ci1.clone() };
         let ci9 = ChunkInfo { node: 9, ..ci1.clone() };
 
-        let id1 = ObjectId::random();
+        let id1 = ManifestId::random();
         let table1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());
         backend.write_manifests(id1.clone(), Arc::clone(&table1)).await?;
-        let id2 = ObjectId::random();
+        let id2 = ManifestId::random();
         let table2 = Arc::new(vec![ci4, ci5, ci6].into_iter().collect());
         backend.write_manifests(id2.clone(), Arc::clone(&table2)).await?;
-        let id3 = ObjectId::random();
+        let id3 = ManifestId::random();
         let table3 = Arc::new(vec![ci7, ci8, ci9].into_iter().collect());
         backend.write_manifests(id3.clone(), Arc::clone(&table3)).await?;
 

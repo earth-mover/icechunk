@@ -14,13 +14,13 @@ use crate::metadata::{
 };
 
 use super::{
-    manifest::ManifestRef, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId,
-    Path, TableOffset,
+    manifest::ManifestRef, AttributesId, Flags, IcechunkFormatError, IcechunkResult,
+    NodeId, ObjectId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAttributesRef {
-    pub object_id: ObjectId,
+    pub object_id: AttributesId,
     pub location: TableOffset,
     pub flags: Flags,
 }
@@ -74,7 +74,7 @@ impl NodeSnapshot {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotMetadata {
-    pub id: ObjectId,
+    pub id: SnapshotId,
     pub written_at: DateTime<Utc>,
     pub message: String,
 }

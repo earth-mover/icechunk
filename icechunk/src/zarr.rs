@@ -23,7 +23,7 @@ use crate::{
     format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
-        ByteRange, ChunkOffset, IcechunkFormatError,
+        ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
     },
     refs::{BranchVersion, Ref},
     repository::{
@@ -89,7 +89,7 @@ impl StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
-    SnapshotId(ObjectId),
+    SnapshotId(SnapshotId),
     #[serde(rename = "tag")]
     TagRef(String),
     #[serde(rename = "branch")]
@@ -294,7 +294,7 @@ impl Store {
         &self.current_branch
     }
 
-    pub async fn snapshot_id(&self) -> ObjectId {
+    pub async fn snapshot_id(&self) -> SnapshotId {
         self.repository.read().await.snapshot_id().clone()
     }
 
@@ -358,7 +358,7 @@ impl Store {
     pub async fn new_branch(
         &mut self,
         branch: &str,
-    ) -> StoreResult<(ObjectId, BranchVersion)> {
+    ) -> StoreResult<(SnapshotId, BranchVersion)> {
         // this needs to be done carefully to avoid deadlocks and race conditions
         let guard = self.repository.write().await;
         if guard.has_uncommitted_changes() {
@@ -374,7 +374,7 @@ impl Store {
 
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
-    pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
+    pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
         if let Some(branch) = &self.current_branch {
             let result = self
                 .repository
@@ -390,7 +390,7 @@ impl Store {
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
+    pub async fn tag(&mut self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
         self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
@@ -1981,8 +1981,8 @@ mod tests {
             storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
             repository: RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(128),
-                version: Some(VersionInfo::SnapshotId(ObjectId([
-                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                version: Some(VersionInfo::SnapshotId(SnapshotId::new([
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
             },
@@ -1992,7 +1992,7 @@ mod tests {
         let json = r#"
             {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
              "repository": {
-                "version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
+                "version": {"snapshot_id":"000G40R40M30E209185G"},
                 "inline_chunk_threshold_bytes":128,
                 "unsafe_overwrite_refs":true
              },

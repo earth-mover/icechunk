@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    format::manifest::VirtualReferenceError,
+    format::{manifest::VirtualReferenceError, ManifestId, SnapshotId},
     storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
 };
 pub use crate::{
@@ -69,7 +69,7 @@ impl Default for RepositoryConfig {
 pub struct Repository {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-    snapshot_id: ObjectId,
+    snapshot_id: SnapshotId,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
     virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
@@ -214,11 +214,11 @@ impl ChangeSet {
 pub struct RepositoryBuilder {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
-    snapshot_id: ObjectId,
+    snapshot_id: SnapshotId,
 }
 
 impl RepositoryBuilder {
-    fn new(storage: Arc<dyn Storage + Send + Sync>, snapshot_id: ObjectId) -> Self {
+    fn new(storage: Arc<dyn Storage + Send + Sync>, snapshot_id: SnapshotId) -> Self {
         Self { config: RepositoryConfig::default(), snapshot_id, storage }
     }
 
@@ -269,7 +269,7 @@ pub enum RepositoryError {
     #[error("tag error: `{0}`")]
     Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
-    Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
+    Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     #[error("the repository has been initialized already (default branch exists)")]
     AlreadyInitialized,
     #[error("error when handling virtual reference {0}")]
@@ -283,7 +283,7 @@ type RepositoryResult<T> = Result<T, RepositoryError>;
 impl Repository {
     pub fn update(
         storage: Arc<dyn Storage + Send + Sync>,
-        previous_version_snapshot_id: ObjectId,
+        previous_version_snapshot_id: SnapshotId,
     ) -> RepositoryBuilder {
         RepositoryBuilder::new(storage, previous_version_snapshot_id)
     }
@@ -352,7 +352,7 @@ impl Repository {
     fn new(
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-        snapshot_id: ObjectId,
+        snapshot_id: SnapshotId,
     ) -> Self {
         Repository {
             snapshot_id,
@@ -371,7 +371,7 @@ impl Repository {
 
     /// Returns the head snapshot id of the repository, not including
     /// anm uncommitted changes
-    pub fn snapshot_id(&self) -> &ObjectId {
+    pub fn snapshot_id(&self) -> &SnapshotId {
         &self.snapshot_id
     }
 
@@ -877,7 +877,7 @@ impl Repository {
 
     async fn updated_existing_nodes<'a>(
         &'a self,
-        manifest_id: &'a ObjectId,
+        manifest_id: &'a ManifestId,
     ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
@@ -903,7 +903,7 @@ impl Repository {
 
     fn new_nodes<'a>(
         &'a self,
-        manifest_id: &'a ObjectId,
+        manifest_id: &'a ManifestId,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
         self.change_set.new_nodes().map(move |path| {
             // we should be able to create the full node because we
@@ -929,7 +929,7 @@ impl Repository {
 
     async fn updated_nodes<'a>(
         &'a self,
-        manifest_id: &'a ObjectId,
+        manifest_id: &'a ManifestId,
     ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         Ok(self
             .updated_existing_nodes(manifest_id)
@@ -997,7 +997,7 @@ impl Repository {
         &mut self,
         message: &str,
         properties: SnapshotProperties,
-    ) -> RepositoryResult<ObjectId> {
+    ) -> RepositoryResult<SnapshotId> {
         if !self.has_uncommitted_changes() {
             return Err(RepositoryError::NoChangesToCommit);
         }
@@ -1088,7 +1088,7 @@ impl Repository {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> RepositoryResult<ObjectId> {
+    ) -> RepositoryResult<SnapshotId> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
         match current {
             Err(RefError::RefNotFound(_)) => {
@@ -1114,7 +1114,7 @@ impl Repository {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> RepositoryResult<ObjectId> {
+    ) -> RepositoryResult<SnapshotId> {
         let parent_snapshot = self.snapshot_id.clone();
         let properties = properties.unwrap_or_default();
         let new_snapshot = self.flush(message, properties).await?;
@@ -1160,7 +1160,7 @@ impl Repository {
     pub async fn tag(
         &self,
         tag_name: &str,
-        snapshot_id: &ObjectId,
+        snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
         create_tag(
             self.storage.as_ref(),
