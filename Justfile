@@ -19,7 +19,7 @@ build-release *args='':
 
 # run clippy
 lint *args='':
-  cargo clippy --all-targets --all-features {{args}}
+  cargo clippy -p icechunk -p icechunk-python --all-features {{args}}
 
 # reformat all rust files
 format *args='':

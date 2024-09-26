@@ -70,3 +70,9 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# ruff
+.ruff_cache/
+
+# mypy
+.mypy_cache/

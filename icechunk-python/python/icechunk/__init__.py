@@ -1,12 +1,22 @@
 # module
 import json
 from typing import Any, AsyncGenerator, Self
-from ._icechunk_python import PyIcechunkStore, S3Credentials, pyicechunk_store_create, pyicechunk_store_from_json_config, Storage, pyicechunk_store_open_existing, pyicechunk_store_exists
+from ._icechunk_python import (
+    PyIcechunkStore,
+    S3Credentials,
+    pyicechunk_store_create,
+    pyicechunk_store_from_json_config,
+    Storage,
+    pyicechunk_store_open_existing,
+    pyicechunk_store_exists,
+)
 
 from zarr.abc.store import AccessMode, Store
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
+
+__all__ = ["IcechunkStore", "Storage", "S3Credentials"]
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -19,7 +29,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         if "mode" in kwargs:
             mode = kwargs.pop("mode")
-        else :
+        else:
             mode = "r"
 
         access_mode = AccessMode.from_literal(mode)
@@ -27,13 +37,17 @@ class IcechunkStore(Store, SyncMixin):
         if "storage" in kwargs:
             storage = kwargs.pop("storage")
         else:
-            raise ValueError("Storage configuration is required. Pass a Storage object to construct an IcechunkStore")
+            raise ValueError(
+                "Storage configuration is required. Pass a Storage object to construct an IcechunkStore"
+            )
 
         store_exists = await pyicechunk_store_exists(storage)
 
         if access_mode.overwrite:
             if store_exists:
-                raise ValueError("Store already exists and overwrite is not allowed for IcechunkStore")
+                raise ValueError(
+                    "Store already exists and overwrite is not allowed for IcechunkStore"
+                )
             store = await cls.create(storage, mode, *args, **kwargs)
         elif access_mode.create or access_mode.update:
             if store_exists:
@@ -59,13 +73,14 @@ class IcechunkStore(Store, SyncMixin):
         """Create a new IcechunkStore. This should not be called directly, instead use the create or open_existing class methods."""
         super().__init__(mode, *args, **kwargs)
         if store is None:
-            raise ValueError("An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods.")
+            raise ValueError(
+                "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
+            )
         self._store = store
 
     @classmethod
     async def from_config(
-        cls,
-        config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
+        cls, config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
     ) -> Self:
         """Create an IcechunkStore from a given configuration.
 
@@ -118,7 +133,7 @@ class IcechunkStore(Store, SyncMixin):
         config_str = json.dumps(config)
         read_only = mode == "r"
         store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
-        return cls(store=store, mode=mode, *args, **kwargs)
+        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
     async def open_existing(
@@ -140,7 +155,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         read_only = mode == "r"
         store = await pyicechunk_store_open_existing(storage, read_only=read_only)
-        return cls(store=store, mode=mode, *args, **kwargs)
+        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
     async def create(
@@ -159,7 +174,7 @@ class IcechunkStore(Store, SyncMixin):
         storage backend.
         """
         store = await pyicechunk_store_create(storage)
-        return cls(store=store, mode=mode, *args, **kwargs)
+        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @property
     def snapshot_id(self) -> str:
