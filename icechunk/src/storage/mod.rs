@@ -46,7 +46,7 @@ pub enum StorageError {
 
 type StorageResult<A> = Result<A, StorageError>;
 
-/// Fetch and write the parquet files that represent the dataset in object store
+/// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.

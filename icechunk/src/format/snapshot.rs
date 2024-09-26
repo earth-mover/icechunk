@@ -111,7 +111,7 @@ impl SnapshotMetadata {
 }
 
 impl Snapshot {
-    pub const INITIAL_COMMIT_MESSAGE: &'static str = "Dataset initialized";
+    pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
     pub fn new(
         short_term_history: VecDeque<SnapshotMetadata>,

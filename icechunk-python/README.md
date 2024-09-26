@@ -48,6 +48,9 @@ You can then commit your changes to save progress or share with others:
 
 ```python
 store.commit("Create foo array")
+
+async for parent in store.ancestry():
+    print(parent.message)
 ```
 
 See [`tests/test_timetravel.py`](tests/test_timetravel.py) for more example usage of the transactional features.

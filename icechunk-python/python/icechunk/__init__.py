@@ -77,8 +77,8 @@ class IcechunkStore(Store, SyncMixin):
                 "type": "s3, // one of "in_memory", "local_filesystem", "s3", "cached"
                 "...": "additional storage configuration"
             },
-            "dataset": {
-                // Optional, only required if you want to open an existing dataset
+            "repository": {
+                // Optional, only required if you want to open an existing repository
                 "version": {
                     "branch": "main",
                 },
@@ -219,6 +219,15 @@ class IcechunkStore(Store, SyncMixin):
     async def tag(self, tag_name: str, snapshot_id: str) -> None:
         """Tag an existing snapshot with a given name."""
         return await self._store.tag(tag_name, snapshot_id=snapshot_id)
+
+    def ancestry(self) -> AsyncGenerator[str, None]:
+        """Get the list of parents of the current version.
+
+        Returns
+        -------
+        AsyncGenerator[str, SnapshotMetadata]
+        """
+        return self._store.ancestry()
 
     async def empty(self) -> bool:
         """Check if the store is empty."""

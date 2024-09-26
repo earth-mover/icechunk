@@ -6,19 +6,20 @@ use std::sync::Arc;
 
 use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     refs::Ref,
     zarr::{
-        ConsolidatedStore, DatasetConfig, ObjectId, StorageConfig, StoreOptions,
+        ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreOptions,
         VersionInfo,
     },
-    Dataset,
+    Repository, SnapshotMetadata,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use storage::{PyS3Credentials, PyStorage};
-use streams::PyAsyncStringGenerator;
+use streams::PyAsyncGenerator;
 use tokio::sync::{Mutex, RwLock};
 
 #[pyclass]
@@ -35,9 +36,9 @@ struct PyStoreConfig {
     pub unsafe_overwrite_refs: Option<bool>,
 }
 
-impl From<&PyStoreConfig> for DatasetConfig {
+impl From<&PyStoreConfig> for RepositoryConfig {
     fn from(config: &PyStoreConfig) -> Self {
-        DatasetConfig {
+        RepositoryConfig {
             version: None,
             inline_chunk_threshold_bytes: config.inline_chunk_threshold,
             unsafe_overwrite_refs: config.unsafe_overwrite_refs,
@@ -72,19 +73,54 @@ impl PyStoreConfig {
         }
     }
 }
+#[pyclass(name = "SnapshotMetadata")]
+#[derive(Clone, Debug)]
+pub struct PySnapshotMetadata {
+    id: String,
+    written_at: DateTime<Utc>,
+    message: String,
+}
+
+#[pymethods]
+impl PySnapshotMetadata {
+    #[getter]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[getter]
+    pub fn message(&self) -> String {
+        self.message.clone()
+    }
+
+    #[getter]
+    pub fn written_at(&self) -> DateTime<Utc> {
+        self.written_at
+    }
+}
+
+impl From<SnapshotMetadata> for PySnapshotMetadata {
+    fn from(val: SnapshotMetadata) -> Self {
+        PySnapshotMetadata {
+            id: val.id.to_string(),
+            written_at: val.written_at,
+            message: val.message,
+        }
+    }
+}
 
 impl PyIcechunkStore {
     async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
         let storage =
             storage.make_cached_storage().map_err(PyIcechunkStoreError::UnkownError)?;
-        let exists = Dataset::exists(storage.as_ref()).await?;
+        let exists = Repository::exists(storage.as_ref()).await?;
         Ok(exists)
     }
 
     async fn open_existing(
         storage: StorageConfig,
         read_only: bool,
-        dataset_config: DatasetConfig,
+        repository_config: RepositoryConfig,
         store_config: StoreOptions,
     ) -> Result<Self, String> {
         let access_mode = if read_only {
@@ -92,9 +128,10 @@ impl PyIcechunkStore {
         } else {
             icechunk::zarr::AccessMode::ReadWrite
         };
-        let dataset = dataset_config
+        let repository = repository_config
             .with_version(VersionInfo::BranchTipRef(Ref::DEFAULT_BRANCH.to_string()));
-        let config = ConsolidatedStore { storage, dataset, config: Some(store_config) };
+        let config =
+            ConsolidatedStore { storage, repository, config: Some(store_config) };
 
         let store = Store::from_consolidated(&config, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
@@ -104,12 +141,12 @@ impl PyIcechunkStore {
 
     async fn create(
         storage: StorageConfig,
-        dataset_config: DatasetConfig,
+        repository_config: RepositoryConfig,
         store_config: StoreOptions,
     ) -> Result<Self, String> {
         let config = ConsolidatedStore {
             storage,
-            dataset: dataset_config,
+            repository: repository_config,
             config: Some(store_config),
         };
 
@@ -160,10 +197,10 @@ fn pyicechunk_store_open_existing<'py>(
     config: PyStoreConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
-    let dataset_config = (&config).into();
+    let repository_config = (&config).into();
     let store_config = (&config).into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::open_existing(storage, read_only, dataset_config, store_config)
+        PyIcechunkStore::open_existing(storage, read_only, repository_config, store_config)
             .await
             .map_err(PyValueError::new_err)
     })
@@ -188,10 +225,10 @@ fn pyicechunk_store_create<'py>(
     config: PyStoreConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
-    let dataset_config = (&config).into();
+    let repository_config = (&config).into();
     let store_config = (&config).into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::create(storage, dataset_config, store_config)
+        PyIcechunkStore::create(storage, repository_config, store_config)
             .await
             .map_err(PyValueError::new_err)
     })
@@ -343,6 +380,21 @@ impl PyIcechunkStore {
             writeable_store.tag(&tag, &oid).await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
+    }
+
+    pub fn ancestry(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        let list = self
+            .rt
+            .block_on(async move {
+                let store = self.store.read().await;
+                store.ancestry().await
+            })?
+            .map_ok(|parent| {
+                let parent = Into::<PySnapshotMetadata>::into(parent);
+                Python::with_gil(|py| parent.into_py(py))
+            });
+        let prepared_list = Arc::new(Mutex::new(list.boxed()));
+        Ok(PyAsyncGenerator::new(prepared_list))
     }
 
     pub fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -541,37 +593,41 @@ impl PyIcechunkStore {
         Ok(supports_listing)
     }
 
-    pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let list = self.rt.block_on(async move {
-            let store = self.store.read().await;
-            store.list().await
-        })?;
+    pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        let list = self
+            .rt
+            .block_on(async move {
+                let store = self.store.read().await;
+                store.list().await
+            })?
+            .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
+
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
-        Ok(PyAsyncStringGenerator::new(prepared_list))
+        Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    pub fn list_prefix(
-        &self,
-        prefix: String,
-    ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let list = self.rt.block_on(async move {
-            let store = self.store.read().await;
-            store.list_prefix(prefix.as_str()).await
-        })?;
+    pub fn list_prefix(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        let list = self
+            .rt
+            .block_on(async move {
+                let store = self.store.read().await;
+                store.list_prefix(prefix.as_str()).await
+            })?
+            .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
-        Ok(PyAsyncStringGenerator::new(prepared_list))
+        Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    pub fn list_dir(
-        &self,
-        prefix: String,
-    ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let list = self.rt.block_on(async move {
-            let store = self.store.read().await;
-            store.list_dir(prefix.as_str()).await
-        })?;
+    pub fn list_dir(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        let list = self
+            .rt
+            .block_on(async move {
+                let store = self.store.read().await;
+                store.list_dir(prefix.as_str()).await
+            })?
+            .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
-        Ok(PyAsyncStringGenerator::new(prepared_list))
+        Ok(PyAsyncGenerator::new(prepared_list))
     }
 }
 
@@ -581,6 +637,7 @@ fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorage>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_class::<PyS3Credentials>()?;
+    m.add_class::<PySnapshotMetadata>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;
