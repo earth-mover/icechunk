@@ -34,29 +34,30 @@ pub struct ObjectStoreVirtualChunkResolver {
 // to the chunk reference of known `offset` and `length`.
 pub fn construct_valid_byte_range(
     request: &ByteRange,
-    offset: u64,
-    length: u64,
+    chunk_offset: u64,
+    chunk_length: u64,
 ) -> ByteRange {
     // TODO: error for offset<0
     // TODO: error if request.start > offset + length
     // FIXME: we allow creating a ByteRange(start, end) where end < start
     let new_offset = match request.0 {
-        Bound::Unbounded => offset,
-        Bound::Included(start) => max(start, 0) + offset,
-        Bound::Excluded(start) => max(start, 0) + offset + 1,
+        Bound::Unbounded => chunk_offset,
+        Bound::Included(start) => max(start, 0) + chunk_offset,
+        Bound::Excluded(start) => max(start, 0) + chunk_offset + 1,
     };
-    let range = request.length().map_or(
-        ByteRange(Bound::Included(new_offset), Bound::Excluded(offset + length)),
+    request.length().map_or(
+        ByteRange(
+            Bound::Included(new_offset),
+            Bound::Excluded(chunk_offset + chunk_length),
+        ),
         |reqlen| {
             ByteRange(
                 Bound::Included(new_offset),
                 // no request can go past offset + length, so clamp it
-                Bound::Excluded(min(new_offset + reqlen, offset + length)),
+                Bound::Excluded(min(new_offset + reqlen, chunk_offset + chunk_length)),
             )
         },
-    );
-    dbg!(&request.length(), &request, &range);
-    range
+    )
 }
 
 #[async_trait]
