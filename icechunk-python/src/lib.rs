@@ -243,7 +243,7 @@ fn pyicechunk_store_create<'py>(
 
 #[pymethods]
 impl PyIcechunkStore {
-    pub fn checkout_snapshot<'py>(
+    fn checkout_snapshot<'py>(
         &'py self,
         py: Python<'py>,
         snapshot_id: String,
@@ -265,7 +265,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn checkout_branch<'py>(
+    fn checkout_branch<'py>(
         &'py self,
         py: Python<'py>,
         branch: String,
@@ -281,7 +281,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn checkout_tag<'py>(
+    fn checkout_tag<'py>(
         &'py self,
         py: Python<'py>,
         tag: String,
@@ -298,13 +298,13 @@ impl PyIcechunkStore {
     }
 
     #[getter]
-    pub fn snapshot_id(&self) -> PyIcechunkStoreResult<String> {
+    fn snapshot_id(&self) -> PyIcechunkStoreResult<String> {
         let store = self.store.blocking_read();
         let snapshot_id = self.rt.block_on(store.snapshot_id());
         Ok(snapshot_id.to_string())
     }
 
-    pub fn commit<'py>(
+    fn commit<'py>(
         &'py self,
         py: Python<'py>,
         message: String,
@@ -324,20 +324,20 @@ impl PyIcechunkStore {
     }
 
     #[getter]
-    pub fn branch(&self) -> PyIcechunkStoreResult<Option<String>> {
+    fn branch(&self) -> PyIcechunkStoreResult<Option<String>> {
         let store = self.store.blocking_read();
         let current_branch = store.current_branch();
         Ok(current_branch.clone())
     }
 
     #[getter]
-    pub fn has_uncommitted_changes(&self) -> PyIcechunkStoreResult<bool> {
+    fn has_uncommitted_changes(&self) -> PyIcechunkStoreResult<bool> {
         let store = self.store.blocking_read();
         let has_uncommitted_changes = self.rt.block_on(store.has_uncommitted_changes());
         Ok(has_uncommitted_changes)
     }
 
-    pub fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
@@ -351,7 +351,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn new_branch<'py>(
+    fn new_branch<'py>(
         &'py self,
         py: Python<'py>,
         branch_name: String,
@@ -370,7 +370,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn tag<'py>(
+    fn tag<'py>(
         &'py self,
         py: Python<'py>,
         tag: String,
@@ -389,7 +389,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn ancestry(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    fn ancestry(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         let list = self
             .rt
             .block_on(async move {
@@ -404,7 +404,7 @@ impl PyIcechunkStore {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    pub fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let is_empty =
@@ -413,7 +413,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
@@ -421,7 +421,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn get<'py>(
+    fn get<'py>(
         &'py self,
         py: Python<'py>,
         key: String,
@@ -444,7 +444,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn get_partial_values<'py>(
+    fn get_partial_values<'py>(
         &'py self,
         py: Python<'py>,
         key_ranges: KeyRanges,
@@ -477,7 +477,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn exists<'py>(
+    fn exists<'py>(
         &'py self,
         py: Python<'py>,
         key: String,
@@ -495,18 +495,18 @@ impl PyIcechunkStore {
     }
 
     #[getter]
-    pub fn supports_deletes(&self) -> PyIcechunkStoreResult<bool> {
+    fn supports_deletes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_deletes = self.store.blocking_read().supports_deletes()?;
         Ok(supports_deletes)
     }
 
     #[getter]
-    pub fn supports_writes(&self) -> PyIcechunkStoreResult<bool> {
+    fn supports_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_writes = self.store.blocking_read().supports_writes()?;
         Ok(supports_writes)
     }
 
-    pub fn set<'py>(
+    fn set<'py>(
         &'py self,
         py: Python<'py>,
         key: String,
@@ -530,7 +530,7 @@ impl PyIcechunkStore {
         })
     }
 
-    pub fn delete<'py>(
+    fn delete<'py>(
         &'py self,
         py: Python<'py>,
         key: String,
@@ -549,13 +549,13 @@ impl PyIcechunkStore {
     }
 
     #[getter]
-    pub fn supports_partial_writes(&self) -> PyIcechunkStoreResult<bool> {
+    fn supports_partial_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_partial_writes =
             self.store.blocking_read().supports_partial_writes()?;
         Ok(supports_partial_writes)
     }
 
-    pub fn set_partial_values<'py>(
+    fn set_partial_values<'py>(
         &'py self,
         py: Python<'py>,
         key_start_values: Vec<(String, ChunkOffset, Vec<u8>)>,
@@ -595,12 +595,12 @@ impl PyIcechunkStore {
     }
 
     #[getter]
-    pub fn supports_listing(&self) -> PyIcechunkStoreResult<bool> {
+    fn supports_listing(&self) -> PyIcechunkStoreResult<bool> {
         let supports_listing = self.store.blocking_read().supports_listing()?;
         Ok(supports_listing)
     }
 
-    pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    fn list(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         let list = self
             .rt
             .block_on(async move {
@@ -613,7 +613,7 @@ impl PyIcechunkStore {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    pub fn list_prefix(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    fn list_prefix(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         let list = self
             .rt
             .block_on(async move {
@@ -625,7 +625,7 @@ impl PyIcechunkStore {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    pub fn list_dir(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    fn list_dir(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         let list = self
             .rt
             .block_on(async move {

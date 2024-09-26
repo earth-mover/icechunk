@@ -11,7 +11,7 @@ use thiserror::Error;
 /// the errors where this is returned from a python class
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
-pub enum PyIcechunkStoreError {
+pub(crate) enum PyIcechunkStoreError {
     #[error("store error: {0}")]
     StoreError(#[from] StoreError),
     #[error("repository Error: {0}")]
@@ -32,4 +32,4 @@ impl From<PyIcechunkStoreError> for PyErr {
     }
 }
 
-pub type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
+pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;

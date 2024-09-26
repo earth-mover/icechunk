@@ -14,7 +14,7 @@ type PyObjectStream =
 ///
 /// Inspired by https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c
 #[pyclass]
-pub struct PyAsyncGenerator {
+pub(crate) struct PyAsyncGenerator {
     stream: PyObjectStream,
 }
 
