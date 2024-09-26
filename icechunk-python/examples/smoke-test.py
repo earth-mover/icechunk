@@ -175,7 +175,7 @@ async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store
 
 if __name__ == "__main__":
     MEMORY = Storage.memory("new")
-    MINIO = Storage.s3_from_creds(
+    MINIO = Storage.s3_from_credentials(
         bucket="testbucket",
         prefix="root-icechunk",
         credentials=S3Credentials(

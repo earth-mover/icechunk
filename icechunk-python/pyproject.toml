@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "coverage",
+    "mypy",
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
