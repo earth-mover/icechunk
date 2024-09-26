@@ -11,7 +11,8 @@ use futures::StreamExt;
 use icechunk::{
     refs::Ref,
     zarr::{
-        DatasetConfig, ObjectId, StorageConfig, ConsolidatedStore, StoreOptions, VersionInfo,
+        ConsolidatedStore, DatasetConfig, ObjectId, StorageConfig, StoreOptions,
+        VersionInfo,
     },
     Dataset,
 };
@@ -106,11 +107,15 @@ impl PyIcechunkStore {
         dataset_config: DatasetConfig,
         store_config: StoreOptions,
     ) -> Result<Self, String> {
-        let config =
-            ConsolidatedStore { storage, dataset: dataset_config, config: Some(store_config) };
+        let config = ConsolidatedStore {
+            storage,
+            dataset: dataset_config,
+            config: Some(store_config),
+        };
 
         let store =
-            Store::from_consolidated(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
+            Store::from_consolidated(&config, icechunk::zarr::AccessMode::ReadWrite)
+                .await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { store, rt })
