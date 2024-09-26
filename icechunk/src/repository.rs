@@ -49,7 +49,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
-pub struct DatasetConfig {
+pub struct RepositoryConfig {
     // Chunks smaller than this will be stored inline in the manifst
     pub inline_threshold_bytes: u16,
     // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
@@ -59,15 +59,15 @@ pub struct DatasetConfig {
     pub unsafe_overwrite_refs: bool,
 }
 
-impl Default for DatasetConfig {
+impl Default for RepositoryConfig {
     fn default() -> Self {
         Self { inline_threshold_bytes: 512, unsafe_overwrite_refs: false }
     }
 }
 
 #[derive(Debug)]
-pub struct Dataset {
-    config: DatasetConfig,
+pub struct Repository {
+    config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: ObjectId,
     last_node_id: Option<NodeId>,
@@ -211,15 +211,15 @@ impl ChangeSet {
 }
 
 #[derive(Debug, Clone)]
-pub struct DatasetBuilder {
-    config: DatasetConfig,
+pub struct RepositoryBuilder {
+    config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: ObjectId,
 }
 
-impl DatasetBuilder {
+impl RepositoryBuilder {
     fn new(storage: Arc<dyn Storage + Send + Sync>, snapshot_id: ObjectId) -> Self {
-        Self { config: DatasetConfig::default(), snapshot_id, storage }
+        Self { config: RepositoryConfig::default(), snapshot_id, storage }
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
@@ -232,18 +232,22 @@ impl DatasetBuilder {
         self
     }
 
-    pub fn with_config(&mut self, config: DatasetConfig) -> &mut Self {
+    pub fn with_config(&mut self, config: RepositoryConfig) -> &mut Self {
         self.config = config;
         self
     }
 
-    pub fn build(&self) -> Dataset {
-        Dataset::new(self.config.clone(), self.storage.clone(), self.snapshot_id.clone())
+    pub fn build(&self) -> Repository {
+        Repository::new(
+            self.config.clone(),
+            self.storage.clone(),
+            self.snapshot_id.clone(),
+        )
     }
 }
 
 #[derive(Debug, Error)]
-pub enum DatasetError {
+pub enum RepositoryError {
     #[error("error contacting storage")]
     StorageError(#[from] StorageError),
     #[error("error in icechunk file")]
@@ -256,7 +260,7 @@ pub enum DatasetError {
     NotAGroup { node: NodeSnapshot, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
     AlreadyExists { node: NodeSnapshot, message: String },
-    #[error("cannot commit, no changes made to the dataset")]
+    #[error("cannot commit, no changes made to the repository")]
     NoChangesToCommit,
     #[error("unknown flush error")]
     OtherFlushError,
@@ -266,28 +270,28 @@ pub enum DatasetError {
     Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
-    #[error("the dataset has been initialized already (default branch exists)")]
+    #[error("the repository has been initialized already (default branch exists)")]
     AlreadyInitialized,
     #[error("error when handling virtual reference {0}")]
     VirtualReferenceError(#[from] VirtualReferenceError),
 }
 
-type DatasetResult<T> = Result<T, DatasetError>;
+type RepositoryResult<T> = Result<T, RepositoryError>;
 
 /// FIXME: what do we want to do with implicit groups?
 ///
-impl Dataset {
+impl Repository {
     pub fn update(
         storage: Arc<dyn Storage + Send + Sync>,
         previous_version_snapshot_id: ObjectId,
-    ) -> DatasetBuilder {
-        DatasetBuilder::new(storage, previous_version_snapshot_id)
+    ) -> RepositoryBuilder {
+        RepositoryBuilder::new(storage, previous_version_snapshot_id)
     }
 
     pub async fn from_branch_tip(
         storage: Arc<dyn Storage + Send + Sync>,
         branch_name: &str,
-    ) -> DatasetResult<DatasetBuilder> {
+    ) -> RepositoryResult<RepositoryBuilder> {
         let snapshot_id = fetch_branch_tip(storage.as_ref(), branch_name).await?.snapshot;
         Ok(Self::update(storage, snapshot_id))
     }
@@ -295,21 +299,21 @@ impl Dataset {
     pub async fn from_tag(
         storage: Arc<dyn Storage + Send + Sync>,
         tag_name: &str,
-    ) -> DatasetResult<DatasetBuilder> {
+    ) -> RepositoryResult<RepositoryBuilder> {
         let ref_data = fetch_tag(storage.as_ref(), tag_name).await?;
         Ok(Self::update(storage, ref_data.snapshot))
     }
 
-    /// Initialize a new dataset with a single empty commit to the main branch.
+    /// Initialize a new repository with a single empty commit to the main branch.
     ///
-    /// This is the default way to create a new dataset to avoid race conditions
-    /// when creating datasets.
+    /// This is the default way to create a new repository to avoid race conditions
+    /// when creating repositories.
     pub async fn init(
         storage: Arc<dyn Storage + Send + Sync>,
         unsafe_overwrite_refs: bool,
-    ) -> DatasetResult<DatasetBuilder> {
+    ) -> RepositoryResult<RepositoryBuilder> {
         if Self::exists(storage.as_ref()).await? {
-            return Err(DatasetError::AlreadyInitialized);
+            return Err(RepositoryError::AlreadyInitialized);
         }
         let new_snapshot = Snapshot::empty();
         let new_snapshot_id = ObjectId::random();
@@ -325,10 +329,10 @@ impl Dataset {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        Ok(DatasetBuilder::new(storage, new_snapshot_id))
+        Ok(RepositoryBuilder::new(storage, new_snapshot_id))
     }
 
-    pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> DatasetResult<bool> {
+    pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
         match fetch_branch_tip(storage, Ref::DEFAULT_BRANCH).await {
             Ok(_) => Ok(true),
             Err(RefError::RefNotFound(_)) => Ok(false),
@@ -346,11 +350,11 @@ impl Dataset {
     }
 
     fn new(
-        config: DatasetConfig,
+        config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
         snapshot_id: ObjectId,
     ) -> Self {
-        Dataset {
+        Repository {
             snapshot_id,
             config,
             storage,
@@ -360,18 +364,18 @@ impl Dataset {
         }
     }
 
-    /// Returns a pointer to the storage for the dataset
+    /// Returns a pointer to the storage for the repository
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
         &self.storage
     }
 
-    /// Returns the head snapshot id of the dataset, not including
+    /// Returns the head snapshot id of the repository, not including
     /// anm uncommitted changes
     pub fn snapshot_id(&self) -> &ObjectId {
         &self.snapshot_id
     }
 
-    /// Indicates if the dataset has pending changes
+    /// Indicates if the repository has pending changes
     pub fn has_uncommitted_changes(&self) -> bool {
         !self.change_set.is_empty()
     }
@@ -379,7 +383,7 @@ impl Dataset {
     /// Returns the sequence of parents of the current session, in order of latest first.
     pub async fn ancestry(
         &self,
-    ) -> DatasetResult<impl Stream<Item = DatasetResult<SnapshotMetadata>>> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
         let parent = self.storage.fetch_snapshot(self.snapshot_id()).await?;
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
@@ -395,14 +399,14 @@ impl Dataset {
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_group(&mut self, path: Path) -> DatasetResult<()> {
+    pub async fn add_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_node(&path).await {
-            Err(DatasetError::NodeNotFound { .. }) => {
+            Err(RepositoryError::NodeNotFound { .. }) => {
                 let id = self.reserve_node_id().await?;
                 self.change_set.add_group(path.clone(), id);
                 Ok(())
             }
-            Ok(node) => Err(DatasetError::AlreadyExists {
+            Ok(node) => Err(RepositoryError::AlreadyExists {
                 node,
                 message: "trying to add group".to_string(),
             }),
@@ -410,7 +414,7 @@ impl Dataset {
         }
     }
 
-    pub async fn delete_group(&mut self, path: Path) -> DatasetResult<()> {
+    pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         self.get_group(&path)
             .await
             .map(|node| self.change_set.delete_group(&node.path, node.id))
@@ -423,14 +427,14 @@ impl Dataset {
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
-    ) -> DatasetResult<()> {
+    ) -> RepositoryResult<()> {
         match self.get_node(&path).await {
-            Err(DatasetError::NodeNotFound { .. }) => {
+            Err(RepositoryError::NodeNotFound { .. }) => {
                 let id = self.reserve_node_id().await?;
                 self.change_set.add_array(path, id, metadata);
                 Ok(())
             }
-            Ok(node) => Err(DatasetError::AlreadyExists {
+            Ok(node) => Err(RepositoryError::AlreadyExists {
                 node,
                 message: "trying to add array".to_string(),
             }),
@@ -445,13 +449,13 @@ impl Dataset {
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
-    ) -> DatasetResult<()> {
+    ) -> RepositoryResult<()> {
         self.get_array(&path)
             .await
             .map(|node| self.change_set.update_array(node.id, metadata))
     }
 
-    pub async fn delete_array(&mut self, path: Path) -> DatasetResult<()> {
+    pub async fn delete_array(&mut self, path: Path) -> RepositoryResult<()> {
         self.get_array(&path)
             .await
             .map(|node| self.change_set.delete_array(&node.path, node.id))
@@ -462,7 +466,7 @@ impl Dataset {
         &mut self,
         path: Path,
         atts: Option<UserAttributes>,
-    ) -> DatasetResult<()> {
+    ) -> RepositoryResult<()> {
         let node = self.get_node(&path).await?;
         self.change_set.update_user_attributes(node.id, atts);
         Ok(())
@@ -476,13 +480,13 @@ impl Dataset {
         path: Path,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
-    ) -> DatasetResult<()> {
+    ) -> RepositoryResult<()> {
         self.get_array(&path)
             .await
             .map(|node| self.change_set.set_chunk_ref(node.id, coord, data))
     }
 
-    async fn compute_last_node_id(&self) -> DatasetResult<NodeId> {
+    async fn compute_last_node_id(&self) -> RepositoryResult<NodeId> {
         let node_id = self
             .storage
             .fetch_snapshot(&self.snapshot_id)
@@ -493,7 +497,7 @@ impl Dataset {
         Ok(node_id)
     }
 
-    async fn reserve_node_id(&mut self) -> DatasetResult<NodeId> {
+    async fn reserve_node_id(&mut self) -> RepositoryResult<NodeId> {
         let last = self.last_node_id.unwrap_or(self.compute_last_node_id().await?);
         let new = last + 1;
         self.last_node_id = Some(new);
@@ -502,7 +506,7 @@ impl Dataset {
 
     // FIXME: add moves
 
-    pub async fn get_node(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
+    pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
         // We need to look for nodes in self.change_set and the snapshot file
         match self.get_new_node(path) {
             Some(node) => Ok(node),
@@ -511,7 +515,7 @@ impl Dataset {
                 if self.change_set.deleted_groups.contains(&node.id)
                     || self.change_set.deleted_arrays.contains(&node.id)
                 {
-                    Err(DatasetError::NodeNotFound {
+                    Err(RepositoryError::NodeNotFound {
                         path: path.clone(),
                         message: "getting node".to_string(),
                     })
@@ -522,10 +526,10 @@ impl Dataset {
         }
     }
 
-    pub async fn get_array(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
+    pub async fn get_array(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
         match self.get_node(path).await {
             res @ Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => res,
-            Ok(node @ NodeSnapshot { .. }) => Err(DatasetError::NotAnArray {
+            Ok(node @ NodeSnapshot { .. }) => Err(RepositoryError::NotAnArray {
                 node,
                 message: "getting an array".to_string(),
             }),
@@ -533,10 +537,10 @@ impl Dataset {
         }
     }
 
-    pub async fn get_group(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
+    pub async fn get_group(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
         match self.get_node(path).await {
             res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
-            Ok(node @ NodeSnapshot { .. }) => Err(DatasetError::NotAGroup {
+            Ok(node @ NodeSnapshot { .. }) => Err(RepositoryError::NotAGroup {
                 node,
                 message: "getting a group".to_string(),
             }),
@@ -544,19 +548,19 @@ impl Dataset {
         }
     }
 
-    async fn get_existing_node(&self, path: &Path) -> DatasetResult<NodeSnapshot> {
+    async fn get_existing_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
         // An existing node is one that is present in a Snapshot file on storage
         let snapshot_id = &self.snapshot_id;
         let snapshot = self.storage.fetch_snapshot(snapshot_id).await?;
 
         let node = snapshot.get_node(path).map_err(|err| match err {
             // A missing node here is not really a format error, so we need to
-            // generate the correct error for datasets
-            IcechunkFormatError::NodeNotFound { path } => DatasetError::NodeNotFound {
+            // generate the correct error for repositories
+            IcechunkFormatError::NodeNotFound { path } => RepositoryError::NodeNotFound {
                 path,
                 message: "existing node not found".to_string(),
             },
-            err => DatasetError::FormatError(err),
+            err => RepositoryError::FormatError(err),
         })?;
         let session_atts = self
             .change_set
@@ -619,12 +623,12 @@ impl Dataset {
         &self,
         path: &Path,
         coords: &ChunkIndices,
-    ) -> DatasetResult<Option<ChunkPayload>> {
+    ) -> RepositoryResult<Option<ChunkPayload>> {
         let node = self.get_node(path).await?;
         // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
         // get_array should return the array data, not a node
         match node.node_data {
-            NodeData::Group => Err(DatasetError::NotAnArray {
+            NodeData::Group => Err(RepositoryError::NotAnArray {
                 node,
                 message: "getting chunk reference".to_string(),
             }),
@@ -651,10 +655,10 @@ impl Dataset {
     ///
     /// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
     /// than needed. We want the bytes to be pulled from object store without holding a ref to the
-    /// [`Dataset`], that way, writes can happen concurrently.
+    /// [`Repository`], that way, writes can happen concurrently.
     ///
     /// The result of calling this function is None, if the chunk reference is not present in the
-    /// dataset, or a [`Future`] that will fetch the bytes, possibly failing.
+    /// repository, or a [`Future`] that will fetch the bytes, possibly failing.
     ///
     /// Example usage:
     /// ```ignore
@@ -676,8 +680,9 @@ impl Dataset {
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> DatasetResult<Option<Pin<Box<dyn Future<Output = DatasetResult<Bytes>> + Send>>>>
-    {
+    ) -> RepositoryResult<
+        Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>,
+    > {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
                 let storage = Arc::clone(&self.storage);
@@ -713,20 +718,23 @@ impl Dataset {
     /// Returns a function that can be used to asynchronously write chunk bytes to object store
     ///
     /// The reason to use this design, instead of simple pass the [`Bytes`] is to avoid holding a
-    /// reference to the dataset while the payload is uploaded to object store. This way, the
+    /// reference to the repository while the payload is uploaded to object store. This way, the
     /// reference is hold very briefly, and then an owned object is obtained which can do the actual
-    /// upload without holding any Dataset refernces.
+    /// upload without holding any [`Repository`] references.
     ///
     /// Example usage:
     /// ```ignore
-    /// dataset.get_chunk_writer()(Bytes::copy_from_slice(b"hello")).await?
+    /// repository.get_chunk_writer()(Bytes::copy_from_slice(b"hello")).await?
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
     pub fn get_chunk_writer(
         &self,
-    ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = DatasetResult<ChunkPayload>> + Send>>
-    {
+    ) -> impl FnOnce(
+        Bytes,
+    ) -> Pin<
+        Box<dyn Future<Output = RepositoryResult<ChunkPayload>> + Send>,
+    > {
         let threshold = self.config.inline_threshold_bytes as usize;
         let storage = Arc::clone(&self.storage);
         move |data: Bytes| {
@@ -747,7 +755,7 @@ impl Dataset {
         node: NodeId,
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
-    ) -> DatasetResult<Option<ChunkPayload>> {
+    ) -> RepositoryResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
         for manifest in manifests {
             let manifest_structure =
@@ -766,7 +774,8 @@ impl Dataset {
     /// Warning: The presence of a single error may mean multiple missing items
     async fn updated_chunk_iterator(
         &self,
-    ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(PathBuf, ChunkInfo)>> + '_>
+    {
         let snapshot = self.storage.fetch_snapshot(&self.snapshot_id).await?;
         let nodes = futures::stream::iter(snapshot.iter_arc());
         let res = nodes.then(move |node| async move {
@@ -780,7 +789,7 @@ impl Dataset {
     async fn node_chunk_iterator(
         &self,
         node: NodeSnapshot,
-    ) -> impl Stream<Item = DatasetResult<ChunkInfo>> + '_ {
+    ) -> impl Stream<Item = RepositoryResult<ChunkInfo>> + '_ {
         match node.node_data {
             NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
             NodeData::Array(_, manifests) => {
@@ -838,7 +847,7 @@ impl Dataset {
                                         // single error value.
                                         Err(err) => futures::future::Either::Right(
                                             futures::stream::once(ready(Err(
-                                                DatasetError::StorageError(err),
+                                                RepositoryError::StorageError(err),
                                             ))),
                                         ),
                                     }
@@ -869,7 +878,7 @@ impl Dataset {
     async fn updated_existing_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-    ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+    ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         // TODO: solve this duplication, there is always the possibility of this being the first
         // version
         let updated_nodes =
@@ -921,7 +930,7 @@ impl Dataset {
     async fn updated_nodes<'a>(
         &'a self,
         manifest_id: &'a ObjectId,
-    ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+    ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
         Ok(self
             .updated_existing_nodes(manifest_id)
             .await?
@@ -963,22 +972,23 @@ impl Dataset {
 
     pub async fn list_nodes(
         &self,
-    ) -> DatasetResult<impl Iterator<Item = NodeSnapshot> + '_> {
+    ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + '_> {
         self.updated_nodes(&ObjectId::FAKE).await
     }
 
     pub async fn all_chunks(
         &self,
-    ) -> DatasetResult<impl Stream<Item = DatasetResult<(PathBuf, ChunkInfo)>> + '_> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(PathBuf, ChunkInfo)>> + '_>
+    {
         let existing_array_chunks = self.updated_chunk_iterator().await?;
         let new_array_chunks =
             futures::stream::iter(self.change_set.new_arrays_chunk_iterator().map(Ok));
         Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
-    /// After changes to the dataset have been made, this generates and writes to `Storage` the updated datastructures.
+    /// After changes to the repository have been made, this generates and writes to `Storage` the updated datastructures.
     ///
-    /// After calling this, changes are reset and the [Dataset] can continue to be used for further
+    /// After calling this, changes are reset and the [`Repository`] can continue to be used for further
     /// changes.
     ///
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
@@ -987,9 +997,9 @@ impl Dataset {
         &mut self,
         message: &str,
         properties: SnapshotProperties,
-    ) -> DatasetResult<ObjectId> {
+    ) -> RepositoryResult<ObjectId> {
         if !self.has_uncommitted_changes() {
-            return Err(DatasetError::NoChangesToCommit);
+            return Err(RepositoryError::NoChangesToCommit);
         }
         // We search for the current manifest. We are assumming a single one for now
         let old_snapshot = self.storage().fetch_snapshot(&self.snapshot_id).await?;
@@ -1069,7 +1079,7 @@ impl Dataset {
                 self.change_set = ChangeSet::default();
                 Ok(new_snapshot_id.clone())
             }
-            Err(_) => Err(DatasetError::OtherFlushError),
+            Err(_) => Err(RepositoryError::OtherFlushError),
         }
     }
 
@@ -1078,7 +1088,7 @@ impl Dataset {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> DatasetResult<ObjectId> {
+    ) -> RepositoryResult<ObjectId> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
         match current {
             Err(RefError::RefNotFound(_)) => {
@@ -1088,7 +1098,7 @@ impl Dataset {
             Ok(ref_data) => {
                 // we can detect there will be a conflict before generating the new snapshot
                 if ref_data.snapshot != self.snapshot_id {
-                    Err(DatasetError::Conflict {
+                    Err(RepositoryError::Conflict {
                         expected_parent: Some(self.snapshot_id.clone()),
                         actual_parent: Some(ref_data.snapshot.clone()),
                     })
@@ -1104,7 +1114,7 @@ impl Dataset {
         update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
-    ) -> DatasetResult<ObjectId> {
+    ) -> RepositoryResult<ObjectId> {
         let parent_snapshot = self.snapshot_id.clone();
         let properties = properties.unwrap_or_default();
         let new_snapshot = self.flush(message, properties).await?;
@@ -1120,13 +1130,13 @@ impl Dataset {
         {
             Ok(_) => Ok(new_snapshot),
             Err(RefError::Conflict { expected_parent, actual_parent }) => {
-                Err(DatasetError::Conflict { expected_parent, actual_parent })
+                Err(RepositoryError::Conflict { expected_parent, actual_parent })
             }
             Err(err) => Err(err.into()),
         }
     }
 
-    pub async fn new_branch(&self, branch_name: &str) -> DatasetResult<BranchVersion> {
+    pub async fn new_branch(&self, branch_name: &str) -> RepositoryResult<BranchVersion> {
         // TODO: The parent snapshot should exist?
         let version = match update_branch(
             self.storage.as_ref(),
@@ -1139,7 +1149,7 @@ impl Dataset {
         {
             Ok(branch_version) => Ok(branch_version),
             Err(RefError::Conflict { expected_parent, actual_parent }) => {
-                Err(DatasetError::Conflict { expected_parent, actual_parent })
+                Err(RepositoryError::Conflict { expected_parent, actual_parent })
             }
             Err(err) => Err(err.into()),
         }?;
@@ -1147,7 +1157,11 @@ impl Dataset {
         Ok(version)
     }
 
-    pub async fn tag(&self, tag_name: &str, snapshot_id: &ObjectId) -> DatasetResult<()> {
+    pub async fn tag(
+        &self,
+        tag_name: &str,
+        snapshot_id: &ObjectId,
+    ) -> RepositoryResult<()> {
         create_tag(
             self.storage.as_ref(),
             tag_name,
@@ -1162,7 +1176,7 @@ impl Dataset {
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
-) -> DatasetResult<ChunkPayload> {
+) -> RepositoryResult<ChunkPayload> {
     let new_id = ObjectId::random();
     storage.write_chunk(new_id.clone(), data.clone()).await?;
     Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
@@ -1193,8 +1207,8 @@ fn update_manifest(
 }
 
 pub async fn get_chunk(
-    reader: Option<Pin<Box<dyn Future<Output = DatasetResult<Bytes>> + Send>>>,
-) -> DatasetResult<Option<Bytes>> {
+    reader: Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>,
+) -> RepositoryResult<Option<Bytes>> {
     match reader {
         Some(reader) => Ok(Some(reader.await?)),
         None => Ok(None),
@@ -1227,115 +1241,115 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_group(
         #[strategy(node_paths())] path: Path,
-        #[strategy(empty_datasets())] mut dataset: Dataset,
+        #[strategy(empty_repositories())] mut repository: Repository,
     ) {
-        // getting any path from an empty dataset must fail
-        prop_assert!(dataset.get_node(&path).await.is_err());
+        // getting any path from an empty repository must fail
+        prop_assert!(repository.get_node(&path).await.is_err());
 
         // adding a new group must succeed
-        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+        prop_assert!(repository.add_group(path.clone()).await.is_ok());
 
         // Getting a group just added must succeed
-        let node = dataset.get_node(&path).await;
+        let node = repository.get_node(&path).await;
         prop_assert!(node.is_ok());
 
         // Getting the group twice must be equal
-        prop_assert_eq!(node.unwrap(), dataset.get_node(&path).await.unwrap());
+        prop_assert_eq!(node.unwrap(), repository.get_node(&path).await.unwrap());
 
         // adding an existing group fails
         let matches = matches!(
-            dataset.add_group(path.clone()).await.unwrap_err(),
-            DatasetError::AlreadyExists{node, ..} if node.path == path
+            repository.add_group(path.clone()).await.unwrap_err(),
+            RepositoryError::AlreadyExists{node, ..} if node.path == path
         );
         prop_assert!(matches);
 
         // deleting the added group must succeed
-        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
 
         // deleting twice must fail
         let matches = matches!(
-            dataset.delete_group(path.clone()).await.unwrap_err(),
-            DatasetError::NodeNotFound{path: reported_path, ..} if reported_path == path
+            repository.delete_group(path.clone()).await.unwrap_err(),
+            RepositoryError::NodeNotFound{path: reported_path, ..} if reported_path == path
         );
         prop_assert!(matches);
 
         // getting a deleted group must fail
-        prop_assert!(dataset.get_node(&path).await.is_err());
+        prop_assert!(repository.get_node(&path).await.is_err());
 
         // adding again must succeed
-        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+        prop_assert!(repository.add_group(path.clone()).await.is_ok());
 
         // deleting again must succeed
-        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
     }
 
     #[proptest(async = "tokio")]
     async fn test_add_delete_array(
         #[strategy(node_paths())] path: Path,
         #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(empty_datasets())] mut dataset: Dataset,
+        #[strategy(empty_repositories())] mut repository: Repository,
     ) {
         // new array must always succeed
-        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
 
         // adding to the same path must fail
-        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_err());
+        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_err());
 
         // first delete must succeed
-        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
 
         // deleting twice must fail
         let matches = matches!(
-            dataset.delete_array(path.clone()).await.unwrap_err(),
-            DatasetError::NodeNotFound{path: reported_path, ..} if reported_path == path
+            repository.delete_array(path.clone()).await.unwrap_err(),
+            RepositoryError::NodeNotFound{path: reported_path, ..} if reported_path == path
         );
         prop_assert!(matches);
 
         // adding again must succeed
-        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
 
         // deleting again must succeed
-        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
     }
 
     #[proptest(async = "tokio")]
     async fn test_add_array_group_clash(
         #[strategy(node_paths())] path: Path,
         #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(empty_datasets())] mut dataset: Dataset,
+        #[strategy(empty_repositories())] mut repository: Repository,
     ) {
         // adding a group at an existing array node must fail
-        prop_assert!(dataset.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
         let matches = matches!(
-            dataset.add_group(path.clone()).await.unwrap_err(),
-            DatasetError::AlreadyExists{node, ..} if node.path == path
+            repository.add_group(path.clone()).await.unwrap_err(),
+            RepositoryError::AlreadyExists{node, ..} if node.path == path
         );
         prop_assert!(matches);
 
         let matches = matches!(
-            dataset.delete_group(path.clone()).await.unwrap_err(),
-            DatasetError::NotAGroup{node, ..} if node.path == path
+            repository.delete_group(path.clone()).await.unwrap_err(),
+            RepositoryError::NotAGroup{node, ..} if node.path == path
         );
         prop_assert!(matches);
-        prop_assert!(dataset.delete_array(path.clone()).await.is_ok());
+        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
 
         // adding an array at an existing group node must fail
-        prop_assert!(dataset.add_group(path.clone()).await.is_ok());
+        prop_assert!(repository.add_group(path.clone()).await.is_ok());
         let matches = matches!(
-            dataset.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
-            DatasetError::AlreadyExists{node, ..} if node.path == path
+            repository.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
+            RepositoryError::AlreadyExists{node, ..} if node.path == path
         );
         prop_assert!(matches);
         let matches = matches!(
-            dataset.delete_array(path.clone()).await.unwrap_err(),
-            DatasetError::NotAnArray{node, ..} if node.path == path
+            repository.delete_array(path.clone()).await.unwrap_err(),
+            RepositoryError::NotAnArray{node, ..} if node.path == path
         );
         prop_assert!(matches);
-        prop_assert!(dataset.delete_group(path.clone()).await.is_ok());
+        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_dataset_with_updates() -> Result<(), Box<dyn Error>> {
+    async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
 
         let array_id = 2;
@@ -1407,7 +1421,7 @@ mod tests {
         let snapshot = Arc::new(Snapshot::first_from_iter(None, nodes.iter().cloned()));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-        let mut ds = Dataset::update(Arc::new(storage), snapshot_id)
+        let mut ds = Repository::update(Arc::new(storage), snapshot_id)
             .with_inline_threshold_bytes(512)
             .build();
 
@@ -1648,15 +1662,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_dataset_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
+    async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-        let storage = Dataset::add_in_mem_asset_caching(Arc::clone(&logging_c));
+        let storage = Repository::add_in_mem_asset_caching(Arc::clone(&logging_c));
 
-        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1796,7 +1810,7 @@ mod tests {
         .await?;
 
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
-        let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
+        let ds = Repository::update(Arc::clone(&storage), snapshot_id).build();
 
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
@@ -1819,7 +1833,7 @@ mod tests {
         ));
 
         //test the previous version is still alive
-        let ds = Dataset::update(Arc::clone(&storage), previous_snapshot_id).build();
+        let ds = Repository::update(Arc::clone(&storage), previous_snapshot_id).build();
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1839,7 +1853,7 @@ mod tests {
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1879,7 +1893,7 @@ mod tests {
         )
         .await?;
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
-        let ds = Dataset::update(Arc::clone(&storage), snapshot_id).build();
+        let ds = Repository::update(Arc::clone(&storage), snapshot_id).build();
         let coords = ds
             .all_chunks()
             .await?
@@ -1903,7 +1917,7 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
         ds.add_group("/".into()).await?;
@@ -1931,7 +1945,7 @@ mod tests {
         );
 
         let mut ds =
-            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
         assert_eq!(
             ds.get_node(&"/".into()).await.ok(),
             Some(NodeSnapshot {
@@ -1986,11 +2000,11 @@ mod tests {
     async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let _ = Dataset::init(Arc::clone(&storage), false).await?;
+        let _ = Repository::init(Arc::clone(&storage), false).await?;
         let mut ds1 =
-            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
         let mut ds2 =
-            Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
 
         ds1.add_group("a".into()).await?;
         ds2.add_group("b".into()).await?;
@@ -2016,17 +2030,17 @@ mod tests {
         let ok = match (&res1, &res2) {
             (
                 Ok(new_snap),
-                Err(DatasetError::Conflict { expected_parent: _, actual_parent }),
+                Err(RepositoryError::Conflict { expected_parent: _, actual_parent }),
             ) if Some(new_snap) == actual_parent.as_ref() => true,
             (
-                Err(DatasetError::Conflict { expected_parent: _, actual_parent }),
+                Err(RepositoryError::Conflict { expected_parent: _, actual_parent }),
                 Ok(new_snap),
             ) if Some(new_snap) == actual_parent.as_ref() => true,
             _ => false,
         };
         assert!(ok);
 
-        let ds = Dataset::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+        let ds = Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
         let parents = ds.ancestry().await?.try_collect::<Vec<_>>().await?;
         assert_eq!(parents.len(), 2);
         let msg = parents[0].message.as_str();
@@ -2040,8 +2054,8 @@ mod tests {
     mod state_machine_test {
         use crate::format::snapshot::NodeData;
         use crate::format::Path;
-        use crate::Dataset;
         use crate::ObjectStorage;
+        use crate::Repository;
         use futures::Future;
         // use futures::Future;
         use proptest::prelude::*;
@@ -2061,7 +2075,7 @@ mod tests {
         use super::{node_paths, zarr_array_metadata};
 
         #[derive(Clone, Debug)]
-        enum DatasetTransition {
+        enum RepositoryTransition {
             AddArray(Path, ZarrArrayMetadata),
             UpdateArray(Path, ZarrArrayMetadata),
             DeleteArray(Option<Path>),
@@ -2070,17 +2084,17 @@ mod tests {
         }
 
         /// An empty type used for the `ReferenceStateMachine` implementation.
-        struct DatasetStateMachine;
+        struct RepositoryStateMachine;
 
         #[derive(Clone, Default, Debug)]
-        struct DatasetModel {
+        struct RepositoryModel {
             arrays: HashMap<Path, ZarrArrayMetadata>,
             groups: Vec<Path>,
         }
 
-        impl ReferenceStateMachine for DatasetStateMachine {
-            type State = DatasetModel;
-            type Transition = DatasetTransition;
+        impl ReferenceStateMachine for RepositoryStateMachine {
+            type State = RepositoryModel;
+            type Transition = RepositoryTransition;
 
             fn init_state() -> BoxedStrategy<Self::State> {
                 Just(Default::default()).boxed()
@@ -2097,30 +2111,30 @@ mod tests {
                         let array_keys: Vec<Path> =
                             state.arrays.keys().cloned().collect();
                         sample::select(array_keys)
-                            .prop_map(|p| DatasetTransition::DeleteArray(Some(p)))
+                            .prop_map(|p| RepositoryTransition::DeleteArray(Some(p)))
                             .boxed()
                     } else {
-                        Just(DatasetTransition::DeleteArray(None)).boxed()
+                        Just(RepositoryTransition::DeleteArray(None)).boxed()
                     }
                 };
 
                 let delete_groups = {
                     if !state.groups.is_empty() {
                         sample::select(state.groups.clone())
-                            .prop_map(|p| DatasetTransition::DeleteGroup(Some(p)))
+                            .prop_map(|p| RepositoryTransition::DeleteGroup(Some(p)))
                             .boxed()
                     } else {
-                        Just(DatasetTransition::DeleteGroup(None)).boxed()
+                        Just(RepositoryTransition::DeleteGroup(None)).boxed()
                     }
                 };
 
                 prop_oneof![
                     (node_paths(), zarr_array_metadata())
-                        .prop_map(|(a, b)| DatasetTransition::AddArray(a, b)),
+                        .prop_map(|(a, b)| RepositoryTransition::AddArray(a, b)),
                     (node_paths(), zarr_array_metadata())
-                        .prop_map(|(a, b)| DatasetTransition::UpdateArray(a, b)),
+                        .prop_map(|(a, b)| RepositoryTransition::UpdateArray(a, b)),
                     delete_arrays,
-                    node_paths().prop_map(DatasetTransition::AddGroup),
+                    node_paths().prop_map(RepositoryTransition::AddGroup),
                     delete_groups,
                 ]
                 .boxed()
@@ -2132,17 +2146,17 @@ mod tests {
             ) -> Self::State {
                 match transition {
                     // Array ops
-                    DatasetTransition::AddArray(path, metadata) => {
+                    RepositoryTransition::AddArray(path, metadata) => {
                         let res = state.arrays.insert(path.clone(), metadata.clone());
                         assert!(res.is_none());
                     }
-                    DatasetTransition::UpdateArray(path, metadata) => {
+                    RepositoryTransition::UpdateArray(path, metadata) => {
                         state
                             .arrays
                             .insert(path.clone(), metadata.clone())
                             .expect("(postcondition) insertion failed");
                     }
-                    DatasetTransition::DeleteArray(path) => {
+                    RepositoryTransition::DeleteArray(path) => {
                         let path = path.clone().unwrap();
                         state
                             .arrays
@@ -2151,11 +2165,11 @@ mod tests {
                     }
 
                     // Group ops
-                    DatasetTransition::AddGroup(path) => {
+                    RepositoryTransition::AddGroup(path) => {
                         state.groups.push(path.clone());
                         // TODO: postcondition
                     }
-                    DatasetTransition::DeleteGroup(Some(path)) => {
+                    RepositoryTransition::DeleteGroup(Some(path)) => {
                         let index =
                             state.groups.iter().position(|x| x == path).expect(
                                 "Attempting to delete a non-existent path: {path}",
@@ -2169,23 +2183,23 @@ mod tests {
 
             fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
                 match transition {
-                    DatasetTransition::AddArray(path, _) => {
+                    RepositoryTransition::AddArray(path, _) => {
                         !state.arrays.contains_key(path) && !state.groups.contains(path)
                     }
-                    DatasetTransition::UpdateArray(path, _) => {
+                    RepositoryTransition::UpdateArray(path, _) => {
                         state.arrays.contains_key(path)
                     }
-                    DatasetTransition::DeleteArray(path) => path.is_some(),
-                    DatasetTransition::AddGroup(path) => {
+                    RepositoryTransition::DeleteArray(path) => path.is_some(),
+                    RepositoryTransition::AddGroup(path) => {
                         !state.arrays.contains_key(path) && !state.groups.contains(path)
                     }
-                    DatasetTransition::DeleteGroup(p) => p.is_some(),
+                    RepositoryTransition::DeleteGroup(p) => p.is_some(),
                 }
             }
         }
 
-        struct TestDataset {
-            dataset: Dataset,
+        struct TestRepository {
+            repository: Repository,
             runtime: Runtime,
         }
         trait BlockOnUnwrap {
@@ -2204,21 +2218,21 @@ mod tests {
             }
         }
 
-        impl StateMachineTest for TestDataset {
+        impl StateMachineTest for TestRepository {
             type SystemUnderTest = Self;
-            type Reference = DatasetStateMachine;
+            type Reference = RepositoryStateMachine;
 
             fn init_test(
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
                 let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
-                let init_dataset =
+                let init_repository =
                     tokio::runtime::Runtime::new().unwrap().block_on(async {
                         let storage = Arc::new(storage);
-                        Dataset::init(storage, false).await.unwrap()
+                        Repository::init(storage, false).await.unwrap()
                     });
-                TestDataset {
-                    dataset: init_dataset.build(),
+                TestRepository {
+                    repository: init_repository.build(),
                     runtime: Runtime::new().unwrap(),
                 }
             }
@@ -2226,25 +2240,25 @@ mod tests {
             fn apply(
                 mut state: Self::SystemUnderTest,
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
-                transition: DatasetTransition,
+                transition: RepositoryTransition,
             ) -> Self::SystemUnderTest {
                 let runtime = &state.runtime;
-                let dataset = &mut state.dataset;
+                let repository = &mut state.repository;
                 match transition {
-                    DatasetTransition::AddArray(path, metadata) => {
-                        runtime.unwrap(dataset.add_array(path, metadata))
+                    RepositoryTransition::AddArray(path, metadata) => {
+                        runtime.unwrap(repository.add_array(path, metadata))
                     }
-                    DatasetTransition::UpdateArray(path, metadata) => {
-                        runtime.unwrap(dataset.update_array(path, metadata))
+                    RepositoryTransition::UpdateArray(path, metadata) => {
+                        runtime.unwrap(repository.update_array(path, metadata))
                     }
-                    DatasetTransition::DeleteArray(Some(path)) => {
-                        runtime.unwrap(dataset.delete_array(path))
+                    RepositoryTransition::DeleteArray(Some(path)) => {
+                        runtime.unwrap(repository.delete_array(path))
                     }
-                    DatasetTransition::AddGroup(path) => {
-                        runtime.unwrap(dataset.add_group(path))
+                    RepositoryTransition::AddGroup(path) => {
+                        runtime.unwrap(repository.add_group(path))
                     }
-                    DatasetTransition::DeleteGroup(Some(path)) => {
-                        runtime.unwrap(dataset.delete_group(path))
+                    RepositoryTransition::DeleteGroup(Some(path)) => {
+                        runtime.unwrap(repository.delete_group(path))
                     }
                     _ => panic!(),
                 }
@@ -2257,7 +2271,7 @@ mod tests {
             ) {
                 let runtime = &state.runtime;
                 for (path, metadata) in ref_state.arrays.iter() {
-                    let node = runtime.unwrap(state.dataset.get_array(path));
+                    let node = runtime.unwrap(state.repository.get_array(path));
                     let actual_metadata = match node.node_data {
                         NodeData::Array(metadata, _) => Ok(metadata),
                         _ => Err("foo"),
@@ -2267,7 +2281,7 @@ mod tests {
                 }
 
                 for path in ref_state.groups.iter() {
-                    let node = runtime.unwrap(state.dataset.get_group(path));
+                    let node = runtime.unwrap(state.repository.get_group(path));
                     match node.node_data {
                         NodeData::Group => Ok(()),
                         _ => Err("foo"),
@@ -2284,7 +2298,7 @@ mod tests {
         })]
 
         #[test]
-        fn run_dataset_state_machine_test(
+        fn run_repository_state_machine_test(
             // This is a macro's keyword - only `sequential` is currently supported.
             sequential
             // The number of transitions to be generated for each case. This can
@@ -2293,7 +2307,7 @@ mod tests {
             // Macro's boilerplate to separate the following identifier.
             =>
             // The name of the type that implements `StateMachineTest`.
-            TestDataset
+            TestRepository
         );
         }
     }

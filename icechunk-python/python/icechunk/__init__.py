@@ -77,8 +77,8 @@ class IcechunkStore(Store, SyncMixin):
                 "type": "s3, // one of "in_memory", "local_filesystem", "s3", "cached"
                 "...": "additional storage configuration"
             },
-            "dataset": {
-                // Optional, only required if you want to open an existing dataset
+            "repository": {
+                // Optional, only required if you want to open an existing repository
                 "version": {
                     "branch": "main",
                 },

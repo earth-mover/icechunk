@@ -1,4 +1,6 @@
-use icechunk::{dataset::DatasetError, format::IcechunkFormatError, zarr::StoreError};
+use icechunk::{
+    format::IcechunkFormatError, repository::RepositoryError, zarr::StoreError,
+};
 use pyo3::{exceptions::PyValueError, PyErr};
 use thiserror::Error;
 
@@ -11,8 +13,8 @@ use thiserror::Error;
 pub enum PyIcechunkStoreError {
     #[error("store error: {0}")]
     StoreError(#[from] StoreError),
-    #[error("dataset Error: {0}")]
-    DatasetError(#[from] DatasetError),
+    #[error("repository Error: {0}")]
+    RepositoryError(#[from] RepositoryError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
     #[error("value error: {0}")]
