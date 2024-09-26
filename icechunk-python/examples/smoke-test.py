@@ -187,7 +187,7 @@ if __name__ == "__main__":
     )
     S3 = Storage.s3_from_env(
         bucket="icechunk-test",
-        prefix="demo-dataset",
+        prefix="demo-repository",
     )
 
     print("Icechunk store")

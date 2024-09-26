@@ -20,19 +20,19 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    dataset::{
-        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
-        Codec, DataType, DatasetError, DimensionNames, FillValue, Path,
-        StorageTransformer, UserAttributes, ZarrArrayMetadata,
-    },
     format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
     refs::{BranchVersion, Ref},
+    repository::{
+        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
+        Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
+        StorageTransformer, UserAttributes, ZarrArrayMetadata,
+    },
     storage::object_store::S3Credentials,
-    Dataset, DatasetBuilder, ObjectStorage, Storage,
+    ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -81,7 +81,7 @@ impl StorageConfig {
 
     pub fn make_cached_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
         let storage = self.make_storage()?;
-        let cached_storage = Dataset::add_in_mem_asset_caching(storage);
+        let cached_storage = Repository::add_in_mem_asset_caching(storage);
         Ok(cached_storage)
     }
 }
@@ -98,13 +98,13 @@ pub enum VersionInfo {
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct DatasetConfig {
+pub struct RepositoryConfig {
     pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
 }
 
-impl DatasetConfig {
+impl RepositoryConfig {
     pub fn new() -> Self {
         Self::default()
     }
@@ -123,36 +123,38 @@ impl DatasetConfig {
         self
     }
 
-    pub async fn make_dataset(
+    pub async fn make_repository(
         &self,
         storage: Arc<dyn Storage + Send + Sync>,
-    ) -> Result<(Dataset, Option<String>), String> {
-        let (mut builder, branch): (DatasetBuilder, Option<String>) = match &self.version
-        {
-            None => {
-                let builder =
-                    Dataset::init(storage, self.unsafe_overwrite_refs.unwrap_or(false))
+    ) -> Result<(Repository, Option<String>), String> {
+        let (mut builder, branch): (RepositoryBuilder, Option<String>) =
+            match &self.version {
+                None => {
+                    let builder = Repository::init(
+                        storage,
+                        self.unsafe_overwrite_refs.unwrap_or(false),
+                    )
+                    .await
+                    .map_err(|err| format!("Error initializing repository: {err}"))?;
+                    (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
+                }
+                Some(VersionInfo::SnapshotId(sid)) => {
+                    let builder = Repository::update(storage, sid.clone());
+                    (builder, None)
+                }
+                Some(VersionInfo::TagRef(tag)) => {
+                    let builder = Repository::from_tag(storage, tag)
                         .await
-                        .map_err(|err| format!("Error initializing dataset: {err}"))?;
-                (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
-            }
-            Some(VersionInfo::SnapshotId(sid)) => {
-                let builder = Dataset::update(storage, sid.clone());
-                (builder, None)
-            }
-            Some(VersionInfo::TagRef(tag)) => {
-                let builder = Dataset::from_tag(storage, tag)
-                    .await
-                    .map_err(|err| format!("Error fetching tag: {err}"))?;
-                (builder, None)
-            }
-            Some(VersionInfo::BranchTipRef(branch)) => {
-                let builder = Dataset::from_branch_tip(storage, branch)
-                    .await
-                    .map_err(|err| format!("Error fetching branch: {err}"))?;
-                (builder, Some(branch.clone()))
-            }
-        };
+                        .map_err(|err| format!("Error fetching tag: {err}"))?;
+                    (builder, None)
+                }
+                Some(VersionInfo::BranchTipRef(branch)) => {
+                    let builder = Repository::from_branch_tip(storage, branch)
+                        .await
+                        .map_err(|err| format!("Error fetching branch: {err}"))?;
+                    (builder, Some(branch.clone()))
+                }
+            };
 
         if let Some(inline_theshold) = self.inline_chunk_threshold_bytes {
             builder.with_inline_threshold_bytes(inline_theshold);
@@ -170,7 +172,7 @@ impl DatasetConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoreConfig {
     pub storage: StorageConfig,
-    pub dataset: DatasetConfig,
+    pub repository: RepositoryConfig,
     pub get_partial_values_concurrency: Option<u16>,
 }
 
@@ -200,8 +202,8 @@ pub enum StoreError {
     NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
-    #[error("unsuccessful dataset operation: `{0}`")]
-    DatasetError(#[from] DatasetError),
+    #[error("unsuccessful repository operation: `{0}`")]
+    RepositoryError(#[from] RepositoryError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("all commits must be made on a branch")]
@@ -217,7 +219,7 @@ pub enum StoreError {
     #[error("cannot write to read-only store")]
     ReadOnly,
     #[error(
-        "uncommitted changes in dataset, commit changes or reset dataset and try again."
+        "uncommitted changes in repository, commit changes or reset repository and try again."
     )]
     UncommittedChanges,
     #[error("unknown store error: `{0}`")]
@@ -226,7 +228,7 @@ pub enum StoreError {
 
 #[derive(Debug)]
 pub struct Store {
-    dataset: Arc<RwLock<Dataset>>,
+    repository: Arc<RwLock<Repository>>,
     mode: AccessMode,
     current_branch: Option<String>,
     get_partial_values_concurrency: u16,
@@ -238,9 +240,9 @@ impl Store {
         mode: AccessMode,
     ) -> Result<Self, String> {
         let storage = config.storage.make_cached_storage()?;
-        let (dataset, branch) = config.dataset.make_dataset(storage).await?;
-        Ok(Self::from_dataset(
-            dataset,
+        let (repository, branch) = config.repository.make_repository(storage).await?;
+        Ok(Self::from_repository(
+            repository,
             mode,
             branch,
             config.get_partial_values_concurrency,
@@ -256,18 +258,19 @@ impl Store {
     pub async fn new_from_storage(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> Result<Self, String> {
-        let (dataset, branch) = DatasetConfig::default().make_dataset(storage).await?;
-        Ok(Self::from_dataset(dataset, AccessMode::ReadWrite, branch, None))
+        let (repository, branch) =
+            RepositoryConfig::default().make_repository(storage).await?;
+        Ok(Self::from_repository(repository, AccessMode::ReadWrite, branch, None))
     }
 
-    pub fn from_dataset(
-        dataset: Dataset,
+    pub fn from_repository(
+        repository: Repository,
         mode: AccessMode,
         current_branch: Option<String>,
         get_partial_values_concurrency: Option<u16>,
     ) -> Self {
         Store {
-            dataset: Arc::new(RwLock::new(dataset)),
+            repository: Arc::new(RwLock::new(repository)),
             mode,
             current_branch,
             get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
@@ -279,28 +282,28 @@ impl Store {
     }
 
     pub async fn snapshot_id(&self) -> ObjectId {
-        self.dataset.read().await.snapshot_id().clone()
+        self.repository.read().await.snapshot_id().clone()
     }
 
     pub async fn has_uncommitted_changes(&self) -> bool {
-        self.dataset.read().await.has_uncommitted_changes()
+        self.repository.read().await.has_uncommitted_changes()
     }
 
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
     pub async fn reset(&mut self) -> StoreResult<()> {
-        let guard = self.dataset.read().await;
+        let guard = self.repository.read().await;
         // carefully avoid the deadlock if we were to call self.snapshot_id()
         let head_snapshot = guard.snapshot_id().clone();
         let storage = Arc::clone(guard.storage());
-        let new_dataset = Dataset::update(storage, head_snapshot).build();
+        let new_repository = Repository::update(storage, head_snapshot).build();
         drop(guard);
-        self.dataset = Arc::new(RwLock::new(new_dataset));
+        self.repository = Arc::new(RwLock::new(new_repository));
 
         Ok(())
     }
 
-    /// Checkout a specific version of the dataset. This can be a snapshot id, a tag, or a branch tip.
+    /// Checkout a specific version of the repository. This can be a snapshot id, a tag, or a branch tip.
     ///
     /// If the version is a branch tip, the branch will be set as the current branch. If the version
     /// is a tag or snapshot id, the current branch will be unset and the store will be in detached state.
@@ -309,7 +312,7 @@ impl Store {
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
         // this needs to be done carefully to avoid deadlocks and race conditions
         let storage = {
-            let guard = self.dataset.read().await;
+            let guard = self.repository.read().await;
             // Checking out is not allowed if there are uncommitted changes
             if guard.has_uncommitted_changes() {
                 return Err(StoreError::UncommittedChanges);
@@ -317,23 +320,23 @@ impl Store {
             guard.storage().clone()
         };
 
-        let dataset = match version {
+        let repository = match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
-                Dataset::update(storage, sid)
+                Repository::update(storage, sid)
             }
             VersionInfo::TagRef(tag) => {
                 self.current_branch = None;
-                Dataset::from_tag(storage, &tag).await?
+                Repository::from_tag(storage, &tag).await?
             }
             VersionInfo::BranchTipRef(branch) => {
                 self.current_branch = Some(branch.clone());
-                Dataset::from_branch_tip(storage, &branch).await?
+                Repository::from_branch_tip(storage, &branch).await?
             }
         }
         .build();
 
-        self.dataset = Arc::new(RwLock::new(dataset));
+        self.repository = Arc::new(RwLock::new(repository));
         Ok(())
     }
 
@@ -344,7 +347,7 @@ impl Store {
         branch: &str,
     ) -> StoreResult<(ObjectId, BranchVersion)> {
         // this needs to be done carefully to avoid deadlocks and race conditions
-        let guard = self.dataset.write().await;
+        let guard = self.repository.write().await;
         if guard.has_uncommitted_changes() {
             return Err(StoreError::UncommittedChanges);
         }
@@ -361,7 +364,7 @@ impl Store {
     pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
         if let Some(branch) = &self.current_branch {
             let result = self
-                .dataset
+                .repository
                 .write()
                 .await
                 .deref_mut()
@@ -375,12 +378,22 @@ impl Store {
 
     /// Tag the given snapshot with a specified tag
     pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
-        self.dataset.write().await.deref_mut().tag(tag, snapshot_id).await?;
+        self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
 
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    pub async fn ancestry(
+        &self,
+    ) -> StoreResult<impl Stream<Item = StoreResult<SnapshotMetadata>> + Send> {
+        let repository = Arc::clone(&self.repository).read_owned().await;
+        // FIXME: in memory realization to avoid maintaining a lock on the repository
+        let all = repository.ancestry().await?.err_into().collect::<Vec<_>>().await;
+        Ok(futures::stream::iter(all))
+    }
+
     pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.dataset.read().await.list_nodes().await?.next().is_none();
+        let res = self.repository.read().await.list_nodes().await?.next().is_none();
         Ok(res)
     }
 
@@ -499,12 +512,12 @@ impl Store {
                 }
             }
             Key::Chunk { node_path, coords } => {
-                // we only lock the dataset to get the writer
-                let writer = self.dataset.read().await.get_chunk_writer();
+                // we only lock the repository to get the writer
+                let writer = self.repository.read().await.get_chunk_writer();
                 // then we can write the bytes without holding the lock
                 let payload = writer(value).await?;
                 // and finally we lock for write and update the reference
-                self.dataset
+                self.repository
                     .write()
                     .await
                     .set_chunk_ref(node_path, coords, Some(payload))
@@ -530,7 +543,7 @@ impl Store {
                 key
             ))),
             Key::Chunk { node_path, coords } => {
-                self.dataset
+                self.repository
                     .write()
                     .await
                     .set_chunk_ref(
@@ -554,7 +567,7 @@ impl Store {
                 // we need to hold the lock while we do the node search and the write
                 // to avoid race conditions with other writers
                 // (remember this method takes &self and not &mut self)
-                let mut guard = self.dataset.write().await;
+                let mut guard = self.repository.write().await;
                 let node = guard.get_node(&node_path).await.map_err(|_| {
                     KeyNotFoundError::NodeNotFound { path: node_path.clone() }
                 })?;
@@ -568,9 +581,9 @@ impl Store {
                 }
             }
             Key::Chunk { node_path, coords } => {
-                let mut guard = self.dataset.write().await;
-                let dataset = guard.deref_mut();
-                Ok(dataset.set_chunk_ref(node_path, coords, None).await?)
+                let mut guard = self.repository.write().await;
+                let repository = guard.deref_mut();
+                Ok(repository.set_chunk_ref(node_path, coords, None).await?)
             }
         }
     }
@@ -649,9 +662,9 @@ impl Store {
         coords: ChunkIndices,
         byte_range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        // we only lock the dataset while we get the reader
+        // we only lock the repository while we get the reader
         let reader = self
-            .dataset
+            .repository
             .read()
             .await
             .get_chunk_reader(&path, &coords, byte_range)
@@ -672,7 +685,7 @@ impl Store {
         path: &Path,
         range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let node = self.dataset.read().await.get_node(path).await.map_err(|_| {
+        let node = self.repository.read().await.get_node(path).await.map_err(|_| {
             StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
         })?;
         let user_attributes = match node.user_attributes {
@@ -701,17 +714,17 @@ impl Store {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
 
-        let mut guard = self.dataset.write().await;
+        let mut guard = self.repository.write().await;
         if guard.get_array(&path).await.is_ok() {
             // TODO: we don't necessarily need to update both
-            let dataset = guard.deref_mut();
-            dataset.set_user_attributes(path.clone(), array_meta.attributes).await?;
-            dataset.update_array(path, array_meta.zarr_metadata).await?;
+            let repository = guard.deref_mut();
+            repository.set_user_attributes(path.clone(), array_meta.attributes).await?;
+            repository.update_array(path, array_meta.zarr_metadata).await?;
             Ok(())
         } else {
-            let dataset = guard.deref_mut();
-            dataset.add_array(path.clone(), array_meta.zarr_metadata).await?;
-            dataset.set_user_attributes(path, array_meta.attributes).await?;
+            let repository = guard.deref_mut();
+            repository.add_array(path.clone(), array_meta.zarr_metadata).await?;
+            repository.set_user_attributes(path, array_meta.attributes).await?;
             Ok(())
         }
     }
@@ -724,15 +737,15 @@ impl Store {
         // we need to hold the lock while we search the group and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         //
-        let mut guard = self.dataset.write().await;
+        let mut guard = self.repository.write().await;
         if guard.get_group(&path).await.is_ok() {
-            let dataset = guard.deref_mut();
-            dataset.set_user_attributes(path, group_meta.attributes).await?;
+            let repository = guard.deref_mut();
+            repository.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         } else {
-            let dataset = guard.deref_mut();
-            dataset.add_group(path.clone()).await?;
-            dataset.set_user_attributes(path, group_meta.attributes).await?;
+            let repository = guard.deref_mut();
+            repository.add_group(path.clone()).await?;
+            repository.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         }
     }
@@ -743,8 +756,8 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let dataset = Arc::clone(&self.dataset).read_owned().await;
-            for node in dataset.list_nodes().await? {
+            let repository = Arc::clone(&self.repository).read_owned().await;
+            for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
                 if let Some(key) = meta_key {
@@ -763,10 +776,10 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let dataset = Arc::clone(&self.dataset).read_owned().await;
+            let repository = Arc::clone(&self.repository).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in  dataset.all_chunks().await.map_err(StoreError::DatasetError)? {
+            for await maybe_path_chunk in  repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
                     Ok((path,chunk)) => {
@@ -1383,8 +1396,8 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1433,8 +1446,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1478,8 +1491,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1556,8 +1569,8 @@ mod tests {
 
         let oid = store.commit("commit").await?;
 
-        let ds = Dataset::update(storage, oid).build();
-        let store = Store::from_dataset(ds, AccessMode::ReadWrite, None, None);
+        let ds = Repository::update(storage, oid).build();
+        let store = Store::from_repository(ds, AccessMode::ReadWrite, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1573,8 +1586,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1619,8 +1632,8 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1688,8 +1701,8 @@ mod tests {
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1727,8 +1740,8 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1767,8 +1780,8 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1826,8 +1839,8 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1935,8 +1948,8 @@ mod tests {
         store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_store_from_snapshot = Store::from_dataset(
-            Dataset::update(Arc::clone(&storage), snapshot_id).build(),
+        let new_store_from_snapshot = Store::from_repository(
+            Repository::update(Arc::clone(&storage), snapshot_id).build(),
             AccessMode::ReadWrite,
             None,
             None,
@@ -1953,7 +1966,7 @@ mod tests {
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = StoreConfig {
             storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
-            dataset: DatasetConfig {
+            repository: RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(128),
                 version: Some(VersionInfo::SnapshotId(ObjectId([
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -1965,7 +1978,7 @@ mod tests {
 
         let json = r#"
             {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
-             "dataset": {
+             "repository": {
                 "version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
                 "inline_chunk_threshold_bytes":128,
                 "unsafe_overwrite_refs":true
@@ -1978,7 +1991,7 @@ mod tests {
         let json = r#"
             {"storage":
                 {"type": "local_filesystem", "root":"/tmp/test"},
-             "dataset": {
+             "repository": {
                 "version": null,
                 "inline_chunk_threshold_bytes": null,
                 "unsafe_overwrite_refs":null
@@ -1986,7 +1999,7 @@ mod tests {
         "#;
         assert_eq!(
             StoreConfig {
-                dataset: DatasetConfig {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -2000,12 +2013,12 @@ mod tests {
         let json = r#"
             {"storage":
                 {"type": "local_filesystem", "root":"/tmp/test"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
             StoreConfig {
-                dataset: DatasetConfig {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -2018,12 +2031,12 @@ mod tests {
 
         let json = r#"
             {"storage":{"type": "in_memory", "prefix": "prefix"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
             StoreConfig {
-                dataset: DatasetConfig {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -2036,12 +2049,12 @@ mod tests {
 
         let json = r#"
             {"storage":{"type": "in_memory"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
             StoreConfig {
-                dataset: DatasetConfig {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -2054,12 +2067,12 @@ mod tests {
 
         let json = r#"
             {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
             StoreConfig {
-                dataset: DatasetConfig {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -2086,12 +2099,12 @@ mod tests {
              },
              "endpoint":"http://localhost:9000"
          },
-         "dataset": {}
+         "repository": {}
         }
     "#;
         assert_eq!(
             StoreConfig {
-                dataset: DatasetConfig {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,

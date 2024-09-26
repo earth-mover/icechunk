@@ -1,12 +1,12 @@
 #![allow(clippy::expect_used)]
 use bytes::Bytes;
 use icechunk::{
-    dataset::{
+    format::{ByteRange, ChunkIndices, Path},
+    repository::{
         get_chunk, ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue,
         StorageTransformer, ZarrArrayMetadata,
     },
-    format::{ByteRange, ChunkIndices, Path},
-    Dataset, ObjectStorage, Storage,
+    ObjectStorage, Repository, Storage,
 };
 use pretty_assertions::assert_eq;
 use rand::{thread_rng, Rng};
@@ -22,7 +22,7 @@ use futures::TryStreamExt;
 const N: usize = 20;
 
 #[tokio::test]
-/// This test starts concurrent tasks to read, write and list a dataset.
+/// This test starts concurrent tasks to read, write and list a repository.
 ///
 /// It writes an `NxN` array,  with individual tasks for each 1x1 chunk. Concurrently with that it
 /// starts NxN tasks to read each chunk, these tasks only finish when the chunk was successfully
@@ -31,7 +31,7 @@ const N: usize = 20;
 async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-    let mut ds = Dataset::init(Arc::clone(&storage), false).await?.build();
+    let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
     ds.add_group("/".into()).await?;
     let zarr_meta = ZarrArrayMetadata {
@@ -83,7 +83,7 @@ async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn write_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32) {
+async fn write_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32) {
     let value = x as f64 * y as f64;
     let bytes = Bytes::copy_from_slice(&value.to_be_bytes());
 
@@ -106,7 +106,7 @@ async fn write_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32) {
         .expect("Failed to write chunk ref");
 }
 
-async fn read_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32, barrier: Arc<Barrier>) {
+async fn read_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32, barrier: Arc<Barrier>) {
     let value = x as f64 * y as f64;
     let expected_bytes = Bytes::copy_from_slice(&value.to_be_bytes());
     barrier.wait().await;
@@ -141,7 +141,7 @@ async fn read_task(ds: Arc<RwLock<Dataset>>, x: u32, y: u32, barrier: Arc<Barrie
     }
 }
 
-async fn list_task(ds: Arc<RwLock<Dataset>>, barrier: Arc<Barrier>) {
+async fn list_task(ds: Arc<RwLock<Repository>>, barrier: Arc<Barrier>) {
     let mut expected_indices = HashSet::new();
     for x in 0..(N as u32) {
         for y in 0..(N as u32) {

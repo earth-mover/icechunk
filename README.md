@@ -117,7 +117,7 @@ storage = Storage.filesystem("/path/to/root")
 store = await IcechunkStore.open(storage=storage, mode='r+')
 
 # Example using S3
-s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-dataset")
+s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-repository")
 store = await IcechunkStore.open(storage=storage, mode='r+')
 ```
 
@@ -162,7 +162,7 @@ Every commit to the main branch updates this reference.
 Icechunk's design protects against the race condition in which two uncoordinated sessions attempt to update the branch at the same time; only one can succeed.
 
 Finally, Icechunk defines **tags**--_immutable_ references to snapshot.
-Tags are appropriate for publishing specific releases of a dataset or for any application which requires a persistent, immutable identifier to the store state.
+Tags are appropriate for publishing specific releases of a repository or for any application which requires a persistent, immutable identifier to the store state.
 
 ## How Does It Work?
 
