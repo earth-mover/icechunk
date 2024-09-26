@@ -3,7 +3,6 @@ import random
 import zarr
 
 import icechunk
-import time
 
 N = 15
 
@@ -43,19 +42,20 @@ async def test_concurrency():
     barrier = asyncio.Barrier(2*N*N + 1)
 
     async with asyncio.TaskGroup() as tg:
-        task1 = tg.create_task(list_store(store, barrier), name="listing")
+        _task1 = tg.create_task(list_store(store, barrier), name="listing")
 
         for x in range(N):
             for y in range(N):
-                write_task = tg.create_task(read_store(array, x, y, barrier), name=f"read {x},{y}")
+                _write_task = tg.create_task(read_store(array, x, y, barrier), name=f"read {x},{y}")
 
         for x in range(N):
             for y in range(N):
-                write_task = tg.create_task(write_to_store(array, x, y, barrier), name=f"write {x},{y}")
+                _write_task = tg.create_task(write_to_store(array, x, y, barrier), name=f"write {x},{y}")
 
-    res=await store.commit("commit")
+    _res=await store.commit("commit")
 
     array = group["array"]
+    assert isinstance(array, zarr.Array)
 
     for x in range(N):
         for y in range(N):

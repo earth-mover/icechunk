@@ -1,3 +1,4 @@
+import abc
 from typing import AsyncGenerator
 
 class PyIcechunkStore:
@@ -43,9 +44,9 @@ class PyIcechunkStore:
     def __eq__(self, other) -> bool: ...
 
 
-class PyAsyncStringGenerator(AsyncGenerator[str | None]):
+class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
-    async def __anext__(self) -> str | None: ...
+    async def __anext__(self) -> str: ...
 
 
 class Storage:
@@ -59,7 +60,7 @@ class Storage:
     storage = Storage.memory("prefix")
     storage = Storage.filesystem("/path/to/root")
     storage = Storage.s3_from_env("bucket", "prefix")
-    storage = Storage.s3_from_creds("bucket", "prefix",
+    storage = Storage.s3_from_credentials("bucket", "prefix",
     ```
     """
     class Memory:
@@ -89,7 +90,7 @@ class Storage:
     def s3_from_env(cls, bucket: str, prefix: str, endpoint_url: str | None = None) -> Storage: ...
 
     @classmethod
-    def s3_from_creds(cls, bucket: str, prefix: str, credentials: S3Credentials, endpoint_url: str | None) -> Storage: ...
+    def s3_from_credentials(cls, bucket: str, prefix: str, credentials: S3Credentials, endpoint_url: str | None) -> Storage: ...
 
 
 class S3Credentials:
