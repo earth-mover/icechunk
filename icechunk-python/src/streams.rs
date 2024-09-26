@@ -19,7 +19,7 @@ pub(crate) struct PyAsyncGenerator {
 }
 
 impl PyAsyncGenerator {
-    pub fn new(stream: PyObjectStream) -> Self {
+    pub(crate) fn new(stream: PyObjectStream) -> Self {
         Self { stream }
     }
 }
