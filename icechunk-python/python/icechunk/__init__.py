@@ -220,6 +220,15 @@ class IcechunkStore(Store, SyncMixin):
         """Tag an existing snapshot with a given name."""
         return await self._store.tag(tag_name, snapshot_id=snapshot_id)
 
+    def ancestry(self) -> AsyncGenerator[str, None]:
+        """Get the list of parents of the current version.
+
+        Returns
+        -------
+        AsyncGenerator[str, SnapshotMetadata]
+        """
+        return self._store.ancestry()
+
     async def empty(self) -> bool:
         """Check if the store is empty."""
         return await self._store.empty()
