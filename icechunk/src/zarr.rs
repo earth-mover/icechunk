@@ -113,6 +113,11 @@ impl RepositoryConfig {
         Self { version: Some(version), ..Self::default() }
     }
 
+    pub fn with_version(mut self, version: VersionInfo) -> Self {
+        self.version = Some(version);
+        self
+    }
+
     pub fn with_inline_chunk_threshold_bytes(mut self, threshold: u16) -> Self {
         self.inline_chunk_threshold_bytes = Some(threshold);
         self
@@ -170,10 +175,22 @@ impl RepositoryConfig {
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StoreConfig {
+pub struct StoreOptions {
+    pub get_partial_values_concurrency: u16,
+}
+
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self { get_partial_values_concurrency: 10 }
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConsolidatedStore {
     pub storage: StorageConfig,
     pub repository: RepositoryConfig,
-    pub get_partial_values_concurrency: Option<u16>,
+    pub config: Option<StoreOptions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -231,28 +248,24 @@ pub struct Store {
     repository: Arc<RwLock<Repository>>,
     mode: AccessMode,
     current_branch: Option<String>,
-    get_partial_values_concurrency: u16,
+    config: StoreOptions,
 }
 
 impl Store {
-    pub async fn from_config(
-        config: &StoreConfig,
+    pub async fn from_consolidated(
+        consolidated: &ConsolidatedStore,
         mode: AccessMode,
     ) -> Result<Self, String> {
-        let storage = config.storage.make_cached_storage()?;
-        let (repository, branch) = config.repository.make_repository(storage).await?;
-        Ok(Self::from_repository(
-            repository,
-            mode,
-            branch,
-            config.get_partial_values_concurrency,
-        ))
+        let storage = consolidated.storage.make_cached_storage()?;
+        let (repository, branch) =
+            consolidated.repository.make_repository(storage).await?;
+        Ok(Self::from_repository(repository, mode, branch, consolidated.config.clone()))
     }
 
-    pub async fn from_json_config(json: &[u8], mode: AccessMode) -> Result<Self, String> {
-        let config: StoreConfig =
+    pub async fn from_json(json: &[u8], mode: AccessMode) -> Result<Self, String> {
+        let config: ConsolidatedStore =
             serde_json::from_slice(json).map_err(|e| e.to_string())?;
-        Self::from_config(&config, mode).await
+        Self::from_consolidated(&config, mode).await
     }
 
     pub async fn new_from_storage(
@@ -267,13 +280,13 @@ impl Store {
         repository: Repository,
         mode: AccessMode,
         current_branch: Option<String>,
-        get_partial_values_concurrency: Option<u16>,
+        config: Option<StoreOptions>,
     ) -> Self {
         Store {
             repository: Arc::new(RwLock::new(repository)),
             mode,
             current_branch,
-            get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
+            config: config.unwrap_or_default(),
         }
     }
 
@@ -449,7 +462,7 @@ impl Store {
         let num_keys = AtomicUsize::new(0);
         stream
             .for_each_concurrent(
-                self.get_partial_values_concurrency as usize,
+                self.config.get_partial_values_concurrency as usize,
                 |(key, range)| {
                     let index = num_keys.fetch_add(1, Ordering::Release);
                     let results = Arc::clone(&results);
@@ -1964,7 +1977,7 @@ mod tests {
 
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
-        let expected = StoreConfig {
+        let expected = ConsolidatedStore {
             storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
             repository: RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(128),
@@ -1973,7 +1986,7 @@ mod tests {
                 ]))),
                 unsafe_overwrite_refs: Some(true),
             },
-            get_partial_values_concurrency: Some(100),
+            config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
         };
 
         let json = r#"
@@ -1983,7 +1996,9 @@ mod tests {
                 "inline_chunk_threshold_bytes":128,
                 "unsafe_overwrite_refs":true
              },
-             "get_partial_values_concurrency": 100
+             "config": {
+                "get_partial_values_concurrency": 100
+             }
             }
         "#;
         assert_eq!(expected, serde_json::from_str(json)?);
@@ -1998,13 +2013,13 @@ mod tests {
              }}
         "#;
         assert_eq!(
-            StoreConfig {
+            ConsolidatedStore {
                 repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
-                get_partial_values_concurrency: None,
+                config: None,
                 ..expected.clone()
             },
             serde_json::from_str(json)?
@@ -2017,13 +2032,13 @@ mod tests {
             }
         "#;
         assert_eq!(
-            StoreConfig {
+            ConsolidatedStore {
                 repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
-                get_partial_values_concurrency: None,
+                config: None,
                 ..expected.clone()
             },
             serde_json::from_str(json)?
@@ -2035,14 +2050,14 @@ mod tests {
             }
         "#;
         assert_eq!(
-            StoreConfig {
+            ConsolidatedStore {
                 repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );
@@ -2053,14 +2068,14 @@ mod tests {
             }
         "#;
         assert_eq!(
-            StoreConfig {
+            ConsolidatedStore {
                 repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );
@@ -2071,7 +2086,7 @@ mod tests {
             }
         "#;
         assert_eq!(
-            StoreConfig {
+            ConsolidatedStore {
                 repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
@@ -2083,7 +2098,7 @@ mod tests {
                     credentials: None,
                     endpoint: None
                 },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );
@@ -2103,7 +2118,7 @@ mod tests {
         }
     "#;
         assert_eq!(
-            StoreConfig {
+            ConsolidatedStore {
                 repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
@@ -2119,7 +2134,7 @@ mod tests {
                     }),
                     endpoint: Some(String::from("http://localhost:9000"))
                 },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );

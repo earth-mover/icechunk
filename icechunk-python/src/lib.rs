@@ -11,7 +11,10 @@ use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     refs::Ref,
-    zarr::{ObjectId, RepositoryConfig, StorageConfig, StoreConfig, VersionInfo},
+    zarr::{
+        ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreOptions,
+        VersionInfo,
+    },
     Repository, SnapshotMetadata,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
@@ -25,6 +28,51 @@ struct PyIcechunkStore {
     rt: tokio::runtime::Runtime,
 }
 
+#[pyclass(name = "StoreConfig")]
+#[derive(Clone, Debug, Default)]
+struct PyStoreConfig {
+    pub get_partial_values_concurrency: Option<u16>,
+    pub inline_chunk_threshold: Option<u16>,
+    pub unsafe_overwrite_refs: Option<bool>,
+}
+
+impl From<&PyStoreConfig> for RepositoryConfig {
+    fn from(config: &PyStoreConfig) -> Self {
+        RepositoryConfig {
+            version: None,
+            inline_chunk_threshold_bytes: config.inline_chunk_threshold,
+            unsafe_overwrite_refs: config.unsafe_overwrite_refs,
+        }
+    }
+}
+
+impl From<&PyStoreConfig> for StoreOptions {
+    fn from(config: &PyStoreConfig) -> Self {
+        if let Some(get_partial_values_concurrency) =
+            config.get_partial_values_concurrency
+        {
+            return StoreOptions { get_partial_values_concurrency };
+        } else {
+            return StoreOptions::default();
+        }
+    }
+}
+
+#[pymethods]
+impl PyStoreConfig {
+    #[new]
+    fn new(
+        get_partial_values_concurrency: Option<u16>,
+        inline_chunk_threshold: Option<u16>,
+        unsafe_overwrite_refs: Option<bool>,
+    ) -> Self {
+        PyStoreConfig {
+            get_partial_values_concurrency,
+            inline_chunk_threshold,
+            unsafe_overwrite_refs,
+        }
+    }
+}
 #[pyclass(name = "SnapshotMetadata")]
 #[derive(Clone, Debug)]
 pub struct PySnapshotMetadata {
@@ -72,31 +120,39 @@ impl PyIcechunkStore {
     async fn open_existing(
         storage: StorageConfig,
         read_only: bool,
+        repository_config: RepositoryConfig,
+        store_config: StoreOptions,
     ) -> Result<Self, String> {
         let access_mode = if read_only {
             icechunk::zarr::AccessMode::ReadOnly
         } else {
             icechunk::zarr::AccessMode::ReadWrite
         };
-        let repository = RepositoryConfig::existing(VersionInfo::BranchTipRef(
-            Ref::DEFAULT_BRANCH.to_string(),
-        ));
+        let repository = repository_config
+            .with_version(VersionInfo::BranchTipRef(Ref::DEFAULT_BRANCH.to_string()));
         let config =
-            StoreConfig { storage, repository, get_partial_values_concurrency: None };
+            ConsolidatedStore { storage, repository, config: Some(store_config) };
 
-        let store = Store::from_config(&config, access_mode).await?;
+        let store = Store::from_consolidated(&config, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { store, rt })
     }
 
-    async fn create(storage: StorageConfig) -> Result<Self, String> {
-        let repository = RepositoryConfig::new();
-        let config =
-            StoreConfig { storage, repository, get_partial_values_concurrency: None };
+    async fn create(
+        storage: StorageConfig,
+        repository_config: RepositoryConfig,
+        store_config: StoreOptions,
+    ) -> Result<Self, String> {
+        let config = ConsolidatedStore {
+            storage,
+            repository: repository_config,
+            config: Some(store_config),
+        };
 
         let store =
-            Store::from_config(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
+            Store::from_consolidated(&config, icechunk::zarr::AccessMode::ReadWrite)
+                .await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { store, rt })
@@ -108,7 +164,7 @@ impl PyIcechunkStore {
         } else {
             icechunk::zarr::AccessMode::ReadWrite
         };
-        let store = Store::from_json_config(json, access_mode).await?;
+        let store = Store::from_json(json, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { store, rt })
@@ -117,9 +173,9 @@ impl PyIcechunkStore {
 
 #[pyfunction]
 fn pyicechunk_store_from_json_config<'py>(
+    py: Python<'py>,
     json: String,
     read_only: bool,
-    py: Python<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let json = json.as_bytes().to_owned();
 
@@ -133,23 +189,32 @@ fn pyicechunk_store_from_json_config<'py>(
 }
 
 #[pyfunction]
+#[pyo3(signature = (storage, read_only, config=PyStoreConfig::default()))]
 fn pyicechunk_store_open_existing<'py>(
+    py: Python<'py>,
     storage: &'py PyStorage,
     read_only: bool,
-    py: Python<'py>,
+    config: PyStoreConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
+    let repository_config = (&config).into();
+    let store_config = (&config).into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::open_existing(storage, read_only)
-            .await
-            .map_err(PyValueError::new_err)
+        PyIcechunkStore::open_existing(
+            storage,
+            read_only,
+            repository_config,
+            store_config,
+        )
+        .await
+        .map_err(PyValueError::new_err)
     })
 }
 
 #[pyfunction]
 fn pyicechunk_store_exists<'py>(
-    storage: &'py PyStorage,
     py: Python<'py>,
+    storage: &'py PyStorage,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
@@ -158,13 +223,19 @@ fn pyicechunk_store_exists<'py>(
 }
 
 #[pyfunction]
+#[pyo3(signature = (storage, config=PyStoreConfig::default()))]
 fn pyicechunk_store_create<'py>(
-    storage: &'py PyStorage,
     py: Python<'py>,
+    storage: &'py PyStorage,
+    config: PyStoreConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
+    let repository_config = (&config).into();
+    let store_config = (&config).into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::create(storage).await.map_err(PyValueError::new_err)
+        PyIcechunkStore::create(storage, repository_config, store_config)
+            .await
+            .map_err(PyValueError::new_err)
     })
 }
 

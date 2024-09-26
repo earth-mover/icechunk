@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     "#;
 
     let store =
-        Store::from_json_config(store_config_json, icechunk::zarr::AccessMode::ReadWrite)
+        Store::from_json(store_config_json, icechunk::zarr::AccessMode::ReadWrite)
             .await?;
     let store = Arc::new(RwLock::new(store));
 
