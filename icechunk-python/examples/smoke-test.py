@@ -66,6 +66,7 @@ async def run(store: Store) -> None:
     group.attrs["foo"] = "foo"
     print(group)
 
+    first_commit = None
     if isinstance(store, IcechunkStore):
         first_commit = await store.commit("initial commit")
 
@@ -80,12 +81,12 @@ async def run(store: Store) -> None:
     group["root-foo"].attrs["update"] = "new attr"
 
     if isinstance(store, IcechunkStore):
-        second_commit = await store.commit("added array, updated attr")
+        _second_commit = await store.commit("added array, updated attr")
 
     assert len(group["root-foo"].attrs) == 2
     assert len(group.members()) == 1
 
-    if isinstance(store, IcechunkStore):
+    if isinstance(store, IcechunkStore) and first_commit is not None:
         await store.checkout(first_commit)
     group.attrs["update"] = "new attr 2"
 
@@ -102,7 +103,7 @@ async def run(store: Store) -> None:
 
     group["root-foo"].attrs["update"] = "new attr 2"
     if isinstance(store, IcechunkStore):
-        third_commit = await store.commit("new attr 2")
+        _third_commit = await store.commit("new attr 2")
 
         try:
             await store.commit("rewrote array")
@@ -135,8 +136,7 @@ async def run(store: Store) -> None:
         fill_value=-1234,
     )
     if isinstance(store, IcechunkStore):
-        fourth_commit = await store.commit("added groups and arrays")
-
+        _fourth_commit = await store.commit("added groups and arrays")
 
     print(f"Write done in {time.time() - write_start} secs")
 
@@ -146,6 +146,8 @@ async def run(store: Store) -> None:
     for key, value in expected.items():
         print(key)
         array = root_group[key]
+        assert isinstance(array, zarr.Array)
+        
         print(
             f"numchunks: {math.prod(s // c for s, c in zip(array.shape, array.chunks))}"
         )
@@ -160,16 +162,20 @@ async def create_icechunk_store(*, storage: Storage) -> IcechunkStore:
 
 async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store:
     if store == "local":
-        return LocalStore.open(f"/tmp/{rdms(6)}", mode="w")
+        return await LocalStore.open(f"/tmp/{rdms(6)}", mode="w")
     if store == "memory":
-        return MemoryStore.open(mode="w")
+        return await MemoryStore.open(mode="w")
     if store == "s3":
-        return RemoteStore.from_url("s3://testbucket/root-zarr", mode="w", storage_options= {"endpoint_url":"http://localhost:9000"})
+        return RemoteStore.from_url(
+            "s3://testbucket/root-zarr",
+            mode="w",
+            storage_options={"endpoint_url": "http://localhost:9000"},
+        )
 
 
 if __name__ == "__main__":
     MEMORY = Storage.memory("new")
-    MINIO = Storage.s3_from_credentials(
+    MINIO = Storage.s3_from_creds(
         bucket="testbucket",
         prefix="root-icechunk",
         credentials=S3Credentials(

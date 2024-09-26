@@ -1,9 +1,8 @@
 from __future__ import annotations
-import asyncio
+from typing import Any
 
 import pytest
 
-from zarr.abc.store import AccessMode
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.testing.store import StoreTests
 
@@ -71,7 +70,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     ) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
         with pytest.raises(ValueError):
-            store = await self.store_cls.open(**create_kwargs)
+            _store = await self.store_cls.open(**create_kwargs)
 
         # TODO
         # set
@@ -82,7 +81,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # with pytest.raises(ValueError):
         #     await store.delete("foo")
 
-    async def test_set_many(self, store: S) -> None:
+    async def test_set_many(self, store: IcechunkStore) -> None:
         """
         Test that a dict of key : value pairs can be inserted into the store via the
         `_set_many` method.
@@ -121,7 +120,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     def test_store_supports_partial_writes(self, store: IcechunkStore) -> None:
         assert not store.supports_partial_writes
 
-    def test_list_prefix(self, store: IcechunkStore) -> None:
+    async def test_list_prefix(self, store: IcechunkStore) -> None:
         assert True
 
     @pytest.mark.xfail(reason="Not implemented")
@@ -225,4 +224,5 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         )
         assert await store.exists("zarr.json")
         result = await store.get("zarr.json", default_buffer_prototype())
+        assert result is not None
         assert result.to_bytes() == DEFAULT_GROUP_METADATA

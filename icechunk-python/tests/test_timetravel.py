@@ -42,5 +42,5 @@ async def test_timetravel():
     await store.tag("v1.0", feature_snapshot_id)
 
     await store.checkout(tag="v1.0")
-    assert store.branch == None
+    assert store.branch is None
     assert air_temp[200, 6] == 90
