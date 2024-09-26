@@ -21,11 +21,12 @@ use tokio::sync::RwLock;
 
 use crate::{
     dataset::{
-        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec,
-        DataType, DatasetError, DimensionNames, FillValue, Path, StorageTransformer,
-        UserAttributes, ZarrArrayMetadata,
+        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
+        Codec, DataType, DatasetError, DimensionNames, FillValue, Path,
+        StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     format::{
+        manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError,
     },
@@ -195,6 +196,8 @@ pub enum KeyNotFoundError {
 pub enum StoreError {
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
+    #[error("this operation is not allowed: {0}")]
+    NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful dataset operation: `{0}`")]
@@ -505,6 +508,36 @@ impl Store {
                     .write()
                     .await
                     .set_chunk_ref(node_path, coords, Some(payload))
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    // alternate API would take array path, and a mapping from string coord to ChunkPayload
+    pub async fn set_virtual_ref(
+        &mut self,
+        key: &str,
+        reference: VirtualChunkRef,
+    ) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
+        match Key::parse(key)? {
+            Key::Metadata { .. } => Err(StoreError::NotAllowed(format!(
+                "use .set to modify metadata for key {}",
+                key
+            ))),
+            Key::Chunk { node_path, coords } => {
+                self.dataset
+                    .write()
+                    .await
+                    .set_chunk_ref(
+                        node_path,
+                        coords,
+                        Some(ChunkPayload::Virtual(reference)),
+                    )
                     .await?;
                 Ok(())
             }

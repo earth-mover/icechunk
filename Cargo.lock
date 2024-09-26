@@ -661,6 +661,7 @@ dependencies = [
  "test-strategy",
  "thiserror",
  "tokio",
+ "url",
 ]
 
 [[package]]

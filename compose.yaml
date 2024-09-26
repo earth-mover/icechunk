@@ -3,7 +3,7 @@ volumes:
 
 services:
   minio:
-    container_name: minio
+    container_name: icechunk_minio
     image: quay.io/minio/minio
     entrypoint: |
         /bin/sh -c '

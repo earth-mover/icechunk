@@ -1,9 +1,14 @@
+use itertools::Itertools;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
+use thiserror::Error;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{ChunkIndices, Flags, IcechunkFormatError, IcechunkResult, NodeId, ObjectId};
+use super::{
+    ChunkIndices, ChunkLength, ChunkOffset, Flags, IcechunkFormatError, IcechunkResult,
+    NodeId, ObjectId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(pub Vec<ChunkIndices>);
@@ -15,18 +20,66 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
+#[derive(Debug, Error)]
+pub enum VirtualReferenceError {
+    #[error("error parsing virtual ref URL {0}")]
+    CannotParseUrl(#[from] url::ParseError),
+    #[error("virtual reference has no path segments {0}")]
+    NoPathSegments(String),
+    #[error("unsupported scheme for virtual chunk refs: {0}")]
+    UnsupportedScheme(String),
+    #[error("error parsing bucket name from virtual ref URL {0}")]
+    CannotParseBucketName(String),
+    #[error("error fetching virtual reference {0}")]
+    FetchError(Box<dyn std::error::Error + Send + Sync>),
+    #[error("error parsing virtual reference {0}")]
+    OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum VirtualChunkLocation {
+    Absolute(String),
+    // Relative(prefix_id, String)
+}
+
+impl VirtualChunkLocation {
+    pub fn from_absolute_path(
+        path: &str,
+    ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        // make sure we can parse the provided URL before creating the enum
+        // TODO: consider other validation here.
+        let url = url::Url::parse(path)?;
+        let new_path: String = url
+            .path_segments()
+            .ok_or(VirtualReferenceError::NoPathSegments(path.into()))?
+            // strip empty segments here, object_store cannot handle them.
+            .filter(|x| !x.is_empty())
+            .join("/");
+
+        let host = url
+            .host()
+            .ok_or_else(|| VirtualReferenceError::CannotParseBucketName(path.into()))?;
+        Ok(VirtualChunkLocation::Absolute(format!(
+            "{}://{}/{}",
+            url.scheme(),
+            host,
+            new_path,
+        )))
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkRef {
-    location: String, // FIXME: better type
-    offset: u64,
-    length: u64,
+    pub location: VirtualChunkLocation,
+    pub offset: ChunkOffset,
+    pub length: ChunkLength,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkRef {
     pub id: ObjectId,
-    pub offset: u64,
-    pub length: u64,
+    pub offset: ChunkOffset,
+    pub length: ChunkLength,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

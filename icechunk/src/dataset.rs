@@ -7,14 +7,21 @@ use std::{
     sync::Arc,
 };
 
+use crate::{
+    format::manifest::VirtualReferenceError,
+    storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
+};
 pub use crate::{
-    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
+    format::{
+        manifest::{ChunkPayload, VirtualChunkLocation},
+        snapshot::ZarrArrayMetadata,
+        ChunkIndices, Path,
+    },
     metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
         DimensionNames, FillValue, StorageTransformer, UserAttributes,
     },
 };
-
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Future, FutureExt, Stream, StreamExt, TryStreamExt};
@@ -24,7 +31,9 @@ use tokio::task;
 
 use crate::{
     format::{
-        manifest::{ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef},
+        manifest::{
+            ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef, VirtualChunkRef,
+        },
         snapshot::{
             NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotMetadata,
             SnapshotProperties, UserAttributesSnapshot,
@@ -35,6 +44,7 @@ use crate::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
         RefError,
     },
+    storage::virtual_ref::ObjectStoreVirtualChunkResolver,
     MemCachingStorage, Storage, StorageError,
 };
 
@@ -55,13 +65,14 @@ impl Default for DatasetConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Dataset {
     config: DatasetConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: ObjectId,
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
+    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -257,6 +268,8 @@ pub enum DatasetError {
     Conflict { expected_parent: Option<ObjectId>, actual_parent: Option<ObjectId> },
     #[error("the dataset has been initialized already (default branch exists)")]
     AlreadyInitialized,
+    #[error("error when handling virtual reference {0}")]
+    VirtualReferenceError(#[from] VirtualReferenceError),
 }
 
 type DatasetResult<T> = Result<T, DatasetError>;
@@ -343,6 +356,7 @@ impl Dataset {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
+            virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::default()),
         }
     }
 
@@ -680,8 +694,19 @@ impl Dataset {
             Some(ChunkPayload::Inline(bytes)) => {
                 Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
             }
-            //FIXME: implement virtual fetch
-            Some(ChunkPayload::Virtual(_)) => todo!(),
+            Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
+                let byte_range = construct_valid_byte_range(byte_range, offset, length);
+                let resolver = Arc::clone(&self.virtual_resolver);
+                Ok(Some(
+                    async move {
+                        resolver
+                            .fetch_chunk(&location, &byte_range)
+                            .await
+                            .map_err(|e| e.into())
+                    }
+                    .boxed(),
+                ))
+            }
             None => Ok(None),
         }
     }

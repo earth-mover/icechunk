@@ -121,6 +121,28 @@ s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-data
 store = await IcechunkStore.open(storage=storage, mode='r+')
 ```
 
+## Running Tests
+
+You will need [`docker compose`](https://docs.docker.com/compose/install/) and (optionally) [`just`](https://just.systems/). 
+Once those are installed, first switch to the icechunk root directory, then start up a local minio server:
+```
+docker compose up -d
+```
+
+Use `just` to conveniently run a test
+```
+just test
+```
+
+This is just an alias for 
+
+```
+AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 cargo test
+```
+
+> [!TIP]  
+> For other aliases see [Justfile](./Justfile).
+
 ## Snapshots, Branches, and Tags
 
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.

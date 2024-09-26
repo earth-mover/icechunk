@@ -105,12 +105,28 @@ impl ByteRange {
         Self(Bound::Included(offset), Bound::Unbounded)
     }
 
+    pub fn from_offset_with_length(offset: ChunkOffset, length: ChunkOffset) -> Self {
+        Self(Bound::Included(offset), Bound::Excluded(offset + length))
+    }
+
     pub fn to_offset(offset: ChunkOffset) -> Self {
         Self(Bound::Unbounded, Bound::Excluded(offset))
     }
 
     pub fn bounded(start: ChunkOffset, end: ChunkOffset) -> Self {
         Self(Bound::Included(start), Bound::Excluded(end))
+    }
+
+    pub fn length(&self) -> Option<u64> {
+        match (self.0, self.1) {
+            (_, Bound::Unbounded) => None,
+            (Bound::Unbounded, Bound::Excluded(end)) => Some(end),
+            (Bound::Unbounded, Bound::Included(end)) => Some(end + 1),
+            (Bound::Included(start), Bound::Excluded(end)) => Some(end - start),
+            (Bound::Excluded(start), Bound::Included(end)) => Some(end - start),
+            (Bound::Included(start), Bound::Included(end)) => Some(end - start + 1),
+            (Bound::Excluded(start), Bound::Excluded(end)) => Some(end - start - 1),
+        }
     }
 
     pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);

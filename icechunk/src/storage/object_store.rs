@@ -1,20 +1,18 @@
-use core::fmt;
-use std::{
-    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+use crate::format::{
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
+    ObjectId,
 };
-
 use async_trait::async_trait;
 use bytes::Bytes;
+use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
     local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
     GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
 use serde::{Deserialize, Serialize};
-
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId,
+use std::{
+    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
 };
 
 use super::{Storage, StorageError, StorageResult};
