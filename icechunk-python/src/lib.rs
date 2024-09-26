@@ -28,9 +28,9 @@ struct PyIcechunkStore {
 #[pyclass(name = "SnapshotMetadata")]
 #[derive(Clone, Debug)]
 pub struct PySnapshotMetadata {
-    pub id: String,
-    pub written_at: DateTime<Utc>,
-    pub message: String,
+    id: String,
+    written_at: DateTime<Utc>,
+    message: String,
 }
 
 #[pymethods]
@@ -51,12 +51,12 @@ impl PySnapshotMetadata {
     }
 }
 
-impl Into<PySnapshotMetadata> for SnapshotMetadata {
-    fn into(self) -> PySnapshotMetadata {
+impl From<SnapshotMetadata> for PySnapshotMetadata {
+    fn from(val: SnapshotMetadata) -> Self {
         PySnapshotMetadata {
-            id: self.id.to_string(),
-            written_at: self.written_at,
-            message: self.message,
+            id: val.id.to_string(),
+            written_at: val.written_at,
+            message: val.message,
         }
     }
 }
