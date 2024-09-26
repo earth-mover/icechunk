@@ -26,6 +26,6 @@ pub mod storage;
 pub mod strategies;
 pub mod zarr;
 
-pub use dataset::{Dataset, DatasetBuilder, DatasetConfig};
+pub use dataset::{Dataset, DatasetBuilder, DatasetConfig, SnapshotMetadata};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
 pub use zarr::Store;

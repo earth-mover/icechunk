@@ -32,7 +32,7 @@ use crate::{
     },
     refs::{BranchVersion, Ref},
     storage::object_store::S3Credentials,
-    Dataset, DatasetBuilder, ObjectStorage, Storage,
+    Dataset, DatasetBuilder, ObjectStorage, SnapshotMetadata, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -377,6 +377,16 @@ impl Store {
     pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
         self.dataset.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
+    }
+
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    pub async fn ancestry(
+        &self,
+    ) -> StoreResult<impl Stream<Item = StoreResult<SnapshotMetadata>> + Send> {
+        let dataset = Arc::clone(&self.dataset).read_owned().await;
+        // FIXME: in memory realization to avoid maintaining a lock on the dataset
+        let all = dataset.ancestry().await?.err_into().collect::<Vec<_>>().await;
+        Ok(futures::stream::iter(all))
     }
 
     pub async fn empty(&self) -> StoreResult<bool> {

@@ -11,9 +11,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bytes = "1.7.2"
+chrono = { version = "0.4.38" }
 futures = "0.3.30"
 icechunk = { path = "../icechunk", version = "0.1.0" }
 pyo3 = { version = "0.21", features = [
+  "chrono",
   "extension-module",
   "experimental-async",
 ] }

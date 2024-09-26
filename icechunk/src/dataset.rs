@@ -14,7 +14,7 @@ use crate::{
 pub use crate::{
     format::{
         manifest::{ChunkPayload, VirtualChunkLocation},
-        snapshot::ZarrArrayMetadata,
+        snapshot::{SnapshotMetadata, ZarrArrayMetadata},
         ChunkIndices, Path,
     },
     metadata::{
@@ -35,8 +35,8 @@ use crate::{
             ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef, VirtualChunkRef,
         },
         snapshot::{
-            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotMetadata,
-            SnapshotProperties, UserAttributesSnapshot,
+            NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotProperties,
+            UserAttributesSnapshot,
         },
         ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
     },
@@ -380,7 +380,6 @@ impl Dataset {
     pub async fn ancestry(
         &self,
     ) -> DatasetResult<impl Stream<Item = DatasetResult<SnapshotMetadata>>> {
-        // Stream<Item = DatasetResult<SnapshotMetadata>> {
         let parent = self.storage.fetch_snapshot(self.snapshot_id()).await?;
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
