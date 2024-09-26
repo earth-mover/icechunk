@@ -2,8 +2,8 @@
 use bytes::Bytes;
 use icechunk::{
     dataset::{
-        get_chunk, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
-        FillValue, StorageTransformer, ZarrArrayMetadata,
+        get_chunk, ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue,
+        StorageTransformer, ZarrArrayMetadata,
     },
     format::{ByteRange, ChunkIndices, Path},
     Dataset, ObjectStorage, Storage,
