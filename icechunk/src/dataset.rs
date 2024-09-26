@@ -695,14 +695,17 @@ impl Dataset {
                 Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
             }
             Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
-                Ok(self
-                    .virtual_resolver
-                    .fetch_chunk(
-                        &location,
-                        &construct_valid_byte_range(byte_range, offset, length),
-                    )
-                    .await
-                    .map(|bytes| Some(ready(Ok(bytes)).boxed()))?)
+                let byte_range = construct_valid_byte_range(byte_range, offset, length);
+                let resolver = Arc::clone(&self.virtual_resolver);
+                Ok(Some(
+                    async move {
+                        resolver
+                            .fetch_chunk(&location, &byte_range)
+                            .await
+                            .map_err(|e| e.into())
+                    }
+                    .boxed(),
+                ))
             }
             None => Ok(None),
         }
