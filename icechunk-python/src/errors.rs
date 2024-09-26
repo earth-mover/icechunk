@@ -9,6 +9,7 @@ use thiserror::Error;
 /// When you use the ? operator, the error is coerced. But if you return the value it is not.
 /// So for now we just use the extra operation to get the coersion instead of manually mapping
 /// the errors where this is returned from a python class
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub enum PyIcechunkStoreError {
     #[error("store error: {0}")]

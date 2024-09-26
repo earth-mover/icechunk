@@ -5,6 +5,8 @@ use icechunk::zarr::StoreError;
 use pyo3::{exceptions::PyStopAsyncIteration, prelude::*};
 use tokio::sync::Mutex;
 
+type PyObjectStream = Arc<Mutex<Pin<Box<dyn Stream<Item = Result<PyObject, StoreError>> + Send>>>>;
+
 /// An async generator that yields strings from a rust stream of strings
 ///
 /// Python class objects cannot be generic, so this stream takes PyObjects
@@ -12,14 +14,12 @@ use tokio::sync::Mutex;
 /// Inspired by https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c
 #[pyclass]
 pub struct PyAsyncGenerator {
-    stream: Arc<Mutex<Pin<Box<dyn Stream<Item = Result<PyObject, StoreError>> + Send>>>>,
+    stream: PyObjectStream,
 }
 
 impl PyAsyncGenerator {
     pub fn new(
-        stream: Arc<
-            Mutex<Pin<Box<dyn Stream<Item = Result<PyObject, StoreError>> + Send>>>,
-        >,
+        stream: PyObjectStream,
     ) -> Self {
         Self { stream }
     }

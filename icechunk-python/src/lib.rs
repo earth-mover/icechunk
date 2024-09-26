@@ -51,9 +51,9 @@ impl From<&PyStoreConfig> for StoreOptions {
         if let Some(get_partial_values_concurrency) =
             config.get_partial_values_concurrency
         {
-            return StoreOptions { get_partial_values_concurrency };
+            StoreOptions { get_partial_values_concurrency }
         } else {
-            return StoreOptions::default();
+            StoreOptions::default()
         }
     }
 }
@@ -108,6 +108,8 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
         }
     }
 }
+
+type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
 impl PyIcechunkStore {
     async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
@@ -172,11 +174,11 @@ impl PyIcechunkStore {
 }
 
 #[pyfunction]
-fn pyicechunk_store_from_json_config<'py>(
-    py: Python<'py>,
+fn pyicechunk_store_from_json_config(
+    py: Python<'_>,
     json: String,
     read_only: bool,
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Bound<'_, PyAny>> {
     let json = json.as_bytes().to_owned();
 
     // The commit mechanism is async and calls tokio::spawn so we need to use the
@@ -445,7 +447,7 @@ impl PyIcechunkStore {
     pub fn get_partial_values<'py>(
         &'py self,
         py: Python<'py>,
-        key_ranges: Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>,
+        key_ranges: KeyRanges,
     ) -> PyResult<Bound<'py, PyAny>> {
         let iter = key_ranges.into_iter().map(|r| (r.0, r.1.into()));
         let store = Arc::clone(&self.store);
