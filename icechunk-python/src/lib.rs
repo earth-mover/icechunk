@@ -2,12 +2,12 @@ mod errors;
 mod storage;
 mod streams;
 
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 
-use ::icechunk::{format::ChunkOffset, zarr::StoreError, Store};
+use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
-use futures::Stream;
+use futures::StreamExt;
 use icechunk::{
     refs::Ref,
     zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo},
@@ -476,9 +476,11 @@ impl PyIcechunkStore {
     }
 
     pub fn list(&self) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.rt.block_on(self.store.read());
-        let list = self.rt.block_on(store.list())?;
-        let prepared_list = pin_extend_stream(list);
+        let list = self.rt.block_on(async move {
+            let store = self.store.read().await;
+            store.list().await
+        })?;
+        let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
@@ -486,9 +488,11 @@ impl PyIcechunkStore {
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.rt.block_on(self.store.read());
-        let list = self.rt.block_on(store.list_prefix(&prefix))?;
-        let prepared_list = pin_extend_stream(list);
+        let list = self.rt.block_on(async move {
+            let store = self.store.read().await;
+            store.list_prefix(prefix.as_str()).await
+        })?;
+        let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
 
@@ -496,31 +500,13 @@ impl PyIcechunkStore {
         &self,
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncStringGenerator> {
-        let store = self.rt.block_on(self.store.read());
-        let list = self.rt.block_on(store.list_dir(&prefix))?;
-        let prepared_list = pin_extend_stream(list);
+        let list = self.rt.block_on(async move {
+            let store = self.store.read().await;
+            store.list_dir(prefix.as_str()).await
+        })?;
+        let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncStringGenerator::new(prepared_list))
     }
-}
-
-// Prepares a stream for use in a Python AsyncGenerator impl.
-// This is possibly unsafe. We have to do this because the stream is pinned
-// and the lifetime of the stream is tied to the lifetime of the store. So the return
-// value is valid as long as the store is valid. Rust has no way to express this to
-// the Python runtime so we have to do it manually.
-fn pin_extend_stream<'a>(
-    stream: impl Stream<Item = Result<String, StoreError>> + Send,
-) -> Arc<Mutex<Pin<Box<dyn Stream<Item = Result<String, StoreError>> + 'a + Send>>>> {
-    let pinned = Box::pin(stream);
-    let extended_stream = unsafe {
-        core::mem::transmute::<
-            Pin<Box<dyn Stream<Item = Result<String, StoreError>> + Send>>,
-            Pin<Box<dyn Stream<Item = Result<String, StoreError>> + 'a + Send>>,
-        >(pinned)
-    };
-
-    let mutexed_stream = Arc::new(Mutex::new(extended_stream));
-    mutexed_stream
 }
 
 /// The icechunk Python module implemented in Rust.

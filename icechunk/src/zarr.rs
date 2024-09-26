@@ -596,25 +596,27 @@ impl Store {
 
     pub async fn list(
         &self,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + '_ + Send> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         self.list_prefix("/").await
     }
 
-    pub async fn list_prefix<'a, 'b: 'a>(
-        &'a self,
-        prefix: &'b str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
+    pub async fn list_prefix(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         let meta = self.list_metadata_prefix(prefix).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
-        Ok(meta.chain(chunks))
+        // FIXME: this is wrong, we are realizing all keys in memory
+        // it should be lazy instead
+        Ok(futures::stream::iter(meta.chain(chunks).collect::<Vec<_>>().await))
     }
 
-    pub async fn list_dir<'a, 'b: 'a>(
-        &'a self,
-        prefix: &'b str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
+    pub async fn list_dir(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
