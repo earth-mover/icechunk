@@ -50,11 +50,11 @@ impl From<&ByteRange> for Option<GetRange> {
     }
 }
 
-const SNAPSHOT_PREFIX: &str = "s/";
-const MANIFEST_PREFIX: &str = "m/";
-// const ATTRIBUTES_PREFIX: &str = "a/";
-const CHUNK_PREFIX: &str = "c/";
-const REF_PREFIX: &str = "r";
+const SNAPSHOT_PREFIX: &str = "snapshots/";
+const MANIFEST_PREFIX: &str = "manifests/";
+// const ATTRIBUTES_PREFIX: &str = "attributes/";
+const CHUNK_PREFIX: &str = "chunks/";
+const REF_PREFIX: &str = "refs";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct S3Credentials {
