@@ -200,9 +200,14 @@ fn pyicechunk_store_open_existing<'py>(
     let repository_config = (&config).into();
     let store_config = (&config).into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-        PyIcechunkStore::open_existing(storage, read_only, repository_config, store_config)
-            .await
-            .map_err(PyValueError::new_err)
+        PyIcechunkStore::open_existing(
+            storage,
+            read_only,
+            repository_config,
+            store_config,
+        )
+        .await
+        .map_err(PyValueError::new_err)
     })
 }
 
