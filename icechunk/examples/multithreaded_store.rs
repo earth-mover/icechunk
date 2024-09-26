@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_config_json = br#"
         {"storage":
             {"type": "in_memory"},
-            "dataset": {
+            "repository": {
                 "previous_version": null,
                 "inline_chunk_threshold_bytes":128
             }}

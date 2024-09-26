@@ -2,15 +2,15 @@
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used, clippy::expect_fun_call)]
 mod tests {
     use icechunk::{
-        dataset::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         format::{
             manifest::{VirtualChunkLocation, VirtualChunkRef},
             ByteRange, ChunkIndices,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+        repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         storage::{object_store::S3Credentials, ObjectStorage},
         zarr::{AccessMode, ObjectId},
-        Dataset, Storage, Store,
+        Repository, Storage, Store,
     };
     use std::sync::Arc;
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
@@ -19,7 +19,7 @@ mod tests {
     use object_store::{ObjectStore, PutMode, PutOptions, PutPayload};
     use pretty_assertions::assert_eq;
 
-    async fn create_minio_dataset() -> Dataset {
+    async fn create_minio_repository() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_s3_store(
                 "testbucket".to_string(),
@@ -33,9 +33,9 @@ mod tests {
             )
             .expect("Creating minio storage failed"),
         );
-        Dataset::init(Arc::clone(&storage), true)
+        Repository::init(Arc::clone(&storage), true)
             .await
-            .expect("building dataset failed")
+            .expect("building repository failed")
             .build()
     }
 
@@ -67,7 +67,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_dataset_with_virtual_refs() -> Result<(), Box<dyn Error>> {
+    async fn test_repository_with_virtual_refs() -> Result<(), Box<dyn Error>> {
         let bytes1 = Bytes::copy_from_slice(b"first");
         let bytes2 = Bytes::copy_from_slice(b"second0000");
         let chunks = [
@@ -76,7 +76,7 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let mut ds = create_minio_dataset().await;
+        let mut ds = create_minio_repository().await;
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
@@ -187,8 +187,8 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let ds = create_minio_dataset().await;
-        let mut store = Store::from_dataset(
+        let ds = create_minio_repository().await;
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),

@@ -2,34 +2,34 @@
 use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{
-    dataset::{
+    repository::{
         ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
         FillValue, Path, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     storage::{MemCachingStorage, ObjectStorage},
     zarr::StoreError,
-    Dataset, Storage,
+    Repository, Storage,
 };
 use itertools::Itertools;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("# The `Dataset` abstraction in Icechunk 2");
-    println!("## First create the `Dataset`");
+    println!("# The `Repository` abstraction in Icechunk 2");
+    println!("## First create the `Repository`");
     println!(
         r#"
 ```
 let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
 let storage: Arc<dyn Storage + Send + Sync> =
     Arc::new(MemCachingStorage::new(storage, 100_000_000));
-let mut ds = Dataset::create(Arc::clone(&storage));
+let mut ds = Repository::create(Arc::clone(&storage));
 ```
 "#,
     );
 
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(ObjectStorage::new_in_memory_store(None));
-    let mut ds = Dataset::init(
+    let mut ds = Repository::init(
         Arc::new(MemCachingStorage::new(Arc::clone(&storage), 2, 2, 0, 0)),
         false,
     )
@@ -162,7 +162,7 @@ ds.flush("some message", Default::default()).await?;
  "#
     );
 
-    println!("\nNow we continue to use the same dataset instance");
+    println!("\nNow we continue to use the same repository instance");
     println!();
     println!();
     println!("## Adding an inline chunk");
@@ -207,14 +207,14 @@ ds.flush("a message", Default::default()).await?;
  "#
     );
 
-    println!("## Creating a new Dataset instance @ latest version");
+    println!("## Creating a new Repository instance @ latest version");
 
-    let mut ds = Dataset::update(Arc::clone(&storage), v2_id.clone()).build();
+    let mut ds = Repository::update(Arc::clone(&storage), v2_id.clone()).build();
 
     println!(
         r#"
 ```
-let mut ds = Dataset::update(Arc::clone(&storage), ObjectId.from("{v2_id:?}"));
+let mut ds = Repository::update(Arc::clone(&storage), ObjectId.from("{v2_id:?}"));
 ```
  "#
     );
@@ -260,13 +260,13 @@ ds.flush("commit", Default::default()).await?;
  "#
     );
 
-    println!("Creating a new Dataset instance, on the previous version");
-    let ds = Dataset::update(Arc::clone(&storage), v2_id.clone()).build();
+    println!("Creating a new Repository instance, on the previous version");
+    let ds = Repository::update(Arc::clone(&storage), v2_id.clone()).build();
 
     println!(
         r#"
 ```
-let ds = Dataset::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
+let ds = Repository::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
 ```
  "#
     );
@@ -282,7 +282,7 @@ let ds = Dataset::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
     Ok(())
 }
 
-async fn print_nodes(ds: &Dataset) -> Result<(), StoreError> {
+async fn print_nodes(ds: &Repository) -> Result<(), StoreError> {
     println!("### List of nodes");
     let rows = ds
         .list_nodes()

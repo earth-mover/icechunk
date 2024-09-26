@@ -34,7 +34,7 @@ async def list_store(store, barrier):
 
 async def test_concurrency():
     store = await icechunk.IcechunkStore.from_config(
-        config={"storage": {"type": "in_memory"}, "dataset": {}}, mode="w"
+        config={"storage": {"type": "in_memory"}, "repository": {}}, mode="w"
     )
 
     group = zarr.group(store=store, overwrite=True)

@@ -3,7 +3,7 @@
 //!   something can be async sometimes it needs to be async always. In our example: fetching from
 //!   storage.
 //! - There is a high level interface that knows about arrays, groups, user attributes, etc. This
-//!   is the [`dataset::Dataset`] type.
+//!   is the [`repository::Repository`] type.
 //! - There is a low level interface that speaks zarr keys and values, and is used to provide the
 //!   zarr store that will be used from python. This is the [`zarr::Store`] type.
 //! - There is a translation language between low and high levels. When user writes to a zarr key,
@@ -17,15 +17,15 @@
 //!     - a caching wrapper implementation
 //! - The datastructures are represented by concrete types in the [`mod@format`] modules.
 //!   These datastructures use Arrow RecordBatches for representation.
-pub mod dataset;
 pub mod format;
 pub mod metadata;
 pub mod refs;
+pub mod repository;
 pub mod storage;
 #[cfg(test)]
 pub mod strategies;
 pub mod zarr;
 
-pub use dataset::{Dataset, DatasetBuilder, DatasetConfig, SnapshotMetadata};
+pub use repository::{Repository, RepositoryBuilder, RepositoryConfig, SnapshotMetadata};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
 pub use zarr::Store;

@@ -162,8 +162,8 @@ mod test {
 
     use super::*;
     use crate::{
-        dataset::{ChunkIndices, ChunkPayload},
         format::manifest::ChunkInfo,
+        repository::{ChunkIndices, ChunkPayload},
         storage::{logging::LoggingStorage, ObjectStorage, Storage},
     };
 

@@ -11,8 +11,8 @@ use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     refs::Ref,
-    zarr::{DatasetConfig, ObjectId, StorageConfig, StoreConfig, VersionInfo},
-    Dataset, SnapshotMetadata,
+    zarr::{ObjectId, RepositoryConfig, StorageConfig, StoreConfig, VersionInfo},
+    Repository, SnapshotMetadata,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use storage::{PyS3Credentials, PyStorage};
@@ -65,7 +65,7 @@ impl PyIcechunkStore {
     async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
         let storage =
             storage.make_cached_storage().map_err(PyIcechunkStoreError::UnkownError)?;
-        let exists = Dataset::exists(storage.as_ref()).await?;
+        let exists = Repository::exists(storage.as_ref()).await?;
         Ok(exists)
     }
 
@@ -78,11 +78,11 @@ impl PyIcechunkStore {
         } else {
             icechunk::zarr::AccessMode::ReadWrite
         };
-        let dataset = DatasetConfig::existing(VersionInfo::BranchTipRef(
+        let repository = RepositoryConfig::existing(VersionInfo::BranchTipRef(
             Ref::DEFAULT_BRANCH.to_string(),
         ));
         let config =
-            StoreConfig { storage, dataset, get_partial_values_concurrency: None };
+            StoreConfig { storage, repository, get_partial_values_concurrency: None };
 
         let store = Store::from_config(&config, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
@@ -91,9 +91,9 @@ impl PyIcechunkStore {
     }
 
     async fn create(storage: StorageConfig) -> Result<Self, String> {
-        let dataset = DatasetConfig::new();
+        let repository = RepositoryConfig::new();
         let config =
-            StoreConfig { storage, dataset, get_partial_values_concurrency: None };
+            StoreConfig { storage, repository, get_partial_values_concurrency: None };
 
         let store =
             Store::from_config(&config, icechunk::zarr::AccessMode::ReadWrite).await?;
