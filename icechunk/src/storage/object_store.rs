@@ -1,19 +1,18 @@
-use core::fmt;
-use std::{
-    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+use crate::format::{
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
+    ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
 };
-
 use async_trait::async_trait;
 use bytes::Bytes;
+use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
     local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
     GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
-
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId,
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -41,21 +40,28 @@ impl From<&ByteRange> for Option<GetRange> {
                 Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
             }
             (Bound::Unbounded, Bound::Excluded(end)) => {
-                Some(GetRange::Suffix(end as usize))
+                Some(GetRange::Bounded(0..end as usize))
             }
             (Bound::Unbounded, Bound::Included(end)) => {
-                Some(GetRange::Suffix(end as usize + 1))
+                Some(GetRange::Bounded(0..end as usize + 1))
             }
             (Bound::Unbounded, Bound::Unbounded) => None,
         }
     }
 }
 
-const SNAPSHOT_PREFIX: &str = "s/";
-const MANIFEST_PREFIX: &str = "m/";
-// const ATTRIBUTES_PREFIX: &str = "a/";
-const CHUNK_PREFIX: &str = "c/";
-const REF_PREFIX: &str = "r";
+const SNAPSHOT_PREFIX: &str = "snapshots/";
+const MANIFEST_PREFIX: &str = "manifests/";
+// const ATTRIBUTES_PREFIX: &str = "attributes/";
+const CHUNK_PREFIX: &str = "chunks/";
+const REF_PREFIX: &str = "refs";
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct S3Credentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
 
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
@@ -103,32 +109,24 @@ impl ObjectStorage {
     pub fn new_s3_store(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
-        access_key_id: Option<impl Into<String>>,
-        secret_access_key: Option<impl Into<String>>,
-        session_token: Option<impl Into<String>>,
+        credentials: Option<S3Credentials>,
         endpoint: Option<impl Into<String>>,
     ) -> Result<ObjectStorage, StorageError> {
         use object_store::aws::AmazonS3Builder;
 
-        let builder = if let (Some(access_key_id), Some(secret_access_key)) =
-            (access_key_id, secret_access_key)
-        {
-            AmazonS3Builder::new()
-                .with_access_key_id(access_key_id)
-                .with_secret_access_key(secret_access_key)
+        let builder = if let Some(credentials) = credentials {
+            let builder = AmazonS3Builder::new()
+                .with_access_key_id(credentials.access_key_id)
+                .with_secret_access_key(credentials.secret_access_key);
+
+            if let Some(token) = credentials.session_token {
+                builder.with_token(token)
+            } else {
+                builder
+            }
         } else {
             AmazonS3Builder::from_env()
         };
-
-        let builder = if let Some(session_token) = session_token {
-            builder.with_token(session_token)
-        } else {
-            builder
-        };
-
-        // FIXME: this is a hack to pretend we do this only for S3
-        // this will go away once object_store supports create-if-not-exist on S3
-        let supports_create_if_not_exists = endpoint.is_some();
 
         let builder = if let Some(endpoint) = endpoint {
             builder.with_endpoint(endpoint).with_allow_http(true)
@@ -141,26 +139,32 @@ impl ObjectStorage {
             store: Arc::new(store),
             prefix: prefix.into(),
             artificially_sort_refs_in_mem: false,
-            supports_create_if_not_exists,
+            // FIXME: this will go away once object_store supports create-if-not-exist on S3
+            supports_create_if_not_exists: false,
         })
     }
 
-    fn get_path(&self, file_prefix: &str, extension: &str, id: &ObjectId) -> ObjectPath {
+    fn get_path<const SIZE: usize, T: FileTypeTag>(
+        &self,
+        file_prefix: &str,
+        extension: &str,
+        id: &ObjectId<SIZE, T>,
+    ) -> ObjectPath {
         // TODO: be careful about allocation here
         // we serialize the url using crockford
         let path = format!("{}/{}/{}{}", self.prefix, file_prefix, id, extension);
         ObjectPath::from(path)
     }
 
-    fn get_snapshot_path(&self, id: &ObjectId) -> ObjectPath {
+    fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
         self.get_path(SNAPSHOT_PREFIX, ".msgpack", id)
     }
 
-    fn get_manifest_path(&self, id: &ObjectId) -> ObjectPath {
+    fn get_manifest_path(&self, id: &ManifestId) -> ObjectPath {
         self.get_path(MANIFEST_PREFIX, ".msgpack", id)
     }
 
-    fn get_chunk_path(&self, id: &ObjectId) -> ObjectPath {
+    fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
         self.get_path(CHUNK_PREFIX, "", id)
     }
 
@@ -198,7 +202,10 @@ impl fmt::Debug for ObjectStorage {
 }
 #[async_trait]
 impl Storage for ObjectStorage {
-    async fn fetch_snapshot(&self, id: &ObjectId) -> Result<Arc<Snapshot>, StorageError> {
+    async fn fetch_snapshot(
+        &self,
+        id: &SnapshotId,
+    ) -> Result<Arc<Snapshot>, StorageError> {
         let path = self.get_snapshot_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
@@ -208,14 +215,14 @@ impl Storage for ObjectStorage {
 
     async fn fetch_attributes(
         &self,
-        _id: &ObjectId,
+        _id: &AttributesId,
     ) -> Result<Arc<AttributesTable>, StorageError> {
         todo!();
     }
 
     async fn fetch_manifests(
         &self,
-        id: &ObjectId,
+        id: &ManifestId,
     ) -> Result<Arc<Manifest>, StorageError> {
         let path = self.get_manifest_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
@@ -226,7 +233,7 @@ impl Storage for ObjectStorage {
 
     async fn write_snapshot(
         &self,
-        id: ObjectId,
+        id: SnapshotId,
         table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         let path = self.get_snapshot_path(&id);
@@ -238,7 +245,7 @@ impl Storage for ObjectStorage {
 
     async fn write_attributes(
         &self,
-        _id: ObjectId,
+        _id: AttributesId,
         _table: Arc<AttributesTable>,
     ) -> Result<(), StorageError> {
         todo!()
@@ -246,7 +253,7 @@ impl Storage for ObjectStorage {
 
     async fn write_manifests(
         &self,
-        id: ObjectId,
+        id: ManifestId,
         table: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         let path = self.get_manifest_path(&id);
@@ -258,7 +265,7 @@ impl Storage for ObjectStorage {
 
     async fn fetch_chunk(
         &self,
-        id: &ObjectId,
+        id: &ChunkId,
         range: &ByteRange,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_chunk_path(id);
@@ -272,7 +279,7 @@ impl Storage for ObjectStorage {
 
     async fn write_chunk(
         &self,
-        id: ObjectId,
+        id: ChunkId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let path = self.get_chunk_path(&id);

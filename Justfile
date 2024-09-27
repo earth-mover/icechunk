@@ -3,7 +3,7 @@ alias pre := pre-commit
 
 # run all tests
 test *args='':
-  cargo test {{args}}
+  AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 cargo test {{args}}
 
 # compile but don't run all tests
 compile-tests *args='':
@@ -19,7 +19,7 @@ build-release *args='':
 
 # run clippy
 lint *args='':
-  cargo clippy --all-targets --all-features {{args}}
+  cargo clippy -p icechunk -p icechunk-python --all-features {{args}}
 
 # reformat all rust files
 format *args='':

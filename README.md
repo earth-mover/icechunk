@@ -117,9 +117,31 @@ storage = Storage.filesystem("/path/to/root")
 store = await IcechunkStore.open(storage=storage, mode='r+')
 
 # Example using S3
-s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-dataset")
+s3_storage = Storage.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-repository")
 store = await IcechunkStore.open(storage=storage, mode='r+')
 ```
+
+## Running Tests
+
+You will need [`docker compose`](https://docs.docker.com/compose/install/) and (optionally) [`just`](https://just.systems/). 
+Once those are installed, first switch to the icechunk root directory, then start up a local minio server:
+```
+docker compose up -d
+```
+
+Use `just` to conveniently run a test
+```
+just test
+```
+
+This is just an alias for 
+
+```
+AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 cargo test
+```
+
+> [!TIP]  
+> For other aliases see [Justfile](./Justfile).
 
 ## Snapshots, Branches, and Tags
 
@@ -140,7 +162,7 @@ Every commit to the main branch updates this reference.
 Icechunk's design protects against the race condition in which two uncoordinated sessions attempt to update the branch at the same time; only one can succeed.
 
 Finally, Icechunk defines **tags**--_immutable_ references to snapshot.
-Tags are appropriate for publishing specific releases of a dataset or for any application which requires a persistent, immutable identifier to the store state.
+Tags are appropriate for publishing specific releases of a repository or for any application which requires a persistent, immutable identifier to the store state.
 
 ## How Does It Work?
 

@@ -5,30 +5,27 @@ use icechunk::zarr::StoreError;
 use pyo3::{exceptions::PyStopAsyncIteration, prelude::*};
 use tokio::sync::Mutex;
 
+type PyObjectStream =
+    Arc<Mutex<Pin<Box<dyn Stream<Item = Result<PyObject, StoreError>> + Send>>>>;
+
 /// An async generator that yields strings from a rust stream of strings
 ///
-/// Python class objects cannot be generic, so this is specific to
-/// strings. If we need to support other types, we will need to create
-/// a new class for each type.
+/// Python class objects cannot be generic, so this stream takes PyObjects
 ///
 /// Inspired by https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c
 #[pyclass]
-pub struct PyAsyncStringGenerator {
-    stream: Arc<Mutex<Pin<Box<dyn Stream<Item = Result<String, StoreError>> + Send>>>>,
+pub(crate) struct PyAsyncGenerator {
+    stream: PyObjectStream,
 }
 
-impl PyAsyncStringGenerator {
-    pub fn new(
-        stream: Arc<
-            Mutex<Pin<Box<dyn Stream<Item = Result<String, StoreError>> + Send>>>,
-        >,
-    ) -> Self {
+impl PyAsyncGenerator {
+    pub(crate) fn new(stream: PyObjectStream) -> Self {
         Self { stream }
     }
 }
 
 #[pymethods]
-impl PyAsyncStringGenerator {
+impl PyAsyncGenerator {
     /// We don't want to create another classes, we want this
     /// class to be iterable. Since we implemented __anext__ method,
     /// we can return self here.

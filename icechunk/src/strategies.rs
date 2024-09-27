@@ -5,32 +5,36 @@ use std::sync::Arc;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
-use crate::dataset::{
-    ChunkKeyEncoding, ChunkShape, Codec, FillValue, StorageTransformer,
-};
 use crate::format::snapshot::ZarrArrayMetadata;
 use crate::format::Path;
 use crate::metadata::{ArrayShape, DimensionNames};
-use crate::{Dataset, ObjectStorage};
+use crate::repository::{
+    ChunkKeyEncoding, ChunkShape, Codec, FillValue, StorageTransformer,
+};
+use crate::{ObjectStorage, Repository};
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
     any::<PathBuf>()
 }
 
-#[allow(clippy::expect_used)]
-pub fn empty_datasets() -> impl Strategy<Value = Dataset> {
+prop_compose! {
+    #[allow(clippy::expect_used)]
+    pub fn empty_repositories()(_id in any::<u32>()) -> Repository {
+    // _id is used as a hack to avoid using prop_oneof![Just(repository)]
+    // Using Just requires Repository impl Clone, which we do not want
+
     // FIXME: add storages strategy
     let storage = ObjectStorage::new_in_memory_store(None);
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
-    let dataset = runtime.block_on(async {
-        Dataset::init(Arc::new(storage), false)
+    runtime.block_on(async {
+        Repository::init(Arc::new(storage), false)
             .await
-            .expect("Failed to initialize dataset")
+            .expect("Failed to initialize repository")
             .build()
-    });
-    prop_oneof![Just(dataset)]
+    })
+}
 }
 
 pub fn codecs() -> impl Strategy<Value = Vec<Codec>> {

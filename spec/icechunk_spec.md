@@ -7,31 +7,31 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 The Icechunk specification is a storage specification for [Zarr](https://zarr-specs.readthedocs.io/en/latest/specs.html) data.
 Icechunk is inspired by Apache Iceberg and borrows many concepts and ideas from the [Iceberg Spec](https://iceberg.apache.org/spec/#version-2-row-level-deletes).
 
-This specification describes a single Icechunk **store**.
-A store is defined as a Zarr store containing one or more Arrays and Groups.
-The most common scenario is for a store to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
-However, formally a store can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
-Users of Icechunk should aim to scope their stores only to related arrays and groups that require consistent transactional updates.
+This specification describes a single Icechunk **repository**.
+A repository is defined as a Zarr store containing one or more Arrays and Groups.
+The most common scenario is for a repository to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
+However, formally a repository can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
+Users of Icechunk should aim to scope their repository only to related arrays and groups that require consistent transactional updates.
 
 Icechunk defines a series of interconnected metadata and data files that together comprise the format.
-All the data and metadata for a store are stored in a directory in object storage or file storage.
+All the data and metadata for a repository are stored in a directory in object storage or file storage.
 
 ## Goals
 
 The goals of the specification are as follows:
 
 1. **Object storage** - the format is designed around the consistency features and performance characteristics available in modern cloud object storage. No external database or catalog is required.
-1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a store. Writes to stores will be committed atomically and will not be partially visible. Readers will not acquire locks.
-1. **Time travel** - Previous snapshots of a store remain accessible after new ones have been written.
+1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a repository. Writes to repositories will be committed atomically and will not be partially visible. Readers will not acquire locks.
+1. **Time travel** - Previous snapshots of a repository remain accessible after new ones have been written.
 1. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
 1. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
 
 ### Non Goals
 
-1. **Low Latency** - Icechunk is designed to support analytical workloads for large stores. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
-1. **No Catalog** - The spec does not extend beyond a single store or provide a way to organize multiple stores into a hierarchy.
+1. **Low Latency** - Icechunk is designed to support analytical workloads for large repositories. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
+1. **No Catalog** - The spec does not extend beyond a single repository or provide a way to organize multiple repositories into a hierarchy.
 1. **Access Controls** - Access control is the responsibility of the storage medium.
-The spec is not designed to enable fine-grained access restrictions (e.g. only read specific arrays) within a single store.
+The spec is not designed to enable fine-grained access restrictions (e.g. only read specific arrays) within a single repository.
 
 ### Storage Operations
 
@@ -51,19 +51,19 @@ The storage system is not required to support random-access writes. Once written
 
 ### Overview
 
-Icechunk uses a series of linked metadata files to describe the state of the store.
+Icechunk uses a series of linked metadata files to describe the state of the repository.
 
-- The **Snapshot file** records all of the different arrays and groups in the store, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files and [optionally] attribute files.
+- The **Snapshot file** records all of the different arrays and groups in the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files and [optionally] attribute files.
 - **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
 - **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important when the attributes are very large.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
 - **Reference files** track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by creating the next branch file in a sequence.
 
 When reading from store, the client opens the latest branch or tag file to obtain a pointer to the relevant snapshot file.
-The client then reads the snapshot file to determine the structure and hierarchy of the store.
+The client then reads the snapshot file to determine the structure and hierarchy of the repository.
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
-When writing a new store snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
+When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
 Finally, in an atomic put-if-not-exists operation, to commit the transaction, it creates the next branch file in the sequence.
 This operation may fail if a different client has already committed the next snapshot.
 In this case, the client may attempt to resolve the conflicts and retry the commit.
@@ -128,15 +128,15 @@ All data and metadata files are stored within a root directory (typically a pref
 ### Reference Files
 
 Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
-These references point to a specific snapshot of the store.
+These references point to a specific snapshot of the repository.
 
 - **Branches** are _mutable_ references to a snapshot.
-  Stores may have one or more branches.
+  Repositories may have one or more branches.
   The default branch name is `main`.
-  Stores must have a `main` branch.
+  Repositories must have a `main` branch.
   After creation, branches may be updated to point to a different snapshot.
 - **Tags** are _immutable_ references to a snapshot.
-  A store may contain zero or more tags.
+  A repository may contain zero or more tags.
   After creation, tags may never be updated, unlike in Git.
 
 References are very important in the Icechunk design.
@@ -223,7 +223,7 @@ The full branch file name is then given by `r/$BRANCH_NAME/$ENCODED_SEQUENCE.jso
 
 For example, the first main branch file is in a store, corresponding with sequence number 0, is always named `r/main/ZZZZZZZZ.json`.
 The branch file for sequence number 100 is `r/main/ZZZZZZWV.json`.
-The maximum number of commits allowed in an Icechunk store is consequently `1099511627775`,
+The maximum number of commits allowed in an Icechunk repository is consequently `1099511627775`,
 corresponding to the state file `r/main/00000000.json`.
 
 #### Tags
@@ -240,7 +240,7 @@ Tags cannot be deleted once created.
 
 ### Snapshot Files
 
-The snapshot file fully describes the schema of the store, including all arrays and groups.
+The snapshot file fully describes the schema of the repository, including all arrays and groups.
  
 The snapshot file has the following JSON schema:
 
@@ -1025,13 +1025,13 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 ## Algorithms
 
-### Initialize New Store
+### Initialize New Repository
 
-A new store is initialized by creating a new [possibly empty] snapshot file and then creating the first file in the main branch sequence.
+A new repository is initialized by creating a new [possibly empty] snapshot file and then creating the first file in the main branch sequence.
 
-If another client attempts to initialize a store in the same location, only one can succeed. 
+If another client attempts to initialize a repository in the same location, only one can succeed. 
 
-### Read from Store
+### Read from Repository
 
 #### From Snapshot ID
 
@@ -1051,7 +1051,7 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 
 #### From Tag
 
-Opening a store from a tag results in a read-only view.
+Opening a repository from a tag results in a read-only view.
 
 1. Read the tag file found at `r/$TAG_NAME.json` to obtain the snapshot ID.
 1. Use the shapshot ID to fetch the snapshot file.
@@ -1061,7 +1061,7 @@ Opening a store from a tag results in a read-only view.
 
 Writing can only be done on a branch.
 
-1. Open a store at a specific branch as described above, keeping track of the sequence number and branch name in the session context.
+1. Open a repository at a specific branch as described above, keeping track of the sequence number and branch name in the session context.
 1. [optional] Write new chunk files.
 1. [optional] Write new chunk manifests.
 1. Write a new snapshot file.
@@ -1073,7 +1073,7 @@ Writing can only be done on a branch.
 
 A tag can be created from any snapshot.
 
-1. Open the store at a specific snapshot.
+1. Open the repository at a specific snapshot.
 1. Attempt to create the tag file.
    a. If successful, the tag was created.
    b. If unsuccessful, the tag already exists.
@@ -1082,12 +1082,12 @@ A tag can be created from any snapshot.
 
 ### Comparison with Iceberg
 
-Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the store.
-But while Iceberg describes a table, the Icechunk store is a Zarr store (hierarchical structure of Arrays and Groups.)
+Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the repository.
+But while Iceberg describes a table, the Icechunk repository is a Zarr store (hierarchical structure of Arrays and Groups.)
 
 | Iceberg Entity | Icechunk Entity | Comment |
 |--|--|--|
-| Table | Store | The fundamental entity described by the spec |
+| Table | Repository | The fundamental entity described by the spec |
 | Column | Array | The logical container for a homogenous collection of values | 
-| Snapshot | Snapshot | A single committed snapshot of the dataset |
+| Snapshot | Snapshot | A single committed snapshot of the repository |
 | Catalog | N/A | There is no concept of a catalog in Icechunk. Consistency provided by object store. |

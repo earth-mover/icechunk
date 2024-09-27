@@ -19,10 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "coverage",
+    "mypy",
+    "object-store-python",
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
     "hypothesis",
+    "ruff",
 ]
 
 [tool.maturin]

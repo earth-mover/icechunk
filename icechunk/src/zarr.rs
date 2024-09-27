@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     iter,
     num::NonZeroU64,
+    ops::DerefMut,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -9,25 +10,29 @@ use std::{
     },
 };
 
+use async_stream::try_stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, skip_serializing_none, TryFromInto};
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use crate::{
-    dataset::{
-        ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkShape, Codec, DataType,
-        DatasetError, DimensionNames, FillValue, Path, StorageTransformer,
-        UserAttributes, ZarrArrayMetadata,
-    },
     format::{
+        manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
-        ByteRange, ChunkOffset, IcechunkFormatError,
+        ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
     },
     refs::{BranchVersion, Ref},
-    Dataset, DatasetBuilder, ObjectStorage, Storage,
+    repository::{
+        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
+        Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
+        StorageTransformer, UserAttributes, ZarrArrayMetadata,
+    },
+    storage::object_store::S3Credentials,
+    ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
 
 pub use crate::format::ObjectId;
@@ -45,9 +50,7 @@ pub enum StorageConfig {
     S3ObjectStore {
         bucket: String,
         prefix: String,
-        access_key_id: Option<String>,
-        secret_access_key: Option<String>,
-        session_token: Option<String>,
+        credentials: Option<S3Credentials>,
         endpoint: Option<String>,
     },
 }
@@ -63,20 +66,11 @@ impl StorageConfig {
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
-            StorageConfig::S3ObjectStore {
-                bucket,
-                prefix,
-                access_key_id,
-                secret_access_key,
-                session_token,
-                endpoint,
-            } => {
+            StorageConfig::S3ObjectStore { bucket, prefix, credentials, endpoint } => {
                 let storage = ObjectStorage::new_s3_store(
                     bucket,
                     prefix,
-                    access_key_id.clone(),
-                    secret_access_key.clone(),
-                    session_token.clone(),
+                    credentials.clone(),
                     endpoint.clone(),
                 )
                 .map_err(|e| format!("Error creating storage: {e}"))?;
@@ -87,7 +81,7 @@ impl StorageConfig {
 
     pub fn make_cached_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
         let storage = self.make_storage()?;
-        let cached_storage = Dataset::add_in_mem_asset_caching(storage);
+        let cached_storage = Repository::add_in_mem_asset_caching(storage);
         Ok(cached_storage)
     }
 }
@@ -95,7 +89,7 @@ impl StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
-    SnapshotId(ObjectId),
+    SnapshotId(SnapshotId),
     #[serde(rename = "tag")]
     TagRef(String),
     #[serde(rename = "branch")]
@@ -104,19 +98,24 @@ pub enum VersionInfo {
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct DatasetConfig {
+pub struct RepositoryConfig {
     pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
 }
 
-impl DatasetConfig {
+impl RepositoryConfig {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn existing(version: VersionInfo) -> Self {
         Self { version: Some(version), ..Self::default() }
+    }
+
+    pub fn with_version(mut self, version: VersionInfo) -> Self {
+        self.version = Some(version);
+        self
     }
 
     pub fn with_inline_chunk_threshold_bytes(mut self, threshold: u16) -> Self {
@@ -129,36 +128,38 @@ impl DatasetConfig {
         self
     }
 
-    pub async fn make_dataset(
+    pub async fn make_repository(
         &self,
         storage: Arc<dyn Storage + Send + Sync>,
-    ) -> Result<(Dataset, Option<String>), String> {
-        let (mut builder, branch): (DatasetBuilder, Option<String>) = match &self.version
-        {
-            None => {
-                let builder =
-                    Dataset::init(storage, self.unsafe_overwrite_refs.unwrap_or(false))
+    ) -> Result<(Repository, Option<String>), String> {
+        let (mut builder, branch): (RepositoryBuilder, Option<String>) =
+            match &self.version {
+                None => {
+                    let builder = Repository::init(
+                        storage,
+                        self.unsafe_overwrite_refs.unwrap_or(false),
+                    )
+                    .await
+                    .map_err(|err| format!("Error initializing repository: {err}"))?;
+                    (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
+                }
+                Some(VersionInfo::SnapshotId(sid)) => {
+                    let builder = Repository::update(storage, sid.clone());
+                    (builder, None)
+                }
+                Some(VersionInfo::TagRef(tag)) => {
+                    let builder = Repository::from_tag(storage, tag)
                         .await
-                        .map_err(|err| format!("Error initializing dataset: {err}"))?;
-                (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
-            }
-            Some(VersionInfo::SnapshotId(sid)) => {
-                let builder = Dataset::update(storage, sid.clone());
-                (builder, None)
-            }
-            Some(VersionInfo::TagRef(tag)) => {
-                let builder = Dataset::from_tag(storage, tag)
-                    .await
-                    .map_err(|err| format!("Error fetching tag: {err}"))?;
-                (builder, None)
-            }
-            Some(VersionInfo::BranchTipRef(branch)) => {
-                let builder = Dataset::from_branch_tip(storage, branch)
-                    .await
-                    .map_err(|err| format!("Error fetching branch: {err}"))?;
-                (builder, Some(branch.clone()))
-            }
-        };
+                        .map_err(|err| format!("Error fetching tag: {err}"))?;
+                    (builder, None)
+                }
+                Some(VersionInfo::BranchTipRef(branch)) => {
+                    let builder = Repository::from_branch_tip(storage, branch)
+                        .await
+                        .map_err(|err| format!("Error fetching branch: {err}"))?;
+                    (builder, Some(branch.clone()))
+                }
+            };
 
         if let Some(inline_theshold) = self.inline_chunk_threshold_bytes {
             builder.with_inline_threshold_bytes(inline_theshold);
@@ -174,10 +175,22 @@ impl DatasetConfig {
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StoreConfig {
+pub struct StoreOptions {
+    pub get_partial_values_concurrency: u16,
+}
+
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self { get_partial_values_concurrency: 10 }
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConsolidatedStore {
     pub storage: StorageConfig,
-    pub dataset: DatasetConfig,
-    pub get_partial_values_concurrency: Option<u16>,
+    pub repository: RepositoryConfig,
+    pub config: Option<StoreOptions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -202,10 +215,12 @@ pub enum KeyNotFoundError {
 pub enum StoreError {
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
+    #[error("this operation is not allowed: {0}")]
+    NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
-    #[error("unsuccessful dataset operation: `{0}`")]
-    CannotUpdate(#[from] DatasetError),
+    #[error("unsuccessful repository operation: `{0}`")]
+    RepositoryError(#[from] RepositoryError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("all commits must be made on a branch")]
@@ -221,60 +236,57 @@ pub enum StoreError {
     #[error("cannot write to read-only store")]
     ReadOnly,
     #[error(
-        "uncommitted changes in dataset, commit changes or reset dataset and try again."
+        "uncommitted changes in repository, commit changes or reset repository and try again."
     )]
     UncommittedChanges,
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Store {
-    dataset: Dataset,
+    repository: Arc<RwLock<Repository>>,
     mode: AccessMode,
     current_branch: Option<String>,
-    get_partial_values_concurrency: u16,
+    config: StoreOptions,
 }
 
 impl Store {
-    pub async fn from_config(
-        config: &StoreConfig,
+    pub async fn from_consolidated(
+        consolidated: &ConsolidatedStore,
         mode: AccessMode,
     ) -> Result<Self, String> {
-        let storage = config.storage.make_cached_storage()?;
-        let (dataset, branch) = config.dataset.make_dataset(storage).await?;
-        Ok(Self::from_dataset(
-            dataset,
-            mode,
-            branch,
-            config.get_partial_values_concurrency,
-        ))
+        let storage = consolidated.storage.make_cached_storage()?;
+        let (repository, branch) =
+            consolidated.repository.make_repository(storage).await?;
+        Ok(Self::from_repository(repository, mode, branch, consolidated.config.clone()))
     }
 
-    pub async fn from_json_config(json: &[u8], mode: AccessMode) -> Result<Self, String> {
-        let config: StoreConfig =
+    pub async fn from_json(json: &[u8], mode: AccessMode) -> Result<Self, String> {
+        let config: ConsolidatedStore =
             serde_json::from_slice(json).map_err(|e| e.to_string())?;
-        Self::from_config(&config, mode).await
+        Self::from_consolidated(&config, mode).await
     }
 
     pub async fn new_from_storage(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> Result<Self, String> {
-        let (dataset, branch) = DatasetConfig::default().make_dataset(storage).await?;
-        Ok(Self::from_dataset(dataset, AccessMode::ReadWrite, branch, None))
+        let (repository, branch) =
+            RepositoryConfig::default().make_repository(storage).await?;
+        Ok(Self::from_repository(repository, AccessMode::ReadWrite, branch, None))
     }
 
-    pub fn from_dataset(
-        dataset: Dataset,
+    pub fn from_repository(
+        repository: Repository,
         mode: AccessMode,
         current_branch: Option<String>,
-        get_partial_values_concurrency: Option<u16>,
+        config: Option<StoreOptions>,
     ) -> Self {
         Store {
-            dataset,
+            repository: Arc::new(RwLock::new(repository)),
             mode,
             current_branch,
-            get_partial_values_concurrency: get_partial_values_concurrency.unwrap_or(10),
+            config: config.unwrap_or_default(),
         }
     }
 
@@ -282,55 +294,62 @@ impl Store {
         &self.current_branch
     }
 
-    pub fn snapshot_id(&self) -> &ObjectId {
-        self.dataset.snapshot_id()
+    pub async fn snapshot_id(&self) -> SnapshotId {
+        self.repository.read().await.snapshot_id().clone()
     }
 
-    pub fn has_uncommitted_changes(&self) -> bool {
-        self.dataset.has_uncommitted_changes()
+    pub async fn has_uncommitted_changes(&self) -> bool {
+        self.repository.read().await.has_uncommitted_changes()
     }
 
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
     pub async fn reset(&mut self) -> StoreResult<()> {
-        let head_snapshot = self.snapshot_id();
-        self.dataset =
-            Dataset::update(Arc::clone(self.dataset.storage()), head_snapshot.clone())
-                .build();
+        let guard = self.repository.read().await;
+        // carefully avoid the deadlock if we were to call self.snapshot_id()
+        let head_snapshot = guard.snapshot_id().clone();
+        let storage = Arc::clone(guard.storage());
+        let new_repository = Repository::update(storage, head_snapshot).build();
+        drop(guard);
+        self.repository = Arc::new(RwLock::new(new_repository));
 
         Ok(())
     }
 
-    /// Checkout a specific version of the dataset. This can be a snapshot id, a tag, or a branch tip.
+    /// Checkout a specific version of the repository. This can be a snapshot id, a tag, or a branch tip.
     ///
     /// If the version is a branch tip, the branch will be set as the current branch. If the version
     /// is a tag or snapshot id, the current branch will be unset and the store will be in detached state.
     ///
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
-        // Checking out is not allowed if there are uncommitted changes
-        if self.dataset.has_uncommitted_changes() {
-            return Err(StoreError::UncommittedChanges);
-        }
+        // this needs to be done carefully to avoid deadlocks and race conditions
+        let storage = {
+            let guard = self.repository.read().await;
+            // Checking out is not allowed if there are uncommitted changes
+            if guard.has_uncommitted_changes() {
+                return Err(StoreError::UncommittedChanges);
+            }
+            guard.storage().clone()
+        };
 
-        let storage = self.dataset.storage().clone();
-        let dataset = match version {
+        let repository = match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
-                Dataset::update(storage, sid)
+                Repository::update(storage, sid)
             }
             VersionInfo::TagRef(tag) => {
                 self.current_branch = None;
-                Dataset::from_tag(storage, &tag).await?
+                Repository::from_tag(storage, &tag).await?
             }
             VersionInfo::BranchTipRef(branch) => {
                 self.current_branch = Some(branch.clone());
-                Dataset::from_branch_tip(storage, &branch).await?
+                Repository::from_branch_tip(storage, &branch).await?
             }
         }
         .build();
 
-        self.dataset = dataset;
+        self.repository = Arc::new(RwLock::new(repository));
         Ok(())
     }
 
@@ -339,13 +358,14 @@ impl Store {
     pub async fn new_branch(
         &mut self,
         branch: &str,
-    ) -> StoreResult<(ObjectId, BranchVersion)> {
-        if self.dataset.has_uncommitted_changes() {
+    ) -> StoreResult<(SnapshotId, BranchVersion)> {
+        // this needs to be done carefully to avoid deadlocks and race conditions
+        let guard = self.repository.write().await;
+        if guard.has_uncommitted_changes() {
             return Err(StoreError::UncommittedChanges);
         }
-
-        let version = self.dataset.new_branch(branch).await?;
-        let snapshot_id = self.snapshot_id().clone();
+        let version = guard.new_branch(branch).await?;
+        let snapshot_id = guard.snapshot_id().clone();
 
         self.current_branch = Some(branch.to_string());
 
@@ -354,9 +374,15 @@ impl Store {
 
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
-    pub async fn commit(&mut self, message: &str) -> StoreResult<ObjectId> {
+    pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
         if let Some(branch) = &self.current_branch {
-            let result = self.dataset.commit(branch, message, None).await?;
+            let result = self
+                .repository
+                .write()
+                .await
+                .deref_mut()
+                .commit(branch, message, None)
+                .await?;
             Ok(result)
         } else {
             Err(StoreError::NotOnBranch)
@@ -364,17 +390,23 @@ impl Store {
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(&mut self, tag: &str, snapshot_id: &ObjectId) -> StoreResult<()> {
-        self.dataset.tag(tag, snapshot_id).await?;
+    pub async fn tag(&mut self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
+        self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
 
-    pub fn dataset(self) -> Dataset {
-        self.dataset
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    pub async fn ancestry(
+        &self,
+    ) -> StoreResult<impl Stream<Item = StoreResult<SnapshotMetadata>> + Send> {
+        let repository = Arc::clone(&self.repository).read_owned().await;
+        // FIXME: in memory realization to avoid maintaining a lock on the repository
+        let all = repository.ancestry().await?.err_into().collect::<Vec<_>>().await;
+        Ok(futures::stream::iter(all))
     }
 
     pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.dataset.list_nodes().await?.next().is_none();
+        let res = self.repository.read().await.list_nodes().await?.next().is_none();
         Ok(res)
     }
 
@@ -430,7 +462,7 @@ impl Store {
         let num_keys = AtomicUsize::new(0);
         stream
             .for_each_concurrent(
-                self.get_partial_values_concurrency as usize,
+                self.config.get_partial_values_concurrency as usize,
                 |(key, range)| {
                     let index = num_keys.fetch_add(1, Ordering::Release);
                     let results = Arc::clone(&results);
@@ -474,7 +506,7 @@ impl Store {
         Ok(true)
     }
 
-    pub async fn set(&mut self, key: &str, value: Bytes) -> StoreResult<()> {
+    pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
         }
@@ -492,31 +524,79 @@ impl Store {
                     }
                 }
             }
-            Key::Chunk { ref node_path, ref coords } => {
-                self.dataset.set_chunk(node_path, coords, value).await?;
+            Key::Chunk { node_path, coords } => {
+                // we only lock the repository to get the writer
+                let writer = self.repository.read().await.get_chunk_writer();
+                // then we can write the bytes without holding the lock
+                let payload = writer(value).await?;
+                // and finally we lock for write and update the reference
+                self.repository
+                    .write()
+                    .await
+                    .set_chunk_ref(node_path, coords, Some(payload))
+                    .await?;
                 Ok(())
             }
         }
     }
 
-    pub async fn delete(&mut self, key: &str) -> StoreResult<()> {
+    // alternate API would take array path, and a mapping from string coord to ChunkPayload
+    pub async fn set_virtual_ref(
+        &mut self,
+        key: &str,
+        reference: VirtualChunkRef,
+    ) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
         }
 
-        let ds = &mut self.dataset;
+        match Key::parse(key)? {
+            Key::Metadata { .. } => Err(StoreError::NotAllowed(format!(
+                "use .set to modify metadata for key {}",
+                key
+            ))),
+            Key::Chunk { node_path, coords } => {
+                self.repository
+                    .write()
+                    .await
+                    .set_chunk_ref(
+                        node_path,
+                        coords,
+                        Some(ChunkPayload::Virtual(reference)),
+                    )
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn delete(&self, key: &str) -> StoreResult<()> {
+        if self.mode == AccessMode::ReadOnly {
+            return Err(StoreError::ReadOnly);
+        }
+
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                let node = ds.get_node(&node_path).await.map_err(|_| {
+                // we need to hold the lock while we do the node search and the write
+                // to avoid race conditions with other writers
+                // (remember this method takes &self and not &mut self)
+                let mut guard = self.repository.write().await;
+                let node = guard.get_node(&node_path).await.map_err(|_| {
                     KeyNotFoundError::NodeNotFound { path: node_path.clone() }
                 })?;
                 match node.node_data {
-                    NodeData::Array(_, _) => Ok(ds.delete_array(node_path).await?),
-                    NodeData::Group => Ok(ds.delete_group(node_path).await?),
+                    NodeData::Array(_, _) => {
+                        Ok(guard.deref_mut().delete_array(node_path).await?)
+                    }
+                    NodeData::Group => {
+                        Ok(guard.deref_mut().delete_group(node_path).await?)
+                    }
                 }
             }
             Key::Chunk { node_path, coords } => {
-                Ok(ds.set_chunk_ref(node_path, coords, None).await?)
+                let mut guard = self.repository.write().await;
+                let repository = guard.deref_mut();
+                Ok(repository.set_chunk_ref(node_path, coords, None).await?)
             }
         }
     }
@@ -526,7 +606,7 @@ impl Store {
     }
 
     pub async fn set_partial_values(
-        &mut self,
+        &self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
@@ -542,25 +622,27 @@ impl Store {
 
     pub async fn list(
         &self,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + '_ + Send> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         self.list_prefix("/").await
     }
 
-    pub async fn list_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
+    pub async fn list_prefix(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        let meta = self.list_metadata_prefix(prefix).await?.map(Ok);
+        let meta = self.list_metadata_prefix(prefix).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
-        Ok(meta.chain(chunks))
+        // FIXME: this is wrong, we are realizing all keys in memory
+        // it should be lazy instead
+        Ok(futures::stream::iter(meta.chain(chunks).collect::<Vec<_>>().await))
     }
 
-    pub async fn list_dir<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + Send> {
+    pub async fn list_dir(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
@@ -593,7 +675,16 @@ impl Store {
         coords: ChunkIndices,
         byte_range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let chunk = self.dataset.get_chunk(&path, &coords, byte_range).await?;
+        // we only lock the repository while we get the reader
+        let reader = self
+            .repository
+            .read()
+            .await
+            .get_chunk_reader(&path, &coords, byte_range)
+            .await?;
+
+        // then we can fetch the bytes without holding the lock
+        let chunk = get_chunk(reader).await?;
         chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
             key: key.to_string(),
             path,
@@ -607,7 +698,7 @@ impl Store {
         path: &Path,
         range: &ByteRange,
     ) -> StoreResult<Bytes> {
-        let node = self.dataset.get_node(path).await.map_err(|_| {
+        let node = self.repository.read().await.get_node(path).await.map_err(|_| {
             StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
         })?;
         let user_attributes = match node.user_attributes {
@@ -629,71 +720,94 @@ impl Store {
     }
 
     async fn set_array_meta(
-        &mut self,
+        &self,
         path: Path,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
-        if self.dataset.get_array(&path).await.is_ok() {
+        // we need to hold the lock while we search the array and do the update to avoid race
+        // conditions with other writers (notice we don't take &mut self)
+
+        let mut guard = self.repository.write().await;
+        if guard.get_array(&path).await.is_ok() {
             // TODO: we don't necessarily need to update both
-            self.dataset.set_user_attributes(path.clone(), array_meta.attributes).await?;
-            self.dataset.update_array(path, array_meta.zarr_metadata).await?;
+            let repository = guard.deref_mut();
+            repository.set_user_attributes(path.clone(), array_meta.attributes).await?;
+            repository.update_array(path, array_meta.zarr_metadata).await?;
             Ok(())
         } else {
-            self.dataset.add_array(path.clone(), array_meta.zarr_metadata).await?;
-            self.dataset.set_user_attributes(path, array_meta.attributes).await?;
+            let repository = guard.deref_mut();
+            repository.add_array(path.clone(), array_meta.zarr_metadata).await?;
+            repository.set_user_attributes(path, array_meta.attributes).await?;
             Ok(())
         }
     }
 
     async fn set_group_meta(
-        &mut self,
+        &self,
         path: Path,
         group_meta: GroupMetadata,
     ) -> Result<(), StoreError> {
-        if self.dataset.get_group(&path).await.is_ok() {
-            self.dataset.set_user_attributes(path, group_meta.attributes).await?;
+        // we need to hold the lock while we search the group and do the update to avoid race
+        // conditions with other writers (notice we don't take &mut self)
+        //
+        let mut guard = self.repository.write().await;
+        if guard.get_group(&path).await.is_ok() {
+            let repository = guard.deref_mut();
+            repository.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         } else {
-            self.dataset.add_group(path.clone()).await?;
-            self.dataset.set_user_attributes(path, group_meta.attributes).await?;
+            let repository = guard.deref_mut();
+            repository.add_group(path.clone()).await?;
+            repository.set_user_attributes(path, group_meta.attributes).await?;
             Ok(())
         }
     }
 
-    async fn list_metadata_prefix<'a>(
+    async fn list_metadata_prefix<'a, 'b: 'a>(
         &'a self,
-        prefix: &'a str,
-    ) -> StoreResult<impl Stream<Item = String> + 'a> {
-        let prefix = prefix.trim_end_matches('/');
-
-        let nodes = futures::stream::iter(self.dataset.list_nodes().await?);
-        // TODO: handle non-utf8?
-        Ok(nodes.filter_map(move |node| async move {
-            Key::Metadata { node_path: node.path }.to_string().and_then(|key| {
-                if key.starts_with(prefix) {
-                    Some(key)
-                } else {
-                    None
-                }
-            })
-        }))
-    }
-
-    async fn list_chunks_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
+        prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
+        let res = try_stream! {
+            let repository = Arc::clone(&self.repository).read_owned().await;
+            for node in repository.list_nodes().await? {
+                // TODO: handle non-utf8?
+                let meta_key = Key::Metadata { node_path: node.path }.to_string();
+                if let Some(key) = meta_key {
+                    if key.starts_with(prefix) {
+                        yield key;
+                    }
+                }
+            }
+        };
+        Ok(res)
+    }
 
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
-        let chunks = self.dataset.all_chunks().await?;
-        Ok(chunks.map_err(|e| e.into()).try_filter_map(move |(path, chunk)| async move {
-            //FIXME: utf handling
-            Ok(Key::Chunk { node_path: path, coords: chunk.coord }
-                .to_string()
-                .and_then(|key| if key.starts_with(prefix) { Some(key) } else { None }))
-        }))
+    async fn list_chunks_prefix<'a, 'b: 'a>(
+        &'a self,
+        prefix: &'b str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+        let prefix = prefix.trim_end_matches('/');
+        let res = try_stream! {
+            let repository = Arc::clone(&self.repository).read_owned().await;
+            // TODO: this is inefficient because it filters based on the prefix, instead of only
+            // generating items that could potentially match
+            for await maybe_path_chunk in  repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
+                // FIXME: utf8 handling
+                match maybe_path_chunk {
+                    Ok((path,chunk)) => {
+                        let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
+                        if let Some(key) = chunk_key {
+                            if key.starts_with(prefix) {
+                                yield key;
+                            }
+                        }
+                    }
+                    Err(err) => Err(err)?
+                }
+            }
+        };
+        Ok(res)
     }
 }
 
@@ -1295,8 +1409,8 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1345,8 +1459,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1390,8 +1504,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1466,11 +1580,10 @@ mod tests {
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
-        let mut ds = store.dataset();
-        let oid = ds.flush("commit", Default::default()).await?;
+        let oid = store.commit("commit").await?;
 
-        let ds = Dataset::update(storage, oid).build();
-        let store = Store::from_dataset(ds, AccessMode::ReadWrite, None, None);
+        let ds = Repository::update(storage, oid).build();
+        let store = Store::from_repository(ds, AccessMode::ReadWrite, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1486,8 +1599,8 @@ mod tests {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1532,8 +1645,8 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1601,8 +1714,8 @@ mod tests {
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1640,8 +1753,8 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1680,8 +1793,8 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1739,8 +1852,8 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Dataset::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_dataset(
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1833,7 +1946,7 @@ mod tests {
 
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
-        assert_eq!(store.has_uncommitted_changes(), true);
+        assert_eq!(store.has_uncommitted_changes().await, true);
 
         let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
         assert!(result.is_err());
@@ -1848,8 +1961,8 @@ mod tests {
         store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_store_from_snapshot = Store::from_dataset(
-            Dataset::update(Arc::clone(&storage), snapshot_id).build(),
+        let new_store_from_snapshot = Store::from_repository(
+            Repository::update(Arc::clone(&storage), snapshot_id).build(),
             AccessMode::ReadWrite,
             None,
             None,
@@ -1864,26 +1977,28 @@ mod tests {
 
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
-        let expected = StoreConfig {
+        let expected = ConsolidatedStore {
             storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
-            dataset: DatasetConfig {
+            repository: RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(128),
-                version: Some(VersionInfo::SnapshotId(ObjectId([
-                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                version: Some(VersionInfo::SnapshotId(SnapshotId::new([
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
             },
-            get_partial_values_concurrency: Some(100),
+            config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
         };
 
         let json = r#"
             {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
-             "dataset": {
-                "version": {"snapshot_id":"000G40R40M30E209185GR38E1W"},
+             "repository": {
+                "version": {"snapshot_id":"000G40R40M30E209185G"},
                 "inline_chunk_threshold_bytes":128,
                 "unsafe_overwrite_refs":true
              },
-             "get_partial_values_concurrency": 100
+             "config": {
+                "get_partial_values_concurrency": 100
+             }
             }
         "#;
         assert_eq!(expected, serde_json::from_str(json)?);
@@ -1891,20 +2006,20 @@ mod tests {
         let json = r#"
             {"storage":
                 {"type": "local_filesystem", "root":"/tmp/test"},
-             "dataset": {
+             "repository": {
                 "version": null,
                 "inline_chunk_threshold_bytes": null,
                 "unsafe_overwrite_refs":null
              }}
         "#;
         assert_eq!(
-            StoreConfig {
-                dataset: DatasetConfig {
+            ConsolidatedStore {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
-                get_partial_values_concurrency: None,
+                config: None,
                 ..expected.clone()
             },
             serde_json::from_str(json)?
@@ -1913,17 +2028,17 @@ mod tests {
         let json = r#"
             {"storage":
                 {"type": "local_filesystem", "root":"/tmp/test"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
-            StoreConfig {
-                dataset: DatasetConfig {
+            ConsolidatedStore {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
-                get_partial_values_concurrency: None,
+                config: None,
                 ..expected.clone()
             },
             serde_json::from_str(json)?
@@ -1931,48 +2046,48 @@ mod tests {
 
         let json = r#"
             {"storage":{"type": "in_memory", "prefix": "prefix"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
-            StoreConfig {
-                dataset: DatasetConfig {
+            ConsolidatedStore {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );
 
         let json = r#"
             {"storage":{"type": "in_memory"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
-            StoreConfig {
-                dataset: DatasetConfig {
+            ConsolidatedStore {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );
 
         let json = r#"
             {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
-             "dataset": {}
+             "repository": {}
             }
         "#;
         assert_eq!(
-            StoreConfig {
-                dataset: DatasetConfig {
+            ConsolidatedStore {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -1980,12 +2095,10 @@ mod tests {
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    access_key_id: None,
-                    secret_access_key: None,
-                    session_token: None,
+                    credentials: None,
                     endpoint: None
                 },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );
@@ -1995,16 +2108,18 @@ mod tests {
              "type": "s3",
              "bucket":"test",
              "prefix":"root",
-             "access_key_id":"my-key",
-             "secret_access_key":"my-secret-key",
-             "endpoint": "http://localhost:9000"
+             "credentials":{
+                 "access_key_id":"my-key",
+                 "secret_access_key":"my-secret-key"
+             },
+             "endpoint":"http://localhost:9000"
          },
-         "dataset": {}
+         "repository": {}
         }
     "#;
         assert_eq!(
-            StoreConfig {
-                dataset: DatasetConfig {
+            ConsolidatedStore {
+                repository: RepositoryConfig {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
@@ -2012,12 +2127,14 @@ mod tests {
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    access_key_id: Some(String::from("my-key")),
-                    secret_access_key: Some(String::from("my-secret-key")),
-                    session_token: None,
+                    credentials: Some(S3Credentials {
+                        access_key_id: String::from("my-key"),
+                        secret_access_key: String::from("my-secret-key"),
+                        session_token: None,
+                    }),
                     endpoint: Some(String::from("http://localhost:9000"))
                 },
-                get_partial_values_concurrency: None,
+                config: None,
             },
             serde_json::from_str(json)?
         );

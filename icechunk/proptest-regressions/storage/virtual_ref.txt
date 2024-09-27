@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 008bfdd8f25d36650994a353bcb0664c03e6089f6e81f7a18340520d82758346 # shrinks to input = _TestConstructValidByteRangeArgs
+cc 0bcff97f9e87d0f72d24e55229d8e6a18427e124755db10bc45e79cdbbac0af2 # shrinks to input = _TestPropertiesConstructValidByteRangeArgs { offset: 0, length: 1 }

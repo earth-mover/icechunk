@@ -12,19 +12,18 @@ pub mod caching;
 pub mod logging;
 
 pub mod object_store;
+pub mod virtual_ref;
 
 pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, ByteRange,
-    ObjectId, Path,
+    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
+    ByteRange, ChunkId, ManifestId, Path, SnapshotId,
 };
 
 #[derive(Debug, Error)]
 pub enum StorageError {
-    #[error("object not found `{0:?}`")]
-    NotFound(ObjectId),
     #[error("error contacting object store {0}")]
     ObjectStore(#[from] ::object_store::Error),
     #[error("messagepack decode error: {0}")]
@@ -45,37 +44,36 @@ pub enum StorageError {
 
 type StorageResult<A> = Result<A, StorageError>;
 
-/// Fetch and write the parquet files that represent the dataset in object store
+/// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 pub trait Storage: fmt::Debug {
-    async fn fetch_snapshot(&self, id: &ObjectId) -> StorageResult<Arc<Snapshot>>;
+    async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,
-        id: &ObjectId,
+        id: &AttributesId,
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
-    async fn fetch_manifests(&self, id: &ObjectId) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
-    async fn fetch_chunk(&self, id: &ObjectId, range: &ByteRange)
-        -> StorageResult<Bytes>; // FIXME: format flags
+    async fn fetch_manifests(&self, id: &ManifestId) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
+    async fn fetch_chunk(&self, id: &ChunkId, range: &ByteRange) -> StorageResult<Bytes>; // FIXME: format flags
 
     async fn write_snapshot(
         &self,
-        id: ObjectId,
+        id: SnapshotId,
         table: Arc<Snapshot>,
     ) -> StorageResult<()>;
     async fn write_attributes(
         &self,
-        id: ObjectId,
+        id: AttributesId,
         table: Arc<AttributesTable>,
     ) -> StorageResult<()>;
     async fn write_manifests(
         &self,
-        id: ObjectId,
+        id: ManifestId,
         table: Arc<Manifest>,
     ) -> StorageResult<()>;
-    async fn write_chunk(&self, id: ObjectId, bytes: Bytes) -> StorageResult<()>;
+    async fn write_chunk(&self, id: ChunkId, bytes: Bytes) -> StorageResult<()>;
 
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;
     async fn ref_names(&self) -> StorageResult<Vec<String>>;

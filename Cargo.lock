@@ -57,6 +57,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd56dd203fef61ac097dd65721a419ddccb106b2d2b70ba60a6b529f03961a51"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16e62a023e7c117e27523144c5d2459f4397fcc3cab0085af8e2224f643a0193"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -617,6 +639,7 @@ name = "icechunk"
 version = "0.1.0"
 dependencies = [
  "async-recursion",
+ "async-stream",
  "async-trait",
  "base32",
  "base64",
@@ -638,13 +661,16 @@ dependencies = [
  "test-strategy",
  "thiserror",
  "tokio",
+ "url",
 ]
 
 [[package]]
 name = "icechunk-python"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "bytes",
+ "chrono",
  "futures",
  "icechunk",
  "pyo3",
@@ -1029,6 +1055,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5e00b96a521718e08e03b1a622f01c8a8deb50719335de3f60b3b3950f069d8"
 dependencies = [
  "cfg-if",
+ "chrono",
  "indoc",
  "libc",
  "memoffset",

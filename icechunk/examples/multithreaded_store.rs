@@ -10,14 +10,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_config_json = br#"
         {"storage":
             {"type": "in_memory"},
-            "dataset": {
+            "repository": {
                 "previous_version": null,
                 "inline_chunk_threshold_bytes":128
             }}
     "#;
 
     let store =
-        Store::from_json_config(store_config_json, icechunk::zarr::AccessMode::ReadWrite)
+        Store::from_json(store_config_json, icechunk::zarr::AccessMode::ReadWrite)
             .await?;
     let store = Arc::new(RwLock::new(store));
 

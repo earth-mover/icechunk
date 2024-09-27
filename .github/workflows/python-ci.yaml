@@ -80,6 +80,24 @@ jobs:
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             cache-hypothesis-
+      - name: mypy
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install icechunk['test'] --find-links dist --force-reinstall
+          mypy python
+      - name: ruff
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install icechunk['test'] --find-links dist --force-reinstall
+          ruff check
       - name: pytest
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         shell: bash
@@ -89,7 +107,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
-          pytest
+          AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
         uses: uraimo/run-on-arch-action@v2
@@ -105,7 +123,8 @@ jobs:
           run: |
             set -e
             pip3 install icechunk['test'] --find-links dist --force-reinstall
-            pytest
+            AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 pytest
+
      # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
@@ -114,7 +133,7 @@ jobs:
         with:
           path: icehunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
-
+            
   # musllinux:
   #   runs-on: ${{ matrix.platform.runner }}
   #   strategy:
