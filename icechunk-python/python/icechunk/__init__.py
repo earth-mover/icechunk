@@ -332,7 +332,7 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.set(key, value.to_bytes())
 
     async def set_virtual_ref(
-        self, key: str, location: str, offset: int, length: int
+        self, key: str, location: str, *, offset: int, length: int
     ) -> None:
         """Store a virtual reference to a chunk.
 
