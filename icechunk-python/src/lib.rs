@@ -20,7 +20,7 @@ use icechunk::{
     Repository, SnapshotMetadata,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
-use storage::{PyS3Credentials, PyStorage};
+use storage::{PyS3Credentials, PyStorageConfig};
 use streams::PyAsyncGenerator;
 use tokio::sync::{Mutex, RwLock};
 
@@ -184,7 +184,7 @@ fn pyicechunk_store_from_json_config(
 #[pyo3(signature = (storage, read_only, config=PyStoreConfig::default()))]
 fn pyicechunk_store_open_existing<'py>(
     py: Python<'py>,
-    storage: &'py PyStorage,
+    storage: &'py PyStorageConfig,
     read_only: bool,
     config: PyStoreConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -206,7 +206,7 @@ fn pyicechunk_store_open_existing<'py>(
 #[pyfunction]
 fn pyicechunk_store_exists<'py>(
     py: Python<'py>,
-    storage: &'py PyStorage,
+    storage: &'py PyStorageConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
@@ -218,7 +218,7 @@ fn pyicechunk_store_exists<'py>(
 #[pyo3(signature = (storage, config=PyStoreConfig::default()))]
 fn pyicechunk_store_create<'py>(
     py: Python<'py>,
-    storage: &'py PyStorage,
+    storage: &'py PyStorageConfig,
     config: PyStoreConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
@@ -656,7 +656,7 @@ impl PyIcechunkStore {
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyStorage>()?;
+    m.add_class::<PyStorageConfig>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_class::<PyS3Credentials>()?;
     m.add_class::<PyStoreConfig>()?;
