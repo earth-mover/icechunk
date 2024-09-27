@@ -34,10 +34,10 @@ pip install -e icechunk@.
 Now you can create or open an icechunk store for use with `zarr-python`:
 
 ```python
-from icechunk import IcechunkStore, Storage
+from icechunk import IcechunkStore, StorageConfig
 from zarr import Array, Group
 
-storage = Storage.memory("test")
+storage = StorageConfig.memory("test")
 store = await IcechunkStore.open(storage=storage, mode='r+')
 
 root = Group.from_store(store=store, zarr_format=zarr_format)

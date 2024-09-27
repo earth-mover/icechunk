@@ -36,8 +36,8 @@ impl PyS3Credentials {
     }
 }
 
-#[pyclass(name = "Storage")]
-pub enum PyStorage {
+#[pyclass(name = "StorageConfig")]
+pub enum PyStorageConfig {
     Memory {
         prefix: Option<String>,
     },
@@ -53,15 +53,15 @@ pub enum PyStorage {
 }
 
 #[pymethods]
-impl PyStorage {
+impl PyStorageConfig {
     #[classmethod]
     fn memory(_cls: &Bound<'_, PyType>, prefix: Option<String>) -> Self {
-        PyStorage::Memory { prefix }
+        PyStorageConfig::Memory { prefix }
     }
 
     #[classmethod]
     fn filesystem(_cls: &Bound<'_, PyType>, root: String) -> Self {
-        PyStorage::Filesystem { root }
+        PyStorageConfig::Filesystem { root }
     }
 
     #[classmethod]
@@ -71,7 +71,7 @@ impl PyStorage {
         prefix: String,
         endpoint_url: Option<String>,
     ) -> Self {
-        PyStorage::S3 { bucket, prefix, credentials: None, endpoint_url }
+        PyStorageConfig::S3 { bucket, prefix, credentials: None, endpoint_url }
     }
 
     #[classmethod]
@@ -82,20 +82,25 @@ impl PyStorage {
         credentials: PyS3Credentials,
         endpoint_url: Option<String>,
     ) -> Self {
-        PyStorage::S3 { bucket, prefix, credentials: Some(credentials), endpoint_url }
+        PyStorageConfig::S3 {
+            bucket,
+            prefix,
+            credentials: Some(credentials),
+            endpoint_url,
+        }
     }
 }
 
-impl From<&PyStorage> for StorageConfig {
-    fn from(storage: &PyStorage) -> Self {
+impl From<&PyStorageConfig> for StorageConfig {
+    fn from(storage: &PyStorageConfig) -> Self {
         match storage {
-            PyStorage::Memory { prefix } => {
+            PyStorageConfig::Memory { prefix } => {
                 StorageConfig::InMemory { prefix: prefix.clone() }
             }
-            PyStorage::Filesystem { root } => {
+            PyStorageConfig::Filesystem { root } => {
                 StorageConfig::LocalFileSystem { root: PathBuf::from(root.clone()) }
             }
-            PyStorage::S3 { bucket, prefix, credentials, endpoint_url } => {
+            PyStorageConfig::S3 { bucket, prefix, credentials, endpoint_url } => {
                 StorageConfig::S3ObjectStore {
                     bucket: bucket.clone(),
                     prefix: prefix.clone(),

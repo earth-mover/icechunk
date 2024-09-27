@@ -7,7 +7,7 @@ from ._icechunk_python import (
     pyicechunk_store_create,
     pyicechunk_store_from_json_config,
     SnapshotMetadata,
-    Storage,
+    StorageConfig,
     StoreConfig,
     pyicechunk_store_open_existing,
     pyicechunk_store_exists,
@@ -18,7 +18,7 @@ from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
-__all__ = ["IcechunkStore", "Storage", "S3Credentials", "StoreConfig"]
+__all__ = ["IcechunkStore", "StorageConfig", "S3Credentials", "StoreConfig"]
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -140,7 +140,7 @@ class IcechunkStore(Store, SyncMixin):
     @classmethod
     async def open_existing(
         cls,
-        storage: Storage,
+        storage: StorageConfig,
         mode: AccessModeLiteral = "r",
         *args: Any,
         **kwargs: Any,
@@ -162,7 +162,7 @@ class IcechunkStore(Store, SyncMixin):
     @classmethod
     async def create(
         cls,
-        storage: Storage,
+        storage: StorageConfig,
         mode: AccessModeLiteral = "w",
         *args: Any,
         **kwargs: Any,

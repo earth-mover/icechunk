@@ -1,5 +1,5 @@
 from object_store import ClientOptions, ObjectStore
-from icechunk import IcechunkStore, Storage, S3Credentials
+from icechunk import IcechunkStore, StorageConfig, S3Credentials
 import zarr
 import zarr.core
 import zarr.core.buffer
@@ -34,7 +34,7 @@ async def test_write_virtual_refs():
 
     # Open the store, the S3 credentials must be set in environment vars for this to work for now
     store = await IcechunkStore.open(
-        storage=Storage.s3_from_credentials(
+        storage=StorageConfig.s3_from_credentials(
             bucket="testbucket",
             prefix="python-virtual-ref",
             credentials=S3Credentials(

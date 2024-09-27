@@ -6,7 +6,7 @@ import pytest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.testing.store import StoreTests
 
-from icechunk import IcechunkStore, Storage
+from icechunk import IcechunkStore, StorageConfig
 
 
 DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
@@ -50,7 +50,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         self, request: pytest.FixtureRequest
     ) -> dict[str, str | None | dict[str, Buffer]]:
         kwargs = {
-            "storage": Storage.memory(""),
+            "storage": StorageConfig.memory(""),
             "mode": "r+",
         }
         return kwargs

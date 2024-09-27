@@ -9,7 +9,7 @@ import time
 
 from zarr.abc.store import Store
 
-from icechunk import IcechunkStore, Storage, S3Credentials, StoreConfig
+from icechunk import IcechunkStore, StorageConfig, S3Credentials, StoreConfig
 import random
 import string
 
@@ -156,7 +156,7 @@ async def run(store: Store) -> None:
     print(f"Read done in {time.time() - read_start} secs")
 
 
-async def create_icechunk_store(*, storage: Storage) -> IcechunkStore:
+async def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
     return await IcechunkStore.create(
         storage=storage, mode="r+", config=StoreConfig(inline_chunk_threshold=1)
     )
@@ -176,8 +176,8 @@ async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store
 
 
 if __name__ == "__main__":
-    MEMORY = Storage.memory("new")
-    MINIO = Storage.s3_from_credentials(
+    MEMORY = StorageConfig.memory("new")
+    MINIO = StorageConfig.s3_from_credentials(
         bucket="testbucket",
         prefix="root-icechunk",
         credentials=S3Credentials(
@@ -187,7 +187,7 @@ if __name__ == "__main__":
         ),
         endpoint_url="http://localhost:9000",
     )
-    S3 = Storage.s3_from_env(
+    S3 = StorageConfig.s3_from_env(
         bucket="icechunk-test",
         prefix="demo-repository",
     )

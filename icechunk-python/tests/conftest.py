@@ -1,17 +1,17 @@
 from typing import Literal
 
-from icechunk import IcechunkStore, Storage
+from icechunk import IcechunkStore, StorageConfig
 import pytest
 
 
 async def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkStore:
     if store == "local":
         return await IcechunkStore.create(
-            storage=Storage.filesystem(path),
+            storage=StorageConfig.filesystem(path),
         )
     if store == "memory":
         return await IcechunkStore.create(
-            storage=Storage.memory(path),
+            storage=StorageConfig.memory(path),
         )
 
 

@@ -5,7 +5,7 @@ import icechunk
 
 async def test_timetravel():
     store = await icechunk.IcechunkStore.create(
-        storage=icechunk.Storage.memory("test"),
+        storage=icechunk.StorageConfig.memory("test"),
         config=icechunk.StoreConfig(inline_chunk_threshold=1),
     )
 
