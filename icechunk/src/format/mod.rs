@@ -21,12 +21,12 @@ pub mod snapshot;
 
 pub type Path = PathBuf;
 
+#[allow(dead_code)]
+pub trait FileTypeTag {}
+
 /// The id of a file in object store
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectId<const SIZE: usize, T>(pub [u8; SIZE], PhantomData<T>);
-
-#[allow(dead_code)]
-trait ObjectTag {}
+pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(pub [u8; SIZE], PhantomData<T>);
 
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotTag;
@@ -40,10 +40,10 @@ pub struct ChunkTag;
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
-impl ObjectTag for SnapshotTag {}
-impl ObjectTag for ManifestTag {}
-impl ObjectTag for ChunkTag {}
-impl ObjectTag for AttributesTag {}
+impl FileTypeTag for SnapshotTag {}
+impl FileTypeTag for ManifestTag {}
+impl FileTypeTag for ChunkTag {}
+impl FileTypeTag for AttributesTag {}
 
 // A 1e-9 conflict probability requires 2^33 ~ 8.5 bn chunks
 // using this site for the calculations: https://www.bdayprob.com/
@@ -52,7 +52,7 @@ pub type ManifestId = ObjectId<12, ManifestTag>;
 pub type ChunkId = ObjectId<12, ChunkTag>;
 pub type AttributesId = ObjectId<12, AttributesTag>;
 
-impl<const SIZE: usize, T> ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub fn random() -> Self {
         let mut buf = [0u8; SIZE];
         thread_rng().fill(&mut buf[..]);
@@ -66,13 +66,13 @@ impl<const SIZE: usize, T> ObjectId<SIZE, T> {
     pub const FAKE: Self = Self([0; SIZE], PhantomData);
 }
 
-impl<const SIZE: usize, T> fmt::Debug for ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> fmt::Debug for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:02x}", self.0.iter().format(""))
     }
 }
 
-impl<const SIZE: usize, T> TryFrom<&[u8]> for ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> TryFrom<&[u8]> for ObjectId<SIZE, T> {
     type Error = &'static str;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
@@ -82,7 +82,7 @@ impl<const SIZE: usize, T> TryFrom<&[u8]> for ObjectId<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T> TryFrom<&str> for ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> TryFrom<&str> for ObjectId<SIZE, T> {
     type Error = &'static str;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
@@ -92,26 +92,26 @@ impl<const SIZE: usize, T> TryFrom<&str> for ObjectId<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T> From<&ObjectId<SIZE, T>> for String {
+impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     fn from(value: &ObjectId<SIZE, T>) -> Self {
         base32::encode(base32::Alphabet::Crockford, &value.0)
     }
 }
 
-impl<const SIZE: usize, T> Display for ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> Display for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", String::from(self))
     }
 }
 
-impl<const SIZE: usize, T> Serialize for ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> Serialize for ObjectId<SIZE, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // Just use the string representation
         serializer.serialize_str(&String::from(self))
     }
 }
 
-impl<'de, const SIZE: usize, T> Deserialize<'de> for ObjectId<SIZE, T> {
+impl<'de, const SIZE: usize, T: FileTypeTag> Deserialize<'de> for ObjectId<SIZE, T> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // Because we implement TryFrom<&str> for ObjectId, we can use it here instead of
         // having to implement a custom deserializer
