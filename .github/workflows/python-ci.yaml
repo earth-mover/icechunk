@@ -98,7 +98,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
-          pytest
+          AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
         uses: uraimo/run-on-arch-action@v2
@@ -114,7 +114,7 @@ jobs:
           run: |
             set -e
             pip3 install icechunk['test'] --find-links dist --force-reinstall
-            pytest
+            AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 pytest
 
   # musllinux:
   #   runs-on: ${{ matrix.platform.runner }}
