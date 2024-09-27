@@ -331,6 +331,22 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.set(key, value.to_bytes())
 
+    async def set_virtual_ref(self, key: str, location: str, offset: int, length: int) -> None:
+        """Store a virtual reference to a chunk.
+
+        Parameters
+        ----------
+        key : str
+            The chunk to store the reference under
+        location : str
+            The location of the chunk in storage
+        offset : int
+            The offset in bytes from the start of the file location in storage the chunk starts at
+        length : int
+            The length of the chunk in bytes, measured from the given offset
+        """
+        return await self._store.set_virtual_ref(key, location, offset, length)
+
     async def delete(self, key: str) -> None:
         """Remove a key from the store
 

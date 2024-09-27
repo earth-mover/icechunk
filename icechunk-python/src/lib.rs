@@ -10,7 +10,9 @@ use chrono::{DateTime, Utc};
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
+    format::{manifest::VirtualChunkRef, ChunkLength},
     refs::Ref,
+    repository::VirtualChunkLocation,
     zarr::{
         ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreOptions,
         VersionInfo,
@@ -512,6 +514,31 @@ impl PyIcechunkStore {
             let store = store.read().await;
             store
                 .set(&key, Bytes::from(value))
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
+    }
+
+    fn set_virtual_ref<'py>(
+        &'py self,
+        py: Python<'py>,
+        key: String,
+        location: String,
+        offset: ChunkOffset,
+        length: ChunkLength,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let virtual_ref = VirtualChunkRef {
+                location: VirtualChunkLocation::Absolute(location),
+                offset,
+                length,
+            };
+            let mut store = store.write().await;
+            store
+                .set_virtual_ref(&key, virtual_ref)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(())
