@@ -20,6 +20,7 @@ dependencies = [
 test = [
     "coverage",
     "mypy",
+    "object-store-python",
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
