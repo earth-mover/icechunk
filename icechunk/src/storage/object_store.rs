@@ -1,6 +1,6 @@
 use crate::format::{
     attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, ObjectId, SnapshotId,
+    ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -144,7 +144,7 @@ impl ObjectStorage {
         })
     }
 
-    fn get_path<const SIZE: usize, T>(
+    fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
         extension: &str,
