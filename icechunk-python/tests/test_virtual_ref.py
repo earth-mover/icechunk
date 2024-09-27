@@ -40,18 +40,20 @@ async def test_write_virtual_refs():
         mode='r+',
     )
 
-    _array = zarr.Array.create(store, shape=(2, 2, 2), chunk_shape=(1, 1, 1), dtype="i4")
+    array = zarr.Array.create(store, shape=(1, 1, 2), chunk_shape=(1, 1, 1), dtype="i4")
 
-    await store.set_virtual_ref('c/0/0/0', 's3://testbucket/path/to/python/chunk-1', 0, 5)
-    await store.set_virtual_ref('c/0/0/1', 's3://testbucket/path/to/python/chunk-2', 0, 5)
+    await store.set_virtual_ref('c/0/0/0', 's3://testbucket/path/to/python/chunk-1', 0, 4)
+    await store.set_virtual_ref('c/0/0/1', 's3://testbucket/path/to/python/chunk-2', 1, 4)
 
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
     first = await store.get('c/0/0/0', prototype=buffer_prototype)
     assert first is not None
-    assert first.to_bytes() == b'first'
+    assert first.to_bytes() == b'firs'
 
     second = await store.get('c/0/0/1', prototype=buffer_prototype)
     assert second is not None
-    assert second.to_bytes() == b'secon'
+    assert second.to_bytes() == b'econ'
 
+    assert array[0, 0, 0] == 1936877926
+    assert array[0, 0, 1] == 1852793701
