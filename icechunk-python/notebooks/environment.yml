@@ -12,3 +12,5 @@ dependencies:
   - ipykernel
   - cftime
   - dask
+  - matplotlib
+  - hvplot
