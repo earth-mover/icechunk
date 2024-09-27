@@ -4,10 +4,15 @@ import icechunk
 
 
 async def test_timetravel():
-    store = await icechunk.IcechunkStore.create(storage=icechunk.Storage.memory("test"))
+    store = await icechunk.IcechunkStore.create(
+        storage=icechunk.Storage.memory("test"),
+        config=icechunk.StoreConfig(inline_chunk_threshold=1),
+    )
 
     group = zarr.group(store=store, overwrite=True)
-    air_temp = group.create_array("air_temp", shape=(1000, 1000), chunk_shape=(100, 100), dtype="i4")
+    air_temp = group.create_array(
+        "air_temp", shape=(1000, 1000), chunk_shape=(100, 100), dtype="i4"
+    )
 
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
@@ -46,7 +51,11 @@ async def test_timetravel():
     assert air_temp[200, 6] == 90
 
     parents = [p async for p in store.ancestry()]
-    assert [snap.message for snap in parents] == ["commit 3", "commit 2", "commit 1", "Repository initialized"]
+    assert [snap.message for snap in parents] == [
+        "commit 3",
+        "commit 2",
+        "commit 1",
+        "Repository initialized",
+    ]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
-

@@ -6,8 +6,11 @@ use pyo3::{prelude::*, types::PyType};
 #[pyclass(name = "S3Credentials")]
 #[derive(Clone, Debug)]
 pub struct PyS3Credentials {
+    #[pyo3(get, set)]
     access_key_id: String,
+    #[pyo3(get, set)]
     secret_access_key: String,
+    #[pyo3(get, set)]
     session_token: Option<String>,
 }
 

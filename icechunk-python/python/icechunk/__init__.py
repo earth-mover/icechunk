@@ -6,7 +6,9 @@ from ._icechunk_python import (
     S3Credentials,
     pyicechunk_store_create,
     pyicechunk_store_from_json_config,
+    SnapshotMetadata,
     Storage,
+    StoreConfig,
     pyicechunk_store_open_existing,
     pyicechunk_store_exists,
 )
@@ -16,7 +18,7 @@ from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
-__all__ = ["IcechunkStore", "Storage", "S3Credentials"]
+__all__ = ["IcechunkStore", "Storage", "S3Credentials", "StoreConfig"]
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -235,12 +237,12 @@ class IcechunkStore(Store, SyncMixin):
         """Tag an existing snapshot with a given name."""
         return await self._store.tag(tag_name, snapshot_id=snapshot_id)
 
-    def ancestry(self) -> AsyncGenerator[str, None]:
+    def ancestry(self) -> AsyncGenerator[SnapshotMetadata, None]:
         """Get the list of parents of the current version.
 
         Returns
         -------
-        AsyncGenerator[str, SnapshotMetadata]
+        AsyncGenerator[SnapshotMetadata, None]
         """
         return self._store.ancestry()
 
