@@ -9,7 +9,7 @@ import time
 
 from zarr.abc.store import Store
 
-from icechunk import IcechunkStore, Storage, S3Credentials
+from icechunk import IcechunkStore, Storage, S3Credentials, StoreConfig
 import random
 import string
 
@@ -147,7 +147,7 @@ async def run(store: Store) -> None:
         print(key)
         array = root_group[key]
         assert isinstance(array, zarr.Array)
-        
+
         print(
             f"numchunks: {math.prod(s // c for s, c in zip(array.shape, array.chunks))}"
         )
@@ -157,7 +157,9 @@ async def run(store: Store) -> None:
 
 
 async def create_icechunk_store(*, storage: Storage) -> IcechunkStore:
-    return await IcechunkStore.create(storage=storage, mode="r+")
+    return await IcechunkStore.create(
+        storage=storage, mode="r+", config=StoreConfig(inline_chunk_threshold=1)
+    )
 
 
 async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store:

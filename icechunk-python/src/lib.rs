@@ -31,8 +31,11 @@ struct PyIcechunkStore {
 #[pyclass(name = "StoreConfig")]
 #[derive(Clone, Debug, Default)]
 struct PyStoreConfig {
+    #[pyo3(get, set)]
     pub get_partial_values_concurrency: Option<u16>,
+    #[pyo3(get, set)]
     pub inline_chunk_threshold: Option<u16>,
+    #[pyo3(get, set)]
     pub unsafe_overwrite_refs: Option<bool>,
 }
 
@@ -76,27 +79,12 @@ impl PyStoreConfig {
 #[pyclass(name = "SnapshotMetadata")]
 #[derive(Clone, Debug)]
 pub struct PySnapshotMetadata {
+    #[pyo3(get)]
     id: String,
+    #[pyo3(get)]
     written_at: DateTime<Utc>,
+    #[pyo3(get)]
     message: String,
-}
-
-#[pymethods]
-impl PySnapshotMetadata {
-    #[getter]
-    pub fn id(&self) -> String {
-        self.id.clone()
-    }
-
-    #[getter]
-    pub fn message(&self) -> String {
-        self.message.clone()
-    }
-
-    #[getter]
-    pub fn written_at(&self) -> DateTime<Utc> {
-        self.written_at
-    }
 }
 
 impl From<SnapshotMetadata> for PySnapshotMetadata {
@@ -644,6 +632,7 @@ fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorage>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_class::<PyS3Credentials>()?;
+    m.add_class::<PyStoreConfig>()?;
     m.add_class::<PySnapshotMetadata>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
