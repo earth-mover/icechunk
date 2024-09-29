@@ -2003,8 +2003,6 @@ mod tests {
             data
         );
 
-        //
-
         Ok(())
     }
 
