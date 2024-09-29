@@ -178,6 +178,32 @@ class IcechunkStore(Store, SyncMixin):
         store = await pyicechunk_store_create(storage)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
+    def with_mode(self, mode: AccessModeLiteral) -> Self:
+        """
+        Return a new store of the same type pointing to the same location with a new mode.
+
+        The returned Store is not automatically opened. Call :meth:`Store.open` before
+        using.
+
+        Parameters
+        ----------
+        mode: AccessModeLiteral
+            The new mode to use.
+
+        Returns
+        -------
+        store:
+            A new store of the same type with the new mode.
+
+        Examples
+        --------
+        >>> writer = zarr.store.MemoryStore(mode="w")
+        >>> reader = writer.with_mode("r")
+        """
+        read_only = read_only = mode == "r"
+        new_store = self._store.with_mode(read_only)
+        return self.__class__(new_store, mode=mode)
+
     @property
     def snapshot_id(self) -> str:
         """Return the current snapshot id."""
@@ -330,6 +356,17 @@ class IcechunkStore(Store, SyncMixin):
         value : Buffer
         """
         return await self._store.set(key, value.to_bytes())
+
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
+        """
+        Store a key to ``value`` if the key is not already present.
+
+        Parameters
+        -----------
+        key : str
+        value : Buffer
+        """
+        raise await self._store.set_if_not_exists(key, value.to_bytes())
 
     async def set_virtual_ref(
         self, key: str, location: str, *, offset: int, length: int
