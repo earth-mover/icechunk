@@ -366,7 +366,7 @@ class IcechunkStore(Store, SyncMixin):
         key : str
         value : Buffer
         """
-        raise await self._store.set_if_not_exists(key, value.to_bytes())
+        return await self._store.set_if_not_exists(key, value.to_bytes())
 
     async def set_virtual_ref(
         self, key: str, location: str, *, offset: int, length: int
