@@ -1956,25 +1956,16 @@ mod tests {
 
         let data = Bytes::copy_from_slice(b"hello");
         store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
-        assert_eq!(
-            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
-            data
-        );
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         let snapshot_id = store.commit("initial commit").await.unwrap();
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
-        assert_eq!(
-            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
-            data
-        );
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
-        assert_eq!(
-            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
-            new_data
-        );
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_snapshot_id = store.commit("update").await.unwrap();
 
