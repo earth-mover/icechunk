@@ -200,7 +200,7 @@ class IcechunkStore(Store, SyncMixin):
         >>> writer = zarr.store.MemoryStore(mode="w")
         >>> reader = writer.with_mode("r")
         """
-        read_only = read_only = mode == "r"
+        read_only = (mode == "r")
         new_store = self._store.with_mode(read_only)
         return self.__class__(new_store, mode=mode)
 
