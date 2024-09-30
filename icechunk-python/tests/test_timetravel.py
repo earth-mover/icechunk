@@ -6,7 +6,7 @@ import icechunk
 async def test_timetravel():
     store = await icechunk.IcechunkStore.create(
         storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.StoreConfig(inline_chunk_threshold=1),
+        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
     )
 
     group = zarr.group(store=store, overwrite=True)

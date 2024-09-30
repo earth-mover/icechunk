@@ -36,7 +36,7 @@ struct PyStoreConfig {
     #[pyo3(get, set)]
     pub get_partial_values_concurrency: Option<u16>,
     #[pyo3(get, set)]
-    pub inline_chunk_threshold: Option<u16>,
+    pub inline_chunk_threshold_bytes: Option<u16>,
     #[pyo3(get, set)]
     pub unsafe_overwrite_refs: Option<bool>,
 }
@@ -45,7 +45,7 @@ impl From<&PyStoreConfig> for RepositoryConfig {
     fn from(config: &PyStoreConfig) -> Self {
         RepositoryConfig {
             version: None,
-            inline_chunk_threshold_bytes: config.inline_chunk_threshold,
+            inline_chunk_threshold_bytes: config.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: config.unsafe_overwrite_refs,
         }
     }
@@ -68,12 +68,12 @@ impl PyStoreConfig {
     #[new]
     fn new(
         get_partial_values_concurrency: Option<u16>,
-        inline_chunk_threshold: Option<u16>,
+        inline_chunk_threshold_bytes: Option<u16>,
         unsafe_overwrite_refs: Option<bool>,
     ) -> Self {
         PyStoreConfig {
             get_partial_values_concurrency,
-            inline_chunk_threshold,
+            inline_chunk_threshold_bytes,
             unsafe_overwrite_refs,
         }
     }
@@ -181,7 +181,6 @@ fn pyicechunk_store_from_json_config(
 }
 
 #[pyfunction]
-#[pyo3(signature = (storage, read_only, config=PyStoreConfig::default()))]
 fn pyicechunk_store_open_existing<'py>(
     py: Python<'py>,
     storage: &'py PyStorageConfig,
@@ -215,7 +214,6 @@ fn pyicechunk_store_exists<'py>(
 }
 
 #[pyfunction]
-#[pyo3(signature = (storage, config=PyStoreConfig::default()))]
 fn pyicechunk_store_create<'py>(
     py: Python<'py>,
     storage: &'py PyStorageConfig,

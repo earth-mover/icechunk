@@ -99,9 +99,11 @@ class IcechunkStore(Store, SyncMixin):
                 "version": {
                     "branch": "main",
                 },
-                // The threshold at which chunks are stored inline and not written to chunk storage
-                inline_chunk_threshold_bytes: 512,
             },
+            "config": {
+                // The threshold at which chunks are stored inline and not written to chunk storage
+                inline_chunk_threshold_bytes: 512
+            }
         }
 
         The following storage types are supported:
@@ -142,6 +144,7 @@ class IcechunkStore(Store, SyncMixin):
         cls,
         storage: StorageConfig,
         mode: AccessModeLiteral = "r",
+        config: StoreConfig = StoreConfig(),
         *args: Any,
         **kwargs: Any,
     ) -> Self:
@@ -156,7 +159,7 @@ class IcechunkStore(Store, SyncMixin):
         If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
         """
         read_only = mode == "r"
-        store = await pyicechunk_store_open_existing(storage, read_only=read_only)
+        store = await pyicechunk_store_open_existing(storage, read_only=read_only, config=config)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
@@ -164,6 +167,7 @@ class IcechunkStore(Store, SyncMixin):
         cls,
         storage: StorageConfig,
         mode: AccessModeLiteral = "w",
+        config: StoreConfig = StoreConfig(),
         *args: Any,
         **kwargs: Any,
     ) -> Self:
@@ -175,7 +179,7 @@ class IcechunkStore(Store, SyncMixin):
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
         """
-        store = await pyicechunk_store_create(storage)
+        store = await pyicechunk_store_create(storage, config=config)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @property
