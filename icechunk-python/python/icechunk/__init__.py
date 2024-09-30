@@ -416,7 +416,7 @@ class IcechunkStore(Store, SyncMixin):
             range_starts, range_starts (considering the length of the respective values) must not
             specify overlapping ranges for the same key
         """
-        # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
+        # NOTE: pyo3 does not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
         return await self._store.set_partial_values(list(key_start_values)) # type: ignore
 
