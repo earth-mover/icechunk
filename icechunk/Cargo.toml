@@ -6,7 +6,7 @@ description = "Icechunk client"
 publish = false
 
 [dependencies]
-async-trait = "0.1.82"
+async-trait = "0.1.83"
 bytes = { version = "1.7.2", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.30"
@@ -31,7 +31,7 @@ async-stream = "0.3.5"
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 proptest-state-machine = "0.3.0"
-tempfile = "3.12.0"
+tempfile = "3.13.0"
 
 [lints]
 workspace = true
