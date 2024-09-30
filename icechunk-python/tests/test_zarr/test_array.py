@@ -4,7 +4,10 @@ from icechunk import IcechunkStore
 import numpy as np
 import pytest
 
-from zarr import Array, Group
+from zarr import Array, AsyncGroup, Group
+import zarr
+import zarr.api
+import zarr.api.asynchronous
 from zarr.core.common import ZarrFormat
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.store.common import StorePath
@@ -59,6 +62,46 @@ def test_array_creation_existing_node(
                 exists_ok=exists_ok,
                 zarr_format=zarr_format,
             )
+
+@pytest.mark.parametrize("store", ["memory"], indirect=["store"])
+@pytest.mark.parametrize("zarr_format", [3])
+async def test_create_creates_parents(
+    store: IcechunkStore, zarr_format: ZarrFormat
+) -> None:
+    # prepare a root node, with some data set
+    await zarr.api.asynchronous.open_group(
+        store=store, path="a", zarr_format=zarr_format, attributes={"key": "value"}
+    )
+
+    # create a child node with a couple intermediates
+    await zarr.api.asynchronous.create(
+        shape=(2, 2), store=store, path="a/b/c/d", zarr_format=zarr_format
+    )
+    parts = ["a", "a/b", "a/b/c"]
+
+    if zarr_format == 2:
+        files = [".zattrs", ".zgroup"]
+    else:
+        files = ["zarr.json"]
+
+    expected = [f"{part}/{file}" for file in files for part in parts]
+
+    if zarr_format == 2:
+        expected.append("a/b/c/d/.zarray")
+        expected.append("a/b/c/d/.zattrs")
+    else:
+        expected.append("a/b/c/d/zarr.json")
+
+    expected = sorted(expected)
+
+    result = sorted([x async for x in store.list_prefix("")])
+
+    assert result == expected
+
+    paths = ["a", "a/b", "a/b/c"]
+    for path in paths:
+        g = await zarr.api.asynchronous.open_group(store=store, path=path)
+        assert isinstance(g, AsyncGroup)
 
 
 @pytest.mark.parametrize("store", ["memory"], indirect=["store"])
@@ -122,8 +165,10 @@ def test_array_v3_fill_value_default(
 
 
 @pytest.mark.parametrize("store", ["memory"], indirect=True)
-@pytest.mark.parametrize("fill_value", [False, 0.0, 1, 2.3])
-@pytest.mark.parametrize("dtype_str", ["bool", "uint8", "float32", "complex64"])
+@pytest.mark.parametrize(
+    ("dtype_str", "fill_value"),
+    [("bool", True), ("uint8", 99), ("float32", -99.9), ("complex64", 3 + 4j)],
+)
 def test_array_v3_fill_value(store: IcechunkStore, fill_value: int, dtype_str: str) -> None:
     shape = (10,)
     arr = Array.create(

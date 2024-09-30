@@ -1,6 +1,6 @@
 import abc
 import datetime
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 
 class PyIcechunkStore:
     def with_mode(self, read_only: bool) -> PyIcechunkStore: ...
@@ -33,12 +33,14 @@ class PyIcechunkStore:
     def supports_deletes(self) -> bool: ...
     async def set(self, key: str, value: bytes) -> None: ...
     async def set_if_not_exists(self, key: str, value: bytes) -> None: ...
-    async def set_virtual_ref(self, key: str, location: str, offset: int, length: int) -> None: ...
+    async def set_virtual_ref(
+        self, key: str, location: str, offset: int, length: int
+    ) -> None: ...
     async def delete(self, key: str) -> None: ...
     @property
     def supports_partial_writes(self) -> bool: ...
     async def set_partial_values(
-        self, key_start_values: list[tuple[str, int, bytes]]
+        self, key_start_values: Sequence[tuple[str, int, bytes]]
     ) -> None: ...
     @property
     def supports_listing(self) -> bool: ...
@@ -47,27 +49,23 @@ class PyIcechunkStore:
     def list_dir(self, prefix: str) -> PyAsyncStringGenerator: ...
     def __eq__(self, other) -> bool: ...
 
-
 class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
-
 class SnapshotMetadata:
     @property
     def id(self) -> str: ...
-
     @property
     def written_at(self) -> datetime.datetime: ...
-
     @property
     def message(self) -> str: ...
 
-
-class PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta):
+class PyAsyncSnapshotGenerator(
+    AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta
+):
     def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotMetadata: ...
-
 
 class StorageConfig:
     """Storage configuration for an IcechunkStore
@@ -85,41 +83,51 @@ class StorageConfig:
     """
     class Memory:
         """An in-memory storage backend"""
+
         prefix: str
 
     class Filesystem:
         """A local filesystem storage backend"""
+
         root: str
 
     class S3:
         """An S3 Object Storage compatible storage backend"""
+
         bucket: str
         prefix: str
         credentials: S3Credentials
         endpoint_url: str | None
 
     def __init__(self, storage: Memory | Filesystem | S3): ...
-
     @classmethod
     def memory(cls, prefix: str) -> StorageConfig: ...
-
     @classmethod
     def filesystem(cls, root: str) -> StorageConfig: ...
-
     @classmethod
-    def s3_from_env(cls, bucket: str, prefix: str, endpoint_url: str | None = None) -> StorageConfig: ...
-
+    def s3_from_env(
+        cls, bucket: str, prefix: str, endpoint_url: str | None = None
+    ) -> StorageConfig: ...
     @classmethod
-    def s3_from_credentials(cls, bucket: str, prefix: str, credentials: S3Credentials, endpoint_url: str | None) -> StorageConfig: ...
-
+    def s3_from_credentials(
+        cls,
+        bucket: str,
+        prefix: str,
+        credentials: S3Credentials,
+        endpoint_url: str | None,
+    ) -> StorageConfig: ...
 
 class S3Credentials:
     access_key_id: str
     secret_access_key: str
     session_token: str | None
 
-    def __init__(self, access_key_id: str, secret_access_key: str, session_token: str | None = None): ...
-
+    def __init__(
+        self,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str | None = None,
+    ): ...
 
 class StoreConfig:
     get_partial_values_concurrency: int | None
@@ -133,8 +141,13 @@ class StoreConfig:
         unsafe_overwrite_refs: bool | None = None,
     ): ...
 
-
 async def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
-async def pyicechunk_store_create(storage: StorageConfig, config: StoreConfig = StoreConfig()) -> PyIcechunkStore: ...
-async def pyicechunk_store_open_existing(storage: StorageConfig, read_only: bool, config: StoreConfig = StoreConfig()) -> PyIcechunkStore: ...
-async def pyicechunk_store_from_json_config(config: str, read_only: bool) -> PyIcechunkStore: ...
+async def pyicechunk_store_create(
+    storage: StorageConfig, config: StoreConfig = StoreConfig()
+) -> PyIcechunkStore: ...
+async def pyicechunk_store_open_existing(
+    storage: StorageConfig, read_only: bool, config: StoreConfig = StoreConfig()
+) -> PyIcechunkStore: ...
+async def pyicechunk_store_from_json_config(
+    config: str, read_only: bool
+) -> PyIcechunkStore: ...
