@@ -47,7 +47,7 @@ jobs:
           docker compose up -d minio
       - name: Wait for MinIO to be ready
         run: |
-          for i in {1..10}; do
+          for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
               break
               fi
@@ -71,6 +71,15 @@ jobs:
           working-directory: icechunk-python
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
+          # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
       - name: mypy
         shell: bash
         working-directory: icechunk-python
@@ -116,6 +125,15 @@ jobs:
             pip3 install icechunk['test'] --find-links dist --force-reinstall
             AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 pytest
 
+     # explicitly save the cache so it gets updated, also do this even if it fails.
+      - name: Save cached hypothesis directory
+        id: save-hypothesis-cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: icehunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+            
   # musllinux:
   #   runs-on: ${{ matrix.platform.runner }}
   #   strategy:

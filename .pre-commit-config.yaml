@@ -7,3 +7,10 @@ repos:
         entry: just pre-commit
         language: system
         pass_filenames: false
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.6.26
+    hooks:
+      - id: actionlint
+        files: ".github/workflows/"
+        args: ["-ignore", "SC1090", "-ignore", "SC2046", "-ignore", "SC2086", "-ignore", "SC2129", "-ignore", "SC2155"]
