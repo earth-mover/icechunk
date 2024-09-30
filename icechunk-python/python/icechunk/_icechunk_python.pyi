@@ -1,6 +1,6 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator
 
 class PyIcechunkStore:
     def with_mode(self, read_only: bool) -> PyIcechunkStore: ...
