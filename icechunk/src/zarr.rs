@@ -558,7 +558,6 @@ impl Store {
         // TODO: Make sure this is correctly threadsafe. Technically a third API call
         // may be able to slip into the gap between the exists and the set.
         if self.exists(key).await? {
-            println!("EXISTS");
             Ok(())
         } else {
             self.set(key, value).await
