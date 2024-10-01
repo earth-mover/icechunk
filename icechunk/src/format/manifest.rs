@@ -49,6 +49,7 @@ impl VirtualChunkLocation {
         // make sure we can parse the provided URL before creating the enum
         // TODO: consider other validation here.
         let url = url::Url::parse(path)?;
+        let scheme = url.scheme();
         let new_path: String = url
             .path_segments()
             .ok_or(VirtualReferenceError::NoPathSegments(path.into()))?
@@ -56,15 +57,17 @@ impl VirtualChunkLocation {
             .filter(|x| !x.is_empty())
             .join("/");
 
-        let host = url
-            .host()
-            .ok_or_else(|| VirtualReferenceError::CannotParseBucketName(path.into()))?;
-        Ok(VirtualChunkLocation::Absolute(format!(
-            "{}://{}/{}",
-            url.scheme(),
-            host,
-            new_path,
-        )))
+        let host = if let Some(host) = url.host() {
+            host.to_string()
+        } else if scheme == "file" {
+            "".to_string()
+        } else {
+            return Err(VirtualReferenceError::CannotParseBucketName(path.into()));
+        };
+
+        let location = format!("{}://{}/{}", scheme, host, new_path,);
+
+        Ok(VirtualChunkLocation::Absolute(location))
     }
 }
 

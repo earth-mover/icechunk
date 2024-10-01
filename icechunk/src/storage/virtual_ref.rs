@@ -71,15 +71,22 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         let VirtualChunkLocation::Absolute(location) = location;
         let parsed =
             url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
-        let bucket_name = parsed
-            .host_str()
-            .ok_or(VirtualReferenceError::CannotParseBucketName(
-                "error parsing bucket name".into(),
-            ))?
-            .to_string();
         let path = ObjectPath::parse(parsed.path())
             .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
         let scheme = parsed.scheme();
+
+        let bucket_name = if let Some(host) = parsed.host_str() {
+            host.to_string()
+        } else if scheme == "file" {
+            // Host is not required for file scheme, if it is not there,
+            // we can assume the bucket name is empty and it is a local file
+            "".to_string()
+        } else {
+            Err(VirtualReferenceError::CannotParseBucketName(
+                "No bucket name found".to_string(),
+            ))?
+        };
+
         let cache_key = StoreCacheKey(scheme.into(), bucket_name);
 
         let options =

@@ -24,7 +24,7 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
         store.put(key, data)
 
 
-async def test_write_virtual_refs():
+async def test_write_minino_virtual_refs():
     write_chunks_to_minio(
         [
             ("path/to/python/chunk-1", b"first"),

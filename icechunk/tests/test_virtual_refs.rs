@@ -16,8 +16,42 @@ mod tests {
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
 
     use bytes::Bytes;
-    use object_store::{ObjectStore, PutMode, PutOptions, PutPayload};
+    use object_store::{
+        local::LocalFileSystem, ObjectStore, PutMode, PutOptions, PutPayload,
+    };
     use pretty_assertions::assert_eq;
+
+    async fn create_repository(storage: Arc<dyn Storage + Send + Sync>) -> Repository {
+        Repository::init(storage, true).await.expect("building repository failed").build()
+    }
+
+    async fn write_chunks_to_store(
+        store: impl ObjectStore,
+        chunks: impl Iterator<Item = (String, Bytes)>,
+    ) {
+        // TODO: Switch to PutMode::Create when object_store supports that
+        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
+
+        for (path, bytes) in chunks {
+            store
+                .put_opts(
+                    &path.clone().into(),
+                    PutPayload::from_bytes(bytes.clone()),
+                    opts.clone(),
+                )
+                .await
+                .expect(&format!("putting chunk to {} failed", &path));
+        }
+    }
+    async fn create_local_repository() -> Repository {
+        let path = PathBuf::from("/tmp/local-virtual-repository");
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+            ObjectStorage::new_local_store(path.as_path())
+                .expect("Creating local storage failed"),
+        );
+
+        create_repository(storage).await
+    }
 
     async fn create_minio_repository() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
@@ -33,17 +67,19 @@ mod tests {
             )
             .expect("Creating minio storage failed"),
         );
-        Repository::init(Arc::clone(&storage), true)
-            .await
-            .expect("building repository failed")
-            .build()
+
+        create_repository(storage).await
+    }
+
+    async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
+        let store =
+            LocalFileSystem::new_with_prefix("/").expect("Failed to create local store");
+        write_chunks_to_store(store, chunks).await;
     }
 
     async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
         use object_store::aws::AmazonS3Builder;
         let bucket_name = "testbucket".to_string();
-        // TODO: Switch to PutMode::Create when object_store supports that
-        let opts = PutOptions { mode: PutMode::Overwrite, ..PutOptions::default() };
 
         let store = AmazonS3Builder::new()
             .with_access_key_id("minio123")
@@ -54,20 +90,121 @@ mod tests {
             .build()
             .expect("building S3 store failed");
 
-        for (path, bytes) in chunks {
-            store
-                .put_opts(
-                    &path.clone().into(),
-                    PutPayload::from_bytes(bytes.clone()),
-                    opts.clone(),
-                )
-                .await
-                .expect(&format!("putting chunk to {} failed", &path));
-        }
+        write_chunks_to_store(store, chunks).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_repository_with_virtual_refs() -> Result<(), Box<dyn Error>> {
+    async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>> {
+        let bytes1 = Bytes::copy_from_slice(b"first");
+        let bytes2 = Bytes::copy_from_slice(b"second0000");
+        let chunks = [
+            ("/tmp/chunks/chunk-1".into(), bytes1.clone()),
+            ("/tmp/chunks/chunk-2".into(), bytes2.clone()),
+        ];
+        write_chunks_to_local_fs(chunks.iter().cloned()).await;
+
+        let mut ds = create_local_repository().await;
+
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1, 1, 2],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+        let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                // intentional extra '/'
+                "file://{}",
+                chunks[0].0
+            ))?,
+            offset: 0,
+            length: 5,
+        });
+        let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                "file://{}",
+                chunks[1].0,
+            ))?,
+            offset: 1,
+            length: 5,
+        });
+
+        let new_array_path: PathBuf = "/array".to_string().into();
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
+
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 0]),
+            Some(payload1),
+        )
+        .await
+        .unwrap();
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 1]),
+            Some(payload2),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            get_chunk(
+                ds.get_chunk_reader(
+                    &new_array_path,
+                    &ChunkIndices(vec![0, 0, 0]),
+                    &ByteRange::ALL
+                )
+                .await
+                .unwrap()
+            )
+            .await
+            .unwrap(),
+            Some(bytes1.clone()),
+        );
+        assert_eq!(
+            get_chunk(
+                ds.get_chunk_reader(
+                    &new_array_path,
+                    &ChunkIndices(vec![0, 0, 1]),
+                    &ByteRange::ALL
+                )
+                .await
+                .unwrap()
+            )
+            .await
+            .unwrap(),
+            Some(Bytes::copy_from_slice(&bytes2[1..6])),
+        );
+
+        for range in [
+            ByteRange::bounded(0u64, 3u64),
+            ByteRange::from_offset(2u64),
+            ByteRange::to_offset(4u64),
+        ] {
+            assert_eq!(
+                get_chunk(
+                    ds.get_chunk_reader(
+                        &new_array_path,
+                        &ChunkIndices(vec![0, 0, 0]),
+                        &range
+                    )
+                    .await
+                    .unwrap()
+                )
+                .await
+                .unwrap(),
+                Some(range.slice(bytes1.clone()))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>> {
         let bytes1 = Bytes::copy_from_slice(b"first");
         let bytes2 = Bytes::copy_from_slice(b"second0000");
         let chunks = [
@@ -177,7 +314,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zarr_store_virtual_refs_set_and_get(
+    async fn test_zarr_store_virtual_refs_minio_set_and_get(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let bytes1 = Bytes::copy_from_slice(b"first");
         let bytes2 = Bytes::copy_from_slice(b"second0000");
