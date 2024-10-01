@@ -83,14 +83,17 @@ class StorageConfig:
     """
     class Memory:
         """Config for an in-memory storage backend"""
+
         prefix: str
 
     class Filesystem:
         """Config for a local filesystem storage backend"""
+
         root: str
 
     class S3:
         """Config for an S3 Object Storage compatible storage backend"""
+
         bucket: str
         prefix: str
         credentials: S3Credentials
@@ -108,7 +111,9 @@ class StorageConfig:
         ...
 
     @classmethod
-    def s3_from_env(cls, bucket: str, prefix: str, endpoint_url: str | None = None) -> StorageConfig:
+    def s3_from_env(
+        cls, bucket: str, prefix: str, endpoint_url: str | None = None
+    ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage backend
         with the given bucket and prefix
 
@@ -120,7 +125,13 @@ class StorageConfig:
         ...
 
     @classmethod
-    def s3_from_credentials(cls, bucket: str, prefix: str, credentials: S3Credentials, endpoint_url: str | None) -> StorageConfig:
+    def s3_from_credentials(
+        cls,
+        bucket: str,
+        prefix: str,
+        credentials: S3Credentials,
+        endpoint_url: str | None,
+    ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
         backend with the given bucket, prefix, and credentials
 
@@ -159,6 +170,12 @@ class StoreConfig:
     ): ...
 
 async def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
-async def pyicechunk_store_create(storage: StorageConfig, config: StoreConfig) -> PyIcechunkStore: ...
-async def pyicechunk_store_open_existing(storage: StorageConfig, read_only: bool, config: StoreConfig) -> PyIcechunkStore: ...
-async def pyicechunk_store_from_json_config(config: str, read_only: bool) -> PyIcechunkStore: ...
+async def pyicechunk_store_create(
+    storage: StorageConfig, config: StoreConfig
+) -> PyIcechunkStore: ...
+async def pyicechunk_store_open_existing(
+    storage: StorageConfig, read_only: bool, config: StoreConfig
+) -> PyIcechunkStore: ...
+async def pyicechunk_store_from_json_config(
+    config: str, read_only: bool
+) -> PyIcechunkStore: ...

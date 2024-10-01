@@ -161,7 +161,9 @@ class IcechunkStore(Store, SyncMixin):
         If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
         """
         read_only = mode == "r"
-        store = await pyicechunk_store_open_existing(storage, read_only=read_only, config=config)
+        store = await pyicechunk_store_open_existing(
+            storage, read_only=read_only, config=config
+        )
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
@@ -330,7 +332,7 @@ class IcechunkStore(Store, SyncMixin):
         -------
         list of values, in the order of the key_ranges, may contain null/none for missing keys
         """
-        # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it 
+        # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
         result = await self._store.get_partial_values(list(key_ranges))
         return [
@@ -422,7 +424,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 does not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        return await self._store.set_partial_values(list(key_start_values)) # type: ignore
+        return await self._store.set_partial_values(list(key_start_values))  # type: ignore
 
     @property
     def supports_listing(self) -> bool:
