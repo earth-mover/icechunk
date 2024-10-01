@@ -52,6 +52,8 @@ pub enum PyStorageConfig {
         prefix: String,
         credentials: Option<PyS3Credentials>,
         endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
     },
 }
 
@@ -73,8 +75,17 @@ impl PyStorageConfig {
         bucket: String,
         prefix: String,
         endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
     ) -> Self {
-        PyStorageConfig::S3 { bucket, prefix, credentials: None, endpoint_url }
+        PyStorageConfig::S3 {
+            bucket,
+            prefix,
+            credentials: None,
+            endpoint_url,
+            allow_http,
+            region,
+        }
     }
 
     #[classmethod]
@@ -84,12 +95,16 @@ impl PyStorageConfig {
         prefix: String,
         credentials: PyS3Credentials,
         endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
     ) -> Self {
         PyStorageConfig::S3 {
             bucket,
             prefix,
             credentials: Some(credentials),
             endpoint_url,
+            allow_http,
+            region,
         }
     }
 }
@@ -103,18 +118,23 @@ impl From<&PyStorageConfig> for StorageConfig {
             PyStorageConfig::Filesystem { root } => {
                 StorageConfig::LocalFileSystem { root: PathBuf::from(root.clone()) }
             }
-            PyStorageConfig::S3 { bucket, prefix, credentials, endpoint_url } => {
-                StorageConfig::S3ObjectStore {
-                    bucket: bucket.clone(),
-                    prefix: prefix.clone(),
-                    config: Some(S3Config {
-                        region: None,
-                        credentials: credentials.as_ref().map(S3Credentials::from),
-                        endpoint: endpoint_url.clone(),
-                        allow_http: Some(false),
-                    }),
-                }
-            }
+            PyStorageConfig::S3 {
+                bucket,
+                prefix,
+                credentials,
+                endpoint_url,
+                allow_http,
+                region,
+            } => StorageConfig::S3ObjectStore {
+                bucket: bucket.clone(),
+                prefix: prefix.clone(),
+                config: Some(S3Config {
+                    region: region.clone(),
+                    credentials: credentials.as_ref().map(S3Credentials::from),
+                    endpoint: endpoint_url.clone(),
+                    allow_http: allow_http.clone(),
+                }),
+            },
         }
     }
 }

@@ -42,6 +42,7 @@ async def test_write_minino_virtual_refs():
                 secret_access_key="minio123",
             ),
             endpoint_url="http://localhost:9000",
+            allow_http=True,
         ),
         mode="r+",
     )

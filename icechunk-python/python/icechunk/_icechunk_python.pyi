@@ -78,26 +78,25 @@ class StorageConfig:
     storage_config = StorageConfig.memory("prefix")
     storage_config = StorageConfig.filesystem("/path/to/root")
     storage_config = StorageConfig.s3_from_env("bucket", "prefix")
-    storage_config = StorageConfig.s3_from_credentials("bucket", "prefix",
+    storage_config = StorageConfig.s3_from_credentials("bucket", "prefix", ...)
     ```
     """
     class Memory:
         """Config for an in-memory storage backend"""
-
         prefix: str
 
     class Filesystem:
         """Config for a local filesystem storage backend"""
-
         root: str
 
     class S3:
         """Config for an S3 Object Storage compatible storage backend"""
-
         bucket: str
         prefix: str
         credentials: S3Credentials
         endpoint_url: str | None
+        allow_http: bool | None
+        region: str | None
 
     def __init__(self, storage: Memory | Filesystem | S3): ...
     @classmethod
@@ -112,7 +111,7 @@ class StorageConfig:
 
     @classmethod
     def s3_from_env(
-        cls, bucket: str, prefix: str, endpoint_url: str | None = None
+        cls, bucket: str, prefix: str
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage backend
         with the given bucket and prefix
@@ -121,6 +120,9 @@ class StorageConfig:
             AWS_ACCESS_KEY_ID,
             AWS_SECRET_ACCESS_KEY,
             AWS_SESSION_TOKEN (optional)
+            AWS_REGION (optional)
+            AWS_ENDPOINT_URL (optional)
+            AWS_ALLOW_HTTP (optional)
         """
         ...
 
@@ -131,6 +133,8 @@ class StorageConfig:
         prefix: str,
         credentials: S3Credentials,
         endpoint_url: str | None,
+        allow_http: bool | None = None,
+        region: str | None = None,
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
         backend with the given bucket, prefix, and credentials
