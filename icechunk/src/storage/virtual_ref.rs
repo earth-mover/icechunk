@@ -2,6 +2,7 @@ use crate::format::manifest::{VirtualChunkLocation, VirtualReferenceError};
 use crate::format::ByteRange;
 use async_trait::async_trait;
 use bytes::Bytes;
+use object_store::local::LocalFileSystem;
 use object_store::{
     aws::AmazonS3Builder, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore,
 };
@@ -85,25 +86,29 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
             GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
         let store = {
             let stores = self.stores.read().await;
-            #[allow(clippy::expect_used)]
             stores.get(&cache_key).cloned()
         };
         let store = match store {
             Some(store) => store,
             None => {
-                let builder = match scheme {
+                let new_store: Arc<dyn ObjectStore> = match scheme {
+                    "file" => {
+                        let fs = LocalFileSystem::new();
+                        Arc::new(fs)
+                    }
                     // FIXME: allow configuring auth for virtual references
-                    "s3" => AmazonS3Builder::from_env(),
+                    "s3" => Arc::new(
+                        AmazonS3Builder::from_env()
+                            .with_bucket_name(&cache_key.1)
+                            .build()
+                            .map_err(|e| {
+                                VirtualReferenceError::FetchError(Box::new(e))
+                            })?,
+                    ),
                     _ => {
                         Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
                     }
                 };
-                let new_store: Arc<dyn ObjectStore> = Arc::new(
-                    builder
-                        .with_bucket_name(&cache_key.1)
-                        .build()
-                        .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?,
-                );
                 {
                     self.stores
                         .write()

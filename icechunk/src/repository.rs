@@ -637,6 +637,7 @@ impl Repository {
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
                     self.change_set.get_chunk_ref(node.id, coords).cloned();
+
                 // If session_chunk is not None we have to return it, because is the update the
                 // user made in the current session
                 // If session_chunk == None, user hasn't modified the chunk in this session and we
