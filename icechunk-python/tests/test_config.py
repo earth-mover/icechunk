@@ -29,7 +29,7 @@ async def test_no_inline_chunks(store):
         dtype="int64",
         zarr_format=3,
         chunk_shape=(1),
-        fill_value="-1",
+        fill_value=-1,
     )
     array[:] = 42
 
@@ -48,7 +48,7 @@ async def test_inline_chunks(store):
         dtype="int32",
         zarr_format=3,
         chunk_shape=(1),
-        fill_value="-1",
+        fill_value=-1,
     )
 
     inline_array[:] = 9
@@ -65,7 +65,7 @@ async def test_inline_chunks(store):
         dtype="int64",
         zarr_format=3,
         chunk_shape=(1),
-        fill_value="-1",
+        fill_value=-1,
     )
 
     written_array[:] = 3
