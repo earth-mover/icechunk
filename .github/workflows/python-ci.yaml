@@ -65,12 +65,12 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          working-directory: icechunk-python
-          name: wheels-linux-${{ matrix.platform.target }}
-          path: dist
+      # - name: Upload wheels
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     working-directory: icechunk-python
+      #     name: wheels-linux-${{ matrix.platform.target }}
+      #     path: icechunk-python/dist
       - name: mypy
         shell: bash
         working-directory: icechunk-python
@@ -263,7 +263,7 @@ jobs:
         with:
           working-directory: icechunk-python
           name: wheels-sdist
-          path: dist
+          path: icechunk-python/dist
 
   # release:
   #   name: Release

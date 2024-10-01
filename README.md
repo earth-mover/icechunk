@@ -51,7 +51,7 @@ Governance of the project will be managed by Earthmover PBC.
 
 We recommend using Icechunk from Python, together with the Zarr-Python library
 
-> [!WARNING]  
+> [!WARNING]
 > Icechunk is a very new project.
 > It is not recommended for production use at this time.
 > These instructions are aimed at Icechunk developers and curious early adopters.
@@ -86,17 +86,19 @@ pip install maturin
 Build the project in dev mode:
 
 ```bash
+cd icechunk-python/
 maturin develop
 ```
 
 or build the project in editable mode:
 
 ```bash
+cd icechunk-python/
 pip install -e icechunk@.
 ```
 
-> [!WARNING]  
-> This only makes the python source code editable, the rust will need to 
+> [!WARNING]
+> This only makes the python source code editable, the rust will need to
 > be recompiled when it changes
 
 ### Basic Usage
@@ -123,7 +125,7 @@ store = await IcechunkStore.open(storage=storage, mode='r+')
 
 ## Running Tests
 
-You will need [`docker compose`](https://docs.docker.com/compose/install/) and (optionally) [`just`](https://just.systems/). 
+You will need [`docker compose`](https://docs.docker.com/compose/install/) and (optionally) [`just`](https://just.systems/).
 Once those are installed, first switch to the icechunk root directory, then start up a local minio server:
 ```
 docker compose up -d
@@ -134,13 +136,13 @@ Use `just` to conveniently run a test
 just test
 ```
 
-This is just an alias for 
+This is just an alias for
 
 ```
 AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 cargo test
 ```
 
-> [!TIP]  
+> [!TIP]
 > For other aliases see [Justfile](./Justfile).
 
 ## Snapshots, Branches, and Tags
@@ -166,7 +168,7 @@ Tags are appropriate for publishing specific releases of a repository or for any
 
 ## How Does It Work?
 
-> [!NOTE]  
+> [!NOTE]
 > For more detailed explanation, have a look at the [Icechunk spec](spec/icechunk_spec.md)
 
 Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
@@ -204,7 +206,7 @@ flowchart TD
 
    Iceberg and all other "table formats" (Delta, Hudi, LanceDB, etc.) are based on tabular data model.
    This data model cannot accommodate large, multidimensional arrays (tensors) in a general, scalable way.
- 
+
 1. Is Icechunk part of Zarr?
 
    Formally, no.
@@ -222,4 +224,3 @@ Icechunk's was inspired by several existing projects and formats, most notably
 - [LanceDB](https://lancedb.github.io/lance/format.html)
 - [TileDB](https://docs.tiledb.com/main/background/key-concepts-and-data-format)
 - [OCDBT](https://google.github.io/tensorstore/kvstore/ocdbt/index.html)
-
