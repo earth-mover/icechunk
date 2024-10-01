@@ -158,7 +158,7 @@ async def run(store: Store) -> None:
 
 async def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
     return await IcechunkStore.create(
-        storage=storage, mode="r+", config=StoreConfig(inline_chunk_threshold=1)
+        storage=storage, mode="r+", config=StoreConfig(inline_chunk_threshold_bytes=1)
     )
 
 

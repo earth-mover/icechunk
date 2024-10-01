@@ -82,17 +82,17 @@ class StorageConfig:
     ```
     """
     class Memory:
-        """An in-memory storage backend"""
+        """Config for an in-memory storage backend"""
 
         prefix: str
 
     class Filesystem:
-        """A local filesystem storage backend"""
+        """Config for a local filesystem storage backend"""
 
         root: str
 
     class S3:
-        """An S3 Object Storage compatible storage backend"""
+        """Config for an S3 Object Storage compatible storage backend"""
 
         bucket: str
         prefix: str
@@ -101,13 +101,29 @@ class StorageConfig:
 
     def __init__(self, storage: Memory | Filesystem | S3): ...
     @classmethod
-    def memory(cls, prefix: str) -> StorageConfig: ...
+    def memory(cls, prefix: str) -> StorageConfig:
+        """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
+        ...
+
     @classmethod
-    def filesystem(cls, root: str) -> StorageConfig: ...
+    def filesystem(cls, root: str) -> StorageConfig:
+        """Create a StorageConfig object for a local filesystem storage backend with the given root directory"""
+        ...
+
     @classmethod
     def s3_from_env(
         cls, bucket: str, prefix: str, endpoint_url: str | None = None
-    ) -> StorageConfig: ...
+    ) -> StorageConfig:
+        """Create a StorageConfig object for an S3 Object Storage compatible storage backend
+        with the given bucket and prefix
+
+        This assumes that the necessary credentials are available in the environment:
+            AWS_ACCESS_KEY_ID,
+            AWS_SECRET_ACCESS_KEY,
+            AWS_SESSION_TOKEN (optional)
+        """
+        ...
+
     @classmethod
     def s3_from_credentials(
         cls,
@@ -115,7 +131,14 @@ class StorageConfig:
         prefix: str,
         credentials: S3Credentials,
         endpoint_url: str | None,
-    ) -> StorageConfig: ...
+    ) -> StorageConfig:
+        """Create a StorageConfig object for an S3 Object Storage compatible storage
+        backend with the given bucket, prefix, and credentials
+
+        This method will directly use the provided credentials to authenticate with the S3 service,
+        ignoring any environment variables.
+        """
+        ...
 
 class S3Credentials:
     access_key_id: str
@@ -130,23 +153,28 @@ class S3Credentials:
     ): ...
 
 class StoreConfig:
+    # The number of concurrent requests to make when fetching partial values
     get_partial_values_concurrency: int | None
-    inline_chunk_threshold: int | None
+    # The threshold at which to inline chunks in the store in bytes. When set,
+    # chunks smaller than this threshold will be inlined in the store. Default is
+    # 512 bytes.
+    inline_chunk_threshold_bytes: int | None
+    # Whether to allow overwriting refs in the store. Default is False. Experimental.
     unsafe_overwrite_refs: bool | None
 
     def __init__(
         self,
         get_partial_values_concurrency: int | None = None,
-        inline_chunk_threshold: int | None = None,
+        inline_chunk_threshold_bytes: int | None = None,
         unsafe_overwrite_refs: bool | None = None,
     ): ...
 
 async def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
 async def pyicechunk_store_create(
-    storage: StorageConfig, config: StoreConfig = StoreConfig()
+    storage: StorageConfig, config: StoreConfig
 ) -> PyIcechunkStore: ...
 async def pyicechunk_store_open_existing(
-    storage: StorageConfig, read_only: bool, config: StoreConfig = StoreConfig()
+    storage: StorageConfig, read_only: bool, config: StoreConfig
 ) -> PyIcechunkStore: ...
 async def pyicechunk_store_from_json_config(
     config: str, read_only: bool

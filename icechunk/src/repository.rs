@@ -51,7 +51,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct RepositoryConfig {
     // Chunks smaller than this will be stored inline in the manifst
-    pub inline_threshold_bytes: u16,
+    pub inline_chunk_threshold_bytes: u16,
     // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
     // own risk in object stores for which we don't support write-object-if-not-exists. There is
     // teh posibility of race conditions if this variable is set to true and there are concurrent
@@ -61,7 +61,7 @@ pub struct RepositoryConfig {
 
 impl Default for RepositoryConfig {
     fn default() -> Self {
-        Self { inline_threshold_bytes: 512, unsafe_overwrite_refs: false }
+        Self { inline_chunk_threshold_bytes: 512, unsafe_overwrite_refs: false }
     }
 }
 
@@ -223,7 +223,7 @@ impl RepositoryBuilder {
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
-        self.config.inline_threshold_bytes = threshold;
+        self.config.inline_chunk_threshold_bytes = threshold;
         self
     }
 
@@ -735,7 +735,7 @@ impl Repository {
     ) -> Pin<
         Box<dyn Future<Output = RepositoryResult<ChunkPayload>> + Send>,
     > {
-        let threshold = self.config.inline_threshold_bytes as usize;
+        let threshold = self.config.inline_chunk_threshold_bytes as usize;
         let storage = Arc::clone(&self.storage);
         move |data: Bytes| {
             async move {
