@@ -6,8 +6,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChunkId, ChunkIndices, ChunkLength, ChunkOffset, Flags, IcechunkFormatError,
-    IcechunkResult, ManifestId, NodeId,
+    format_constants, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
+    IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +16,6 @@ pub struct ManifestExtents(pub Vec<ChunkIndices>);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRef {
     pub object_id: ManifestId,
-    pub flags: Flags,
     pub extents: ManifestExtents,
 }
 
@@ -84,7 +83,7 @@ pub struct ChunkRef {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ChunkPayload {
-    Inline(Bytes), // FIXME: optimize copies
+    Inline(Bytes),
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
@@ -98,7 +97,9 @@ pub struct ChunkInfo {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Manifest {
-    pub chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
+    pub icechunk_manifest_format_version: IcechunkFormatVersion,
+    pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
+    chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
 }
 
 impl Manifest {
@@ -119,6 +120,19 @@ impl Manifest {
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
         PayloadIterator { manifest: self, for_node: *node, last_key: None }
     }
+
+    pub fn new(chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>) -> Self {
+        Self {
+            chunks,
+            icechunk_manifest_format_version:
+                format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+            icechunk_manifest_format_flags: Default::default(),
+        }
+    }
+
+    pub fn chunks(&self) -> &BTreeMap<(NodeId, ChunkIndices), ChunkPayload> {
+        &self.chunks
+    }
 }
 
 impl FromIterator<ChunkInfo> for Manifest {
@@ -127,7 +141,7 @@ impl FromIterator<ChunkInfo> for Manifest {
             .into_iter()
             .map(|chunk| ((chunk.node, chunk.coord), chunk.payload))
             .collect();
-        Manifest { chunks }
+        Self::new(chunks)
     }
 }
 

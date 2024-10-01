@@ -8,7 +8,10 @@ use std::{
 };
 
 use crate::{
-    format::{manifest::VirtualReferenceError, ManifestId, SnapshotId},
+    format::{
+        manifest::VirtualReferenceError, snapshot::ManifestFileInfo, ManifestId,
+        SnapshotId,
+    },
     storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
 };
 pub use crate::{
@@ -38,7 +41,7 @@ use crate::{
             NodeData, NodeSnapshot, NodeType, Snapshot, SnapshotProperties,
             UserAttributesSnapshot,
         },
-        ByteRange, Flags, IcechunkFormatError, NodeId, ObjectId,
+        ByteRange, IcechunkFormatError, NodeId, ObjectId,
     },
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
@@ -888,7 +891,6 @@ impl Repository {
                         //FIXME: it could be none for empty arrays
                         Some(vec![ManifestRef {
                             object_id: manifest_id.clone(),
-                            flags: Flags(),
                             extents: ManifestExtents(vec![]),
                         }])
                     } else {
@@ -915,7 +917,6 @@ impl Repository {
                 NodeData::Array(meta, _no_manifests_yet) => {
                     let new_manifests = vec![ManifestRef {
                         object_id: manifest_id.clone(),
-                        flags: Flags(),
                         extents: ManifestExtents(vec![]),
                     }];
                     NodeSnapshot {
@@ -1037,7 +1038,7 @@ impl Repository {
             //FIXME: avoid clone, this one is extremely expensive en memory
             //it's currently needed because we don't want to destroy the manifest in case of later
             //failure
-            let mut new_chunks = old_manifest.as_ref().chunks.clone();
+            let mut new_chunks = old_manifest.as_ref().chunks().clone();
             update_manifest(&mut new_chunks, &chunk_changes_c);
             (new_chunks, chunk_changes)
         });
@@ -1053,17 +1054,22 @@ impl Repository {
                         Arc::into_inner(chunk_changes).expect("Bug in flush task join");
                 }
 
-                let new_manifest = Arc::new(Manifest { chunks: new_chunks });
+                let new_manifest = Arc::new(Manifest::new(new_chunks));
                 let new_manifest_id = ObjectId::random();
                 self.storage
-                    .write_manifests(new_manifest_id.clone(), new_manifest)
+                    .write_manifests(new_manifest_id.clone(), Arc::clone(&new_manifest))
                     .await?;
 
                 let all_nodes = self.updated_nodes(&new_manifest_id).await?;
 
-                let mut new_snapshot = Snapshot::child_from_iter(
+                let mut new_snapshot = Snapshot::from_iter(
                     old_snapshot.as_ref(),
                     Some(properties),
+                    vec![ManifestFileInfo {
+                        id: new_manifest_id.clone(),
+                        format_version: new_manifest.icechunk_manifest_format_version,
+                    }],
+                    vec![],
                     all_nodes,
                 );
                 new_snapshot.metadata.message = message.to_string();
@@ -1372,7 +1378,7 @@ mod tests {
         let manifest =
             Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
         let manifest_id = ObjectId::random();
-        storage.write_manifests(manifest_id.clone(), manifest).await?;
+        storage.write_manifests(manifest_id.clone(), Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -1396,8 +1402,7 @@ mod tests {
             ]),
         };
         let manifest_ref = ManifestRef {
-            object_id: manifest_id,
-            flags: Flags(),
+            object_id: manifest_id.clone(),
             extents: ManifestExtents(vec![]),
         };
         let array1_path: PathBuf = "/array1".to_string().into();
@@ -1418,7 +1423,18 @@ mod tests {
             },
         ];
 
-        let snapshot = Arc::new(Snapshot::first_from_iter(None, nodes.iter().cloned()));
+        let initial = Snapshot::empty();
+        let manifests = vec![ManifestFileInfo {
+            id: manifest_id.clone(),
+            format_version: manifest.icechunk_manifest_format_version,
+        }];
+        let snapshot = Arc::new(Snapshot::from_iter(
+            &initial,
+            None,
+            manifests,
+            vec![],
+            nodes.iter().cloned(),
+        ));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
         let mut ds = Repository::update(Arc::new(storage), snapshot_id)

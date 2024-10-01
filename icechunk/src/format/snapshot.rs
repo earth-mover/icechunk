@@ -14,15 +14,15 @@ use crate::metadata::{
 };
 
 use super::{
-    manifest::ManifestRef, AttributesId, Flags, IcechunkFormatError, IcechunkResult,
-    NodeId, ObjectId, Path, SnapshotId, TableOffset,
+    format_constants, manifest::ManifestRef, AttributesId, IcechunkFormatError,
+    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
+    SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAttributesRef {
     pub object_id: AttributesId,
     pub location: TableOffset,
-    pub flags: Flags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,8 +81,26 @@ pub struct SnapshotMetadata {
 
 pub type SnapshotProperties = HashMap<String, Value>;
 
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub struct ManifestFileInfo {
+    pub id: ManifestId,
+    pub format_version: IcechunkFormatVersion,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub struct AttributeFileInfo {
+    pub id: AttributesId,
+    pub format_version: IcechunkFormatVersion,
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
+    pub icechunk_snapshot_format_version: IcechunkFormatVersion,
+    pub icechunk_snapshot_format_flags: BTreeMap<String, rmpv::Value>,
+
+    pub manifest_files: Vec<ManifestFileInfo>,
+    pub attribute_files: Vec<AttributeFileInfo>,
+
     pub total_parents: u32,
     // we denormalize this field to have it easily available in the serialized file
     pub short_term_parents: u16,
@@ -91,7 +109,7 @@ pub struct Snapshot {
     pub metadata: SnapshotMetadata,
     pub started_at: DateTime<Utc>,
     pub properties: SnapshotProperties,
-    pub nodes: BTreeMap<Path, NodeSnapshot>,
+    nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
 impl Default for SnapshotMetadata {
@@ -113,17 +131,24 @@ impl SnapshotMetadata {
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
-    pub fn new(
+    fn new(
         short_term_history: VecDeque<SnapshotMetadata>,
         total_parents: u32,
         properties: Option<SnapshotProperties>,
+        nodes: BTreeMap<Path, NodeSnapshot>,
+        manifest_files: Vec<ManifestFileInfo>,
+        attribute_files: Vec<AttributeFileInfo>,
     ) -> Self {
         let metadata = SnapshotMetadata::default();
         let short_term_parents = short_term_history.len() as u16;
         let started_at = Utc::now();
         let properties = properties.unwrap_or_default();
-        let nodes = BTreeMap::new();
         Self {
+            icechunk_snapshot_format_version:
+                format_constants::LATEST_ICECHUNK_SNAPSHOT_FORMAT,
+            icechunk_snapshot_format_flags: Default::default(),
+            manifest_files,
+            attribute_files,
             total_parents,
             short_term_parents,
             short_term_history,
@@ -135,50 +160,33 @@ impl Snapshot {
     }
 
     pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        short_term_history: VecDeque<SnapshotMetadata>,
-        total_parents: u32,
+        parent: &Snapshot,
         properties: Option<SnapshotProperties>,
+        manifest_files: Vec<ManifestFileInfo>,
+        attribute_files: Vec<AttributeFileInfo>,
         iter: T,
     ) -> Self {
         let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
-        Self { nodes, ..Self::new(short_term_history, total_parents, properties) }
-    }
-
-    pub fn first(properties: Option<SnapshotProperties>) -> Self {
-        Self::new(VecDeque::new(), 0, properties)
-    }
-
-    pub fn first_from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        properties: Option<SnapshotProperties>,
-        iter: T,
-    ) -> Self {
-        Self::from_iter(VecDeque::new(), 0, properties, iter)
-    }
-
-    pub fn from_parent(
-        parent: &Snapshot,
-        properties: Option<SnapshotProperties>,
-    ) -> Self {
         let mut history = parent.short_term_history.clone();
         history.push_front(parent.metadata.clone());
-        Self::new(history, parent.total_parents + 1, properties)
-    }
 
-    pub fn child_from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        parent: &Snapshot,
-        properties: Option<SnapshotProperties>,
-        iter: T,
-    ) -> Self {
-        let mut res = Self::from_parent(parent, properties);
-        let with_nodes = Self::first_from_iter(None, iter);
-        res.nodes = with_nodes.nodes;
-        res
+        Self::new(
+            history,
+            parent.total_parents + 1,
+            properties,
+            nodes,
+            manifest_files,
+            attribute_files,
+        )
     }
 
     pub fn empty() -> Self {
         let metadata =
             SnapshotMetadata::with_message(Self::INITIAL_COMMIT_MESSAGE.to_string());
-        Self { metadata, ..Self::first(None) }
+        Self {
+            metadata,
+            ..Self::new(VecDeque::new(), 0, None, Default::default(), vec![], vec![])
+        }
     }
 
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
@@ -295,12 +303,10 @@ mod tests {
             ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
-            flags: Flags(),
             extents: ManifestExtents(vec![]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
-            flags: Flags(),
             extents: ManifestExtents(vec![]),
         };
 
@@ -338,7 +344,6 @@ mod tests {
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid.clone(),
                     location: 42,
-                    flags: Flags(),
                 })),
                 node_data: NodeData::Array(
                     zarr_meta1.clone(),
@@ -358,7 +363,19 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let st = Snapshot::first_from_iter(None, nodes);
+        let initial = Snapshot::empty();
+        let manifests = vec![
+            ManifestFileInfo {
+                id: man_ref1.object_id.clone(),
+                format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+            },
+            ManifestFileInfo {
+                id: man_ref2.object_id.clone(),
+                format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+            },
+        ];
+        let st = Snapshot::from_iter(&initial, None, manifests, vec![], nodes);
+
         assert_eq!(
             st.get_node(&"/nonexistent".into()),
             Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })
@@ -395,7 +412,6 @@ mod tests {
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid,
                     location: 42,
-                    flags: Flags(),
                 })),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![man_ref1, man_ref2]),
             }),
