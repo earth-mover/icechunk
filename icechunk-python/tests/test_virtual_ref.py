@@ -1,5 +1,11 @@
 from object_store import ClientOptions, ObjectStore
-from icechunk import IcechunkStore, StorageConfig, S3Credentials
+from icechunk import (
+    IcechunkStore,
+    StorageConfig,
+    StoreConfig,
+    S3Credentials,
+    VirtualRefConfig,
+)
 import zarr
 import zarr.core
 import zarr.core.buffer
@@ -34,7 +40,7 @@ async def test_write_minino_virtual_refs():
 
     # Open the store, the S3 credentials must be set in environment vars for this to work for now
     store = await IcechunkStore.open(
-        storage=StorageConfig.s3_from_credentials(
+        storage=StorageConfig.s3_from_config(
             bucket="testbucket",
             prefix="python-virtual-ref",
             credentials=S3Credentials(
@@ -45,6 +51,16 @@ async def test_write_minino_virtual_refs():
             allow_http=True,
         ),
         mode="r+",
+        config=StoreConfig(
+            virtual_ref_config=VirtualRefConfig.s3_from_config(
+                credentials=S3Credentials(
+                    access_key_id="minio123",
+                    secret_access_key="minio123",
+                ),
+                endpoint_url="http://localhost:9000",
+                allow_http=True,
+            )
+        ),
     )
 
     array = zarr.Array.create(store, shape=(1, 1, 2), chunk_shape=(1, 1, 1), dtype="i4")

@@ -13,6 +13,7 @@ use icechunk::{
     format::{manifest::VirtualChunkRef, ChunkLength},
     refs::Ref,
     repository::VirtualChunkLocation,
+    storage::virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     zarr::{
         ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreOptions,
         VersionInfo,
@@ -20,7 +21,7 @@ use icechunk::{
     Repository, SnapshotMetadata,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
-use storage::{PyS3Credentials, PyStorageConfig};
+use storage::{PyS3Credentials, PyStorageConfig, PyVirtualRefConfig};
 use streams::PyAsyncGenerator;
 use tokio::sync::{Mutex, RwLock};
 
@@ -39,6 +40,8 @@ struct PyStoreConfig {
     pub inline_chunk_threshold_bytes: Option<u16>,
     #[pyo3(get, set)]
     pub unsafe_overwrite_refs: Option<bool>,
+    #[pyo3(get, set)]
+    pub virtual_ref_config: Option<PyVirtualRefConfig>,
 }
 
 impl From<&PyStoreConfig> for RepositoryConfig {
@@ -47,7 +50,10 @@ impl From<&PyStoreConfig> for RepositoryConfig {
             version: None,
             inline_chunk_threshold_bytes: config.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: config.unsafe_overwrite_refs,
-            virtual_ref_config: None,
+            virtual_ref_config: config
+                .virtual_ref_config
+                .as_ref()
+                .map(ObjectStoreVirtualChunkResolverConfig::from),
         }
     }
 }
@@ -71,11 +77,13 @@ impl PyStoreConfig {
         get_partial_values_concurrency: Option<u16>,
         inline_chunk_threshold_bytes: Option<u16>,
         unsafe_overwrite_refs: Option<bool>,
+        virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> Self {
         PyStoreConfig {
             get_partial_values_concurrency,
             inline_chunk_threshold_bytes,
             unsafe_overwrite_refs,
+            virtual_ref_config,
         }
     }
 }
@@ -692,6 +700,7 @@ fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyS3Credentials>()?;
     m.add_class::<PyStoreConfig>()?;
     m.add_class::<PySnapshotMetadata>()?;
+    m.add_class::<PyVirtualRefConfig>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_from_json_config, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;

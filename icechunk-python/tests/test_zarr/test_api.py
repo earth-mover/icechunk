@@ -8,9 +8,18 @@ from numpy.testing import assert_array_equal
 import zarr
 from zarr import Array, Group
 from zarr.abc.store import Store
-from zarr.api.synchronous import create, load, open, open_group, save, save_array, save_group
+from zarr.api.synchronous import (
+    create,
+    load,
+    open,
+    open_group,
+    save,
+    save_array,
+    save_group,
+)
 
 from ..conftest import parse_store
+
 
 @pytest.fixture(scope="function")
 async def memory_store() -> IcechunkStore:
@@ -48,7 +57,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
 
     # open array, overwrite
     # _store_dict wont currently work with IcechunkStore
-    # TODO: Should it? 
+    # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
     store._store_dict = {}
     z = open(store=store, shape=200, mode="w")  # mode="w"
@@ -59,7 +68,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     store_cls = type(store)
 
     # _store_dict wont currently work with IcechunkStore
-    # TODO: Should it? 
+    # TODO: Should it?
 
     ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
     z = open(store=ro_store)
@@ -89,7 +98,7 @@ async def test_open_group(memory_store: IcechunkStore) -> None:
     # open group, read-only
     store_cls = type(store)
     # _store_dict wont currently work with IcechunkStore
-    # TODO: Should it? 
+    # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
     ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
     g = open_group(store=ro_store)
@@ -139,7 +148,7 @@ async def test_open_with_mode_a(tmp_path: pathlib.Path) -> None:
     g = zarr.open(store=tmp_path, mode="a")
     assert isinstance(g, Group)
     await g.store_path.delete()
-    
+
     # 'a' means read/write (create if doesn't exist)
     arr = zarr.open(store=tmp_path, mode="a", shape=(3, 3))
     assert isinstance(arr, Array)

@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use icechunk::{
-    storage::object_store::{S3Config, S3Credentials},
+    storage::{
+        object_store::{S3Config, S3Credentials},
+        virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+    },
     zarr::StorageConfig,
 };
 use pyo3::{prelude::*, types::PyType};
@@ -89,7 +92,7 @@ impl PyStorageConfig {
     }
 
     #[classmethod]
-    fn s3_from_credentials(
+    fn s3_from_config(
         _cls: &Bound<'_, PyType>,
         bucket: String,
         prefix: String,
@@ -132,9 +135,64 @@ impl From<&PyStorageConfig> for StorageConfig {
                     region: region.clone(),
                     credentials: credentials.as_ref().map(S3Credentials::from),
                     endpoint: endpoint_url.clone(),
-                    allow_http: allow_http.clone(),
+                    allow_http: *allow_http,
                 }),
             },
+        }
+    }
+}
+
+#[pyclass(name = "VirtualRefConfig")]
+#[derive(Clone, Debug)]
+pub enum PyVirtualRefConfig {
+    S3 {
+        credentials: Option<PyS3Credentials>,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    },
+}
+
+#[pymethods]
+impl PyVirtualRefConfig {
+    #[classmethod]
+    fn s3_from_env(_cls: &Bound<'_, PyType>) -> Self {
+        PyVirtualRefConfig::S3 {
+            credentials: None,
+            endpoint_url: None,
+            allow_http: None,
+            region: None,
+        }
+    }
+
+    #[classmethod]
+    fn s3_from_config(
+        _cls: &Bound<'_, PyType>,
+        credentials: PyS3Credentials,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    ) -> Self {
+        PyVirtualRefConfig::S3 {
+            credentials: Some(credentials),
+            endpoint_url,
+            allow_http,
+            region,
+        }
+    }
+}
+
+impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {
+    fn from(config: &PyVirtualRefConfig) -> Self {
+        match config {
+            PyVirtualRefConfig::S3 { credentials, endpoint_url, allow_http, region } => {
+                ObjectStoreVirtualChunkResolverConfig::S3(S3Config {
+                    region: region.clone(),
+                    endpoint: endpoint_url.clone(),
+                    credentials: credentials.as_ref().map(S3Credentials::from),
+                    allow_http: *allow_http,
+                })
+            }
         }
     }
 }
