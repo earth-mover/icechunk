@@ -31,7 +31,9 @@ use crate::{
         Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
         StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
-    storage::object_store::S3Credentials,
+    storage::{
+        object_store::S3Config, virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+    },
     ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
 
@@ -50,8 +52,8 @@ pub enum StorageConfig {
     S3ObjectStore {
         bucket: String,
         prefix: String,
-        credentials: Option<S3Credentials>,
-        endpoint: Option<String>,
+        #[serde(flatten)]
+        config: Option<S3Config>,
     },
 }
 
@@ -66,14 +68,9 @@ impl StorageConfig {
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
-            StorageConfig::S3ObjectStore { bucket, prefix, credentials, endpoint } => {
-                let storage = ObjectStorage::new_s3_store(
-                    bucket,
-                    prefix,
-                    credentials.clone(),
-                    endpoint.clone(),
-                )
-                .map_err(|e| format!("Error creating storage: {e}"))?;
+            StorageConfig::S3ObjectStore { bucket, prefix, config } => {
+                let storage = ObjectStorage::new_s3_store(bucket, prefix, config.clone())
+                    .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
         }
@@ -102,6 +99,7 @@ pub struct RepositoryConfig {
     pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
+    pub virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
 impl RepositoryConfig {
@@ -125,6 +123,14 @@ impl RepositoryConfig {
 
     pub fn with_unsafe_overwrite_refs(mut self, unsafe_overwrite_refs: bool) -> Self {
         self.unsafe_overwrite_refs = Some(unsafe_overwrite_refs);
+        self
+    }
+
+    pub fn with_virtual_ref_credentials(
+        mut self,
+        config: ObjectStoreVirtualChunkResolverConfig,
+    ) -> Self {
+        self.virtual_ref_config = Some(config);
         self
     }
 
@@ -166,6 +172,9 @@ impl RepositoryConfig {
         }
         if let Some(value) = self.unsafe_overwrite_refs {
             builder.with_unsafe_overwrite_refs(value);
+        }
+        if let Some(config) = &self.virtual_ref_config {
+            builder.with_virtual_ref_config(config.clone());
         }
 
         // TODO: add error checking, does the previous version exist?
@@ -1212,6 +1221,8 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
+    use crate::storage::object_store::S3Credentials;
+
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -2050,6 +2061,7 @@ mod tests {
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
+                virtual_ref_config: None,
             },
             config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
         };
@@ -2083,6 +2095,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    virtual_ref_config: None,
                 },
                 config: None,
                 ..expected.clone()
@@ -2102,6 +2115,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    virtual_ref_config: None,
                 },
                 config: None,
                 ..expected.clone()
@@ -2120,6 +2134,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
                 config: None,
@@ -2138,6 +2153,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
                 config: None,
@@ -2156,12 +2172,17 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    credentials: None,
-                    endpoint: None
+                    config: Some(S3Config {
+                        endpoint: None,
+                        credentials: None,
+                        allow_http: None,
+                        region: None
+                    }),
                 },
                 config: None,
             },
@@ -2177,7 +2198,8 @@ mod tests {
                  "access_key_id":"my-key",
                  "secret_access_key":"my-secret-key"
              },
-             "endpoint":"http://localhost:9000"
+             "endpoint":"http://localhost:9000",
+             "allow_http": true
          },
          "repository": {}
         }
@@ -2188,16 +2210,21 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    credentials: Some(S3Credentials {
-                        access_key_id: String::from("my-key"),
-                        secret_access_key: String::from("my-secret-key"),
-                        session_token: None,
-                    }),
-                    endpoint: Some(String::from("http://localhost:9000"))
+                    config: Some(S3Config {
+                        region: None,
+                        endpoint: Some(String::from("http://localhost:9000")),
+                        credentials: Some(S3Credentials {
+                            access_key_id: String::from("my-key"),
+                            secret_access_key: String::from("my-secret-key"),
+                            session_token: None,
+                        }),
+                        allow_http: Some(true),
+                    })
                 },
                 config: None,
             },

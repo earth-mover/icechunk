@@ -47,6 +47,7 @@ impl From<&PyStoreConfig> for RepositoryConfig {
             version: None,
             inline_chunk_threshold_bytes: config.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: config.unsafe_overwrite_refs,
+            virtual_ref_config: None,
         }
     }
 }

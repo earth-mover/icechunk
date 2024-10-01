@@ -3,9 +3,8 @@ use crate::format::ByteRange;
 use async_trait::async_trait;
 use bytes::Bytes;
 use object_store::local::LocalFileSystem;
-use object_store::{
-    aws::AmazonS3Builder, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore,
-};
+use object_store::{path::Path as ObjectPath, GetOptions, GetRange, ObjectStore};
+use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -13,6 +12,8 @@ use std::ops::Bound;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use url;
+
+use super::object_store::S3Config;
 
 #[async_trait]
 pub trait VirtualChunkResolver: Debug {
@@ -26,9 +27,21 @@ pub trait VirtualChunkResolver: Debug {
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 struct StoreCacheKey(String, String);
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ObjectStoreVirtualChunkResolverConfig {
+    S3(S3Config),
+}
+
 #[derive(Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
     stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
+    config: Option<ObjectStoreVirtualChunkResolverConfig>,
+}
+
+impl ObjectStoreVirtualChunkResolver {
+    pub fn new(config: Option<ObjectStoreVirtualChunkResolverConfig>) -> Self {
+        Self { stores: RwLock::new(HashMap::new()), config }
+    }
 }
 
 // Converts the requested ByteRange to a valid ByteRange appropriate
@@ -104,14 +117,26 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
                         Arc::new(fs)
                     }
                     // FIXME: allow configuring auth for virtual references
-                    "s3" => Arc::new(
-                        AmazonS3Builder::from_env()
+                    "s3" => {
+                        let config = if let Some(
+                            ObjectStoreVirtualChunkResolverConfig::S3(config),
+                        ) = &self.config
+                        {
+                            config.clone()
+                        } else {
+                            S3Config::default()
+                        };
+
+                        let s3 = config
+                            .to_builder()
                             .with_bucket_name(&cache_key.1)
                             .build()
                             .map_err(|e| {
                                 VirtualReferenceError::FetchError(Box::new(e))
-                            })?,
-                    ),
+                            })?;
+
+                        Arc::new(s3)
+                    }
                     _ => {
                         Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
                     }

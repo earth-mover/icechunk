@@ -9,7 +9,10 @@ use std::{
 
 use crate::{
     format::{manifest::VirtualReferenceError, ManifestId, SnapshotId},
-    storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
+    storage::virtual_ref::{
+        construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
+        VirtualChunkResolver,
+    },
 };
 pub use crate::{
     format::{
@@ -215,11 +218,17 @@ pub struct RepositoryBuilder {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
+    virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
 impl RepositoryBuilder {
     fn new(storage: Arc<dyn Storage + Send + Sync>, snapshot_id: SnapshotId) -> Self {
-        Self { config: RepositoryConfig::default(), snapshot_id, storage }
+        Self {
+            config: RepositoryConfig::default(),
+            snapshot_id,
+            storage,
+            virtual_ref_config: None,
+        }
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
@@ -237,11 +246,20 @@ impl RepositoryBuilder {
         self
     }
 
+    pub fn with_virtual_ref_config(
+        &mut self,
+        config: ObjectStoreVirtualChunkResolverConfig,
+    ) -> &mut Self {
+        self.virtual_ref_config = Some(config);
+        self
+    }
+
     pub fn build(&self) -> Repository {
         Repository::new(
             self.config.clone(),
             self.storage.clone(),
             self.snapshot_id.clone(),
+            self.virtual_ref_config.clone(),
         )
     }
 }
@@ -353,6 +371,7 @@ impl Repository {
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
         snapshot_id: SnapshotId,
+        virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
     ) -> Self {
         Repository {
             snapshot_id,
@@ -360,7 +379,9 @@ impl Repository {
             storage,
             last_node_id: None,
             change_set: ChangeSet::default(),
-            virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::default()),
+            virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::new(
+                virtual_ref_config,
+            )),
         }
     }
 

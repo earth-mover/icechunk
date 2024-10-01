@@ -8,7 +8,10 @@ mod tests {
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
-        storage::{object_store::S3Credentials, ObjectStorage},
+        storage::{
+            object_store::{S3Config, S3Credentials},
+            ObjectStorage,
+        },
         zarr::AccessMode,
         Repository, Storage, Store,
     };
@@ -57,12 +60,16 @@ mod tests {
             ObjectStorage::new_s3_store(
                 "testbucket".to_string(),
                 format!("{:?}", ChunkId::random()),
-                Some(S3Credentials {
-                    access_key_id: "minio123".into(),
-                    secret_access_key: "minio123".into(),
-                    session_token: None,
+                Some(S3Config {
+                    region: None,
+                    endpoint: Some("http://localhost:9000".to_string()),
+                    credentials: Some(S3Credentials {
+                        access_key_id: "minio123".into(),
+                        secret_access_key: "minio123".into(),
+                        session_token: None,
+                    }),
+                    allow_http: Some(true),
                 }),
-                Some("http://localhost:9000"),
             )
             .expect("Creating minio storage failed"),
         );

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use icechunk::{storage::object_store::S3Credentials, zarr::StorageConfig};
+use icechunk::{
+    storage::object_store::{S3Config, S3Credentials},
+    zarr::StorageConfig,
+};
 use pyo3::{prelude::*, types::PyType};
 
 #[pyclass(name = "S3Credentials")]
@@ -104,8 +107,12 @@ impl From<&PyStorageConfig> for StorageConfig {
                 StorageConfig::S3ObjectStore {
                     bucket: bucket.clone(),
                     prefix: prefix.clone(),
-                    credentials: credentials.as_ref().map(S3Credentials::from),
-                    endpoint: endpoint_url.clone(),
+                    config: Some(S3Config {
+                        region: None,
+                        credentials: credentials.as_ref().map(S3Credentials::from),
+                        endpoint: endpoint_url.clone(),
+                        allow_http: Some(false),
+                    }),
                 }
             }
         }
