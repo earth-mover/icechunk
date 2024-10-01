@@ -12,8 +12,9 @@ mod tests {
         zarr::AccessMode,
         Repository, Storage, Store,
     };
-    use std::sync::Arc;
     use std::{error::Error, num::NonZeroU64, path::PathBuf};
+    use std::{path::Path, sync::Arc};
+    use tempfile::TempDir;
 
     use bytes::Bytes;
     use object_store::{
@@ -43,11 +44,9 @@ mod tests {
                 .expect(&format!("putting chunk to {} failed", &path));
         }
     }
-    async fn create_local_repository() -> Repository {
-        let path = PathBuf::from("/tmp/local-virtual-repository");
+    async fn create_local_repository(path: &Path) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-            ObjectStorage::new_local_store(path.as_path())
-                .expect("Creating local storage failed"),
+            ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
         );
 
         create_repository(storage).await
@@ -95,15 +94,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>> {
+        let chunk_dir = TempDir::new()?;
+        let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
+        let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
+
         let bytes1 = Bytes::copy_from_slice(b"first");
         let bytes2 = Bytes::copy_from_slice(b"second0000");
-        let chunks = [
-            ("/tmp/chunks/chunk-1".into(), bytes1.clone()),
-            ("/tmp/chunks/chunk-2".into(), bytes2.clone()),
-        ];
+        let chunks = [(chunk_1, bytes1.clone()), (chunk_2, bytes2.clone())];
         write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
-        let mut ds = create_local_repository().await;
+        let repo_dir = TempDir::new()?;
+        let mut ds = create_local_repository(&repo_dir.path()).await;
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
