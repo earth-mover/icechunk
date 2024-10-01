@@ -1,22 +1,24 @@
 # module
 import json
-from typing import Any, AsyncGenerator, Self
-from ._icechunk_python import (
-    PyIcechunkStore,
-    S3Credentials,
-    pyicechunk_store_create,
-    pyicechunk_store_from_json_config,
-    SnapshotMetadata,
-    StorageConfig,
-    StoreConfig,
-    pyicechunk_store_open_existing,
-    pyicechunk_store_exists,
-)
+from collections.abc import AsyncGenerator, Iterable
+from typing import Any, Self
 
-from zarr.abc.store import AccessMode, Store
+from zarr.abc.store import AccessMode, ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
+
+from ._icechunk_python import (
+    PyIcechunkStore,
+    S3Credentials,
+    SnapshotMetadata,
+    StorageConfig,
+    StoreConfig,
+    pyicechunk_store_create,
+    pyicechunk_store_exists,
+    pyicechunk_store_from_json_config,
+    pyicechunk_store_open_existing,
+)
 
 __all__ = ["IcechunkStore", "StorageConfig", "S3Credentials", "StoreConfig"]
 
@@ -182,6 +184,32 @@ class IcechunkStore(Store, SyncMixin):
         store = await pyicechunk_store_create(storage, config=config)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
+    def with_mode(self, mode: AccessModeLiteral) -> Self:
+        """
+        Return a new store of the same type pointing to the same location with a new mode.
+
+        The returned Store is not automatically opened. Call :meth:`Store.open` before
+        using.
+
+        Parameters
+        ----------
+        mode: AccessModeLiteral
+            The new mode to use.
+
+        Returns
+        -------
+        store:
+            A new store of the same type with the new mode.
+
+        Examples
+        --------
+        >>> writer = zarr.store.MemoryStore(mode="w")
+        >>> reader = writer.with_mode("r")
+        """
+        read_only = mode == "r"
+        new_store = self._store.with_mode(read_only)
+        return self.__class__(new_store, mode=mode)
+
     @property
     def snapshot_id(self) -> str:
         """Return the current snapshot id."""
@@ -289,20 +317,22 @@ class IcechunkStore(Store, SyncMixin):
     async def get_partial_values(
         self,
         prototype: BufferPrototype,
-        key_ranges: list[tuple[str, tuple[int | None, int | None]]],
+        key_ranges: Iterable[tuple[str, ByteRangeRequest]],
     ) -> list[Buffer | None]:
         """Retrieve possibly partial values from given key_ranges.
 
         Parameters
         ----------
-        key_ranges : list[tuple[str, tuple[int, int]]]
+        key_ranges : Iterable[tuple[str, tuple[int | None, int | None]]]
             Ordered set of key, range pairs, a key may occur multiple times with different ranges
 
         Returns
         -------
         list of values, in the order of the key_ranges, may contain null/none for missing keys
         """
-        result = await self._store.get_partial_values(key_ranges)
+        # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it 
+        # to a list here first. Possible opportunity for optimization.
+        result = await self._store.get_partial_values(list(key_ranges))
         return [
             prototype.buffer.from_bytes(r) if r is not None else None for r in result
         ]
@@ -334,6 +364,17 @@ class IcechunkStore(Store, SyncMixin):
         value : Buffer
         """
         return await self._store.set(key, value.to_bytes())
+
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
+        """
+        Store a key to ``value`` if the key is not already present.
+
+        Parameters
+        -----------
+        key : str
+        value : Buffer
+        """
+        return await self._store.set_if_not_exists(key, value.to_bytes())
 
     async def set_virtual_ref(
         self, key: str, location: str, *, offset: int, length: int
@@ -368,7 +409,7 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.supports_partial_writes
 
     async def set_partial_values(
-        self, key_start_values: list[tuple[str, int, BytesLike]]
+        self, key_start_values: Iterable[tuple[str, int, BytesLike]]
     ) -> None:
         """Store values at a given key, starting at byte range_start.
 
@@ -379,7 +420,9 @@ class IcechunkStore(Store, SyncMixin):
             range_starts, range_starts (considering the length of the respective values) must not
             specify overlapping ranges for the same key
         """
-        return await self._store.set_partial_values(key_start_values)
+        # NOTE: pyo3 does not implicit conversion from an Iterable to a rust iterable. So we convert it
+        # to a list here first. Possible opportunity for optimization.
+        return await self._store.set_partial_values(list(key_start_values)) # type: ignore
 
     @property
     def supports_listing(self) -> bool:

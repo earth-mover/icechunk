@@ -1,8 +1,9 @@
 import abc
 import datetime
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 class PyIcechunkStore:
+    def with_mode(self, read_only: bool) -> PyIcechunkStore: ...
     @property
     def snapshot_id(self) -> str: ...
     @property
@@ -31,7 +32,10 @@ class PyIcechunkStore:
     @property
     def supports_deletes(self) -> bool: ...
     async def set(self, key: str, value: bytes) -> None: ...
-    async def set_virtual_ref(self, key: str, location: str, offset: int, length: int) -> None: ...
+    async def set_if_not_exists(self, key: str, value: bytes) -> None: ...
+    async def set_virtual_ref(
+        self, key: str, location: str, offset: int, length: int
+    ) -> None: ...
     async def delete(self, key: str) -> None: ...
     @property
     def supports_partial_writes(self) -> bool: ...
@@ -45,27 +49,23 @@ class PyIcechunkStore:
     def list_dir(self, prefix: str) -> PyAsyncStringGenerator: ...
     def __eq__(self, other) -> bool: ...
 
-
 class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
-
 class SnapshotMetadata:
     @property
     def id(self) -> str: ...
-
     @property
     def written_at(self) -> datetime.datetime: ...
-
     @property
     def message(self) -> str: ...
 
-
-class PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta):
+class PyAsyncSnapshotGenerator(
+    AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta
+):
     def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotMetadata: ...
-
 
 class StorageConfig:
     """Storage configuration for an IcechunkStore
@@ -97,7 +97,6 @@ class StorageConfig:
         endpoint_url: str | None
 
     def __init__(self, storage: Memory | Filesystem | S3): ...
-
     @classmethod
     def memory(cls, prefix: str) -> StorageConfig:
         """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
@@ -130,14 +129,17 @@ class StorageConfig:
         """
         ...
 
-
 class S3Credentials:
     access_key_id: str
     secret_access_key: str
     session_token: str | None
 
-    def __init__(self, access_key_id: str, secret_access_key: str, session_token: str | None = None): ...
-
+    def __init__(
+        self,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str | None = None,
+    ): ...
 
 class StoreConfig:
     # The number of concurrent requests to make when fetching partial values
@@ -155,7 +157,6 @@ class StoreConfig:
         inline_chunk_threshold_bytes: int | None = None,
         unsafe_overwrite_refs: bool | None = None,
     ): ...
-
 
 async def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
 async def pyicechunk_store_create(storage: StorageConfig, config: StoreConfig) -> PyIcechunkStore: ...

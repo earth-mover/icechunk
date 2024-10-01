@@ -7,8 +7,11 @@ import numpy as np
 import pytest
 
 from zarr import Array, AsyncArray, AsyncGroup, Group
+import zarr
+import zarr.api
+import zarr.api.asynchronous
 from zarr.core.buffer import default_buffer_prototype
-from zarr.core.common import ZarrFormat
+from zarr.core.common import JSON, ZarrFormat
 from zarr.core.group import GroupMetadata
 from zarr.core.sync import sync
 from zarr.errors import ContainsArrayError, ContainsGroupError
@@ -54,6 +57,46 @@ def test_group_init(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     assert group._async_group == agroup
 
 
+async def test_create_creates_parents(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
+    # prepare a root node, with some data set
+    await zarr.api.asynchronous.open_group(
+        store=store, path="a", zarr_format=zarr_format, attributes={"key": "value"}
+    )
+    # create a child node with a couple intermediates
+    await zarr.api.asynchronous.open_group(store=store, path="a/b/c/d", zarr_format=zarr_format)
+    parts = ["a", "a/b", "a/b/c"]
+
+    if zarr_format == 2:
+        files = [".zattrs", ".zgroup"]
+    else:
+        files = ["zarr.json"]
+
+    expected = [f"{part}/{file}" for file in files for part in parts]
+
+    if zarr_format == 2:
+        expected.append("a/b/c/d/.zgroup")
+        expected.append("a/b/c/d/.zattrs")
+    else:
+        expected.append("a/b/c/d/zarr.json")
+
+    expected = sorted(expected)
+
+    result = sorted([x async for x in store.list_prefix("")])
+
+    assert result == expected
+
+    paths = ["a", "a/b", "a/b/c"]
+    for path in paths:
+        g = await zarr.api.asynchronous.open_group(store=store, path=path)
+        assert isinstance(g, AsyncGroup)
+
+        if path == "a":
+            # ensure we didn't overwrite the root attributes
+            assert g.attrs == {"key": "value"}
+        else:
+            assert g.attrs == {}
+
+
 def test_group_name_properties(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
     Test basic properties of groups
@@ -91,8 +134,8 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     members_expected["subgroup"] = group.create_group("subgroup")
     # make a sub-sub-subgroup, to ensure that the children calculation doesn't go
     # too deep in the hierarchy
-    subsubgroup = members_expected["subgroup"].create_group("subsubgroup")  # type: ignore
-    subsubsubgroup = subsubgroup.create_group("subsubsubgroup")  # type: ignore
+    subsubgroup = members_expected["subgroup"].create_group("subsubgroup")
+    subsubsubgroup = subsubgroup.create_group("subsubsubgroup")
 
     members_expected["subarray"] = group.create_array(
         "subarray", shape=(100,), dtype="uint8", chunk_shape=(10,), exists_ok=True
@@ -284,7 +327,7 @@ def test_group_len(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
 
     group = Group.from_store(store, zarr_format=zarr_format)
     with pytest.raises(NotImplementedError):
-        len(group)  # type: ignore
+        len(group)
 
 
 def test_group_setitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
@@ -412,8 +455,8 @@ def test_group_creation_existing_node(
     """
     spath = StorePath(store)
     group = Group.from_store(spath, zarr_format=zarr_format)
-    expected_exception: type[ContainsArrayError] | type[ContainsGroupError]
-    attributes = {"old": True}
+    expected_exception: type[ContainsArrayError | ContainsGroupError]
+    attributes: dict[str, JSON] = {"old": True}
 
     if extant_node == "array":
         expected_exception = ContainsArrayError
@@ -546,9 +589,9 @@ async def test_asyncgroup_open_wrong_format(
 # should this be async?
 @pytest.mark.parametrize(
     "data",
-    (
+    [
         {"zarr_format": 3, "node_type": "group", "attributes": {"foo": 100}},
-    ),
+    ],
 )
 def test_asyncgroup_from_dict(store: IcechunkStore, data: dict[str, Any]) -> None:
     """
@@ -650,7 +693,7 @@ async def test_asyncgroup_create_array(
     shape = (10,)
     dtype = "uint8"
     chunk_shape = (4,)
-    attributes = {"foo": 100}
+    attributes: dict[str, JSON] = {"foo": 100}
 
     sub_node_path = "sub_array"
     subnode = await agroup.create_array(
@@ -669,7 +712,7 @@ async def test_asyncgroup_create_array(
     assert subnode.dtype == dtype
     # todo: fix the type annotation of array.metadata.chunk_grid so that we get some autocomplete
     # here.
-    assert subnode.metadata.chunk_grid.chunk_shape == chunk_shape
+    assert subnode.metadata.chunk_grid.chunk_shape == chunk_shape # type: ignore
     assert subnode.metadata.zarr_format == zarr_format
 
 

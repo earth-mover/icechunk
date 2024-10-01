@@ -290,6 +290,20 @@ impl Store {
         }
     }
 
+    /// Creates a new clone of the store with the given access mode.
+    pub fn with_access_mode(&self, mode: AccessMode) -> Self {
+        Store {
+            repository: self.repository.clone(),
+            mode,
+            current_branch: self.current_branch.clone(),
+            config: self.config.clone(),
+        }
+    }
+
+    pub fn access_mode(&self) -> &AccessMode {
+        &self.mode
+    }
+
     pub fn current_branch(&self) -> &Option<String> {
         &self.current_branch
     }
@@ -537,6 +551,16 @@ impl Store {
                     .await?;
                 Ok(())
             }
+        }
+    }
+
+    pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
+        // TODO: Make sure this is correctly threadsafe. Technically a third API call
+        // may be able to slip into the gap between the exists and the set.
+        if self.exists(key).await? {
+            Ok(())
+        } else {
+            self.set(key, value).await
         }
     }
 
@@ -1930,12 +1954,18 @@ mod tests {
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
 
         let data = Bytes::copy_from_slice(b"hello");
-        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+        store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         let snapshot_id = store.commit("initial commit").await.unwrap();
 
         let new_data = Bytes::copy_from_slice(b"world");
+        store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
+
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
         let new_snapshot_id = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
@@ -1954,7 +1984,7 @@ mod tests {
         store.reset().await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        // TODO: Create a new branch and do stuff with it
+        // Create a new branch and do stuff with it
         store.new_branch("dev").await?;
         store.set("array/c/0/1/0", new_data.clone()).await?;
         let dev_snapshot_id = store.commit("update dev branch").await?;
@@ -1973,6 +2003,41 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_access_mode() {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let writeable_store =
+            Store::new_from_storage(Arc::clone(&storage)).await.unwrap();
+        assert_eq!(writeable_store.access_mode(), &AccessMode::ReadWrite);
+
+        writeable_store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let readable_store = writeable_store.with_access_mode(AccessMode::ReadOnly);
+        assert_eq!(readable_store.access_mode(), &AccessMode::ReadOnly);
+
+        let result = readable_store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await;
+        let correct_error = match result {
+            Err(StoreError::ReadOnly { .. }) => true,
+            _ => false,
+        };
+        assert!(correct_error);
+
+        readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
     }
 
     #[test]

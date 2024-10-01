@@ -231,6 +231,20 @@ fn pyicechunk_store_create<'py>(
 
 #[pymethods]
 impl PyIcechunkStore {
+    fn with_mode(&self, read_only: bool) -> PyResult<PyIcechunkStore> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+        let store = self.store.blocking_read().with_access_mode(access_mode);
+        let store = Arc::new(RwLock::new(store));
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(PyIcechunkStore { store, rt })
+    }
+
     fn checkout_snapshot<'py>(
         &'py self,
         py: Python<'py>,
@@ -512,6 +526,24 @@ impl PyIcechunkStore {
             let store = store.read().await;
             store
                 .set(&key, Bytes::from(value))
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
+    }
+
+    fn set_if_not_exists<'py>(
+        &'py self,
+        py: Python<'py>,
+        key: String,
+        value: Vec<u8>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let store = store.read().await;
+            store
+                .set_if_not_exists(&key, Bytes::from(value))
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(())
