@@ -2,9 +2,9 @@ use crate::format::manifest::{VirtualChunkLocation, VirtualReferenceError};
 use crate::format::ByteRange;
 use async_trait::async_trait;
 use bytes::Bytes;
-use object_store::{
-    aws::AmazonS3Builder, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore,
-};
+use object_store::local::LocalFileSystem;
+use object_store::{path::Path as ObjectPath, GetOptions, GetRange, ObjectStore};
+use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -12,6 +12,8 @@ use std::ops::Bound;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use url;
+
+use super::object_store::S3Config;
 
 #[async_trait]
 pub trait VirtualChunkResolver: Debug {
@@ -25,9 +27,21 @@ pub trait VirtualChunkResolver: Debug {
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 struct StoreCacheKey(String, String);
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ObjectStoreVirtualChunkResolverConfig {
+    S3(S3Config),
+}
+
 #[derive(Debug, Default)]
 pub struct ObjectStoreVirtualChunkResolver {
     stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
+    config: Option<ObjectStoreVirtualChunkResolverConfig>,
+}
+
+impl ObjectStoreVirtualChunkResolver {
+    pub fn new(config: Option<ObjectStoreVirtualChunkResolverConfig>) -> Self {
+        Self { stores: RwLock::new(HashMap::new()), config }
+    }
 }
 
 // Converts the requested ByteRange to a valid ByteRange appropriate
@@ -70,40 +84,63 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         let VirtualChunkLocation::Absolute(location) = location;
         let parsed =
             url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
-        let bucket_name = parsed
-            .host_str()
-            .ok_or(VirtualReferenceError::CannotParseBucketName(
-                "error parsing bucket name".into(),
-            ))?
-            .to_string();
         let path = ObjectPath::parse(parsed.path())
             .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
         let scheme = parsed.scheme();
+
+        let bucket_name = if let Some(host) = parsed.host_str() {
+            host.to_string()
+        } else if scheme == "file" {
+            // Host is not required for file scheme, if it is not there,
+            // we can assume the bucket name is empty and it is a local file
+            "".to_string()
+        } else {
+            Err(VirtualReferenceError::CannotParseBucketName(
+                "No bucket name found".to_string(),
+            ))?
+        };
+
         let cache_key = StoreCacheKey(scheme.into(), bucket_name);
 
         let options =
             GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
         let store = {
             let stores = self.stores.read().await;
-            #[allow(clippy::expect_used)]
             stores.get(&cache_key).cloned()
         };
         let store = match store {
             Some(store) => store,
             None => {
-                let builder = match scheme {
+                let new_store: Arc<dyn ObjectStore> = match scheme {
+                    "file" => {
+                        let fs = LocalFileSystem::new();
+                        Arc::new(fs)
+                    }
                     // FIXME: allow configuring auth for virtual references
-                    "s3" => AmazonS3Builder::from_env(),
+                    "s3" => {
+                        let config = if let Some(
+                            ObjectStoreVirtualChunkResolverConfig::S3(config),
+                        ) = &self.config
+                        {
+                            config.clone()
+                        } else {
+                            S3Config::default()
+                        };
+
+                        let s3 = config
+                            .to_builder()
+                            .with_bucket_name(&cache_key.1)
+                            .build()
+                            .map_err(|e| {
+                                VirtualReferenceError::FetchError(Box::new(e))
+                            })?;
+
+                        Arc::new(s3)
+                    }
                     _ => {
                         Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
                     }
                 };
-                let new_store: Arc<dyn ObjectStore> = Arc::new(
-                    builder
-                        .with_bucket_name(&cache_key.1)
-                        .build()
-                        .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?,
-                );
                 {
                     self.stores
                         .write()

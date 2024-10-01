@@ -7,6 +7,7 @@ import zarr
 
 STORE_PATH = "/tmp/icechunk_config_test"
 
+
 @pytest.fixture
 async def store():
     store = await icechunk.IcechunkStore.open(
