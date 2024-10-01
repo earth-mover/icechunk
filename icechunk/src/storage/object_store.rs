@@ -7,8 +7,9 @@ use bytes::Bytes;
 use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
-    GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
+    aws::S3ConditionalPut, local::LocalFileSystem, memory::InMemory,
+    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
+    PutPayload,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -70,8 +71,6 @@ pub struct ObjectStorage {
     // implementation is used only for tests, it's OK to sort in memory.
     artificially_sort_refs_in_mem: bool,
 
-    // We need this because object_store's hasn't implemented support for create-if-not-exists in
-    // S3 yet. We'll delete this after they do.
     supports_create_if_not_exists: bool,
 }
 
@@ -134,13 +133,14 @@ impl ObjectStorage {
             builder
         };
 
+        let builder = builder.with_conditional_put(S3ConditionalPut::ETagMatch);
+
         let store = builder.with_bucket_name(bucket_name.into()).build()?;
         Ok(ObjectStorage {
             store: Arc::new(store),
             prefix: prefix.into(),
             artificially_sort_refs_in_mem: false,
-            // FIXME: this will go away once object_store supports create-if-not-exist on S3
-            supports_create_if_not_exists: false,
+            supports_create_if_not_exists: true,
         })
     }
 
