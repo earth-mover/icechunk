@@ -7,9 +7,11 @@ use bytes::Bytes;
 use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    aws::S3ConditionalPut, local::LocalFileSystem, memory::InMemory,
-    path::Path as ObjectPath, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
-    PutPayload,
+    aws::{AmazonS3Builder, S3ConditionalPut},
+    local::LocalFileSystem,
+    memory::InMemory,
+    path::Path as ObjectPath,
+    GetOptions, GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -64,6 +66,51 @@ pub struct S3Credentials {
     pub session_token: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct S3Config {
+    pub region: Option<String>,
+    pub endpoint: Option<String>,
+    pub credentials: Option<S3Credentials>,
+    pub allow_http: Option<bool>,
+}
+
+// TODO: Hide this behind a feature flag?
+impl S3Config {
+    pub fn to_builder(&self) -> AmazonS3Builder {
+        let builder = if let Some(credentials) = &self.credentials {
+            let builder = AmazonS3Builder::new()
+                .with_access_key_id(credentials.access_key_id.clone())
+                .with_secret_access_key(credentials.secret_access_key.clone());
+
+            if let Some(token) = &credentials.session_token {
+                builder.with_token(token.clone())
+            } else {
+                builder
+            }
+        } else {
+            AmazonS3Builder::from_env()
+        };
+
+        let builder = if let Some(region) = &self.region {
+            builder.with_region(region.clone())
+        } else {
+            builder
+        };
+
+        let builder = if let Some(endpoint) = &self.endpoint {
+            builder.with_endpoint(endpoint.clone())
+        } else {
+            builder
+        };
+
+        if let Some(allow_http) = self.allow_http {
+            builder.with_allow_http(allow_http)
+        } else {
+            builder
+        }
+    }
+}
+
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
     prefix: String,
@@ -108,33 +155,11 @@ impl ObjectStorage {
     pub fn new_s3_store(
         bucket_name: impl Into<String>,
         prefix: impl Into<String>,
-        credentials: Option<S3Credentials>,
-        endpoint: Option<impl Into<String>>,
+        config: Option<S3Config>,
     ) -> Result<ObjectStorage, StorageError> {
-        use object_store::aws::AmazonS3Builder;
-
-        let builder = if let Some(credentials) = credentials {
-            let builder = AmazonS3Builder::new()
-                .with_access_key_id(credentials.access_key_id)
-                .with_secret_access_key(credentials.secret_access_key);
-
-            if let Some(token) = credentials.session_token {
-                builder.with_token(token)
-            } else {
-                builder
-            }
-        } else {
-            AmazonS3Builder::from_env()
-        };
-
-        let builder = if let Some(endpoint) = endpoint {
-            builder.with_endpoint(endpoint).with_allow_http(true)
-        } else {
-            builder
-        };
-
+        let config = config.unwrap_or_default();
+        let builder = config.to_builder();
         let builder = builder.with_conditional_put(S3ConditionalPut::ETagMatch);
-
         let store = builder.with_bucket_name(bucket_name.into()).build()?;
         Ok(ObjectStorage {
             store: Arc::new(store),

@@ -1,6 +1,12 @@
 use std::path::PathBuf;
 
-use icechunk::{storage::object_store::S3Credentials, zarr::StorageConfig};
+use icechunk::{
+    storage::{
+        object_store::{S3Config, S3Credentials},
+        virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+    },
+    zarr::StorageConfig,
+};
 use pyo3::{prelude::*, types::PyType};
 
 #[pyclass(name = "S3Credentials")]
@@ -49,6 +55,8 @@ pub enum PyStorageConfig {
         prefix: String,
         credentials: Option<PyS3Credentials>,
         endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
     },
 }
 
@@ -70,23 +78,36 @@ impl PyStorageConfig {
         bucket: String,
         prefix: String,
         endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
     ) -> Self {
-        PyStorageConfig::S3 { bucket, prefix, credentials: None, endpoint_url }
+        PyStorageConfig::S3 {
+            bucket,
+            prefix,
+            credentials: None,
+            endpoint_url,
+            allow_http,
+            region,
+        }
     }
 
     #[classmethod]
-    fn s3_from_credentials(
+    fn s3_from_config(
         _cls: &Bound<'_, PyType>,
         bucket: String,
         prefix: String,
         credentials: PyS3Credentials,
         endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
     ) -> Self {
         PyStorageConfig::S3 {
             bucket,
             prefix,
             credentials: Some(credentials),
             endpoint_url,
+            allow_http,
+            region,
         }
     }
 }
@@ -100,13 +121,77 @@ impl From<&PyStorageConfig> for StorageConfig {
             PyStorageConfig::Filesystem { root } => {
                 StorageConfig::LocalFileSystem { root: PathBuf::from(root.clone()) }
             }
-            PyStorageConfig::S3 { bucket, prefix, credentials, endpoint_url } => {
-                StorageConfig::S3ObjectStore {
-                    bucket: bucket.clone(),
-                    prefix: prefix.clone(),
+            PyStorageConfig::S3 {
+                bucket,
+                prefix,
+                credentials,
+                endpoint_url,
+                allow_http,
+                region,
+            } => StorageConfig::S3ObjectStore {
+                bucket: bucket.clone(),
+                prefix: prefix.clone(),
+                config: Some(S3Config {
+                    region: region.clone(),
                     credentials: credentials.as_ref().map(S3Credentials::from),
                     endpoint: endpoint_url.clone(),
-                }
+                    allow_http: *allow_http,
+                }),
+            },
+        }
+    }
+}
+
+#[pyclass(name = "VirtualRefConfig")]
+#[derive(Clone, Debug)]
+pub enum PyVirtualRefConfig {
+    S3 {
+        credentials: Option<PyS3Credentials>,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    },
+}
+
+#[pymethods]
+impl PyVirtualRefConfig {
+    #[classmethod]
+    fn s3_from_env(_cls: &Bound<'_, PyType>) -> Self {
+        PyVirtualRefConfig::S3 {
+            credentials: None,
+            endpoint_url: None,
+            allow_http: None,
+            region: None,
+        }
+    }
+
+    #[classmethod]
+    fn s3_from_config(
+        _cls: &Bound<'_, PyType>,
+        credentials: PyS3Credentials,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    ) -> Self {
+        PyVirtualRefConfig::S3 {
+            credentials: Some(credentials),
+            endpoint_url,
+            allow_http,
+            region,
+        }
+    }
+}
+
+impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {
+    fn from(config: &PyVirtualRefConfig) -> Self {
+        match config {
+            PyVirtualRefConfig::S3 { credentials, endpoint_url, allow_http, region } => {
+                ObjectStoreVirtualChunkResolverConfig::S3(S3Config {
+                    region: region.clone(),
+                    endpoint: endpoint_url.clone(),
+                    credentials: credentials.as_ref().map(S3Credentials::from),
+                    allow_http: *allow_http,
+                })
             }
         }
     }

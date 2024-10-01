@@ -63,6 +63,7 @@ def test_array_creation_existing_node(
                 zarr_format=zarr_format,
             )
 
+
 @pytest.mark.parametrize("store", ["memory"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
 async def test_create_creates_parents(
@@ -109,7 +110,9 @@ async def test_create_creates_parents(
 def test_array_name_properties_no_group(
     store: IcechunkStore, zarr_format: ZarrFormat
 ) -> None:
-    arr = Array.create(store=store, shape=(100,), chunks=(10,), zarr_format=zarr_format, dtype="i4")
+    arr = Array.create(
+        store=store, shape=(100,), chunks=(10,), zarr_format=zarr_format, dtype="i4"
+    )
     assert arr.path == ""
     assert arr.name is None
     assert arr.basename is None
@@ -169,7 +172,9 @@ def test_array_v3_fill_value_default(
     ("dtype_str", "fill_value"),
     [("bool", True), ("uint8", 99), ("float32", -99.9), ("complex64", 3 + 4j)],
 )
-def test_array_v3_fill_value(store: IcechunkStore, fill_value: int, dtype_str: str) -> None:
+def test_array_v3_fill_value(
+    store: IcechunkStore, fill_value: int, dtype_str: str
+) -> None:
     shape = (10,)
     arr = Array.create(
         store=store,

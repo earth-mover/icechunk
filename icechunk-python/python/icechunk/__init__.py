@@ -14,13 +14,20 @@ from ._icechunk_python import (
     SnapshotMetadata,
     StorageConfig,
     StoreConfig,
+    VirtualRefConfig,
     pyicechunk_store_create,
     pyicechunk_store_exists,
     pyicechunk_store_from_json_config,
     pyicechunk_store_open_existing,
 )
 
-__all__ = ["IcechunkStore", "StorageConfig", "S3Credentials", "StoreConfig"]
+__all__ = [
+    "IcechunkStore",
+    "StorageConfig",
+    "S3Credentials",
+    "StoreConfig",
+    "VirtualRefConfig",
+]
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -120,7 +127,6 @@ class IcechunkStore(Store, SyncMixin):
         - s3: {
             "bucket": "bucket-name",
             "prefix": "optional-prefix",
-            "endpoint": "optional-end
             "access_key_id": "optional-access-key-id",
             "secret_access_key": "optional",
             "session_token": "optional",

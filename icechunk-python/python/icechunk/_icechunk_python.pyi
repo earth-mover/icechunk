@@ -78,7 +78,7 @@ class StorageConfig:
     storage_config = StorageConfig.memory("prefix")
     storage_config = StorageConfig.filesystem("/path/to/root")
     storage_config = StorageConfig.s3_from_env("bucket", "prefix")
-    storage_config = StorageConfig.s3_from_credentials("bucket", "prefix",
+    storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
     ```
     """
     class Memory:
@@ -96,8 +96,10 @@ class StorageConfig:
 
         bucket: str
         prefix: str
-        credentials: S3Credentials
+        credentials: S3Credentials | None
         endpoint_url: str | None
+        allow_http: bool | None
+        region: str | None
 
     def __init__(self, storage: Memory | Filesystem | S3): ...
     @classmethod
@@ -111,9 +113,7 @@ class StorageConfig:
         ...
 
     @classmethod
-    def s3_from_env(
-        cls, bucket: str, prefix: str, endpoint_url: str | None = None
-    ) -> StorageConfig:
+    def s3_from_env(cls, bucket: str, prefix: str) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage backend
         with the given bucket and prefix
 
@@ -121,19 +121,24 @@ class StorageConfig:
             AWS_ACCESS_KEY_ID,
             AWS_SECRET_ACCESS_KEY,
             AWS_SESSION_TOKEN (optional)
+            AWS_REGION (optional)
+            AWS_ENDPOINT_URL (optional)
+            AWS_ALLOW_HTTP (optional)
         """
         ...
 
     @classmethod
-    def s3_from_credentials(
+    def s3_from_config(
         cls,
         bucket: str,
         prefix: str,
         credentials: S3Credentials,
         endpoint_url: str | None,
+        allow_http: bool | None = None,
+        region: str | None = None,
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
-        backend with the given bucket, prefix, and credentials
+        backend with the given bucket, prefix, and configuration
 
         This method will directly use the provided credentials to authenticate with the S3 service,
         ignoring any environment variables.
@@ -152,6 +157,46 @@ class S3Credentials:
         session_token: str | None = None,
     ): ...
 
+class VirtualRefConfig:
+    class S3:
+        """Config for an S3 Object Storage compatible storage backend"""
+
+        credentials: S3Credentials | None
+        endpoint_url: str | None
+        allow_http: bool | None
+        region: str | None
+
+    @classmethod
+    def s3_from_env(cls) -> StorageConfig:
+        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage backend
+        with the given bucket and prefix
+
+        This assumes that the necessary credentials are available in the environment:
+            AWS_ACCESS_KEY_ID,
+            AWS_SECRET_ACCESS_KEY,
+            AWS_SESSION_TOKEN (optional)
+            AWS_REGION (optional)
+            AWS_ENDPOINT_URL (optional)
+            AWS_ALLOW_HTTP (optional)
+        """
+        ...
+
+    @classmethod
+    def s3_from_config(
+        cls,
+        credentials: S3Credentials,
+        endpoint_url: str | None,
+        allow_http: bool | None = None,
+        region: str | None = None,
+    ) -> StorageConfig:
+        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
+        backend with the given bucket, prefix, and configuration
+
+        This method will directly use the provided credentials to authenticate with the S3 service,
+        ignoring any environment variables.
+        """
+        ...
+
 class StoreConfig:
     # The number of concurrent requests to make when fetching partial values
     get_partial_values_concurrency: int | None
@@ -161,12 +206,15 @@ class StoreConfig:
     inline_chunk_threshold_bytes: int | None
     # Whether to allow overwriting refs in the store. Default is False. Experimental.
     unsafe_overwrite_refs: bool | None
+    # Configurations for virtual references such as credentials and endpoints
+    virtual_ref_config: VirtualRefConfig | None
 
     def __init__(
         self,
         get_partial_values_concurrency: int | None = None,
         inline_chunk_threshold_bytes: int | None = None,
         unsafe_overwrite_refs: bool | None = None,
+        virtual_ref_config: VirtualRefConfig | None = None,
     ): ...
 
 async def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
