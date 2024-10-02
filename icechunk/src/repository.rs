@@ -269,7 +269,7 @@ impl RepositoryBuilder {
 
 #[derive(Debug, Error)]
 pub enum RepositoryError {
-    #[error("error contacting storage")]
+    #[error("error contacting storage {0}")]
     StorageError(#[from] StorageError),
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
