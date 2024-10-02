@@ -1,23 +1,13 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     iter::{self},
-    mem::take,
     path::PathBuf,
     pin::Pin,
     sync::Arc,
 };
 
-use crate::{
-    format::{
-        manifest::VirtualReferenceError, snapshot::ManifestFileInfo, ManifestId,
-        SnapshotId,
-    },
-    storage::virtual_ref::{
-        construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
-        VirtualChunkResolver,
-    },
-};
 pub use crate::{
+    change_set::ChangeSet,
     format::{
         manifest::{ChunkPayload, VirtualChunkLocation},
         snapshot::{SnapshotMetadata, ZarrArrayMetadata},
@@ -26,6 +16,16 @@ pub use crate::{
     metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionName,
         DimensionNames, FillValue, StorageTransformer, UserAttributes,
+    },
+};
+use crate::{
+    format::{
+        manifest::VirtualReferenceError, snapshot::ManifestFileInfo, ManifestId,
+        SnapshotId,
+    },
+    storage::virtual_ref::{
+        construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
+        VirtualChunkResolver,
     },
 };
 use bytes::Bytes;
@@ -79,141 +79,6 @@ pub struct Repository {
     last_node_id: Option<NodeId>,
     change_set: ChangeSet,
     virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
-}
-
-#[derive(Clone, Debug, PartialEq, Default)]
-struct ChangeSet {
-    new_groups: HashMap<Path, NodeId>,
-    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
-    updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
-    // These paths may point to Arrays or Groups,
-    // since both Groups and Arrays support UserAttributes
-    updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
-    // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
-    deleted_groups: HashSet<NodeId>,
-    deleted_arrays: HashSet<NodeId>,
-}
-
-impl ChangeSet {
-    fn is_empty(&self) -> bool {
-        self == &ChangeSet::default()
-    }
-
-    fn add_group(&mut self, path: Path, node_id: NodeId) {
-        self.new_groups.insert(path, node_id);
-    }
-
-    fn get_group(&self, path: &Path) -> Option<&NodeId> {
-        self.new_groups.get(path)
-    }
-
-    fn get_array(&self, path: &Path) -> Option<&(NodeId, ZarrArrayMetadata)> {
-        self.new_arrays.get(path)
-    }
-
-    fn delete_group(&mut self, path: &Path, node_id: NodeId) {
-        let new_node_id = self.new_groups.remove(path);
-        let is_new_group = new_node_id.is_some();
-        debug_assert!(!is_new_group || new_node_id == Some(node_id));
-
-        self.updated_attributes.remove(&node_id);
-        if !is_new_group {
-            self.deleted_groups.insert(node_id);
-        }
-    }
-
-    fn add_array(&mut self, path: Path, node_id: NodeId, metadata: ZarrArrayMetadata) {
-        self.new_arrays.insert(path, (node_id, metadata));
-    }
-
-    fn update_array(&mut self, node_id: NodeId, metadata: ZarrArrayMetadata) {
-        self.updated_arrays.insert(node_id, metadata);
-    }
-
-    fn delete_array(&mut self, path: &Path, node_id: NodeId) {
-        // if deleting a new array created in this session, just remove the entry
-        // from new_arrays
-        let node_and_meta = self.new_arrays.remove(path);
-        let is_new_array = node_and_meta.is_some();
-        debug_assert!(!is_new_array || node_and_meta.map(|n| n.0) == Some(node_id));
-
-        self.updated_arrays.remove(&node_id);
-        self.updated_attributes.remove(&node_id);
-        self.set_chunks.remove(&node_id);
-        if !is_new_array {
-            self.deleted_arrays.insert(node_id);
-        }
-    }
-
-    fn get_updated_zarr_metadata(&self, node_id: NodeId) -> Option<&ZarrArrayMetadata> {
-        self.updated_arrays.get(&node_id)
-    }
-
-    fn update_user_attributes(&mut self, node_id: NodeId, atts: Option<UserAttributes>) {
-        self.updated_attributes.insert(node_id, atts);
-    }
-
-    fn get_user_attributes(&self, node_id: NodeId) -> Option<&Option<UserAttributes>> {
-        self.updated_attributes.get(&node_id)
-    }
-
-    fn set_chunk_ref(
-        &mut self,
-        node_id: NodeId,
-        coord: ChunkIndices,
-        data: Option<ChunkPayload>,
-    ) {
-        // this implementation makes delete idempotent
-        // it allows deleting a deleted chunk by repeatedly setting None.
-        self.set_chunks
-            .entry(node_id)
-            .and_modify(|h| {
-                h.insert(coord.clone(), data.clone());
-            })
-            .or_insert(HashMap::from([(coord, data)]));
-    }
-
-    fn get_chunk_ref(
-        &self,
-        node_id: NodeId,
-        coords: &ChunkIndices,
-    ) -> Option<&Option<ChunkPayload>> {
-        self.set_chunks.get(&node_id).and_then(|h| h.get(coords))
-    }
-
-    fn array_chunks_iterator(
-        &self,
-        node_id: NodeId,
-    ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
-        match self.set_chunks.get(&node_id) {
-            None => Either::Left(iter::empty()),
-            Some(h) => Either::Right(h.iter()),
-        }
-    }
-
-    fn new_arrays_chunk_iterator(
-        &self,
-    ) -> impl Iterator<Item = (PathBuf, ChunkInfo)> + '_ {
-        self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.array_chunks_iterator(*node_id).filter_map(|(coords, payload)| {
-                payload.as_ref().map(|p| {
-                    (
-                        path.clone(),
-                        ChunkInfo {
-                            node: *node_id,
-                            coord: coords.clone(),
-                            payload: p.clone(),
-                        },
-                    )
-                })
-            })
-        })
-    }
-
-    fn new_nodes(&self) -> impl Iterator<Item = &Path> {
-        self.new_groups.keys().chain(self.new_arrays.keys())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -536,9 +401,7 @@ impl Repository {
             Some(node) => Ok(node),
             None => {
                 let node = self.get_existing_node(path).await?;
-                if self.change_set.deleted_groups.contains(&node.id)
-                    || self.change_set.deleted_arrays.contains(&node.id)
-                {
+                if self.change_set.is_deleted(&node.id) {
                     Err(RepositoryError::NodeNotFound {
                         path: path.clone(),
                         message: "getting node".to_string(),
@@ -1053,7 +916,7 @@ impl Repository {
         // and at the end we put the map back to where it was, in case there is some later failure.
         // We always want to leave things in the previous state if there was a failure.
 
-        let chunk_changes = Arc::new(take(&mut self.change_set.set_chunks));
+        let chunk_changes = Arc::new(self.change_set.take_chunks());
         let chunk_changes_c = Arc::clone(&chunk_changes);
 
         let update_task = task::spawn_blocking(move || {
@@ -1072,8 +935,9 @@ impl Repository {
                 {
                     // It's OK to call into_inner here because we created the Arc locally and never
                     // shared it with other code
-                    self.change_set.set_chunks =
+                    let chunks =
                         Arc::into_inner(chunk_changes).expect("Bug in flush task join");
+                    self.change_set.set_chunks(chunks);
                 }
 
                 let new_manifest = Arc::new(Manifest::new(new_chunks));
@@ -1590,12 +1454,9 @@ mod tests {
 
         let path: Path = "/group/array2".into();
         let node = ds.get_node(&path).await;
-        assert!(ds
-            .change_set
-            .updated_attributes
-            .contains_key(&node.as_ref().unwrap().id));
+        assert!(ds.change_set.has_updated_attributes(&node.as_ref().unwrap().id));
         assert!(ds.delete_array(path.clone()).await.is_ok());
-        assert!(!ds.change_set.updated_attributes.contains_key(&node?.id));
+        assert!(!ds.change_set.has_updated_attributes(&node?.id));
 
         Ok(())
     }
