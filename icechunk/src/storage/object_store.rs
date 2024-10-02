@@ -121,6 +121,7 @@ pub struct ObjectStorage {
     artificially_sort_refs_in_mem: bool,
 
     supports_create_if_not_exists: bool,
+    supports_metadata: bool,
 }
 
 impl ObjectStorage {
@@ -136,6 +137,7 @@ impl ObjectStorage {
             prefix,
             artificially_sort_refs_in_mem: false,
             supports_create_if_not_exists: true,
+            supports_metadata: true,
         }
     }
 
@@ -151,6 +153,7 @@ impl ObjectStorage {
             prefix: "".to_string(),
             artificially_sort_refs_in_mem: true,
             supports_create_if_not_exists: true,
+            supports_metadata: false,
         })
     }
 
@@ -168,6 +171,7 @@ impl ObjectStorage {
             prefix: prefix.into(),
             artificially_sort_refs_in_mem: false,
             supports_create_if_not_exists: true,
+            supports_metadata: true,
         })
     }
 
@@ -264,8 +268,8 @@ impl Storage for ObjectStorage {
     ) -> Result<(), StorageError> {
         let path = self.get_snapshot_path(&id);
         let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
-        let options = PutOptions {
-            attributes: Attributes::from_iter(vec![
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
                 (
                     Attribute::ContentType,
                     AttributeValue::from(
@@ -280,9 +284,11 @@ impl Storage for ObjectStorage {
                         snapshot.icechunk_snapshot_format_version.to_string(),
                     ),
                 ),
-            ]),
-            ..PutOptions::default()
+            ])
+        } else {
+            Attributes::new()
         };
+        let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
@@ -303,8 +309,8 @@ impl Storage for ObjectStorage {
     ) -> Result<(), StorageError> {
         let path = self.get_manifest_path(&id);
         let bytes = rmp_serde::to_vec(manifest.as_ref())?;
-        let options = PutOptions {
-            attributes: Attributes::from_iter(vec![
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
                 (
                     Attribute::ContentType,
                     AttributeValue::from(
@@ -319,9 +325,11 @@ impl Storage for ObjectStorage {
                         manifest.icechunk_manifest_format_version.to_string(),
                     ),
                 ),
-            ]),
-            ..PutOptions::default()
+            ])
+        } else {
+            Attributes::new()
         };
+        let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
