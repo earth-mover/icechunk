@@ -204,9 +204,6 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Flags(); // FIXME: implement
-
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum IcechunkFormatError {
     #[error("error decoding fill_value from array")]
@@ -220,6 +217,20 @@ pub enum IcechunkFormatError {
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
+
+type IcechunkFormatVersion = u16;
+
+pub mod format_constants {
+    use super::IcechunkFormatVersion;
+
+    pub const LATEST_ICECHUNK_MANIFEST_FORMAT: IcechunkFormatVersion = 0;
+    pub const LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE: &str = "application/msgpack";
+    pub const LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY: &str = "ic-man-fmt-ver";
+
+    pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
+    pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
+    pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
+}
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]

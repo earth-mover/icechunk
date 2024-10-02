@@ -1,6 +1,7 @@
 use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
+    attributes::AttributesTable, format_constants, manifest::Manifest,
+    snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
+    ObjectId, SnapshotId,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,7 +12,8 @@ use object_store::{
     local::LocalFileSystem,
     memory::InMemory,
     path::Path as ObjectPath,
-    GetOptions, GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
+    Attribute, AttributeValue, Attributes, GetOptions, GetRange, ObjectStore, PutMode,
+    PutOptions, PutPayload,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -119,6 +121,7 @@ pub struct ObjectStorage {
     artificially_sort_refs_in_mem: bool,
 
     supports_create_if_not_exists: bool,
+    supports_metadata: bool,
 }
 
 impl ObjectStorage {
@@ -134,6 +137,7 @@ impl ObjectStorage {
             prefix,
             artificially_sort_refs_in_mem: false,
             supports_create_if_not_exists: true,
+            supports_metadata: true,
         }
     }
 
@@ -149,6 +153,7 @@ impl ObjectStorage {
             prefix: "".to_string(),
             artificially_sort_refs_in_mem: true,
             supports_create_if_not_exists: true,
+            supports_metadata: false,
         })
     }
 
@@ -166,31 +171,31 @@ impl ObjectStorage {
             prefix: prefix.into(),
             artificially_sort_refs_in_mem: false,
             supports_create_if_not_exists: true,
+            supports_metadata: true,
         })
     }
 
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
-        extension: &str,
         id: &ObjectId<SIZE, T>,
     ) -> ObjectPath {
         // TODO: be careful about allocation here
         // we serialize the url using crockford
-        let path = format!("{}/{}/{}{}", self.prefix, file_prefix, id, extension);
+        let path = format!("{}/{}/{}", self.prefix, file_prefix, id);
         ObjectPath::from(path)
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
-        self.get_path(SNAPSHOT_PREFIX, ".msgpack", id)
+        self.get_path(SNAPSHOT_PREFIX, id)
     }
 
     fn get_manifest_path(&self, id: &ManifestId) -> ObjectPath {
-        self.get_path(MANIFEST_PREFIX, ".msgpack", id)
+        self.get_path(MANIFEST_PREFIX, id)
     }
 
     fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
-        self.get_path(CHUNK_PREFIX, "", id)
+        self.get_path(CHUNK_PREFIX, id)
     }
 
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
@@ -259,12 +264,33 @@ impl Storage for ObjectStorage {
     async fn write_snapshot(
         &self,
         id: SnapshotId,
-        table: Arc<Snapshot>,
+        snapshot: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         let path = self.get_snapshot_path(&id);
-        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
+                (
+                    Attribute::ContentType,
+                    AttributeValue::from(
+                        format_constants::LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE,
+                    ),
+                ),
+                (
+                    Attribute::Metadata(std::borrow::Cow::Borrowed(
+                        format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
+                    )),
+                    AttributeValue::from(
+                        snapshot.icechunk_snapshot_format_version.to_string(),
+                    ),
+                ),
+            ])
+        } else {
+            Attributes::new()
+        };
+        let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.store.put(&path, bytes.into()).await?;
+        self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
@@ -279,12 +305,33 @@ impl Storage for ObjectStorage {
     async fn write_manifests(
         &self,
         id: ManifestId,
-        table: Arc<Manifest>,
+        manifest: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         let path = self.get_manifest_path(&id);
-        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        let bytes = rmp_serde::to_vec(manifest.as_ref())?;
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
+                (
+                    Attribute::ContentType,
+                    AttributeValue::from(
+                        format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE,
+                    ),
+                ),
+                (
+                    Attribute::Metadata(std::borrow::Cow::Borrowed(
+                        format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
+                    )),
+                    AttributeValue::from(
+                        manifest.icechunk_manifest_format_version.to_string(),
+                    ),
+                ),
+            ])
+        } else {
+            Attributes::new()
+        };
+        let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.store.put(&path, bytes.into()).await?;
+        self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 

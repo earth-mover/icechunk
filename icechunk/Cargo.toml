@@ -27,6 +27,7 @@ async-recursion = "1.1.1"
 rmp-serde = "1.3.0"
 url = "2.5.2"
 async-stream = "0.3.5"
+rmpv = { version = "1.3.0", features = ["serde", "with-serde"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
