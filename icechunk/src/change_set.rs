@@ -5,14 +5,19 @@ use std::{
 };
 
 use itertools::Either;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    format::{manifest::ChunkInfo, NodeId},
+    format::{
+        manifest::{ChunkInfo, ManifestExtents, ManifestRef},
+        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot},
+        ManifestId, NodeId,
+    },
     metadata::UserAttributes,
-    repository::{ChunkIndices, ChunkPayload, Path, ZarrArrayMetadata},
+    repository::{ChunkIndices, ChunkPayload, Path, RepositoryResult, ZarrArrayMetadata},
 };
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
     new_groups: HashMap<Path, NodeId>,
     new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
@@ -180,5 +185,154 @@ impl ChangeSet {
         chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
     ) {
         self.set_chunks = chunks
+    }
+
+    /// Merge this ChangeSet with `other`.
+    ///
+    /// Results of the merge are applied to `self`. Changes present in `other` take precedence over
+    /// `self` changes.
+    pub fn merge(&mut self, other: ChangeSet) {
+        // FIXME: this should detect conflict, for example, if different writers added on the same
+        // path, different objects, or if the same path is added and deleted, etc.
+        // TODO: optimize
+        self.new_groups.extend(other.new_groups);
+        self.new_arrays.extend(other.new_arrays);
+        self.updated_arrays.extend(other.updated_arrays);
+        self.updated_attributes.extend(other.updated_attributes);
+        self.deleted_groups.extend(other.deleted_groups);
+        self.deleted_arrays.extend(other.deleted_arrays);
+
+        for (node, other_chunks) in other.set_chunks.into_iter() {
+            match self.set_chunks.remove(&node) {
+                Some(mut old_value) => {
+                    old_value.extend(other_chunks);
+                    self.set_chunks.insert(node, old_value);
+                }
+                None => {
+                    self.set_chunks.insert(node, other_chunks);
+                }
+            }
+        }
+    }
+
+    pub fn merge_many<T: IntoIterator<Item = ChangeSet>>(&mut self, others: T) {
+        others.into_iter().fold(self, |res, change_set| {
+            res.merge(change_set);
+            res
+        });
+    }
+
+    /// Serialize this ChangeSet
+    ///
+    /// This is intended to help with marshalling distributed writers back to the coordinator
+    pub fn export_to_bytes(&self) -> RepositoryResult<Vec<u8>> {
+        Ok(rmp_serde::to_vec(self)?)
+    }
+
+    /// Deserialize a ChangeSet
+    ///
+    /// This is intended to help with marshalling distributed writers back to the coordinator
+    pub fn import_from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
+        Ok(rmp_serde::from_slice(bytes)?)
+    }
+
+    pub fn update_existing_chunks<'a>(
+        &'a self,
+        node: NodeId,
+        chunks: impl Iterator<Item = ChunkInfo> + 'a,
+    ) -> impl Iterator<Item = ChunkInfo> + 'a {
+        chunks.filter_map(move |chunk| match self.get_chunk_ref(node, &chunk.coord) {
+            None => Some(chunk),
+            Some(new_payload) => {
+                new_payload.clone().map(|pl| ChunkInfo { payload: pl, ..chunk })
+            }
+        })
+    }
+
+    pub fn get_new_node(&self, path: &Path) -> Option<NodeSnapshot> {
+        self.get_new_array(path).or(self.get_new_group(path))
+    }
+
+    pub fn get_new_array(&self, path: &Path) -> Option<NodeSnapshot> {
+        self.get_array(path).map(|(id, meta)| {
+            let meta = self.get_updated_zarr_metadata(*id).unwrap_or(meta).clone();
+            let atts = self.get_user_attributes(*id).cloned();
+            NodeSnapshot {
+                id: *id,
+                path: path.clone(),
+                user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
+                // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
+                // fetched for those arrays
+                node_data: NodeData::Array(meta.clone(), vec![]),
+            }
+        })
+    }
+
+    pub fn get_new_group(&self, path: &Path) -> Option<NodeSnapshot> {
+        self.get_group(path).map(|id| {
+            let atts = self.get_user_attributes(*id).cloned();
+            NodeSnapshot {
+                id: *id,
+                path: path.clone(),
+                user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
+                node_data: NodeData::Group,
+            }
+        })
+    }
+
+    pub fn new_nodes_iterator<'a>(
+        &'a self,
+        manifest_id: &'a ManifestId,
+    ) -> impl Iterator<Item = NodeSnapshot> + 'a {
+        self.new_nodes().map(move |path| {
+            // we should be able to create the full node because we
+            // know it's a new node
+            #[allow(clippy::expect_used)]
+            let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
+            match node.node_data {
+                NodeData::Group => node,
+                NodeData::Array(meta, _no_manifests_yet) => {
+                    let new_manifests = vec![ManifestRef {
+                        object_id: manifest_id.clone(),
+                        extents: ManifestExtents(vec![]),
+                    }];
+                    NodeSnapshot {
+                        node_data: NodeData::Array(meta, new_manifests),
+                        ..node
+                    }
+                }
+            }
+        })
+    }
+
+    pub fn update_existing_node(
+        &self,
+        node: NodeSnapshot,
+        new_manifests: Option<Vec<ManifestRef>>,
+    ) -> NodeSnapshot {
+        let session_atts = self
+            .get_user_attributes(node.id)
+            .cloned()
+            .map(|a| a.map(UserAttributesSnapshot::Inline));
+        let new_atts = session_atts.unwrap_or(node.user_attributes);
+        match node.node_data {
+            NodeData::Group => NodeSnapshot { user_attributes: new_atts, ..node },
+            NodeData::Array(old_zarr_meta, _) => {
+                let new_zarr_meta = self
+                    .get_updated_zarr_metadata(node.id)
+                    .cloned()
+                    .unwrap_or(old_zarr_meta);
+
+                NodeSnapshot {
+                    // FIXME: bad option type, change
+                    node_data: NodeData::Array(
+                        new_zarr_meta,
+                        new_manifests.unwrap_or_default(),
+                    ),
+                    user_attributes: new_atts,
+                    ..node
+                }
+            }
+        }
     }
 }
