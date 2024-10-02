@@ -20,6 +20,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
+    change_set::ChangeSet,
     format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
@@ -398,13 +399,25 @@ impl Store {
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
     pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
+        self.distributed_commit(message, vec![]).await
+    }
+
+    pub async fn distributed_commit<'a, I: IntoIterator<Item = Vec<u8>>>(
+        &mut self,
+        message: &str,
+        other_changesets_bytes: I,
+    ) -> StoreResult<SnapshotId> {
         if let Some(branch) = &self.current_branch {
+            let other_change_sets: Vec<ChangeSet> = other_changesets_bytes
+                .into_iter()
+                .map(|v| ChangeSet::import_from_bytes(v.as_slice()))
+                .try_collect()?;
             let result = self
                 .repository
                 .write()
                 .await
                 .deref_mut()
-                .commit(branch, message, None)
+                .distributed_commit(branch, other_change_sets, message, None)
                 .await?;
             Ok(result)
         } else {
@@ -426,6 +439,10 @@ impl Store {
         // FIXME: in memory realization to avoid maintaining a lock on the repository
         let all = repository.ancestry().await?.err_into().collect::<Vec<_>>().await;
         Ok(futures::stream::iter(all))
+    }
+
+    pub async fn change_set_bytes(&self) -> StoreResult<Vec<u8>> {
+        Ok(self.repository.read().await.change_set_bytes()?)
     }
 
     pub async fn empty(&self) -> StoreResult<bool> {
@@ -2042,10 +2059,7 @@ mod tests {
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
             )
             .await;
-        let correct_error = match result {
-            Err(StoreError::ReadOnly { .. }) => true,
-            _ => false,
-        };
+        let correct_error = matches!(result, Err(StoreError::ReadOnly { .. }));
         assert!(correct_error);
 
         readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
