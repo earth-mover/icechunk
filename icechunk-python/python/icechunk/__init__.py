@@ -223,7 +223,6 @@ class IcechunkStore(Store, SyncMixin):
         """Return the current snapshot id."""
         return self._store.snapshot_id
 
-
     def change_set_bytes(self) -> bytes:
         return self._store.change_set_bytes()
 
@@ -264,8 +263,12 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.commit(message)
 
-    async def distributed_commit(self, message: str, other_change_set_bytes: Iterable[bytes]) -> str:
-        return await self._store.distributed_commit(message, list(other_change_set_bytes))
+    async def distributed_commit(
+        self, message: str, other_change_set_bytes: Iterable[bytes]
+    ) -> str:
+        return await self._store.distributed_commit(
+            message, list(other_change_set_bytes)
+        )
 
     @property
     def has_uncommitted_changes(self) -> bool:

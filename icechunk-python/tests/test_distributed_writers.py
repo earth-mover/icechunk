@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 import time
 import asyncio
-import random
 import zarr
 from dask.distributed import Client
 import numpy as np
 
 import icechunk
+
 
 @dataclass
 class Task:
@@ -15,6 +15,7 @@ class Task:
     store_config: dict
     area: slice
     seed: int
+
 
 # We create a 2-d array with this many chunks along each direction
 CHUNKS_PER_DIM = 10
@@ -25,13 +26,14 @@ CHUNK_DIM_SIZE = 10
 # We split the writes in tasks, each task does this many chunks
 CHUNKS_PER_TASK = 2
 
+
 async def mk_store(mode: str, task: Task):
     storage_config = icechunk.StorageConfig.s3_from_config(
         **task.storage_config,
         credentials=icechunk.S3Credentials(
             access_key_id="minio123",
             secret_access_key="minio123",
-        )
+        ),
     )
     store_config = icechunk.StoreConfig(**task.store_config)
 
@@ -42,6 +44,7 @@ async def mk_store(mode: str, task: Task):
     )
 
     return store
+
 
 def generate_task_array(task: Task):
     np.random.seed(task.seed)
@@ -62,6 +65,7 @@ async def execute_task(task: Task):
 def run_task(task: Task):
     return asyncio.run(execute_task(task))
 
+
 async def test_distributed_writers():
     """Write to an array using uncoordinated writers, distributed via Dask.
 
@@ -74,23 +78,44 @@ async def test_distributed_writers():
 
     client = Client(n_workers=8)
     storage_config = {
-        "bucket":"testbucket",
-        "prefix":"python-distributed-writers-test__" + str(time.time()),
-        "endpoint_url":"http://localhost:9000",
-        "allow_http":True,
+        "bucket": "testbucket",
+        "prefix": "python-distributed-writers-test__" + str(time.time()),
+        "endpoint_url": "http://localhost:9000",
+        "allow_http": True,
     }
-    store_config = {"inline_chunk_threshold_bytes":5}
-
+    store_config = {"inline_chunk_threshold_bytes": 5}
 
     ranges = [
-            (slice(x, min(x+CHUNKS_PER_TASK*CHUNK_DIM_SIZE, CHUNK_DIM_SIZE*CHUNKS_PER_DIM)),
-             slice(y, min(y+CHUNKS_PER_TASK*CHUNK_DIM_SIZE, CHUNK_DIM_SIZE*CHUNKS_PER_DIM))
-             )
-            for x in range(0, CHUNK_DIM_SIZE*CHUNKS_PER_DIM, CHUNKS_PER_TASK*CHUNK_DIM_SIZE)
-            for y in range(0, CHUNK_DIM_SIZE*CHUNKS_PER_DIM, CHUNKS_PER_TASK*CHUNK_DIM_SIZE)
-        ]
+        (
+            slice(
+                x,
+                min(
+                    x + CHUNKS_PER_TASK * CHUNK_DIM_SIZE,
+                    CHUNK_DIM_SIZE * CHUNKS_PER_DIM,
+                ),
+            ),
+            slice(
+                y,
+                min(
+                    y + CHUNKS_PER_TASK * CHUNK_DIM_SIZE,
+                    CHUNK_DIM_SIZE * CHUNKS_PER_DIM,
+                ),
+            ),
+        )
+        for x in range(
+            0, CHUNK_DIM_SIZE * CHUNKS_PER_DIM, CHUNKS_PER_TASK * CHUNK_DIM_SIZE
+        )
+        for y in range(
+            0, CHUNK_DIM_SIZE * CHUNKS_PER_DIM, CHUNKS_PER_TASK * CHUNK_DIM_SIZE
+        )
+    ]
     tasks = [
-        Task(storage_config=storage_config, store_config=store_config, area=area, seed=idx)
+        Task(
+            storage_config=storage_config,
+            store_config=store_config,
+            area=area,
+            seed=idx,
+        )
         for idx, area in enumerate(ranges)
     ]
     store = await mk_store("r+", tasks[0])
@@ -98,9 +123,13 @@ async def test_distributed_writers():
 
     n = CHUNKS_PER_DIM * CHUNK_DIM_SIZE
     array = group.create_array(
-        "array", shape=(n, n), chunk_shape=(CHUNK_DIM_SIZE, CHUNK_DIM_SIZE), dtype="f8", fill_value=float('nan')
+        "array",
+        shape=(n, n),
+        chunk_shape=(CHUNK_DIM_SIZE, CHUNK_DIM_SIZE),
+        dtype="f8",
+        fill_value=float("nan"),
     )
-    first_snap = await store.commit("array created")
+    _first_snap = await store.commit("array created")
 
     map_result = client.map(run_task, tasks)
     change_sets_bytes = client.gather(map_result)
@@ -109,12 +138,14 @@ async def test_distributed_writers():
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
     commit_res = await store.distributed_commit("distributed commit", change_sets_bytes)
-    assert(commit_res)
+    assert commit_res
 
     # Lets open a new store to verify the results
     store = await mk_store("r", tasks[0])
-    all_keys = [key async for key in  store.list_prefix("/")]
-    assert len(all_keys) == 1 + 1 + CHUNKS_PER_DIM*CHUNKS_PER_DIM  # group meta + array meta + each chunk
+    all_keys = [key async for key in store.list_prefix("/")]
+    assert (
+        len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
+    )  # group meta + array meta + each chunk
 
     group = zarr.group(store=store, overwrite=False)
 
