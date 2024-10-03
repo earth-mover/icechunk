@@ -203,6 +203,13 @@ pub struct ConsolidatedStore {
     pub config: Option<StoreOptions>,
 }
 
+impl ConsolidatedStore {
+    pub fn with_version(mut self, version: VersionInfo) -> Self {
+        self.repository.version = Some(version);
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AccessMode {
     #[serde(rename = "r")]
@@ -320,6 +327,14 @@ impl Store {
 
     pub async fn snapshot_id(&self) -> SnapshotId {
         self.repository.read().await.snapshot_id().clone()
+    }
+
+    pub async fn current_version(&self) -> VersionInfo {
+        if let Some(branch) = &self.current_branch {
+            VersionInfo::BranchTipRef(branch.clone())
+        } else {
+            VersionInfo::SnapshotId(self.snapshot_id().await)
+        }
     }
 
     pub async fn has_uncommitted_changes(&self) -> bool {
