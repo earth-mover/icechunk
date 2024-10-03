@@ -858,6 +858,10 @@ impl Repository {
         }
     }
 
+    pub fn change_set_bytes(&self) -> RepositoryResult<Vec<u8>> {
+        self.change_set.export_to_bytes()
+    }
+
     pub async fn new_branch(&self, branch_name: &str) -> RepositoryResult<BranchVersion> {
         // TODO: The parent snapshot should exist?
         let version = match update_branch(

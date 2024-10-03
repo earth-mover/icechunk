@@ -334,6 +334,35 @@ impl PyIcechunkStore {
         })
     }
 
+    fn distributed_commit<'py>(
+        &'py self,
+        py: Python<'py>,
+        message: String,
+        other_change_set_bytes: Vec<Vec<u8>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+
+        // The commit mechanism is async and calls tokio::spawn so we need to use the
+        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            let mut writeable_store = store.write().await;
+            let oid = writeable_store
+                .distributed_commit(&message, other_change_set_bytes)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(String::from(&oid))
+        })
+    }
+
+    fn change_set_bytes(&self) -> PyIcechunkStoreResult<Vec<u8>> {
+        let store = self.store.blocking_read();
+        let res = self
+            .rt
+            .block_on(store.change_set_bytes())
+            .map_err(PyIcechunkStoreError::from)?;
+        Ok(res)
+    }
+
     #[getter]
     fn branch(&self) -> PyIcechunkStoreResult<Option<String>> {
         let store = self.store.blocking_read();
