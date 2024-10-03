@@ -676,6 +676,7 @@ dependencies = [
  "icechunk",
  "pyo3",
  "pyo3-asyncio-0-21",
+ "rmp-serde",
  "thiserror",
  "tokio",
 ]

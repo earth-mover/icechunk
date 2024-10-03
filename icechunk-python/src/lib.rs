@@ -51,6 +51,7 @@ impl From<&PyStoreConfig> for RepositoryConfig {
             version: None,
             inline_chunk_threshold_bytes: config.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: config.unsafe_overwrite_refs,
+            change_set_bytes: None,
             virtual_ref_config: config
                 .virtual_ref_config
                 .as_ref()
@@ -125,20 +126,12 @@ impl PyIcechunkStore {
         repository_config: RepositoryConfig,
         store_config: StoreOptions,
     ) -> Result<Self, String> {
-        let access_mode = if read_only {
-            icechunk::zarr::AccessMode::ReadOnly
-        } else {
-            icechunk::zarr::AccessMode::ReadWrite
-        };
         let repository = repository_config
             .with_version(VersionInfo::BranchTipRef(Ref::DEFAULT_BRANCH.to_string()));
         let consolidated =
             ConsolidatedStore { storage, repository, config: Some(store_config) };
 
-        let store = Store::from_consolidated(&consolidated, access_mode).await?;
-        let store = Arc::new(RwLock::new(store));
-        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-        Ok(Self { consolidated, store, rt })
+        PyIcechunkStore::from_consolidated(consolidated, read_only).await
     }
 
     async fn create(
@@ -152,11 +145,20 @@ impl PyIcechunkStore {
             config: Some(store_config),
         };
 
-        let store = Store::from_consolidated(
-            &consolidated,
-            icechunk::zarr::AccessMode::ReadWrite,
-        )
-        .await?;
+        PyIcechunkStore::from_consolidated(consolidated, false).await
+    }
+
+    async fn from_consolidated(
+        consolidated: ConsolidatedStore,
+        read_only: bool,
+    ) -> Result<Self, String> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+
+        let store = Store::from_consolidated(&consolidated, access_mode).await?;
         let store = Arc::new(RwLock::new(store));
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         Ok(Self { consolidated, store, rt })
@@ -173,6 +175,18 @@ impl PyIcechunkStore {
     //     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     //     Ok(Self { consolidated: config, store, rt })
     // }
+
+    async fn as_consolidated(&self) -> PyIcechunkStoreResult<ConsolidatedStore> {
+        let consolidated = self.consolidated.clone();
+
+        let store = self.store.read().await;
+        let version = store.current_version().await;
+        let change_set = store.change_set_bytes().await?;
+
+        let consolidated =
+            consolidated.with_version(version).with_change_set_bytes(change_set)?;
+        Ok(consolidated)
+    }
 }
 
 // #[pyfunction]
@@ -241,8 +255,35 @@ fn pyicechunk_store_create<'py>(
     })
 }
 
+#[pyfunction]
+fn pyicechunk_store_from_bytes<'py>(
+    _py: Python<'py>,
+    bytes: Vec<u8>,
+    read_only: bool,
+) -> PyResult<PyIcechunkStore> {
+    let consolidated: ConsolidatedStore = rmp_serde::from_slice(&bytes)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
+    let store = rt.block_on(async move {
+        PyIcechunkStore::from_consolidated(consolidated, read_only)
+            .await
+            .map_err(PyValueError::new_err)
+    })?;
+
+    Ok(store)
+}
+
 #[pymethods]
 impl PyIcechunkStore {
+    fn as_bytes(&self) -> PyResult<Vec<u8>> {
+        let consolidated = self.rt.block_on(self.as_consolidated())?;
+        let serialized = rmp_serde::to_vec(&consolidated)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(serialized)
+    }
+
     fn with_mode(&self, read_only: bool) -> PyResult<PyIcechunkStore> {
         let access_mode = if read_only {
             icechunk::zarr::AccessMode::ReadOnly
@@ -251,8 +292,7 @@ impl PyIcechunkStore {
         };
 
         let readable_store = self.store.blocking_read();
-        let repository_version = self.rt.block_on(readable_store.current_version());
-        let consolidated = self.consolidated.clone().with_version(repository_version);
+        let consolidated = self.rt.block_on(self.as_consolidated())?;
         let store = Arc::new(RwLock::new(readable_store.with_access_mode(access_mode)));
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -739,5 +779,6 @@ fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_open_existing, m)?)?;
+    m.add_function(wrap_pyfunction!(pyicechunk_store_from_bytes, m)?)?;
     Ok(())
 }

@@ -3,6 +3,7 @@ import datetime
 from collections.abc import AsyncGenerator
 
 class PyIcechunkStore:
+    def as_bytes(self) -> bytes: ...
     def with_mode(self, read_only: bool) -> PyIcechunkStore: ...
     @property
     def snapshot_id(self) -> str: ...
@@ -228,6 +229,9 @@ async def pyicechunk_store_create(
 async def pyicechunk_store_open_existing(
     storage: StorageConfig, read_only: bool, config: StoreConfig
 ) -> PyIcechunkStore: ...
-async def pyicechunk_store_from_json_config(
-    config: str, read_only: bool
+# async def pyicechunk_store_from_json_config(
+#     config: str, read_only: bool
+# ) -> PyIcechunkStore: ...
+def pyicechunk_store_from_bytes(
+    bytes: bytes, read_only: bool
 ) -> PyIcechunkStore: ...

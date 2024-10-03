@@ -30,7 +30,7 @@ use crate::{
     repository::{
         get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
         Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
-        StorageTransformer, UserAttributes, ZarrArrayMetadata,
+        RepositoryResult, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     storage::{
         object_store::S3Config, virtual_ref::ObjectStoreVirtualChunkResolverConfig,
@@ -100,6 +100,7 @@ pub struct RepositoryConfig {
     pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
+    pub change_set_bytes: Option<Vec<u8>>,
     pub virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
@@ -132,6 +133,11 @@ impl RepositoryConfig {
         config: ObjectStoreVirtualChunkResolverConfig,
     ) -> Self {
         self.virtual_ref_config = Some(config);
+        self
+    }
+
+    pub fn with_change_set_bytes(mut self, change_set_bytes: Vec<u8>) -> Self {
+        self.change_set_bytes = Some(change_set_bytes);
         self
     }
 
@@ -177,6 +183,11 @@ impl RepositoryConfig {
         if let Some(config) = &self.virtual_ref_config {
             builder.with_virtual_ref_config(config.clone());
         }
+        if let Some(change_set_bytes) = &self.change_set_bytes {
+            let change_set = ChangeSet::import_from_bytes(change_set_bytes)
+                .map_err(|err| format!("Error parsing change set: {err}"))?;
+            builder.with_change_set(change_set);
+        }
 
         // TODO: add error checking, does the previous version exist?
         Ok((builder.build(), branch))
@@ -207,6 +218,11 @@ impl ConsolidatedStore {
     pub fn with_version(mut self, version: VersionInfo) -> Self {
         self.repository.version = Some(version);
         self
+    }
+
+    pub fn with_change_set_bytes(mut self, change_set: Vec<u8>) -> RepositoryResult<Self> {
+        self.repository.change_set_bytes = Some(change_set);
+        Ok(self)
     }
 }
 

@@ -17,8 +17,8 @@ from ._icechunk_python import (
     VirtualRefConfig,
     pyicechunk_store_create,
     pyicechunk_store_exists,
-    pyicechunk_store_from_json_config,
     pyicechunk_store_open_existing,
+    pyicechunk_store_from_bytes,
 )
 
 __all__ = [
@@ -89,63 +89,63 @@ class IcechunkStore(Store, SyncMixin):
             )
         self._store = store
 
-    @classmethod
-    async def from_config(
-        cls, config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
-    ) -> Self:
-        """Create an IcechunkStore from a given configuration.
+    # @classmethod
+    # async def from_config(
+    #     cls, config: dict, mode: AccessModeLiteral = "r", *args: Any, **kwargs: Any
+    # ) -> Self:
+    #     """Create an IcechunkStore from a given configuration.
 
-        NOTE: This is deprecated and will be removed in a future release. Use the open_existing or create methods instead.
+    #     NOTE: This is deprecated and will be removed in a future release. Use the open_existing or create methods instead.
 
-        The configuration should be a dictionary in the following format:
-        {
-            "storage": {
-                "type": "s3, // one of "in_memory", "local_filesystem", "s3", "cached"
-                "...": "additional storage configuration"
-            },
-            "repository": {
-                // Optional, only required if you want to open an existing repository
-                "version": {
-                    "branch": "main",
-                },
-            },
-            "config": {
-                // The threshold at which chunks are stored inline and not written to chunk storage
-                inline_chunk_threshold_bytes: 512
-            }
-        }
+    #     The configuration should be a dictionary in the following format:
+    #     {
+    #         "storage": {
+    #             "type": "s3, // one of "in_memory", "local_filesystem", "s3", "cached"
+    #             "...": "additional storage configuration"
+    #         },
+    #         "repository": {
+    #             // Optional, only required if you want to open an existing repository
+    #             "version": {
+    #                 "branch": "main",
+    #             },
+    #         },
+    #         "config": {
+    #             // The threshold at which chunks are stored inline and not written to chunk storage
+    #             inline_chunk_threshold_bytes: 512
+    #         }
+    #     }
 
-        The following storage types are supported:
-        - in_memory: store data in memory
-        - local_filesystem: store data on the local filesystem
-        - s3: store data on S3 compatible storage
-        - cached: store data in memory with a backing storage
+    #     The following storage types are supported:
+    #     - in_memory: store data in memory
+    #     - local_filesystem: store data on the local filesystem
+    #     - s3: store data on S3 compatible storage
+    #     - cached: store data in memory with a backing storage
 
-        The following additional configuration options are supported for each storage type:
-        - in_memory: {}
-        - local_filesystem: {"root": "path/to/root/directory"}
-        - s3: {
-            "bucket": "bucket-name",
-            "prefix": "optional-prefix",
-            "access_key_id": "optional-access-key-id",
-            "secret_access_key": "optional",
-            "session_token": "optional",
-            "endpoint": "optional"
-        }
-        - cached: {
-            "approx_max_memory_bytes": 1_000_000,
-            "backend": {
-                "type": "s3",
-                "...": "additional storage configuration"
-            }
-        }
+    #     The following additional configuration options are supported for each storage type:
+    #     - in_memory: {}
+    #     - local_filesystem: {"root": "path/to/root/directory"}
+    #     - s3: {
+    #         "bucket": "bucket-name",
+    #         "prefix": "optional-prefix",
+    #         "access_key_id": "optional-access-key-id",
+    #         "secret_access_key": "optional",
+    #         "session_token": "optional",
+    #         "endpoint": "optional"
+    #     }
+    #     - cached: {
+    #         "approx_max_memory_bytes": 1_000_000,
+    #         "backend": {
+    #             "type": "s3",
+    #             "...": "additional storage configuration"
+    #         }
+    #     }
 
-        If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
-        """
-        config_str = json.dumps(config)
-        read_only = mode == "r"
-        store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
-        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
+    #     If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
+    #     """
+    #     config_str = json.dumps(config)
+    #     read_only = mode == "r"
+    #     store = await pyicechunk_store_from_json_config(config_str, read_only=read_only)
+    #     return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
     async def open_existing(
@@ -217,6 +217,23 @@ class IcechunkStore(Store, SyncMixin):
         read_only = mode == "r"
         new_store = self._store.with_mode(read_only)
         return self.__class__(new_store, mode=mode)
+
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, self.__class__):
+            return False
+        self_bytes = self._store.as_bytes()
+        other_bytes = value._store.as_bytes()
+        return self_bytes == other_bytes
+
+    def __getstate__(self) -> object:
+        store_repr = self._store.as_bytes()
+        return {"store": store_repr, "mode": self.mode}
+
+    def __setstate__(self, state: Any) -> None:
+        store_repr = state["store"]
+        mode = state['mode']
+        is_read_only = (mode == "r")
+        self._store = pyicechunk_store_from_bytes(store_repr, is_read_only)
 
     @property
     def snapshot_id(self) -> str:
@@ -494,8 +511,3 @@ class IcechunkStore(Store, SyncMixin):
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_dir(prefix)
-
-    def __eq__(self, other) -> bool:
-        if other is self:
-            return True
-        raise NotImplementedError
