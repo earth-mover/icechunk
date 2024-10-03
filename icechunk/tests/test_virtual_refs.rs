@@ -9,7 +9,8 @@ mod tests {
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         storage::{
-            object_store::{S3Config, S3Credentials},
+            s3::{mk_client, S3Config, S3Credentials, S3Storage},
+            virtual_ref::ObjectStoreVirtualChunkResolverConfig,
             ObjectStorage,
         },
         zarr::AccessMode,
@@ -25,8 +26,27 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
 
+    fn s3_config() -> S3Config {
+        S3Config {
+            region: None,
+            endpoint: Some("http://localhost:9000".to_string()),
+            credentials: Some(S3Credentials {
+                access_key_id: "minio123".into(),
+                secret_access_key: "minio123".into(),
+                session_token: None,
+            }),
+            allow_http: Some(true),
+        }
+    }
+
     async fn create_repository(storage: Arc<dyn Storage + Send + Sync>) -> Repository {
-        Repository::init(storage, true).await.expect("building repository failed").build()
+        Repository::init(storage, true)
+            .await
+            .expect("building repository failed")
+            .with_virtual_ref_config(ObjectStoreVirtualChunkResolverConfig::S3(
+                s3_config(),
+            ))
+            .build()
     }
 
     async fn write_chunks_to_store(
@@ -57,20 +77,12 @@ mod tests {
 
     async fn create_minio_repository() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-            ObjectStorage::new_s3_store(
+            S3Storage::new_s3_store(
                 "testbucket".to_string(),
                 format!("{:?}", ChunkId::random()),
-                Some(S3Config {
-                    region: None,
-                    endpoint: Some("http://localhost:9000".to_string()),
-                    credentials: Some(S3Credentials {
-                        access_key_id: "minio123".into(),
-                        secret_access_key: "minio123".into(),
-                        session_token: None,
-                    }),
-                    allow_http: Some(true),
-                }),
+                Some(&s3_config()),
             )
+            .await
             .expect("Creating minio storage failed"),
         );
 
@@ -84,19 +96,19 @@ mod tests {
     }
 
     async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
-        use object_store::aws::AmazonS3Builder;
+        let client = mk_client(Some(&s3_config())).await;
+
         let bucket_name = "testbucket".to_string();
-
-        let store = AmazonS3Builder::new()
-            .with_access_key_id("minio123")
-            .with_secret_access_key("minio123")
-            .with_endpoint("http://localhost:9000")
-            .with_allow_http(true)
-            .with_bucket_name(bucket_name)
-            .build()
-            .expect("building S3 store failed");
-
-        write_chunks_to_store(store, chunks).await;
+        for (key, bytes) in chunks {
+            client
+                .put_object()
+                .bucket(bucket_name.clone())
+                .key(key)
+                .body(bytes.into())
+                .send()
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -111,7 +123,7 @@ mod tests {
         write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
         let repo_dir = TempDir::new()?;
-        let mut ds = create_local_repository(&repo_dir.path()).await;
+        let mut ds = create_local_repository(repo_dir.path()).await;
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],

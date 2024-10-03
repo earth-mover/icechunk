@@ -5,17 +5,12 @@ use crate::format::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    aws::{AmazonS3Builder, S3ConditionalPut},
-    local::LocalFileSystem,
-    memory::InMemory,
-    path::Path as ObjectPath,
-    Attribute, AttributeValue, Attributes, GetOptions, GetRange, ObjectStore, PutMode,
-    PutOptions, PutPayload,
+    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute,
+    AttributeValue, Attributes, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
+    PutPayload,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
 };
@@ -61,58 +56,7 @@ const MANIFEST_PREFIX: &str = "manifests/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Credentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Config {
-    pub region: Option<String>,
-    pub endpoint: Option<String>,
-    pub credentials: Option<S3Credentials>,
-    pub allow_http: Option<bool>,
-}
-
-// TODO: Hide this behind a feature flag?
-impl S3Config {
-    pub fn to_builder(&self) -> AmazonS3Builder {
-        let builder = if let Some(credentials) = &self.credentials {
-            let builder = AmazonS3Builder::new()
-                .with_access_key_id(credentials.access_key_id.clone())
-                .with_secret_access_key(credentials.secret_access_key.clone());
-
-            if let Some(token) = &credentials.session_token {
-                builder.with_token(token.clone())
-            } else {
-                builder
-            }
-        } else {
-            AmazonS3Builder::from_env()
-        };
-
-        let builder = if let Some(region) = &self.region {
-            builder.with_region(region.clone())
-        } else {
-            builder
-        };
-
-        let builder = if let Some(endpoint) = &self.endpoint {
-            builder.with_endpoint(endpoint.clone())
-        } else {
-            builder
-        };
-
-        if let Some(allow_http) = self.allow_http {
-            builder.with_allow_http(allow_http)
-        } else {
-            builder
-        }
-    }
-}
-
+#[derive(Debug)]
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
     prefix: String,
@@ -154,24 +98,6 @@ impl ObjectStorage {
             artificially_sort_refs_in_mem: true,
             supports_create_if_not_exists: true,
             supports_metadata: false,
-        })
-    }
-
-    pub fn new_s3_store(
-        bucket_name: impl Into<String>,
-        prefix: impl Into<String>,
-        config: Option<S3Config>,
-    ) -> Result<ObjectStorage, StorageError> {
-        let config = config.unwrap_or_default();
-        let builder = config.to_builder();
-        let builder = builder.with_conditional_put(S3ConditionalPut::ETagMatch);
-        let store = builder.with_bucket_name(bucket_name.into()).build()?;
-        Ok(ObjectStorage {
-            store: Arc::new(store),
-            prefix: prefix.into(),
-            artificially_sort_refs_in_mem: false,
-            supports_create_if_not_exists: true,
-            supports_metadata: true,
         })
     }
 
@@ -225,11 +151,6 @@ impl ObjectStorage {
     }
 }
 
-impl fmt::Debug for ObjectStorage {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ObjectStorage, prefix={}, store={}", self.prefix, self.store)
-    }
-}
 #[async_trait]
 impl Storage for ObjectStorage {
     async fn fetch_snapshot(
@@ -391,7 +312,10 @@ impl Storage for ObjectStorage {
             .collect())
     }
 
-    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+    async fn ref_versions(
+        &self,
+        ref_name: &str,
+    ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let res = self.do_ref_versions(ref_name).await;
         if self.artificially_sort_refs_in_mem {
             #[allow(clippy::expect_used)]
@@ -401,9 +325,9 @@ impl Storage for ObjectStorage {
             let mut all =
                 res.try_collect::<Vec<_>>().await.expect("Error fetching ref versions");
             all.sort();
-            futures::stream::iter(all.into_iter().map(Ok)).boxed()
+            Ok(futures::stream::iter(all.into_iter().map(Ok)).boxed())
         } else {
-            res
+            Ok(res)
         }
     }
 
