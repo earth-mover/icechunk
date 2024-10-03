@@ -220,7 +220,10 @@ impl ConsolidatedStore {
         self
     }
 
-    pub fn with_change_set_bytes(mut self, change_set: Vec<u8>) -> RepositoryResult<Self> {
+    pub fn with_change_set_bytes(
+        mut self,
+        change_set: Vec<u8>,
+    ) -> RepositoryResult<Self> {
         self.repository.change_set_bytes = Some(change_set);
         Ok(self)
     }
@@ -2106,6 +2109,7 @@ mod tests {
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
+                change_set_bytes: None,
                 virtual_ref_config: None,
             },
             config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
@@ -2140,6 +2144,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 config: None,
@@ -2160,6 +2165,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 config: None,
@@ -2179,6 +2185,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
@@ -2198,6 +2205,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
@@ -2217,6 +2225,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
@@ -2255,6 +2264,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {

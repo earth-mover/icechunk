@@ -256,8 +256,7 @@ fn pyicechunk_store_create<'py>(
 }
 
 #[pyfunction]
-fn pyicechunk_store_from_bytes<'py>(
-    _py: Python<'py>,
+fn pyicechunk_store_from_bytes(
     bytes: Vec<u8>,
     read_only: bool,
 ) -> PyResult<PyIcechunkStore> {
