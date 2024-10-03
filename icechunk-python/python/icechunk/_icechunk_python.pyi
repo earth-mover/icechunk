@@ -1,7 +1,6 @@
 import abc
 import datetime
 from collections.abc import AsyncGenerator
-from typing import Iterable
 
 class PyIcechunkStore:
     def with_mode(self, read_only: bool) -> PyIcechunkStore: ...
@@ -14,7 +13,7 @@ class PyIcechunkStore:
     async def checkout_branch(self, branch: str) -> None: ...
     async def checkout_tag(self, tag: str) -> None: ...
     async def distributed_commit(
-        self, message: str, other_change_set_bytes: Iterable[bytes]
+        self, message: str, other_change_set_bytes: list[bytes]
     ) -> str: ...
     async def commit(self, message: str) -> str: ...
     @property

@@ -264,11 +264,9 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.commit(message)
 
     async def distributed_commit(
-        self, message: str, other_change_set_bytes: Iterable[bytes]
+        self, message: str, other_change_set_bytes: list[bytes]
     ) -> str:
-        return await self._store.distributed_commit(
-            message, list(other_change_set_bytes)
-        )
+        return await self._store.distributed_commit(message, other_change_set_bytes)
 
     @property
     def has_uncommitted_changes(self) -> bool:
