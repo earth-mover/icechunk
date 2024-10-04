@@ -2,7 +2,7 @@ mod errors;
 mod storage;
 mod streams;
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
@@ -257,7 +257,7 @@ fn pyicechunk_store_create<'py>(
 
 #[pyfunction]
 fn pyicechunk_store_from_bytes(
-    bytes: Vec<u8>,
+    bytes: Cow<[u8]>,
     read_only: bool,
 ) -> PyResult<PyIcechunkStore> {
     let consolidated: ConsolidatedStore = rmp_serde::from_slice(&bytes)
@@ -276,11 +276,11 @@ fn pyicechunk_store_from_bytes(
 
 #[pymethods]
 impl PyIcechunkStore {
-    fn as_bytes(&self) -> PyResult<Vec<u8>> {
+    fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         let consolidated = self.rt.block_on(self.as_consolidated())?;
         let serialized = rmp_serde::to_vec(&consolidated)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(serialized)
+        Ok(Cow::Owned(serialized))
     }
 
     fn with_mode(&self, read_only: bool) -> PyResult<PyIcechunkStore> {

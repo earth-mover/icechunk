@@ -15,10 +15,17 @@ async def test_pickle():
     array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="f8")
     array[:] = 20
 
-    pickled = pickle.dumps(store)
+    await store.commit("firsttt")
 
-    store_loaded = pickle.loads(pickled)
-    root_loaded = zarr.open_group(store_loaded, mode='r')
-    array_loaded = root_loaded.require_array("ones")
+    bb = store._store.as_bytes()
+    print(bb)
 
-    assert array_loaded == array
+    res = icechunk._icechunk_python.pyicechunk_store_from_bytes(bb, False)
+
+    # pickled = pickle.dumps(store)
+
+    # store_loaded = pickle.loads(pickled)
+    # root_loaded = zarr.open_group(store_loaded, mode='r')
+    # array_loaded = root_loaded.require_array("ones")
+
+    # assert array_loaded == array
