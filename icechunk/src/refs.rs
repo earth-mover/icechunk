@@ -46,7 +46,7 @@ pub enum RefError {
 
 pub type RefResult<A> = Result<A, RefError>;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Ref {
     Tag(String),
     Branch(String),
@@ -196,7 +196,7 @@ async fn branch_history<'a, 'b>(
     branch: &'b str,
 ) -> RefResult<impl Stream<Item = RefResult<BranchVersion>> + 'a> {
     let key = branch_root(branch)?;
-    let all = storage.ref_versions(key.as_str()).await;
+    let all = storage.ref_versions(key.as_str()).await?;
     Ok(all.map_err(|e| e.into()).and_then(move |version_id| async move {
         let version = version_id
             .strip_suffix(".json")

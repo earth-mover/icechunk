@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use icechunk::{
     storage::{
-        object_store::{S3Config, S3Credentials},
+        s3::{S3Config, S3Credentials},
         virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     },
     zarr::StorageConfig,

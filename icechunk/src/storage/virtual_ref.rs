@@ -1,19 +1,18 @@
 use crate::format::manifest::{VirtualChunkLocation, VirtualReferenceError};
 use crate::format::ByteRange;
 use async_trait::async_trait;
+use aws_sdk_s3::Client;
 use bytes::Bytes;
 use object_store::local::LocalFileSystem;
 use object_store::{path::Path as ObjectPath, GetOptions, GetRange, ObjectStore};
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Bound;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use url;
+use tokio::sync::OnceCell;
+use url::{self, Url};
 
-use super::object_store::S3Config;
+use super::s3::{mk_client, range_to_header, S3Config};
 
 #[async_trait]
 pub trait VirtualChunkResolver: Debug {
@@ -24,23 +23,85 @@ pub trait VirtualChunkResolver: Debug {
     ) -> Result<Bytes, VirtualReferenceError>;
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-struct StoreCacheKey(String, String);
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ObjectStoreVirtualChunkResolverConfig {
     S3(S3Config),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ObjectStoreVirtualChunkResolver {
-    stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
-    config: Option<ObjectStoreVirtualChunkResolverConfig>,
+    s3: OnceCell<Client>,
+    config: Box<Option<ObjectStoreVirtualChunkResolverConfig>>,
 }
 
 impl ObjectStoreVirtualChunkResolver {
     pub fn new(config: Option<ObjectStoreVirtualChunkResolverConfig>) -> Self {
-        Self { stores: RwLock::new(HashMap::new()), config }
+        Self { s3: Default::default(), config: Box::new(config) }
+    }
+
+    async fn s3(&self) -> &Client {
+        let config = self.config.clone();
+        self.s3
+            .get_or_init(|| async move {
+                match config.as_ref() {
+                    Some(ObjectStoreVirtualChunkResolverConfig::S3(config)) => {
+                        mk_client(Some(config)).await
+                    }
+                    None => mk_client(None).await,
+                }
+            })
+            .await
+    }
+
+    async fn fetch_file(
+        &self,
+        url: &Url,
+        range: &ByteRange,
+    ) -> Result<Bytes, VirtualReferenceError> {
+        let store = LocalFileSystem::new();
+        let options =
+            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+        let path = ObjectPath::parse(url.path())
+            .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
+
+        store
+            .get_opts(&path, options)
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .bytes()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))
+    }
+
+    async fn fetch_s3(
+        &self,
+        url: &Url,
+        range: &ByteRange,
+    ) -> Result<Bytes, VirtualReferenceError> {
+        let bucket_name = if let Some(host) = url.host_str() {
+            host.to_string()
+        } else {
+            Err(VirtualReferenceError::CannotParseBucketName(
+                "No bucket name found".to_string(),
+            ))?
+        };
+
+        let key = url.path();
+        let key = key.strip_prefix('/').unwrap_or(key);
+        let mut b = self.s3().await.get_object().bucket(bucket_name).key(key);
+
+        if let Some(header) = range_to_header(range) {
+            b = b.range(header)
+        };
+
+        Ok(b.send()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .body
+            .collect()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .into_bytes())
     }
 }
 
@@ -84,79 +145,13 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         let VirtualChunkLocation::Absolute(location) = location;
         let parsed =
             url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
-        let path = ObjectPath::parse(parsed.path())
-            .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
         let scheme = parsed.scheme();
 
-        let bucket_name = if let Some(host) = parsed.host_str() {
-            host.to_string()
-        } else if scheme == "file" {
-            // Host is not required for file scheme, if it is not there,
-            // we can assume the bucket name is empty and it is a local file
-            "".to_string()
-        } else {
-            Err(VirtualReferenceError::CannotParseBucketName(
-                "No bucket name found".to_string(),
-            ))?
-        };
-
-        let cache_key = StoreCacheKey(scheme.into(), bucket_name);
-
-        let options =
-            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
-        let store = {
-            let stores = self.stores.read().await;
-            stores.get(&cache_key).cloned()
-        };
-        let store = match store {
-            Some(store) => store,
-            None => {
-                let new_store: Arc<dyn ObjectStore> = match scheme {
-                    "file" => {
-                        let fs = LocalFileSystem::new();
-                        Arc::new(fs)
-                    }
-                    // FIXME: allow configuring auth for virtual references
-                    "s3" => {
-                        let config = if let Some(
-                            ObjectStoreVirtualChunkResolverConfig::S3(config),
-                        ) = &self.config
-                        {
-                            config.clone()
-                        } else {
-                            S3Config::default()
-                        };
-
-                        let s3 = config
-                            .to_builder()
-                            .with_bucket_name(&cache_key.1)
-                            .build()
-                            .map_err(|e| {
-                                VirtualReferenceError::FetchError(Box::new(e))
-                            })?;
-
-                        Arc::new(s3)
-                    }
-                    _ => {
-                        Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
-                    }
-                };
-                {
-                    self.stores
-                        .write()
-                        .await
-                        .insert(cache_key.clone(), Arc::clone(&new_store));
-                }
-                new_store
-            }
-        };
-        Ok(store
-            .get_opts(&path, options)
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
-            .bytes()
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?)
+        match scheme {
+            "file" => self.fetch_file(&parsed, range).await,
+            "s3" => self.fetch_s3(&parsed, range).await,
+            _ => Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string())),
+        }
     }
 }
 
