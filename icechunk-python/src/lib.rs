@@ -113,6 +113,10 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
 impl PyIcechunkStore {
+    pub fn consolidated(&self) -> &ConsolidatedStore {
+        &self.consolidated
+    }
+
     async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
         let storage =
             storage.make_cached_storage().map_err(PyIcechunkStoreError::UnkownError)?;
@@ -247,6 +251,10 @@ fn pyicechunk_store_from_bytes(
 
 #[pymethods]
 impl PyIcechunkStore {
+    fn __eq__(&self, other: &Self) -> bool {
+        self.consolidated.storage == other.consolidated().storage
+    }
+
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         let consolidated = self.rt.block_on(self.as_consolidated())?;
         let serialized = serde_json::to_vec(&consolidated)

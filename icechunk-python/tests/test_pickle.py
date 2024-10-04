@@ -2,6 +2,7 @@ import pickle
 
 import pytest
 import zarr
+from zarr.store.local import LocalStore
 
 import icechunk
 
@@ -36,3 +37,28 @@ async def test_pickle(tmp_store):
     assert type(array_loaded) is zarr.Array
     assert array_loaded == array
     assert array_loaded[0, 5] == 20
+
+
+async def test_store_equality(tmpdir, tmp_store):
+    assert tmp_store == tmp_store
+
+    local_store = await LocalStore.open(f"{tmpdir}/zarr", mode="w")
+    assert tmp_store != local_store
+
+    store2 = await icechunk.IcechunkStore.open(
+        storage=icechunk.StorageConfig.memory(prefix="test"),
+        mode="w",
+    )
+    assert tmp_store != store2
+
+    store3 = await icechunk.IcechunkStore.open(
+        storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
+        mode="a",
+    )
+    assert tmp_store != store3
+
+    store4 = await icechunk.IcechunkStore.open(
+        storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
+        mode="a",
+    )
+    assert store3 == store4

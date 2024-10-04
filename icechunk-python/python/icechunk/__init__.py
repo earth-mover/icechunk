@@ -163,9 +163,7 @@ class IcechunkStore(Store, SyncMixin):
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, self.__class__):
             return False
-        self_bytes = self._store.as_bytes()
-        other_bytes = value._store.as_bytes()
-        return self_bytes == other_bytes
+        return self._store == value._store
 
     def __getstate__(self) -> object:
         store_repr = self._store.as_bytes()
