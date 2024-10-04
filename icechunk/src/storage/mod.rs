@@ -1,6 +1,15 @@
+use aws_sdk_s3::{
+    config::http::HttpResponse,
+    error::SdkError,
+    operation::{
+        get_object::GetObjectError, list_objects_v2::ListObjectsV2Error,
+        put_object::PutObjectError,
+    },
+    primitives::ByteStreamError,
+};
 use core::fmt;
 use futures::stream::BoxStream;
-use std::sync::Arc;
+use std::{ffi::OsString, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -12,6 +21,7 @@ pub mod caching;
 pub mod logging;
 
 pub mod object_store;
+pub mod s3;
 pub mod virtual_ref;
 
 pub use caching::MemCachingStorage;
@@ -19,30 +29,36 @@ pub use object_store::ObjectStorage;
 
 use crate::format::{
     attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, Path, SnapshotId,
+    ByteRange, ChunkId, ManifestId, SnapshotId,
 };
 
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("error contacting object store {0}")]
     ObjectStore(#[from] ::object_store::Error),
+    #[error("bad object store prefix {0:?}")]
+    BadPrefix(OsString),
+    #[error("error getting object from object store {0}")]
+    S3GetObjectError(#[from] SdkError<GetObjectError, HttpResponse>),
+    #[error("error writing object to object store {0}")]
+    S3PutObjectError(#[from] SdkError<PutObjectError, HttpResponse>),
+    #[error("error listing objects in object store {0}")]
+    S3ListObjectError(#[from] SdkError<ListObjectsV2Error, HttpResponse>),
+    #[error("error streaming bytes from object store {0}")]
+    S3StreamError(#[from] ByteStreamError),
     #[error("messagepack decode error: {0}")]
     MsgPackDecodeError(#[from] rmp_serde::decode::Error),
     #[error("messagepack encode error: {0}")]
     MsgPackEncodeError(#[from] rmp_serde::encode::Error),
-    #[error("error parsing RecordBatch from parquet file {0}.")]
-    BadRecordBatchRead(Path),
     #[error("cannot overwrite ref: {0}")]
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
-    #[error("generic storage error: {0}")]
-    OtherError(#[from] Arc<dyn std::error::Error + Sync + Send>),
     #[error("unknown storage error: {0}")]
     Other(String),
 }
 
-type StorageResult<A> = Result<A, StorageError>;
+pub type StorageResult<A> = Result<A, StorageError>;
 
 /// Fetch and write the parquet files that represent the repository in object store
 ///
@@ -77,7 +93,10 @@ pub trait Storage: fmt::Debug {
 
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;
     async fn ref_names(&self) -> StorageResult<Vec<String>>;
-    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>>;
+    async fn ref_versions(
+        &self,
+        ref_name: &str,
+    ) -> StorageResult<BoxStream<StorageResult<String>>>;
     async fn write_ref(
         &self,
         ref_key: &str,

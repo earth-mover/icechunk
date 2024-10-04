@@ -118,8 +118,10 @@ impl PyIcechunkStore {
     }
 
     async fn store_exists(storage: StorageConfig) -> PyIcechunkStoreResult<bool> {
-        let storage =
-            storage.make_cached_storage().map_err(PyIcechunkStoreError::UnkownError)?;
+        let storage = storage
+            .make_cached_storage()
+            .await
+            .map_err(PyIcechunkStoreError::UnkownError)?;
         let exists = Repository::exists(storage.as_ref()).await?;
         Ok(exists)
     }

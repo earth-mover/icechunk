@@ -49,6 +49,7 @@ async def test_write_minino_virtual_refs():
             ),
             endpoint_url="http://localhost:9000",
             allow_http=True,
+            region="us-east-1",
         ),
         mode="r+",
         config=StoreConfig(
@@ -59,6 +60,7 @@ async def test_write_minino_virtual_refs():
                 ),
                 endpoint_url="http://localhost:9000",
                 allow_http=True,
+                region="us-east-1",
             )
         ),
     )

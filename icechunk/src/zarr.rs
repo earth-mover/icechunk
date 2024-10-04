@@ -33,7 +33,8 @@ use crate::{
         RepositoryResult, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     storage::{
-        object_store::S3Config, virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+        s3::{S3Config, S3Storage},
+        virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     },
     ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
@@ -59,7 +60,7 @@ pub enum StorageConfig {
 }
 
 impl StorageConfig {
-    pub fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+    pub async fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
         match self {
             StorageConfig::InMemory { prefix } => {
                 Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
@@ -70,15 +71,18 @@ impl StorageConfig {
                 Ok(Arc::new(storage))
             }
             StorageConfig::S3ObjectStore { bucket, prefix, config } => {
-                let storage = ObjectStorage::new_s3_store(bucket, prefix, config.clone())
+                let storage = S3Storage::new_s3_store(bucket, prefix, config.as_ref())
+                    .await
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
         }
     }
 
-    pub fn make_cached_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
-        let storage = self.make_storage()?;
+    pub async fn make_cached_storage(
+        &self,
+    ) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+        let storage = self.make_storage().await?;
         let cached_storage = Repository::add_in_mem_asset_caching(storage);
         Ok(cached_storage)
     }
@@ -292,7 +296,7 @@ impl Store {
         consolidated: &ConsolidatedStore,
         mode: AccessMode,
     ) -> Result<Self, String> {
-        let storage = consolidated.storage.make_cached_storage()?;
+        let storage = consolidated.storage.make_cached_storage().await?;
         let (repository, branch) =
             consolidated.repository.make_repository(storage).await?;
         Ok(Self::from_repository(repository, mode, branch, consolidated.config.clone()))
@@ -1272,7 +1276,7 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
-    use crate::storage::object_store::S3Credentials;
+    use crate::storage::s3::S3Credentials;
 
     use super::*;
     use pretty_assertions::assert_eq;

@@ -3,7 +3,7 @@ alias pre := pre-commit
 
 # run all tests
 test *args='':
-  AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 cargo test {{args}}
+  cargo test --all {{args}}
 
 # compile but don't run all tests
 compile-tests *args='':

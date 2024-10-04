@@ -139,7 +139,7 @@ just test
 This is just an alias for
 
 ```
-AWS_ALLOW_HTTP=1 AWS_ENDPOINT_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=minio123 AWS_SECRET_ACCESS_KEY=minio123 cargo test
+cargo test --all
 ```
 
 > [!TIP]

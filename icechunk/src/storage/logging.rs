@@ -121,7 +121,10 @@ impl Storage for LoggingStorage {
         self.backend.write_ref(ref_key, overwrite_refs, bytes).await
     }
 
-    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+    async fn ref_versions(
+        &self,
+        ref_name: &str,
+    ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
     }
 }

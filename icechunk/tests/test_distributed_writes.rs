@@ -6,30 +6,33 @@ use icechunk::{
     format::{ByteRange, ChunkIndices, Path, SnapshotId},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     repository::{get_chunk, ChangeSet, ZarrArrayMetadata},
-    storage::object_store::{S3Config, S3Credentials},
-    ObjectStorage, Repository, Storage,
+    storage::s3::{S3Config, S3Credentials, S3Storage},
+    Repository, Storage,
 };
 use tokio::task::JoinSet;
 
 const SIZE: usize = 10;
 
-fn mk_storage(
+async fn mk_storage(
     prefix: &str,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error + Send + Sync>> {
-    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(ObjectStorage::new_s3_store(
-        "testbucket",
-        prefix,
-        Some(S3Config {
-            region: None,
-            endpoint: Some("http://localhost:9000".to_string()),
-            credentials: Some(S3Credentials {
-                access_key_id: "minio123".into(),
-                secret_access_key: "minio123".into(),
-                session_token: None,
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        S3Storage::new_s3_store(
+            "testbucket",
+            prefix,
+            Some(&S3Config {
+                region: Some("us-east-1".to_string()),
+                endpoint: Some("http://localhost:9000".to_string()),
+                credentials: Some(S3Credentials {
+                    access_key_id: "minio123".into(),
+                    secret_access_key: "minio123".into(),
+                    session_token: None,
+                }),
+                allow_http: Some(true),
             }),
-            allow_http: Some(true),
-        }),
-    )?);
+        )
+        .await?,
+    );
     Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
@@ -109,10 +112,10 @@ async fn verify(
 async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 {
     let prefix = format!("test_distributed_writes_{}", SnapshotId::random());
-    let storage1 = mk_storage(prefix.as_str())?;
-    let storage2 = mk_storage(prefix.as_str())?;
-    let storage3 = mk_storage(prefix.as_str())?;
-    let storage4 = mk_storage(prefix.as_str())?;
+    let storage1 = mk_storage(prefix.as_str()).await?;
+    let storage2 = mk_storage(prefix.as_str()).await?;
+    let storage3 = mk_storage(prefix.as_str()).await?;
+    let storage4 = mk_storage(prefix.as_str()).await?;
     let mut repo1 = mk_repo(storage1, true).await?;
 
     let zarr_meta = ZarrArrayMetadata {
@@ -180,7 +183,7 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
     verify(repo1).await?;
 
     // To be safe, we create a new instance of the storage and repo, and verify again
-    let storage = mk_storage(prefix.as_str())?;
+    let storage = mk_storage(prefix.as_str()).await?;
     let repo = mk_repo(storage, false).await?;
     verify(repo).await?;
 

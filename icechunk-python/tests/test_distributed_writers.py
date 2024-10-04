@@ -81,6 +81,7 @@ async def test_distributed_writers():
         "bucket": "testbucket",
         "prefix": "python-distributed-writers-test__" + str(time.time()),
         "endpoint_url": "http://localhost:9000",
+        "region": "us-east-1",
         "allow_http": True,
     }
     store_config = {"inline_chunk_threshold_bytes": 5}
