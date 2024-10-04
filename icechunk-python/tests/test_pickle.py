@@ -12,7 +12,6 @@ async def tmp_store(tmpdir):
     store = await icechunk.IcechunkStore.open(
         storage=icechunk.StorageConfig.filesystem(store_path),
         mode="w",
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=5),
     )
 
     yield store
@@ -29,7 +28,11 @@ async def test_pickle(tmp_store):
     pickled = pickle.dumps(tmp_store)
 
     store_loaded = pickle.loads(pickled)
-    root_loaded = zarr.open_group(store_loaded)
-    # array_loaded = root_loaded.open("ones")
+    assert store_loaded == tmp_store
 
-    # assert array_loaded == array
+    root_loaded = zarr.open_group(store_loaded)
+    array_loaded = root_loaded['ones']
+
+    assert type(array_loaded) is zarr.Array
+    assert array_loaded == array
+    assert array_loaded[0, 5] == 20

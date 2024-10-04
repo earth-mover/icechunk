@@ -260,7 +260,6 @@ fn pyicechunk_store_from_bytes(
     bytes: Cow<[u8]>,
     read_only: bool,
 ) -> PyResult<PyIcechunkStore> {
-    println!("bytes: {:?}", bytes);
     let consolidated: ConsolidatedStore = serde_json::from_slice(&bytes)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 

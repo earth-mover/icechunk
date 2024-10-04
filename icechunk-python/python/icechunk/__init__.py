@@ -227,17 +227,14 @@ class IcechunkStore(Store, SyncMixin):
 
     def __getstate__(self) -> object:
         store_repr = self._store.as_bytes()
-        print('store_repr', store_repr)
-        print(type(store_repr))
         return {"store": store_repr, "mode": self.mode}
 
     def __setstate__(self, state: Any) -> None:
         store_repr = state["store"]
-        print("store_repr", store_repr)
-        print(type(store_repr))
         mode = state['mode']
         is_read_only = (mode == "r")
         self._store = pyicechunk_store_from_bytes(store_repr, is_read_only)
+        self._is_open = True
 
     @property
     def snapshot_id(self) -> str:
