@@ -30,7 +30,7 @@ use crate::{
     repository::{
         get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
         Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
-        StorageTransformer, UserAttributes, ZarrArrayMetadata,
+        RepositoryResult, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     storage::{
         s3::{S3Config, S3Storage},
@@ -104,6 +104,7 @@ pub struct RepositoryConfig {
     pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
+    pub change_set_bytes: Option<Vec<u8>>,
     pub virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
@@ -136,6 +137,11 @@ impl RepositoryConfig {
         config: ObjectStoreVirtualChunkResolverConfig,
     ) -> Self {
         self.virtual_ref_config = Some(config);
+        self
+    }
+
+    pub fn with_change_set_bytes(mut self, change_set_bytes: Vec<u8>) -> Self {
+        self.change_set_bytes = Some(change_set_bytes);
         self
     }
 
@@ -181,6 +187,11 @@ impl RepositoryConfig {
         if let Some(config) = &self.virtual_ref_config {
             builder.with_virtual_ref_config(config.clone());
         }
+        if let Some(change_set_bytes) = &self.change_set_bytes {
+            let change_set = ChangeSet::import_from_bytes(change_set_bytes)
+                .map_err(|err| format!("Error parsing change set: {err}"))?;
+            builder.with_change_set(change_set);
+        }
 
         // TODO: add error checking, does the previous version exist?
         Ok((builder.build(), branch))
@@ -205,6 +216,21 @@ pub struct ConsolidatedStore {
     pub storage: StorageConfig,
     pub repository: RepositoryConfig,
     pub config: Option<StoreOptions>,
+}
+
+impl ConsolidatedStore {
+    pub fn with_version(mut self, version: VersionInfo) -> Self {
+        self.repository.version = Some(version);
+        self
+    }
+
+    pub fn with_change_set_bytes(
+        mut self,
+        change_set: Vec<u8>,
+    ) -> RepositoryResult<Self> {
+        self.repository.change_set_bytes = Some(change_set);
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -324,6 +350,14 @@ impl Store {
 
     pub async fn snapshot_id(&self) -> SnapshotId {
         self.repository.read().await.snapshot_id().clone()
+    }
+
+    pub async fn current_version(&self) -> VersionInfo {
+        if let Some(branch) = &self.current_branch {
+            VersionInfo::BranchTipRef(branch.clone())
+        } else {
+            VersionInfo::SnapshotId(self.snapshot_id().await)
+        }
     }
 
     pub async fn has_uncommitted_changes(&self) -> bool {
@@ -2079,6 +2113,7 @@ mod tests {
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
+                change_set_bytes: None,
                 virtual_ref_config: None,
             },
             config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
@@ -2113,6 +2148,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 config: None,
@@ -2133,6 +2169,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 config: None,
@@ -2152,6 +2189,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
@@ -2171,6 +2209,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
@@ -2190,6 +2229,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
@@ -2228,6 +2268,7 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
                     virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {

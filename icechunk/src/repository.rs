@@ -86,6 +86,7 @@ pub struct RepositoryBuilder {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
+    change_set: Option<ChangeSet>,
     virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
@@ -95,6 +96,7 @@ impl RepositoryBuilder {
             config: RepositoryConfig::default(),
             snapshot_id,
             storage,
+            change_set: None,
             virtual_ref_config: None,
         }
     }
@@ -122,11 +124,17 @@ impl RepositoryBuilder {
         self
     }
 
+    pub fn with_change_set(&mut self, change_set_bytes: ChangeSet) -> &mut Self {
+        self.change_set = Some(change_set_bytes);
+        self
+    }
+
     pub fn build(&self) -> Repository {
         Repository::new(
             self.config.clone(),
             self.storage.clone(),
             self.snapshot_id.clone(),
+            self.change_set.clone(),
             self.virtual_ref_config.clone(),
         )
     }
@@ -243,6 +251,7 @@ impl Repository {
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
         snapshot_id: SnapshotId,
+        change_set: Option<ChangeSet>,
         virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
     ) -> Self {
         Repository {
@@ -250,7 +259,7 @@ impl Repository {
             config,
             storage,
             last_node_id: None,
-            change_set: ChangeSet::default(),
+            change_set: change_set.unwrap_or_default(),
             virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::new(
                 virtual_ref_config,
             )),
