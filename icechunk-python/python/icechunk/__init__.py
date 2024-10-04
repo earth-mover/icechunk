@@ -1,5 +1,4 @@
 # module
-import json
 from collections.abc import AsyncGenerator, Iterable
 from typing import Any, Self
 
