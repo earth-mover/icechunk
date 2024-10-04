@@ -1,31 +1,35 @@
 import pickle
 
+import pytest
 import zarr
 
 import icechunk
 
 
-async def test_pickle():
+@pytest.fixture(scope="function")
+async def tmp_store(tmpdir):
+    store_path = f"{tmpdir}"
     store = await icechunk.IcechunkStore.open(
+        storage=icechunk.StorageConfig.filesystem(store_path),
         mode="w",
-        storage=icechunk.StorageConfig.memory(prefix='test'),
+        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=5),
     )
 
-    root = zarr.group(store=store)
-    array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="f8")
+    yield store
+
+    store.close()
+
+
+async def test_pickle(tmp_store):
+    root = zarr.group(store=tmp_store)
+    array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="float32")
     array[:] = 20
+    await tmp_store.commit("firsttt")
 
-    await store.commit("firsttt")
+    pickled = pickle.dumps(tmp_store)
 
-    bb = store._store.as_bytes()
-    print(bb)
-
-    res = icechunk._icechunk_python.pyicechunk_store_from_bytes(bb, False)
-
-    # pickled = pickle.dumps(store)
-
-    # store_loaded = pickle.loads(pickled)
-    # root_loaded = zarr.open_group(store_loaded, mode='r')
-    # array_loaded = root_loaded.require_array("ones")
+    store_loaded = pickle.loads(pickled)
+    root_loaded = zarr.open_group(store_loaded)
+    # array_loaded = root_loaded.open("ones")
 
     # assert array_loaded == array

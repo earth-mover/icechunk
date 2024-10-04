@@ -260,7 +260,8 @@ fn pyicechunk_store_from_bytes(
     bytes: Cow<[u8]>,
     read_only: bool,
 ) -> PyResult<PyIcechunkStore> {
-    let consolidated: ConsolidatedStore = rmp_serde::from_slice(&bytes)
+    println!("bytes: {:?}", bytes);
+    let consolidated: ConsolidatedStore = serde_json::from_slice(&bytes)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
     let rt = tokio::runtime::Runtime::new()
@@ -278,7 +279,7 @@ fn pyicechunk_store_from_bytes(
 impl PyIcechunkStore {
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         let consolidated = self.rt.block_on(self.as_consolidated())?;
-        let serialized = rmp_serde::to_vec(&consolidated)
+        let serialized = serde_json::to_vec(&consolidated)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Cow::Owned(serialized))
     }

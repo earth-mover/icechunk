@@ -677,6 +677,7 @@ dependencies = [
  "pyo3",
  "pyo3-asyncio-0-21",
  "rmp-serde",
+ "serde_json",
  "thiserror",
  "tokio",
 ]
