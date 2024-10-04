@@ -235,6 +235,7 @@ fn pyicechunk_store_from_bytes(
     bytes: Cow<[u8]>,
     read_only: bool,
 ) -> PyResult<PyIcechunkStore> {
+    // FIXME: Use rmp_serde instead of serde_json to optimize performance
     let consolidated: ConsolidatedStore = serde_json::from_slice(&bytes)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
@@ -257,6 +258,8 @@ impl PyIcechunkStore {
 
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         let consolidated = self.rt.block_on(self.as_consolidated())?;
+
+        // FIXME: Use rmp_serde instead of serde_json to optimize performance
         let serialized = serde_json::to_vec(&consolidated)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Cow::Owned(serialized))
