@@ -28,7 +28,7 @@ mod tests {
 
     fn s3_config() -> S3Config {
         S3Config {
-            region: None,
+            region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
             credentials: Some(S3Credentials {
                 access_key_id: "minio123".into(),

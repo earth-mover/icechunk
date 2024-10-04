@@ -23,7 +23,7 @@ async fn mk_storage() -> StorageResult<S3Storage> {
         "testbucket",
         "test_s3_storage__".to_string() + Utc::now().to_rfc3339().as_str(),
         Some(&S3Config {
-            region: None,
+            region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
             credentials: Some(S3Credentials {
                 access_key_id: "minio123".into(),
