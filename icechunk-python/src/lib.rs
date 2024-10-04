@@ -113,7 +113,7 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
 impl PyIcechunkStore {
-    pub fn consolidated(&self) -> &ConsolidatedStore {
+    pub(crate) fn consolidated(&self) -> &ConsolidatedStore {
         &self.consolidated
     }
 
