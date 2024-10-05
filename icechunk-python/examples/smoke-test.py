@@ -196,9 +196,9 @@ if __name__ == "__main__":
         endpoint_url="http://localhost:9000",
     )
 
-    # print("Icechunk store")
-    # store = asyncio.run(create_icechunk_store(storage=MINIO))
-    # asyncio.run(run(store))
+    print("Icechunk store")
+    store = asyncio.run(create_icechunk_store(storage=MINIO))
+    asyncio.run(run(store))
 
     print("Zarr store")
     zarr_store = asyncio.run(create_zarr_store(store="local"))
