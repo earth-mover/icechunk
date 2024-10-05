@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     iter,
     num::NonZeroU64,
-    ops::DerefMut,
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -492,18 +492,9 @@ impl Store {
         todo!()
     }
 
-    // TODO: prototype argument
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
-        let bytes = match Key::parse(key)? {
-            Key::Metadata { node_path } => {
-                self.get_metadata(key, &node_path, byte_range).await
-            }
-            Key::Chunk { node_path, coords } => {
-                self.get_chunk(key, node_path, coords, byte_range).await
-            }
-        }?;
-
-        Ok(bytes)
+        let repo = self.repository.read().await;
+        get_key(key, byte_range, repo.deref()).await
     }
 
     /// Get all the requested keys concurrently.
@@ -567,13 +558,9 @@ impl Store {
         res.ok_or(StoreError::PartialValuesPanic)
     }
 
-    // TODO: prototype argument
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
-        match self.get(key, &ByteRange::ALL).await {
-            Ok(_) => Ok(true),
-            Err(StoreError::NotFound(_)) => Ok(false),
-            Err(other_error) => Err(other_error),
-        }
+        let guard = self.repository.read().await;
+        exists(key, guard.deref()).await
     }
 
     pub fn supports_writes(&self) -> StoreResult<bool> {
@@ -585,6 +572,15 @@ impl Store {
     }
 
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
+        self.set_with_optional_locking(key, value, None).await
+    }
+
+    async fn set_with_optional_locking(
+        &self,
+        key: &str,
+        value: Bytes,
+        locked_repo: Option<&mut Repository>,
+    ) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
         }
@@ -592,39 +588,47 @@ impl Store {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
-                    self.set_array_meta(node_path, array_meta).await
+                    self.set_array_meta(node_path, array_meta, locked_repo).await
                 } else {
                     match serde_json::from_slice(value.as_ref()) {
                         Ok(group_meta) => {
-                            self.set_group_meta(node_path, group_meta).await
+                            self.set_group_meta(node_path, group_meta, locked_repo).await
                         }
                         Err(err) => Err(StoreError::BadMetadata(err)),
                     }
                 }
             }
             Key::Chunk { node_path, coords } => {
-                // we only lock the repository to get the writer
-                let writer = self.repository.read().await.get_chunk_writer();
-                // then we can write the bytes without holding the lock
-                let payload = writer(value).await?;
-                // and finally we lock for write and update the reference
-                self.repository
-                    .write()
-                    .await
-                    .set_chunk_ref(node_path, coords, Some(payload))
-                    .await?;
+                match locked_repo {
+                    Some(repo) => {
+                        let writer = repo.get_chunk_writer();
+                        let payload = writer(value).await?;
+                        repo.set_chunk_ref(node_path, coords, Some(payload)).await?
+                    }
+                    None => {
+                        // we only lock the repository to get the writer
+                        let writer = self.repository.read().await.get_chunk_writer();
+                        // then we can write the bytes without holding the lock
+                        let payload = writer(value).await?;
+                        // and finally we lock for write and update the reference
+                        self.repository
+                            .write()
+                            .await
+                            .set_chunk_ref(node_path, coords, Some(payload))
+                            .await?
+                    }
+                }
                 Ok(())
             }
         }
     }
 
     pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
-        // TODO: Make sure this is correctly threadsafe. Technically a third API call
-        // may be able to slip into the gap between the exists and the set.
-        if self.exists(key).await? {
+        let mut guard = self.repository.write().await;
+        if exists(key, guard.deref()).await? {
             Ok(())
         } else {
-            self.set(key, value).await
+            self.set_with_optional_locking(key, value, Some(guard.deref_mut())).await
         }
     }
 
@@ -756,99 +760,50 @@ impl Store {
         Ok(futures::stream::iter(parents.into_iter().map(Ok)))
     }
 
-    async fn get_chunk(
-        &self,
-        key: &str,
-        path: Path,
-        coords: ChunkIndices,
-        byte_range: &ByteRange,
-    ) -> StoreResult<Bytes> {
-        // we only lock the repository while we get the reader
-        let reader = self
-            .repository
-            .read()
-            .await
-            .get_chunk_reader(&path, &coords, byte_range)
-            .await?;
-
-        // then we can fetch the bytes without holding the lock
-        let chunk = get_chunk(reader).await?;
-        chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
-            key: key.to_string(),
-            path,
-            coords,
-        }))
-    }
-
-    async fn get_metadata(
-        &self,
-        _key: &str,
-        path: &Path,
-        range: &ByteRange,
-    ) -> StoreResult<Bytes> {
-        let node = self.repository.read().await.get_node(path).await.map_err(|_| {
-            StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
-        })?;
-        let user_attributes = match node.user_attributes {
-            None => None,
-            Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-            // FIXME: implement
-            Some(UserAttributesSnapshot::Ref(_)) => todo!(),
-        };
-        let full_metadata = match node.node_data {
-            NodeData::Group => {
-                Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
-            }
-            NodeData::Array(zarr_metadata, _) => {
-                Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
-            }
-        }?;
-
-        Ok(range.slice(full_metadata))
-    }
-
     async fn set_array_meta(
+        &self,
+        path: Path,
+        array_meta: ArrayMetadata,
+        locked_repo: Option<&mut Repository>,
+    ) -> Result<(), StoreError> {
+        match locked_repo {
+            Some(repo) => set_array_meta(path, array_meta, repo).await,
+            None => self.set_array_meta_locking(path, array_meta).await,
+        }
+    }
+
+    async fn set_array_meta_locking(
         &self,
         path: Path,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
-
         let mut guard = self.repository.write().await;
-        if guard.get_array(&path).await.is_ok() {
-            // TODO: we don't necessarily need to update both
-            let repository = guard.deref_mut();
-            repository.set_user_attributes(path.clone(), array_meta.attributes).await?;
-            repository.update_array(path, array_meta.zarr_metadata).await?;
-            Ok(())
-        } else {
-            let repository = guard.deref_mut();
-            repository.add_array(path.clone(), array_meta.zarr_metadata).await?;
-            repository.set_user_attributes(path, array_meta.attributes).await?;
-            Ok(())
-        }
+        set_array_meta(path, array_meta, guard.deref_mut()).await
     }
 
     async fn set_group_meta(
         &self,
         path: Path,
         group_meta: GroupMetadata,
+        locked_repo: Option<&mut Repository>,
     ) -> Result<(), StoreError> {
-        // we need to hold the lock while we search the group and do the update to avoid race
-        // conditions with other writers (notice we don't take &mut self)
-        //
-        let mut guard = self.repository.write().await;
-        if guard.get_group(&path).await.is_ok() {
-            let repository = guard.deref_mut();
-            repository.set_user_attributes(path, group_meta.attributes).await?;
-            Ok(())
-        } else {
-            let repository = guard.deref_mut();
-            repository.add_group(path.clone()).await?;
-            repository.set_user_attributes(path, group_meta.attributes).await?;
-            Ok(())
+        match locked_repo {
+            Some(repo) => set_group_meta(path, group_meta, repo).await,
+            None => self.set_group_meta_locking(path, group_meta).await,
         }
+    }
+
+    async fn set_group_meta_locking(
+        &self,
+        path: Path,
+        group_meta: GroupMetadata,
+    ) -> Result<(), StoreError> {
+        // we need to hold the lock while we search the array and do the update to avoid race
+        // conditions with other writers (notice we don't take &mut self)
+        let mut guard = self.repository.write().await;
+        set_group_meta(path, group_meta, guard.deref_mut()).await
     }
 
     async fn list_metadata_prefix<'a, 'b: 'a>(
@@ -896,6 +851,111 @@ impl Store {
             }
         };
         Ok(res)
+    }
+}
+
+async fn set_array_meta(
+    path: Path,
+    array_meta: ArrayMetadata,
+    repo: &mut Repository,
+) -> Result<(), StoreError> {
+    if repo.get_array(&path).await.is_ok() {
+        // TODO: we don't necessarily need to update both
+        repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
+        repo.update_array(path, array_meta.zarr_metadata).await?;
+        Ok(())
+    } else {
+        repo.add_array(path.clone(), array_meta.zarr_metadata).await?;
+        repo.set_user_attributes(path, array_meta.attributes).await?;
+        Ok(())
+    }
+}
+
+async fn set_group_meta(
+    path: Path,
+    group_meta: GroupMetadata,
+    repo: &mut Repository,
+) -> Result<(), StoreError> {
+    // we need to hold the lock while we search the group and do the update to avoid race
+    // conditions with other writers (notice we don't take &mut self)
+    //
+    if repo.get_group(&path).await.is_ok() {
+        repo.set_user_attributes(path, group_meta.attributes).await?;
+        Ok(())
+    } else {
+        repo.add_group(path.clone()).await?;
+        repo.set_user_attributes(path, group_meta.attributes).await?;
+        Ok(())
+    }
+}
+
+async fn get_metadata(
+    _key: &str,
+    path: &Path,
+    range: &ByteRange,
+    repo: &Repository,
+) -> StoreResult<Bytes> {
+    let node = repo.get_node(path).await.map_err(|_| {
+        StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
+    })?;
+    let user_attributes = match node.user_attributes {
+        None => None,
+        Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
+        // FIXME: implement
+        Some(UserAttributesSnapshot::Ref(_)) => todo!(),
+    };
+    let full_metadata = match node.node_data {
+        NodeData::Group => {
+            Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
+        }
+        NodeData::Array(zarr_metadata, _) => {
+            Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
+        }
+    }?;
+
+    Ok(range.slice(full_metadata))
+}
+
+async fn get_chunk_bytes(
+    key: &str,
+    path: Path,
+    coords: ChunkIndices,
+    byte_range: &ByteRange,
+    repo: &Repository,
+) -> StoreResult<Bytes> {
+    let reader = repo.get_chunk_reader(&path, &coords, byte_range).await?;
+
+    // then we can fetch the bytes without holding the lock
+    let chunk = get_chunk(reader).await?;
+    chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
+        key: key.to_string(),
+        path,
+        coords,
+    }))
+}
+
+async fn get_key(
+    key: &str,
+    byte_range: &ByteRange,
+    repo: &Repository,
+) -> StoreResult<Bytes> {
+    let bytes = match Key::parse(key)? {
+        Key::Metadata { node_path } => {
+            get_metadata(key, &node_path, byte_range, repo).await
+        }
+        Key::Chunk { node_path, coords } => {
+            get_chunk_bytes(key, node_path, coords, byte_range, repo).await
+        }
+    }?;
+
+    Ok(bytes)
+}
+
+async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
+    match get_key(key, &ByteRange::ALL, repo).await {
+        Ok(_) => Ok(true),
+        Err(StoreError::NotFound(_)) => Ok(false),
+        Err(other_error) => Err(other_error),
     }
 }
 
