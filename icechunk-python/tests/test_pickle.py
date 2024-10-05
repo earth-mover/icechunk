@@ -2,7 +2,7 @@ import pickle
 
 import pytest
 import zarr
-from zarr.store.local import LocalStore
+from zarr.storage import LocalStore
 
 import icechunk
 
