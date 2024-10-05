@@ -1,6 +1,6 @@
 from icechunk import IcechunkStore
 
-from zarr.store.common import make_store_path
+from zarr.storage import make_store_path
 
 from ...conftest import parse_store
 
