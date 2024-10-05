@@ -12,7 +12,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0a6"]
+dependencies = ["zarr==3.0.0a7"]
 
 [project.optional-dependencies]
 test = [

@@ -151,10 +151,6 @@ class IcechunkStore(Store, SyncMixin):
         store:
             A new store of the same type with the new mode.
 
-        Examples
-        --------
-        >>> writer = zarr.store.MemoryStore(mode="w")
-        >>> reader = writer.with_mode("r")
         """
         read_only = mode == "r"
         new_store = self._store.with_mode(read_only)
