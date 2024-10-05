@@ -319,7 +319,7 @@ impl Repository {
     pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         self.get_group(&path)
             .await
-            .map(|node| self.change_set.delete_group(&node.path, node.id))
+            .map(|node| self.change_set.delete_group(node.path, node.id))
     }
 
     /// Add an array to the store.
@@ -360,7 +360,7 @@ impl Repository {
     pub async fn delete_array(&mut self, path: Path) -> RepositoryResult<()> {
         self.get_array(&path)
             .await
-            .map(|node| self.change_set.delete_array(&node.path, node.id))
+            .map(|node| self.change_set.delete_array(node.path, node.id))
     }
 
     /// Record the write or delete of user attributes to array or group
@@ -410,11 +410,17 @@ impl Repository {
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
         // We need to look for nodes in self.change_set and the snapshot file
+        if self.change_set.is_deleted(path) {
+            return Err(RepositoryError::NodeNotFound {
+                path: path.clone(),
+                message: "getting node".to_string(),
+            });
+        }
         match self.change_set.get_new_node(path) {
             Some(node) => Ok(node),
             None => {
                 let node = self.get_existing_node(path).await?;
-                if self.change_set.is_deleted(&node.id) {
+                if self.change_set.is_deleted(node.path.as_path()) {
                     Err(RepositoryError::NodeNotFound {
                         path: path.clone(),
                         message: "getting node".to_string(),
@@ -965,7 +971,7 @@ async fn updated_existing_nodes<'a>(
     // TODO: solve this duplication, there is always the possibility of this being the first
     // version
     let updated_nodes =
-        storage.fetch_snapshot(parent_id).await?.iter_arc().map(move |node| {
+        storage.fetch_snapshot(parent_id).await?.iter_arc().filter_map(move |node| {
             let new_manifests = if node.node_type() == NodeType::Array {
                 //FIXME: it could be none for empty arrays
                 Some(vec![ManifestRef {
@@ -1793,6 +1799,23 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        ds.add_group("/".into()).await?;
+        ds.add_group("/a".into()).await?;
+        ds.add_group("/b".into()).await?;
+        ds.add_group("/b/bb".into()).await?;
+        ds.commit("main", "commit", None).await?;
+
+        ds.delete_group("/b".into()).await?;
+        assert!(ds.get_group(&"/b".into()).await.is_err());
+        assert!(ds.get_group(&"/b/bb".into()).await.is_err());
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
@@ -2119,6 +2142,8 @@ mod tests {
                                 "Attempting to delete a non-existent path: {path}",
                             );
                         state.groups.swap_remove(index);
+                        state.groups.retain(|group| !group.starts_with(path));
+                        state.arrays.retain(|array, _| !array.starts_with(path));
                     }
                     _ => panic!(),
                 }
