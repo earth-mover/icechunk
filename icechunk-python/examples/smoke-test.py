@@ -1,6 +1,6 @@
 import asyncio
 from typing import Literal
-from zarr.store import LocalStore, MemoryStore, RemoteStore
+from zarr.storage import LocalStore, MemoryStore, RemoteStore
 import math
 
 import numpy as np
@@ -45,7 +45,7 @@ def create_array(*, group, name, size, dtype, fill_value) -> np.ndarray:
 
     array, chunk_shape = generate_array_chunks(size=size, dtype=dtype)
 
-    group.create_array(
+    group.require_array(
         name=name,
         shape=array.shape,
         dtype=array.dtype,
@@ -157,7 +157,7 @@ async def run(store: Store) -> None:
 
 
 async def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
-    return await IcechunkStore.create(
+    return await IcechunkStore.open(
         storage=storage, mode="r+", config=StoreConfig(inline_chunk_threshold_bytes=1)
     )
 
@@ -171,7 +171,13 @@ async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store
         return RemoteStore.from_url(
             "s3://testbucket/root-zarr",
             mode="w",
-            storage_options={"endpoint_url": "http://localhost:9000"},
+            storage_options={
+                "anon": False,
+                "key": "minio123",
+                "secret": "minio123",
+                "region": "us-east-1",
+                "endpoint_url": "http://localhost:9000"
+            },
         )
 
 
@@ -185,17 +191,15 @@ if __name__ == "__main__":
             secret_access_key="minio123",
             session_token=None,
         ),
+        region="us-east-1",
+        allow_http=True,
         endpoint_url="http://localhost:9000",
     )
-    S3 = StorageConfig.s3_from_env(
-        bucket="icechunk-test",
-        prefix="demo-repository",
-    )
 
-    print("Icechunk store")
-    store = asyncio.run(create_icechunk_store(storage=MINIO))
-    asyncio.run(run(store))
+    # print("Icechunk store")
+    # store = asyncio.run(create_icechunk_store(storage=MINIO))
+    # asyncio.run(run(store))
 
     print("Zarr store")
-    zarr_store = asyncio.run(create_zarr_store(store="s3"))
+    zarr_store = asyncio.run(create_zarr_store(store="local"))
     asyncio.run(run(zarr_store))
