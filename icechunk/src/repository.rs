@@ -1733,6 +1733,66 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        ds.add_group("/".into()).await?;
+        ds.add_group("/1".into()).await?;
+        ds.delete_group("/1".into()).await?;
+        assert_eq!(ds.list_nodes().await?.count(), 1);
+        ds.commit("main", "commit", None).await?;
+        assert!(ds.get_group(&"/".into()).await.is_ok());
+        assert!(ds.get_group(&"/1".into()).await.is_err());
+        assert_eq!(ds.list_nodes().await?.count(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        ds.add_group("/".into()).await?;
+        ds.add_group("/1".into()).await?;
+        ds.commit("main", "commit", None).await?;
+
+        ds.delete_group("/1".into()).await?;
+        assert!(ds.get_group(&"/".into()).await.is_ok());
+        assert!(ds.get_group(&"/1".into()).await.is_err());
+        assert_eq!(ds.list_nodes().await?.count(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        ds.add_group("/".into()).await?;
+        ds.commit("main", "commit", None).await?;
+        ds.delete_group("/".into()).await?;
+        ds.commit("main", "commit", None).await?;
+        assert_eq!(ds.list_nodes().await?.count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_children() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        ds.add_group("/".into()).await?;
+        ds.add_group("/a".into()).await?;
+        ds.add_group("/b".into()).await?;
+        ds.add_group("/b/bb".into()).await?;
+        ds.delete_group("/b".into()).await?;
+        assert!(ds.get_group(&"/b".into()).await.is_err());
+        assert!(ds.get_group(&"/b/bb".into()).await.is_err());
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
