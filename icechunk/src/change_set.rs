@@ -27,8 +27,8 @@ pub struct ChangeSet {
     updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
-    deleted_groups: HashSet<NodeId>,
-    deleted_arrays: HashSet<NodeId>,
+    deleted_groups: HashSet<Path>,
+    deleted_arrays: HashSet<Path>,
 }
 
 impl ChangeSet {
@@ -48,14 +48,43 @@ impl ChangeSet {
         self.new_arrays.get(path)
     }
 
-    pub fn delete_group(&mut self, path: &Path, node_id: NodeId) {
-        let new_node_id = self.new_groups.remove(path);
-        let is_new_group = new_node_id.is_some();
-        debug_assert!(!is_new_group || new_node_id == Some(node_id));
-
+    pub fn delete_group(&mut self, path: Path, node_id: NodeId) {
         self.updated_attributes.remove(&node_id);
-        if !is_new_group {
-            self.deleted_groups.insert(node_id);
+        match self.new_groups.remove(&path) {
+            Some(deleted_node_id) => {
+                // the group was created in this session
+                // so we delete it directly, no need to flag as deleted
+                debug_assert!(deleted_node_id == node_id);
+                self.delete_children(&path);
+            }
+            None => {
+                // it's an old group, we need to flag it as deleted
+                self.deleted_groups.insert(path);
+            }
+        }
+    }
+
+    fn delete_children(&mut self, path: &Path) {
+        let groups_to_delete: Vec<_> = self
+            .new_groups
+            .iter()
+            .filter(|(child_path, _)| child_path.starts_with(path))
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        for (path, node) in groups_to_delete {
+            self.delete_group(path, node);
+        }
+
+        let arrays_to_delete: Vec<_> = self
+            .new_arrays
+            .iter()
+            .filter(|(child_path, _)| child_path.starts_with(path))
+            .map(|(k, (node, _))| (k.clone(), *node))
+            .collect();
+
+        for (path, node) in arrays_to_delete {
+            self.delete_array(path, node);
         }
     }
 
@@ -72,10 +101,10 @@ impl ChangeSet {
         self.updated_arrays.insert(node_id, metadata);
     }
 
-    pub fn delete_array(&mut self, path: &Path, node_id: NodeId) {
+    pub fn delete_array(&mut self, path: Path, node_id: NodeId) {
         // if deleting a new array created in this session, just remove the entry
         // from new_arrays
-        let node_and_meta = self.new_arrays.remove(path);
+        let node_and_meta = self.new_arrays.remove(&path);
         let is_new_array = node_and_meta.is_some();
         debug_assert!(!is_new_array || node_and_meta.map(|n| n.0) == Some(node_id));
 
@@ -83,12 +112,14 @@ impl ChangeSet {
         self.updated_attributes.remove(&node_id);
         self.set_chunks.remove(&node_id);
         if !is_new_array {
-            self.deleted_arrays.insert(node_id);
+            self.deleted_arrays.insert(path);
         }
     }
 
-    pub fn is_deleted(&self, node_id: &NodeId) -> bool {
-        self.deleted_groups.contains(node_id) || self.deleted_arrays.contains(node_id)
+    pub fn is_deleted(&self, path: &Path) -> bool {
+        self.deleted_groups.contains(path)
+            || self.deleted_arrays.contains(path)
+            || path.ancestors().skip(1).any(|parent| self.is_deleted(&parent))
     }
 
     pub fn has_updated_attributes(&self, node_id: &NodeId) -> bool {
@@ -309,29 +340,32 @@ impl ChangeSet {
         &self,
         node: NodeSnapshot,
         new_manifests: Option<Vec<ManifestRef>>,
-    ) -> NodeSnapshot {
+    ) -> Option<NodeSnapshot> {
+        if self.is_deleted(&node.path) {
+            return None;
+        }
+
         let session_atts = self
             .get_user_attributes(node.id)
             .cloned()
             .map(|a| a.map(UserAttributesSnapshot::Inline));
         let new_atts = session_atts.unwrap_or(node.user_attributes);
         match node.node_data {
-            NodeData::Group => NodeSnapshot { user_attributes: new_atts, ..node },
+            NodeData::Group => Some(NodeSnapshot { user_attributes: new_atts, ..node }),
             NodeData::Array(old_zarr_meta, _) => {
                 let new_zarr_meta = self
                     .get_updated_zarr_metadata(node.id)
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 
-                NodeSnapshot {
-                    // FIXME: bad option type, change
+                Some(NodeSnapshot {
                     node_data: NodeData::Array(
                         new_zarr_meta,
                         new_manifests.unwrap_or_default(),
                     ),
                     user_attributes: new_atts,
                     ..node
-                }
+                })
             }
         }
     }

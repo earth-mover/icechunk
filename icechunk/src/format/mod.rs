@@ -4,14 +4,15 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     ops::Bound,
-    path::PathBuf,
 };
 
 use bytes::Bytes;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
+use typed_path::Utf8UnixPathBuf;
 
 use crate::metadata::DataType;
 
@@ -19,7 +20,9 @@ pub mod attributes;
 pub mod manifest;
 pub mod snapshot;
 
-pub type Path = PathBuf;
+#[serde_as]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 #[allow(dead_code)]
 pub trait FileTypeTag {}
@@ -230,6 +233,70 @@ pub mod format_constants {
     pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
     pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
     pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
+}
+
+impl Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum PathError {
+    #[error("path must start with a `/` character")]
+    NotAbsolute,
+    #[error(r#"path must be cannonic, cannot include "." or "..""#)]
+    NotCanonic,
+}
+
+impl Path {
+    pub fn root() -> Path {
+        Path(Utf8UnixPathBuf::from("/".to_string()))
+    }
+
+    pub fn new(path: &str) -> Result<Path, PathError> {
+        let buf = Utf8UnixPathBuf::from(path);
+        if !buf.is_absolute() {
+            return Err(PathError::NotAbsolute);
+        }
+
+        if buf.normalize() != buf {
+            return Err(PathError::NotCanonic);
+        }
+        Ok(Path(buf))
+    }
+
+    pub fn starts_with(&self, other: &Path) -> bool {
+        self.0.starts_with(&other.0)
+    }
+
+    pub fn ancestors(&self) -> impl Iterator<Item = Path> + '_ {
+        self.0.ancestors().map(|p| Path(p.to_owned()))
+    }
+}
+
+impl TryFrom<&str> for Path {
+    type Error = PathError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&String> for Path {
+    type Error = PathError;
+
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        value.as_str().try_into()
+    }
+}
+
+impl TryFrom<String> for Path {
+    type Error = PathError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.as_str().try_into()
+    }
 }
 
 #[cfg(test)]
