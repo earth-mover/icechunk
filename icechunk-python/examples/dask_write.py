@@ -148,7 +148,7 @@ async def update(args):
             sleep=max(
                 0,
                 args.max_sleep
-                - ((args.max_sleep - args.min_sleep) / args.sleep_tasks * time),
+                - ((args.max_sleep - args.min_sleep) / (args.sleep_tasks + 1) * time),
             ),
         )
         for time in range(args.t_from, args.t_to, 1)
@@ -263,7 +263,7 @@ async def distributed_write():
         "--max-sleep",
         type=float,
         help="initial tasks sleep by these many seconds",
-        default=0.3,
+        default=0,
     )
     update_parser.add_argument(
         "--min-sleep",
@@ -272,30 +272,36 @@ async def distributed_write():
         default=0,
     )
     update_parser.add_argument(
-        "--sleep-tasks", type=int, help="this many tasks sleep", default=0.3
+        "--sleep-tasks", type=int, help="this many tasks sleep", default=0
+    )
+    update_parser.add_argument(
+        "--distributed-cluster", type=bool, help="use multiple machines", action=argparse.BooleanOptionalAction, default=False
     )
     update_parser.set_defaults(command="update")
 
-    update_parser = subparsers.add_parser("verify", help="verify array chunks")
-    update_parser.add_argument(
+    verify_parser = subparsers.add_parser("verify", help="verify array chunks")
+    verify_parser.add_argument(
         "--t-from",
         type=int,
         help="time position where to start adding chunks (included)",
         required=True,
     )
-    update_parser.add_argument(
+    verify_parser.add_argument(
         "--t-to",
         type=int,
         help="time position where to stop adding chunks (not included)",
         required=True,
     )
-    update_parser.add_argument(
+    verify_parser.add_argument(
         "--workers", type=int, help="number of workers to use", required=True
     )
-    update_parser.add_argument(
+    verify_parser.add_argument(
         "--name", type=str, help="repository name", required=True
     )
-    update_parser.set_defaults(command="verify")
+    verify_parser.add_argument(
+        "--distributed-cluster", type=bool, help="use multiple machines", action=argparse.BooleanOptionalAction, default=False
+    )
+    verify_parser.set_defaults(command="verify")
 
     args = global_parser.parse_args()
     match args.command:
