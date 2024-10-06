@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
     format::{ByteRange, ChunkIndices, Path},
@@ -33,7 +33,7 @@ async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
     let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
-    ds.add_group("/".into()).await?;
+    ds.add_group(Path::root()).await?;
     let zarr_meta = ZarrArrayMetadata {
         shape: vec![N as u64, N as u64],
         data_type: DataType::Float64,
@@ -51,7 +51,7 @@ async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
         dimension_names: Some(vec![Some("x".to_string()), Some("y".to_string())]),
     };
 
-    let new_array_path: Path = "/array".to_string().into();
+    let new_array_path: Path = "/array".try_into().unwrap();
     ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
     let ds = Arc::new(RwLock::new(ds));
@@ -101,7 +101,11 @@ async fn write_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32) {
 
     ds.write()
         .await
-        .set_chunk_ref("/array".into(), ChunkIndices(vec![x, y]), Some(payload))
+        .set_chunk_ref(
+            "/array".try_into().unwrap(),
+            ChunkIndices(vec![x, y]),
+            Some(payload),
+        )
         .await
         .expect("Failed to write chunk ref");
 }
@@ -114,7 +118,7 @@ async fn read_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32, barrier: Arc<Bar
         let readable_ds = ds.read().await;
         let chunk_reader = readable_ds
             .get_chunk_reader(
-                &"/array".into(),
+                &"/array".try_into().unwrap(),
                 &ChunkIndices(vec![x, y]),
                 &ByteRange::ALL,
             )
@@ -159,7 +163,7 @@ async fn list_task(ds: Arc<RwLock<Repository>>, barrier: Arc<Barrier>) {
             .list_nodes()
             .await
             .expect("list_nodes failed")
-            .map(|n| n.path.as_path().to_string_lossy().into_owned())
+            .map(|n| n.path.to_string())
             .collect::<HashSet<_>>();
         assert_eq!(expected_nodes, nodes);
 

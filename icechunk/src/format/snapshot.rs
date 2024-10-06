@@ -313,25 +313,25 @@ mod tests {
         let oid = ObjectId::random();
         let nodes = vec![
             NodeSnapshot {
-                path: "/".into(),
+                path: Path::root(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
-                path: "/a".into(),
+                path: "/a".try_into().unwrap(),
                 id: 2,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
-                path: "/b".into(),
+                path: "/b".try_into().unwrap(),
                 id: 3,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
-                path: "/b/c".into(),
+                path: "/b/c".try_into().unwrap(),
                 id: 4,
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
@@ -339,7 +339,7 @@ mod tests {
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
-                path: "/b/array1".into(),
+                path: "/b/array1".try_into().unwrap(),
                 id: 5,
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid.clone(),
@@ -351,13 +351,13 @@ mod tests {
                 ),
             },
             NodeSnapshot {
-                path: "/array2".into(),
+                path: "/array2".try_into().unwrap(),
                 id: 6,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             },
             NodeSnapshot {
-                path: "/b/array3".into(),
+                path: "/b/array3".try_into().unwrap(),
                 id: 7,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
@@ -377,15 +377,17 @@ mod tests {
         let st = Snapshot::from_iter(&initial, None, manifests, vec![], nodes);
 
         assert_eq!(
-            st.get_node(&"/nonexistent".into()),
-            Err(IcechunkFormatError::NodeNotFound { path: "/nonexistent".into() })
+            st.get_node(&"/nonexistent".try_into().unwrap()),
+            Err(IcechunkFormatError::NodeNotFound {
+                path: "/nonexistent".try_into().unwrap()
+            })
         );
 
-        let node = st.get_node(&"/b/c".into());
+        let node = st.get_node(&"/b/c".try_into().unwrap());
         assert_eq!(
             node,
             Ok(&NodeSnapshot {
-                path: "/b/c".into(),
+                path: "/b/c".try_into().unwrap(),
                 id: 4,
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
@@ -393,21 +395,21 @@ mod tests {
                 node_data: NodeData::Group,
             }),
         );
-        let node = st.get_node(&"/".into());
+        let node = st.get_node(&Path::root());
         assert_eq!(
             node,
             Ok(&NodeSnapshot {
-                path: "/".into(),
+                path: Path::root(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
             }),
         );
-        let node = st.get_node(&"/b/array1".into());
+        let node = st.get_node(&"/b/array1".try_into().unwrap());
         assert_eq!(
             node,
             Ok(&NodeSnapshot {
-                path: "/b/array1".into(),
+                path: "/b/array1".try_into().unwrap(),
                 id: 5,
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid,
@@ -416,21 +418,21 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![man_ref1, man_ref2]),
             }),
         );
-        let node = st.get_node(&"/array2".into());
+        let node = st.get_node(&"/array2".try_into().unwrap());
         assert_eq!(
             node,
             Ok(&NodeSnapshot {
-                path: "/array2".into(),
+                path: "/array2".try_into().unwrap(),
                 id: 6,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             }),
         );
-        let node = st.get_node(&"/b/array3".into());
+        let node = st.get_node(&"/b/array3".try_into().unwrap());
         assert_eq!(
             node,
             Ok(&NodeSnapshot {
-                path: "/b/array3".into(),
+                path: "/b/array3".try_into().unwrap(),
                 id: 7,
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),

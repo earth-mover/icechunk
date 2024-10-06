@@ -49,9 +49,9 @@ ds.add_group("/group2".into()).await?;
 "#,
     );
 
-    ds.add_group("/".into()).await?;
-    ds.add_group("/group1".into()).await?;
-    ds.add_group("/group2".into()).await?;
+    ds.add_group(Path::root()).await?;
+    ds.add_group("/group1".try_into().unwrap()).await?;
+    ds.add_group("/group2".try_into().unwrap()).await?;
 
     println!();
     print_nodes(&ds).await?;
@@ -129,7 +129,7 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
             Some("t".to_string()),
         ]),
     };
-    let array1_path: Path = "/group1/array1".into();
+    let array1_path: Path = "/group1/array1".try_into().unwrap();
     ds.add_array(array1_path.clone(), zarr_meta1).await?;
     println!();
     print_nodes(&ds).await?;
@@ -292,7 +292,7 @@ async fn print_nodes(ds: &Repository) -> Result<(), StoreError> {
             format!(
                 "|{:10?}|{:15}|{:10?}\n",
                 node.node_type(),
-                node.path.to_str().unwrap(),
+                node.path.to_string(),
                 node.user_attributes,
             )
         })
