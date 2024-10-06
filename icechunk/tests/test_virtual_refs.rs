@@ -4,7 +4,7 @@ mod tests {
     use icechunk::{
         format::{
             manifest::{VirtualChunkLocation, VirtualChunkRef},
-            ByteRange, ChunkId, ChunkIndices,
+            ByteRange, ChunkId, ChunkIndices, Path,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
@@ -16,8 +16,8 @@ mod tests {
         zarr::AccessMode,
         Repository, Storage, Store,
     };
-    use std::{error::Error, num::NonZeroU64, path::PathBuf};
-    use std::{path::Path, sync::Arc};
+    use std::{error::Error, num::NonZeroU64};
+    use std::{path::Path as StdPath, sync::Arc};
     use tempfile::TempDir;
 
     use bytes::Bytes;
@@ -67,7 +67,7 @@ mod tests {
                 .expect(&format!("putting chunk to {} failed", &path));
         }
     }
-    async fn create_local_repository(path: &Path) -> Repository {
+    async fn create_local_repository(path: &StdPath) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
         );
@@ -153,7 +153,7 @@ mod tests {
             length: 5,
         });
 
-        let new_array_path: PathBuf = "/array".to_string().into();
+        let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
 
         ds.set_chunk_ref(
@@ -263,7 +263,7 @@ mod tests {
             length: 5,
         });
 
-        let new_array_path: PathBuf = "/array".to_string().into();
+        let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
 
         ds.set_chunk_ref(

@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
-use std::path::PathBuf;
 use std::sync::Arc;
 
+use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
@@ -15,7 +15,10 @@ use crate::{ObjectStorage, Repository};
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
-    any::<PathBuf>()
+    #[allow(clippy::expect_used)]
+    vec(string_regex("[a-zA-Z0-9]*").expect("invalid regex"), 0..10).prop_map(|v| {
+        format!("/{}", v.join("/")).try_into().expect("invalid Path string")
+    })
 }
 
 prop_compose! {

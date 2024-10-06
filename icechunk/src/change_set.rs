@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     mem::take,
-    path::Path as StdPath,
 };
 
 use itertools::Either;
@@ -117,10 +116,10 @@ impl ChangeSet {
         }
     }
 
-    pub fn is_deleted(&self, path: &StdPath) -> bool {
+    pub fn is_deleted(&self, path: &Path) -> bool {
         self.deleted_groups.contains(path)
             || self.deleted_arrays.contains(path)
-            || path.ancestors().skip(1).any(|parent| self.is_deleted(parent))
+            || path.ancestors().skip(1).any(|parent| self.is_deleted(&parent))
     }
 
     pub fn has_updated_attributes(&self, node_id: &NodeId) -> bool {

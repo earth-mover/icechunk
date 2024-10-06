@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     iter::{self},
-    path::PathBuf,
     pin::Pin,
     sync::Arc,
 };
@@ -420,7 +419,7 @@ impl Repository {
             Some(node) => Ok(node),
             None => {
                 let node = self.get_existing_node(path).await?;
-                if self.change_set.is_deleted(node.path.as_path()) {
+                if self.change_set.is_deleted(&node.path) {
                     Err(RepositoryError::NodeNotFound {
                         path: path.clone(),
                         message: "getting node".to_string(),
@@ -649,7 +648,7 @@ impl Repository {
     /// Warning: The presence of a single error may mean multiple missing items
     async fn updated_chunk_iterator(
         &self,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(PathBuf, ChunkInfo)>> + '_>
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + '_>
     {
         let snapshot = self.storage.fetch_snapshot(&self.snapshot_id).await?;
         let nodes = futures::stream::iter(snapshot.iter_arc());
@@ -750,7 +749,7 @@ impl Repository {
 
     pub async fn all_chunks(
         &self,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(PathBuf, ChunkInfo)>> + '_>
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + '_>
     {
         let existing_array_chunks = self.updated_chunk_iterator().await?;
         let new_array_chunks =
@@ -1102,7 +1101,7 @@ async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::{error::Error, num::NonZeroU64, path::PathBuf};
+    use std::{error::Error, num::NonZeroU64};
 
     use crate::{
         format::manifest::ChunkInfo,
@@ -1282,10 +1281,10 @@ mod tests {
             object_id: manifest_id.clone(),
             extents: ManifestExtents(vec![]),
         };
-        let array1_path: PathBuf = "/array1".to_string().into();
+        let array1_path: Path = "/array1".try_into().unwrap();
         let nodes = vec![
             NodeSnapshot {
-                path: "/".into(),
+                path: Path::root(),
                 id: 1,
                 user_attributes: None,
                 node_data: NodeData::Group,
@@ -1323,13 +1322,13 @@ mod tests {
         assert_eq!(nodes.get(1).unwrap(), &node);
 
         let group_name = "/tbd-group".to_string();
-        ds.add_group(group_name.clone().into()).await?;
-        ds.delete_group(group_name.clone().into()).await?;
-        assert!(ds.delete_group(group_name.clone().into()).await.is_err());
-        assert!(ds.get_node(&group_name.into()).await.is_err());
+        ds.add_group(group_name.clone().try_into().unwrap()).await?;
+        ds.delete_group(group_name.clone().try_into().unwrap()).await?;
+        assert!(ds.delete_group(group_name.clone().try_into().unwrap()).await.is_err());
+        assert!(ds.get_node(&group_name.try_into().unwrap()).await.is_err());
 
         // add a new array and retrieve its node
-        ds.add_group("/group".to_string().into()).await?;
+        ds.add_group("/group".try_into().unwrap()).await?;
 
         let zarr_meta2 = ZarrArrayMetadata {
             shape: vec![3],
@@ -1345,7 +1344,7 @@ mod tests {
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
-        let new_array_path: PathBuf = "/group/array2".to_string().into();
+        let new_array_path: Path = "/group/array2".to_string().try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
         ds.delete_array(new_array_path.clone()).await?;
@@ -1377,7 +1376,7 @@ mod tests {
         assert_eq!(
             node.ok(),
             Some(NodeSnapshot {
-                path: "/group/array2".into(),
+                path: "/group/array2".try_into().unwrap(),
                 id: 6,
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"n":42}"#).unwrap()
@@ -1443,7 +1442,7 @@ mod tests {
         .await?;
         assert_eq!(chunk, Some(data));
 
-        let path: Path = "/group/array2".into();
+        let path: Path = "/group/array2".try_into().unwrap();
         let node = ds.get_node(&path).await;
         assert!(ds.change_set.has_updated_attributes(&node.as_ref().unwrap().id));
         assert!(ds.delete_array(path.clone()).await.is_ok());
@@ -1479,8 +1478,8 @@ mod tests {
             ]),
         };
 
-        change_set.add_array("foo/bar".into(), 1, zarr_meta.clone());
-        change_set.add_array("foo/baz".into(), 2, zarr_meta);
+        change_set.add_array("/foo/bar".try_into().unwrap(), 1, zarr_meta.clone());
+        change_set.add_array("/foo/baz".try_into().unwrap(), 2, zarr_meta);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(1, ChunkIndices(vec![0, 1]), None);
@@ -1514,7 +1513,7 @@ mod tests {
                 .collect();
             let expected_chunks: Vec<_> = [
                 (
-                    "foo/baz".into(),
+                    "/foo/baz".try_into().unwrap(),
                     ChunkInfo {
                         node: 2,
                         coord: ChunkIndices(vec![0]),
@@ -1522,7 +1521,7 @@ mod tests {
                     },
                 ),
                 (
-                    "foo/baz".into(),
+                    "/foo/baz".try_into().unwrap(),
                     ChunkInfo {
                         node: 2,
                         coord: ChunkIndices(vec![1]),
@@ -1530,7 +1529,7 @@ mod tests {
                     },
                 ),
                 (
-                    "foo/bar".into(),
+                    "/foo/bar".try_into().unwrap(),
                     ChunkInfo {
                         node: 1,
                         coord: ChunkIndices(vec![1, 0]),
@@ -1538,7 +1537,7 @@ mod tests {
                     },
                 ),
                 (
-                    "foo/bar".into(),
+                    "/foo/bar".try_into().unwrap(),
                     ChunkInfo {
                         node: 1,
                         coord: ChunkIndices(vec![1, 1]),
@@ -1563,35 +1562,35 @@ mod tests {
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
-        ds.add_group("/".into()).await?;
+        ds.add_group(Path::root()).await?;
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
 
         assert_eq!(snapshot_id, ds.snapshot_id);
         assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
+            ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot {
                 id: 1,
-                path: "/".into(),
+                path: Path::root(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
         );
-        ds.add_group("/group".into()).await?;
+        ds.add_group("/group".try_into().unwrap()).await?;
         let _snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
         assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
+            ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot {
                 id: 1,
-                path: "/".into(),
+                path: Path::root(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
         );
         assert_eq!(
-            ds.get_node(&"/group".into()).await.ok(),
+            ds.get_node(&"/group".try_into().unwrap()).await.ok(),
             Some(NodeSnapshot {
                 id: 2,
-                path: "/group".into(),
+                path: "/group".try_into().unwrap(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
@@ -1610,7 +1609,7 @@ mod tests {
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
-        let new_array_path: PathBuf = "/group/array1".to_string().into();
+        let new_array_path: Path = "/group/array1".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
         // wo commit to test the case of a chunkless array
@@ -1626,19 +1625,19 @@ mod tests {
 
         let _snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
         assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
+            ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot {
                 id: 1,
-                path: "/".into(),
+                path: Path::root(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
         );
         assert_eq!(
-            ds.get_node(&"/group".into()).await.ok(),
+            ds.get_node(&"/group".try_into().unwrap()).await.ok(),
             Some(NodeSnapshot {
                 id: 2,
-                path: "/group".into(),
+                path: "/group".try_into().unwrap(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
@@ -1744,13 +1743,13 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        ds.add_group("/".into()).await?;
-        ds.add_group("/1".into()).await?;
-        ds.delete_group("/1".into()).await?;
+        ds.add_group(Path::root()).await?;
+        ds.add_group("/1".try_into().unwrap()).await?;
+        ds.delete_group("/1".try_into().unwrap()).await?;
         assert_eq!(ds.list_nodes().await?.count(), 1);
         ds.commit("main", "commit", None).await?;
-        assert!(ds.get_group(&"/".into()).await.is_ok());
-        assert!(ds.get_group(&"/1".into()).await.is_err());
+        assert!(ds.get_group(&Path::root()).await.is_ok());
+        assert!(ds.get_group(&"/1".try_into().unwrap()).await.is_err());
         assert_eq!(ds.list_nodes().await?.count(), 1);
         Ok(())
     }
@@ -1760,13 +1759,13 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        ds.add_group("/".into()).await?;
-        ds.add_group("/1".into()).await?;
+        ds.add_group(Path::root()).await?;
+        ds.add_group("/1".try_into().unwrap()).await?;
         ds.commit("main", "commit", None).await?;
 
-        ds.delete_group("/1".into()).await?;
-        assert!(ds.get_group(&"/".into()).await.is_ok());
-        assert!(ds.get_group(&"/1".into()).await.is_err());
+        ds.delete_group("/1".try_into().unwrap()).await?;
+        assert!(ds.get_group(&Path::root()).await.is_ok());
+        assert!(ds.get_group(&"/1".try_into().unwrap()).await.is_err());
         assert_eq!(ds.list_nodes().await?.count(), 1);
         Ok(())
     }
@@ -1776,9 +1775,9 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        ds.add_group("/".into()).await?;
+        ds.add_group(Path::root()).await?;
         ds.commit("main", "commit", None).await?;
-        ds.delete_group("/".into()).await?;
+        ds.delete_group(Path::root()).await?;
         ds.commit("main", "commit", None).await?;
         assert_eq!(ds.list_nodes().await?.count(), 0);
         Ok(())
@@ -1789,13 +1788,13 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        ds.add_group("/".into()).await?;
-        ds.add_group("/a".into()).await?;
-        ds.add_group("/b".into()).await?;
-        ds.add_group("/b/bb".into()).await?;
-        ds.delete_group("/b".into()).await?;
-        assert!(ds.get_group(&"/b".into()).await.is_err());
-        assert!(ds.get_group(&"/b/bb".into()).await.is_err());
+        ds.add_group(Path::root()).await?;
+        ds.add_group("/a".try_into().unwrap()).await?;
+        ds.add_group("/b".try_into().unwrap()).await?;
+        ds.add_group("/b/bb".try_into().unwrap()).await?;
+        ds.delete_group("/b".try_into().unwrap()).await?;
+        assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
+        assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
         Ok(())
     }
 
@@ -1804,15 +1803,15 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        ds.add_group("/".into()).await?;
-        ds.add_group("/a".into()).await?;
-        ds.add_group("/b".into()).await?;
-        ds.add_group("/b/bb".into()).await?;
+        ds.add_group(Path::root()).await?;
+        ds.add_group("/a".try_into().unwrap()).await?;
+        ds.add_group("/b".try_into().unwrap()).await?;
+        ds.add_group("/b/bb".try_into().unwrap()).await?;
         ds.commit("main", "commit", None).await?;
 
-        ds.delete_group("/b".into()).await?;
-        assert!(ds.get_group(&"/b".into()).await.is_err());
-        assert!(ds.get_group(&"/b/bb".into()).await.is_err());
+        ds.delete_group("/b".try_into().unwrap()).await?;
+        assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
+        assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
         Ok(())
     }
 
@@ -1823,7 +1822,7 @@ mod tests {
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
-        ds.add_group("/".into()).await?;
+        ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
@@ -1838,7 +1837,7 @@ mod tests {
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
-        let new_array_path: PathBuf = "/array".to_string().into();
+        let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
         // we 3 chunks
         ds.set_chunk_ref(
@@ -1887,7 +1886,7 @@ mod tests {
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
 
         // add a new array and retrieve its node
-        ds.add_group("/".into()).await?;
+        ds.add_group(Path::root()).await?;
         let new_snapshot_id =
             ds.commit(Ref::DEFAULT_BRANCH, "first commit", None).await?;
         assert_eq!(
@@ -1902,10 +1901,10 @@ mod tests {
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
         assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
+            ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot {
                 id: 1,
-                path: "/".into(),
+                path: Path::root(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
@@ -1914,10 +1913,10 @@ mod tests {
         let mut ds =
             Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
         assert_eq!(
-            ds.get_node(&"/".into()).await.ok(),
+            ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot {
                 id: 1,
-                path: "/".into(),
+                path: Path::root(),
                 user_attributes: None,
                 node_data: NodeData::Group
             })
@@ -1936,7 +1935,7 @@ mod tests {
             dimension_names: Some(vec![Some("t".to_string())]),
         };
 
-        let new_array_path: PathBuf = "/array1".to_string().into();
+        let new_array_path: Path = "/array1".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
         ds.set_chunk_ref(
             new_array_path.clone(),
@@ -1973,8 +1972,8 @@ mod tests {
         let mut ds2 =
             Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
 
-        ds1.add_group("a".into()).await?;
-        ds2.add_group("b".into()).await?;
+        ds1.add_group("/a".try_into().unwrap()).await?;
+        ds2.add_group("/b".try_into().unwrap()).await?;
 
         let barrier = Arc::new(Barrier::new(2));
         let barrier_c = Arc::clone(&barrier);

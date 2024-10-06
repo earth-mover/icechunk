@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use pretty_assertions::assert_eq;
 use std::{num::NonZeroU64, ops::Range, sync::Arc};
 
@@ -66,14 +67,17 @@ async fn write_chunks(
                 .collect();
             let payload =
                 repo.get_chunk_writer()(Bytes::copy_from_slice(bytes.as_slice())).await?;
-            repo.set_chunk_ref("/array".into(), ChunkIndices(vec![x, y]), Some(payload))
-                .await?;
+            repo.set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![x, y]),
+                Some(payload),
+            )
+            .await?;
         }
     }
     Ok(repo)
 }
 
-#[allow(clippy::unwrap_used)]
 async fn verify(
     repo: Repository,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -81,7 +85,7 @@ async fn verify(
         for y in 0..(SIZE / 2) as u32 {
             let bytes = get_chunk(
                 repo.get_chunk_reader(
-                    &"/array".into(),
+                    &"/array".try_into().unwrap(),
                     &ChunkIndices(vec![x, y]),
                     &ByteRange::ALL,
                 )
@@ -132,7 +136,7 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
         dimension_names: None,
     };
 
-    let new_array_path: Path = "/array".to_string().into();
+    let new_array_path: Path = "/array".try_into().unwrap();
     repo1.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
     repo1.commit("main", "create array", None).await?;
 
