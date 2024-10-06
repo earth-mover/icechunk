@@ -1,7 +1,10 @@
-use crate::format::{
-    attributes::AttributesTable, format_constants, manifest::Manifest,
-    snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
-    ObjectId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, format_constants, manifest::Manifest,
+        snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
+        ObjectId, SnapshotId,
+    },
+    private,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -150,6 +153,8 @@ impl ObjectStorage {
             .boxed()
     }
 }
+
+impl private::Sealed for ObjectStorage {}
 
 #[async_trait]
 impl Storage for ObjectStorage {
