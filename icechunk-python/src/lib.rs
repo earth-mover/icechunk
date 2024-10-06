@@ -263,7 +263,7 @@ impl PyIcechunkStore {
 
         // FIXME: Use rmp_serde instead of serde_json to optimize performance
         let serialized = serde_json::to_vec(&consolidated)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(|e| PyValueError::new_err(e.to_string())).unwrap();
         Ok(Cow::Owned(serialized))
     }
 
