@@ -37,4 +37,11 @@ run-all-examples:
   for example in icechunk/examples/*.rs; do cargo run --example "$(basename "${example%.rs}")"; done
 
 # run all checks that CI actions will run
-pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects": (compile-tests "--locked") build (format "--check") lint test run-all-examples check-deps
+pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+  just compile-tests "--locked"
+  just build
+  just format "--check"
+  just lint
+  just test
+  just run-all-examples
+  just check-deps
