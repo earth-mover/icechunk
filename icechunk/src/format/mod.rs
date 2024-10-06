@@ -14,7 +14,7 @@ use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
 
-use crate::metadata::DataType;
+use crate::{metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
@@ -25,7 +25,7 @@ pub mod snapshot;
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 #[allow(dead_code)]
-pub trait FileTypeTag {}
+pub trait FileTypeTag: private::Sealed {}
 
 /// The id of a file in object store
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,6 +43,10 @@ pub struct ChunkTag;
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
+impl private::Sealed for SnapshotTag {}
+impl private::Sealed for ManifestTag {}
+impl private::Sealed for ChunkTag {}
+impl private::Sealed for AttributesTag {}
 impl FileTypeTag for SnapshotTag {}
 impl FileTypeTag for ManifestTag {}
 impl FileTypeTag for ChunkTag {}
