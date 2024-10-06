@@ -757,6 +757,15 @@ impl Repository {
         Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
+    pub async fn merge<I: IntoIterator<Item = Repository>>(
+        &mut self,
+        other_repositories: I,
+    ) -> RepositoryResult<()> {
+        let change_sets = other_repositories.into_iter().map(|r| r.change_set);
+        self.change_set.merge_many(change_sets);
+        Ok(())
+    }
+
     pub async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
         &mut self,
         other_change_sets: I,

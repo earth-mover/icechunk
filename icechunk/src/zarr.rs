@@ -435,6 +435,13 @@ impl Store {
         Ok((snapshot_id, version))
     }
 
+    pub async fn merge<I: IntoIterator<Item = Store>>(&self, other_stores: I) -> StoreResult<()> {
+        // TODO: Need to figure out how to merge multiple stores, since all the repositories
+        // are behind an Arc<RwLock<>>.
+
+        todo!()
+    }
+
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
     pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
