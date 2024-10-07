@@ -1043,7 +1043,7 @@ async fn flush(
                 .await?;
 
             let all_nodes =
-                updated_nodes(storage, &change_set, parent_id, &new_manifest_id).await?;
+                updated_nodes(storage, change_set, parent_id, &new_manifest_id).await?;
 
             let mut new_snapshot = Snapshot::from_iter(
                 old_snapshot.as_ref(),

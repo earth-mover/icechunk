@@ -456,8 +456,8 @@ impl Store {
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
 
-        let result = self.repository.write().await.merge(repositories).await?;
-        Ok(result)
+        self.repository.write().await.merge(repositories).await?;
+        Ok(())
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
