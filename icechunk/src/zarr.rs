@@ -44,6 +44,7 @@ pub use crate::format::ObjectId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum StorageConfig {
     #[serde(rename = "in_memory")]
     InMemory { prefix: Option<String> },
@@ -90,6 +91,7 @@ impl StorageConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
     SnapshotId(SnapshotId),
@@ -235,6 +237,7 @@ impl ConsolidatedStore {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AccessMode {
     #[serde(rename = "r")]
     ReadOnly,
@@ -245,6 +248,7 @@ pub enum AccessMode {
 pub type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum KeyNotFoundError {
     #[error("chunk cannot be find for key `{key}`")]
     ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
@@ -253,6 +257,7 @@ pub enum KeyNotFoundError {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StoreError {
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },

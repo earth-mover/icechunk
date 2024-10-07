@@ -212,6 +212,7 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 pub type TableOffset = u32;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IcechunkFormatError {
     #[error("error decoding fill_value from array")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
@@ -246,6 +247,7 @@ impl Display for Path {
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PathError {
     #[error("path must start with a `/` character")]
     NotAbsolute,

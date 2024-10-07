@@ -140,6 +140,7 @@ impl RepositoryBuilder {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum RepositoryError {
     #[error("error contacting storage {0}")]
     StorageError(#[from] StorageError),
