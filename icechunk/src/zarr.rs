@@ -262,6 +262,8 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
+    #[error("error merging stores: `{0}`")]
+    MergeError(String),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("all commits must be made on a branch")]
@@ -435,11 +437,27 @@ impl Store {
         Ok((snapshot_id, version))
     }
 
-    pub async fn merge<I: IntoIterator<Item = Store>>(&self, other_stores: I) -> StoreResult<()> {
-        // TODO: Need to figure out how to merge multiple stores, since all the repositories
-        // are behind an Arc<RwLock<>>.
+    pub async fn merge<I: IntoIterator<Item = Store>>(
+        &self,
+        other_stores: I,
+    ) -> StoreResult<()> {
+        let repositories = other_stores
+            .into_iter()
+            .enumerate()
+            .map(|(i, store)| {
+                let repository_lock =
+                    Arc::try_unwrap(store.repository).map_err(|_| {
+                        StoreError::MergeError(format!(
+                            "store at index {i} in merge operation is still in use"
+                        ))
+                    })?;
+                let repository = repository_lock.into_inner();
+                Ok(repository)
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
 
-        todo!()
+        let result = self.repository.write().await.merge(repositories).await?;
+        Ok(result)
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
