@@ -354,8 +354,9 @@ impl PyIcechunkStore {
         // The commit mechanism is async and calls tokio::spawn so we need to use the
         // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut writeable_store = store.write().await;
-            let oid = writeable_store
+            let oid = store
+                .read()
+                .await
                 .commit(&message)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -363,25 +364,25 @@ impl PyIcechunkStore {
         })
     }
 
-    fn distributed_commit<'py>(
-        &'py self,
-        py: Python<'py>,
-        message: String,
-        other_change_set_bytes: Vec<Vec<u8>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let store = Arc::clone(&self.store);
+    // fn distributed_commit<'py>(
+    //     &'py self,
+    //     py: Python<'py>,
+    //     message: String,
+    //     other_change_set_bytes: Vec<Vec<u8>>,
+    // ) -> PyResult<Bound<'py, PyAny>> {
+    //     let store = Arc::clone(&self.store);
 
-        // The commit mechanism is async and calls tokio::spawn so we need to use the
-        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut writeable_store = store.write().await;
-            let oid = writeable_store
-                .distributed_commit(&message, other_change_set_bytes)
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
-            Ok(String::from(&oid))
-        })
-    }
+    //     // The commit mechanism is async and calls tokio::spawn so we need to use the
+    //     // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
+    //     pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+    //         let mut writeable_store = store.write().await;
+    //         let oid = writeable_store
+    //             .distributed_commit(&message, other_change_set_bytes)
+    //             .await
+    //             .map_err(PyIcechunkStoreError::from)?;
+    //         Ok(String::from(&oid))
+    //     })
+    // }
 
     fn change_set_bytes(&self) -> PyIcechunkStoreResult<Vec<u8>> {
         let store = self.store.blocking_read();
@@ -410,12 +411,7 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
 
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            store
-                .write()
-                .await
-                .reset()
-                .await
-                .map_err(PyIcechunkStoreError::StoreError)?;
+            store.read().await.reset().await.map_err(PyIcechunkStoreError::StoreError)?;
             Ok(())
         })
     }
@@ -450,10 +446,14 @@ impl PyIcechunkStore {
         // The commit mechanism is async and calls tokio::spawn so we need to use the
         // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let mut writeable_store = store.write().await;
             let oid = ObjectId::try_from(snapshot_id.as_str())
                 .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
-            writeable_store.tag(&tag, &oid).await.map_err(PyIcechunkStoreError::from)?;
+            store
+                .read()
+                .await
+                .tag(&tag, &oid)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
@@ -627,14 +627,16 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
+        let virtual_ref = VirtualChunkRef {
+            location: VirtualChunkLocation::Absolute(location),
+            offset,
+            length,
+        };
+
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
-            let virtual_ref = VirtualChunkRef {
-                location: VirtualChunkLocation::Absolute(location),
-                offset,
-                length,
-            };
-            let mut store = store.write().await;
             store
+                .read()
+                .await
                 .set_virtual_ref(&key, virtual_ref)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;

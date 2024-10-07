@@ -345,7 +345,7 @@ mod tests {
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
         let ds = create_minio_repository().await;
-        let mut store = Store::from_repository(
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),

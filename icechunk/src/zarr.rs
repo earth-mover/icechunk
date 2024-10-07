@@ -369,15 +369,8 @@ impl Store {
 
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
-    pub async fn reset(&mut self) -> StoreResult<()> {
-        let guard = self.repository.read().await;
-        // carefully avoid the deadlock if we were to call self.snapshot_id()
-        let head_snapshot = guard.snapshot_id().clone();
-        let storage = Arc::clone(guard.storage());
-        let new_repository = Repository::update(storage, head_snapshot).build();
-        drop(guard);
-        self.repository = Arc::new(RwLock::new(new_repository));
-
+    pub async fn reset(&self) -> StoreResult<()> {
+        let _changes = self.repository.write().await.discard_changes();
         Ok(())
     }
 
@@ -462,7 +455,7 @@ impl Store {
 
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
-    pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
+    pub async fn commit(&self, message: &str) -> StoreResult<SnapshotId> {
         let Some(branch) = &self.current_branch else {
             return Err(StoreError::NotOnBranch);
         };
@@ -478,7 +471,7 @@ impl Store {
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(&mut self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
+    pub async fn tag(&self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
         self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
@@ -648,7 +641,7 @@ impl Store {
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
     pub async fn set_virtual_ref(
-        &mut self,
+        &self,
         key: &str,
         reference: VirtualChunkRef,
     ) -> StoreResult<()> {
@@ -1686,7 +1679,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),

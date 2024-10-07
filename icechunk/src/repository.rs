@@ -281,6 +281,11 @@ impl Repository {
         !self.change_set.is_empty()
     }
 
+    /// Discard all uncommitted changes and return them as a `ChangeSet`
+    pub fn discard_changes(&mut self) -> ChangeSet {
+        std::mem::take(&mut self.change_set)
+    }
+
     /// Returns the sequence of parents of the current session, in order of latest first.
     pub async fn ancestry(
         &self,
@@ -1587,6 +1592,14 @@ mod tests {
 
         // wo commit to test the case of a chunkless array
         let _snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
+
+        let new_new_array_path: Path = "/group/array2".try_into().unwrap();
+        ds.add_array(new_new_array_path.clone(), zarr_meta.clone()).await?;
+
+        assert!(ds.has_uncommitted_changes());
+        let changes = ds.discard_changes();
+        assert!(!changes.is_empty());
+        assert!(!ds.has_uncommitted_changes());
 
         // we set a chunk in a new array
         ds.set_chunk_ref(
