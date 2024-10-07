@@ -171,13 +171,6 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
     let repo3 = write_results.pop().unwrap().unwrap();
     let repo4 = write_results.pop().unwrap().unwrap();
 
-    // We get the ChangeSet from repos 2, 3 and 4, by converting them into bytes.
-    // This simulates a marshalling  operation from a remote writer.
-    // let change_sets: Vec<ChangeSet> = vec![repo2.into(), repo3.into(), repo4.into()];
-    // let change_sets_bytes = change_sets.iter().map(|cs| cs.export_to_bytes().unwrap());
-    // let change_sets = change_sets_bytes
-    //     .map(|bytes| ChangeSet::import_from_bytes(bytes.as_slice()).unwrap());
-
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
     repo1.merge(vec![repo2, repo3, repo4]).await?;
