@@ -6,7 +6,7 @@ use bytes::Bytes;
 use icechunk::{
     format::{ByteRange, ChunkIndices, Path, SnapshotId},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-    repository::{get_chunk, ChangeSet, ZarrArrayMetadata},
+    repository::{get_chunk, ZarrArrayMetadata},
     storage::s3::{S3Config, S3Credentials, S3Storage},
     Repository, Storage,
 };
@@ -173,15 +173,15 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
 
     // We get the ChangeSet from repos 2, 3 and 4, by converting them into bytes.
     // This simulates a marshalling  operation from a remote writer.
-    let change_sets: Vec<ChangeSet> = vec![repo2.into(), repo3.into(), repo4.into()];
-    let change_sets_bytes = change_sets.iter().map(|cs| cs.export_to_bytes().unwrap());
-    let change_sets = change_sets_bytes
-        .map(|bytes| ChangeSet::import_from_bytes(bytes.as_slice()).unwrap());
+    // let change_sets: Vec<ChangeSet> = vec![repo2.into(), repo3.into(), repo4.into()];
+    // let change_sets_bytes = change_sets.iter().map(|cs| cs.export_to_bytes().unwrap());
+    // let change_sets = change_sets_bytes
+    //     .map(|bytes| ChangeSet::import_from_bytes(bytes.as_slice()).unwrap());
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
-    let _new_snapshot =
-        repo1.distributed_commit("main", change_sets, "distributed commit", None).await?;
+    repo1.merge(vec![repo2, repo3, repo4]).await?;
+    let _new_snapshot = repo1.commit("main", "distributed commit", None).await?;
 
     // We check we can read all chunks correctly
     verify(repo1).await?;

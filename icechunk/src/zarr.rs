@@ -463,30 +463,18 @@ impl Store {
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
     pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
-        self.distributed_commit(message, vec![]).await
-    }
+        let Some(branch) = &self.current_branch else {
+            return Err(StoreError::NotOnBranch);
+        };
 
-    pub async fn distributed_commit<'a, I: IntoIterator<Item = Vec<u8>>>(
-        &mut self,
-        message: &str,
-        other_changesets_bytes: I,
-    ) -> StoreResult<SnapshotId> {
-        if let Some(branch) = &self.current_branch {
-            let other_change_sets: Vec<ChangeSet> = other_changesets_bytes
-                .into_iter()
-                .map(|v| ChangeSet::import_from_bytes(v.as_slice()))
-                .try_collect()?;
-            let result = self
-                .repository
-                .write()
-                .await
-                .deref_mut()
-                .distributed_commit(branch, other_change_sets, message, None)
-                .await?;
-            Ok(result)
-        } else {
-            Err(StoreError::NotOnBranch)
-        }
+        let result = self
+            .repository
+            .write()
+            .await
+            .deref_mut()
+            .commit(branch, message, None)
+            .await?;
+        Ok(result)
     }
 
     /// Tag the given snapshot with a specified tag

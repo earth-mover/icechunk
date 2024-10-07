@@ -766,28 +766,6 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
-        &mut self,
-        other_change_sets: I,
-        message: &str,
-        properties: SnapshotProperties,
-    ) -> RepositoryResult<SnapshotId> {
-        // FIXME: this clone can be avoided
-        let change_sets = iter::once(self.change_set.clone()).chain(other_change_sets);
-        let new_snapshot_id = distributed_flush(
-            self.storage.as_ref(),
-            self.snapshot_id(),
-            change_sets,
-            message,
-            properties,
-        )
-        .await?;
-
-        self.snapshot_id = new_snapshot_id.clone();
-        self.change_set = ChangeSet::default();
-        Ok(new_snapshot_id)
-    }
-
     /// After changes to the repository have been made, this generates and writes to `Storage` the updated datastructures.
     ///
     /// After calling this, changes are reset and the [`Repository`] can continue to be used for further
@@ -800,7 +778,23 @@ impl Repository {
         message: &str,
         properties: SnapshotProperties,
     ) -> RepositoryResult<SnapshotId> {
-        self.distributed_flush(iter::empty(), message, properties).await
+        // TODO: can this clone can be avoided? its difficult because
+        // self is borrows for flush and the change set should only
+        // be cleared after the flush is successful.
+        let mut change_set = self.change_set.clone();
+
+        let new_snapshot_id = flush(
+            self.storage.as_ref(),
+            self.snapshot_id(),
+            &mut change_set,
+            message,
+            properties,
+        )
+        .await?;
+
+        self.snapshot_id = new_snapshot_id.clone();
+        self.change_set = ChangeSet::default();
+        Ok(new_snapshot_id)
     }
 
     pub async fn commit(
@@ -809,27 +803,11 @@ impl Repository {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> RepositoryResult<SnapshotId> {
-        self.distributed_commit(update_branch_name, iter::empty(), message, properties)
-            .await
-    }
-
-    pub async fn distributed_commit<I: IntoIterator<Item = ChangeSet>>(
-        &mut self,
-        update_branch_name: &str,
-        other_change_sets: I,
-        message: &str,
-        properties: Option<SnapshotProperties>,
-    ) -> RepositoryResult<SnapshotId> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
+
         match current {
             Err(RefError::RefNotFound(_)) => {
-                self.do_distributed_commit(
-                    update_branch_name,
-                    other_change_sets,
-                    message,
-                    properties,
-                )
-                .await
+                self.do_commit(update_branch_name, message, properties).await
             }
             Err(err) => Err(err.into()),
             Ok(ref_data) => {
@@ -840,29 +818,21 @@ impl Repository {
                         actual_parent: Some(ref_data.snapshot.clone()),
                     })
                 } else {
-                    self.do_distributed_commit(
-                        update_branch_name,
-                        other_change_sets,
-                        message,
-                        properties,
-                    )
-                    .await
+                    self.do_commit(update_branch_name, message, properties).await
                 }
             }
         }
     }
 
-    async fn do_distributed_commit<I: IntoIterator<Item = ChangeSet>>(
+    async fn do_commit(
         &mut self,
         update_branch_name: &str,
-        other_change_sets: I,
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> RepositoryResult<SnapshotId> {
         let parent_snapshot = self.snapshot_id.clone();
         let properties = properties.unwrap_or_default();
-        let new_snapshot =
-            self.distributed_flush(other_change_sets, message, properties).await?;
+        let new_snapshot = self.flush(message, properties).await?;
 
         match update_branch(
             self.storage.as_ref(),
@@ -1006,19 +976,13 @@ async fn updated_nodes<'a>(
         .chain(change_set.new_nodes_iterator(manifest_id)))
 }
 
-async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
+async fn flush(
     storage: &(dyn Storage + Send + Sync),
     parent_id: &SnapshotId,
-    change_sets: I,
+    change_set: &mut ChangeSet,
     message: &str,
     properties: SnapshotProperties,
 ) -> RepositoryResult<SnapshotId> {
-    let mut change_set = ChangeSet::default();
-    change_set.merge_many(change_sets);
-    if change_set.is_empty() {
-        return Err(RepositoryError::NoChangesToCommit);
-    }
-
     // We search for the current manifest. We are assumming a single one for now
     let old_snapshot = storage.fetch_snapshot(parent_id).await?;
     let old_snapshot_c = Arc::clone(&old_snapshot);
@@ -1047,8 +1011,8 @@ async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
     // As a solution, we temporarily `take` the map, replacing it an empty one, run the thread,
     // and at the end we put the map back to where it was, in case there is some later failure.
     // We always want to leave things in the previous state if there was a failure.
-
-    let chunk_changes = Arc::new(change_set.take_chunks());
+    let chunks = change_set.take_chunks();
+    let chunk_changes = Arc::new(chunks);
     let chunk_changes_c = Arc::clone(&chunk_changes);
 
     let update_task = task::spawn_blocking(move || {
@@ -1105,6 +1069,106 @@ async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
         Err(_) => Err(RepositoryError::OtherFlushError),
     }
 }
+
+// async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
+//     storage: &(dyn Storage + Send + Sync),
+//     parent_id: &SnapshotId,
+//     change_sets: I,
+//     message: &str,
+//     properties: SnapshotProperties,
+// ) -> RepositoryResult<SnapshotId> {
+//     let mut change_set = ChangeSet::default();
+//     change_set.merge_many(change_sets);
+//     if change_set.is_empty() {
+//         return Err(RepositoryError::NoChangesToCommit);
+//     }
+
+//     // We search for the current manifest. We are assumming a single one for now
+//     let old_snapshot = storage.fetch_snapshot(parent_id).await?;
+//     let old_snapshot_c = Arc::clone(&old_snapshot);
+//     let manifest_id = old_snapshot_c.iter_arc().find_map(|node| {
+//         match node.node_data {
+//             NodeData::Array(_, man) => {
+//                 // TODO: can we avoid clone
+//                 man.first().map(|manifest| manifest.object_id.clone())
+//             }
+//             NodeData::Group => None,
+//         }
+//     });
+
+//     let old_manifest = match manifest_id {
+//         Some(ref manifest_id) => storage.fetch_manifests(manifest_id).await?,
+//         // If there is no previous manifest we create an empty one
+//         None => Arc::new(Manifest::default()),
+//     };
+
+//     // The manifest update process is CPU intensive, so we want to executed it on a worker
+//     // thread. Currently it's also destructive of the manifest, so we are also cloning the
+//     // old manifest data
+//     //
+//     // The update process requires reference access to the set_chunks map, since we are running
+//     // it on blocking task, it wants that reference to be 'static, which we cannot provide.
+//     // As a solution, we temporarily `take` the map, replacing it an empty one, run the thread,
+//     // and at the end we put the map back to where it was, in case there is some later failure.
+//     // We always want to leave things in the previous state if there was a failure.
+
+//     let chunk_changes = Arc::new(change_set.take_chunks());
+//     let chunk_changes_c = Arc::clone(&chunk_changes);
+
+//     let update_task = task::spawn_blocking(move || {
+//         //FIXME: avoid clone, this one is extremely expensive en memory
+//         //it's currently needed because we don't want to destroy the manifest in case of later
+//         //failure
+//         let mut new_chunks = old_manifest.as_ref().chunks().clone();
+//         update_manifest(&mut new_chunks, &chunk_changes_c);
+//         (new_chunks, chunk_changes)
+//     });
+
+//     match update_task.await {
+//         Ok((new_chunks, chunk_changes)) => {
+//             // reset the set_chunks map to it's previous value
+//             #[allow(clippy::expect_used)]
+//             {
+//                 // It's OK to call into_inner here because we created the Arc locally and never
+//                 // shared it with other code
+//                 let chunks =
+//                     Arc::into_inner(chunk_changes).expect("Bug in flush task join");
+//                 change_set.set_chunks(chunks);
+//             }
+
+//             let new_manifest = Arc::new(Manifest::new(new_chunks));
+//             let new_manifest_id = ObjectId::random();
+//             storage
+//                 .write_manifests(new_manifest_id.clone(), Arc::clone(&new_manifest))
+//                 .await?;
+
+//             let all_nodes =
+//                 updated_nodes(storage, &change_set, parent_id, &new_manifest_id).await?;
+
+//             let mut new_snapshot = Snapshot::from_iter(
+//                 old_snapshot.as_ref(),
+//                 Some(properties),
+//                 vec![ManifestFileInfo {
+//                     id: new_manifest_id.clone(),
+//                     format_version: new_manifest.icechunk_manifest_format_version,
+//                 }],
+//                 vec![],
+//                 all_nodes,
+//             );
+//             new_snapshot.metadata.message = message.to_string();
+//             new_snapshot.metadata.written_at = Utc::now();
+
+//             let new_snapshot = Arc::new(new_snapshot);
+//             let new_snapshot_id = &new_snapshot.metadata.id;
+//             storage
+//                 .write_snapshot(new_snapshot_id.clone(), Arc::clone(&new_snapshot))
+//                 .await?;
+
+//             Ok(new_snapshot_id.clone())
+//         }
+//         Err(_) => Err(RepositoryError::OtherFlushError),
+//     }
+// }
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
