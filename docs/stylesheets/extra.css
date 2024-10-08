@@ -1,0 +1,13 @@
+/* Notebook Adjustments */
+/* Hides prompts ([In]/[Out]) */
+.jp-InputPrompt {
+  display: none !important;
+}
+
+.jp-OutputPrompt {
+  display: none !important;
+}
+
+body {
+  background-color: red !important;
+}

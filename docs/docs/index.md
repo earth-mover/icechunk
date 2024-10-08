@@ -1,9 +1,11 @@
+---
+title: Icechunk - Transactional storage engine for Zarr on cloud object storage.
+---
+
 # Icechunk
 
-![Icechunk logo](icechunk_logo.png)
-
-Icechunk is a transactional storage engine for Zarr designed for use on cloud object storage.
-<!--home-start-->
+!!! info "Welcome to Icechunk!"
+    Icechunk is a transactional storage engine for Zarr designed for use on cloud object storage.
 
 Let's break down what that means:
 
@@ -36,7 +38,7 @@ Icechunk aspires to support the following core requirements for stores:
 
 This Icechunk project consists of three main parts:
 
-1. The [Icechunk specification](spec/icechunk-spec.md).
+1. The [Icechunk specification](./spec.md).
 1. A Rust implementation
 1. A Python wrapper which exposes a Zarr store interface
 
@@ -50,102 +52,13 @@ Governance of the project will be managed by Earthmover PBC.
 
 ## How Can I Use It?
 
-We recommend using Icechunk from Python, together with the Zarr-Python library
+We recommend using [Icechunk from Python](./icechunk-python/index.md), together with the Zarr-Python library. 
 
 !!! warning "Icechunk is a very new project."
     It is not recommended for production use at this time.
     These instructions are aimed at Icechunk developers and curious early adopters.
 
-### Installation and Dependencies
-
-Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
-Using it today requires installing the [still unreleased] Zarr Python V3 branch.
-
-To set up an Icechunk development environment, follow these steps
-
-Activate your preferred virtual environment (here we use `virtualenv`):
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Alternatively, create a conda environment
-
-```bash
-mamba create -n icechunk rust python=3.12
-conda activate icechunk
-```
-
-Install `maturin`:
-
-```bash
-pip install maturin
-```
-
-Build the project in dev mode:
-
-```bash
-cd icechunk-python/
-maturin develop
-```
-
-or build the project in editable mode:
-
-```bash
-cd icechunk-python/
-pip install -e icechunk@.
-```
-
-> [!WARNING]
-> This only makes the python source code editable, the rust will need to
-> be recompiled when it changes
-
-### Basic Usage
-
-Once you have everything installed, here's an example of how to use Icechunk.
-
-```python
-from icechunk import IcechunkStore, StorageConfig
-from zarr import Array, Group
-
-
-# Example using memory store
-storage = StorageConfig.memory("test")
-store = await IcechunkStore.open(storage=storage, mode='r+')
-
-# Example using file store
-storage = StorageConfig.filesystem("/path/to/root")
-store = await IcechunkStore.open(storage=storage, mode='r+')
-
-# Example using S3
-s3_storage = StorageConfig.s3_from_env(bucket="icechunk-test", prefix="oscar-demo-repository")
-store = await IcechunkStore.open(storage=storage, mode='r+')
-```
-
-## Running Tests
-
-You will need [`docker compose`](https://docs.docker.com/compose/install/) and (optionally) [`just`](https://just.systems/).
-Once those are installed, first switch to the icechunk root directory, then start up a local minio server:
-```
-docker compose up -d
-```
-
-Use `just` to conveniently run a test
-```
-just test
-```
-
-This is just an alias for
-
-```
-cargo test --all
-```
-
-!!! tip 
-    For other aliases see [Justfile](./Justfile).
-
-## Snapshots, Branches, and Tags
+## Key Concepts: Snapshots, Branches, and Tags
 
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.
 Icechunk users must organize their updates into groups of related operations called **transactions**.
@@ -168,11 +81,11 @@ Tags are appropriate for publishing specific releases of a repository or for any
 
 ## How Does It Work?
 
-> [!NOTE]
-> For more detailed explanation, have a look at the [Icechunk spec](spec/icechunk-spec.md)
+!!! note
+    For more detailed explanation, have a look at the [Icechunk spec](./spec.md)
 
 Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
-For example, a 2D Zarr array called myarray, within a group called mygroup, would generate the following keys.
+For example, a 2D Zarr array called myarray, within a group called mygroup, would generate the following keys:
 
 ```
 mygroup/zarr.json
