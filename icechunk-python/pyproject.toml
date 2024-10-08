@@ -14,6 +14,16 @@ dynamic = ["version"]
 
 dependencies = ["zarr==3.0.0a7"]
 
+[tool.poetry]
+name = "icechunk"
+version = "0.1.0"
+description = "Icechunk Python"
+authors = ["Earthmover <info@earthmover.io>"]
+readme = "README.md"
+packages = [
+    { include = "icechunk", from = "python" }
+]
+
 [project.optional-dependencies]
 test = [
   "coverage",
