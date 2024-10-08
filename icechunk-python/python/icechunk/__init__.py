@@ -8,6 +8,7 @@ from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
 from ._icechunk_python import (
+    __version__,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
@@ -21,6 +22,7 @@ from ._icechunk_python import (
 )
 
 __all__ = [
+    "__version__",
     "IcechunkStore",
     "StorageConfig",
     "S3Credentials",

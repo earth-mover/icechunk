@@ -753,6 +753,7 @@ impl PyIcechunkStore {
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyStorageConfig>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_class::<PyS3Credentials>()?;
