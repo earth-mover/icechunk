@@ -235,3 +235,5 @@ async def pyicechunk_store_open_existing(
 def pyicechunk_store_from_bytes(
     bytes: bytes, read_only: bool
 ) -> PyIcechunkStore: ...
+
+__version__: str
