@@ -1,17 +1,15 @@
 import asyncio
-from typing import Literal
-from zarr.storage import LocalStore, MemoryStore, RemoteStore
 import math
+import random
+import string
+import time
+from typing import Literal
 
 import numpy as np
 import zarr
-import time
-
+from icechunk import IcechunkStore, S3Credentials, StorageConfig, StoreConfig
 from zarr.abc.store import Store
-
-from icechunk import IcechunkStore, StorageConfig, S3Credentials, StoreConfig
-import random
-import string
+from zarr.storage import LocalStore, MemoryStore, RemoteStore
 
 
 def rdms(n):
@@ -149,7 +147,7 @@ async def run(store: Store) -> None:
         assert isinstance(array, zarr.Array)
 
         print(
-            f"numchunks: {math.prod(s // c for s, c in zip(array.shape, array.chunks))}"
+            f"numchunks: {math.prod(s // c for s, c in zip(array.shape, array.chunks, strict=False))}"
         )
         np.testing.assert_array_equal(array[:], value)
 
@@ -176,7 +174,7 @@ async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store
                 "key": "minio123",
                 "secret": "minio123",
                 "region": "us-east-1",
-                "endpoint_url": "http://localhost:9000"
+                "endpoint_url": "http://localhost:9000",
             },
         )
 

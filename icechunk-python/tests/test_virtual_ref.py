@@ -1,14 +1,14 @@
-from object_store import ClientOptions, ObjectStore
-from icechunk import (
-    IcechunkStore,
-    StorageConfig,
-    StoreConfig,
-    S3Credentials,
-    VirtualRefConfig,
-)
 import zarr
 import zarr.core
 import zarr.core.buffer
+from icechunk import (
+    IcechunkStore,
+    S3Credentials,
+    StorageConfig,
+    StoreConfig,
+    VirtualRefConfig,
+)
+from object_store import ClientOptions, ObjectStore
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
