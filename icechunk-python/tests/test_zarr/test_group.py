@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from icechunk import IcechunkStore
 import numpy as np
 import pytest
-
-from zarr import Array, AsyncArray, AsyncGroup, Group
 import zarr
 import zarr.api
 import zarr.api.asynchronous
+from icechunk import IcechunkStore
+from zarr import Array, AsyncArray, AsyncGroup, Group
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import JSON, ZarrFormat
 from zarr.core.group import GroupMetadata
@@ -152,7 +151,7 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     members_expected["subgroup"] = group.create_group("subgroup")
     # make a sub-sub-subgroup, to ensure that the children calculation doesn't go
     # too deep in the hierarchy
-    subsubgroup = members_expected["subgroup"].create_group("subsubgroup")
+    subsubgroup = cast(Group, members_expected["subgroup"]).create_group("subsubgroup")
     subsubsubgroup = subsubgroup.create_group("subsubsubgroup")
 
     members_expected["subarray"] = group.create_array(
@@ -600,9 +599,7 @@ async def test_asyncgroup_open_wrong_format(
     store: IcechunkStore,
     zarr_format: ZarrFormat,
 ) -> None:
-    _ = await AsyncGroup.from_store(
-        store=store, exists_ok=False, zarr_format=zarr_format
-    )
+    _ = await AsyncGroup.from_store(store=store, exists_ok=False, zarr_format=zarr_format)
     zarr_format_wrong: ZarrFormat
     # try opening with the wrong zarr format
     if zarr_format == 3:
@@ -639,9 +636,7 @@ def test_asyncgroup_from_dict(store: IcechunkStore, data: dict[str, Any]) -> Non
 # todo: replace this with a declarative API where we model a full hierarchy
 
 
-async def test_asyncgroup_getitem(
-    store: IcechunkStore, zarr_format: ZarrFormat
-) -> None:
+async def test_asyncgroup_getitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
     Create an `AsyncGroup`, then create members of that group, and ensure that we can access those
     members via the `AsyncGroup.getitem` method.
@@ -663,9 +658,7 @@ async def test_asyncgroup_getitem(
         await agroup.getitem("foo")
 
 
-async def test_asyncgroup_delitem(
-    store: IcechunkStore, zarr_format: ZarrFormat
-) -> None:
+async def test_asyncgroup_delitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     agroup = await AsyncGroup.from_store(store=store, zarr_format=zarr_format)
     array_name = "sub_array"
     _ = await agroup.create_array(
@@ -914,6 +907,7 @@ async def test_require_array(store: IcechunkStore, zarr_format: ZarrFormat) -> N
     _ = await root.create_group("bar")
     with pytest.raises(TypeError, match="Incompatible object"):
         await root.require_array("bar", shape=(10,), dtype="int8")
+
 
 class TestGroupMetadata:
     def test_from_dict_extra_fields(self):

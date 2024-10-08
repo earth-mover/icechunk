@@ -1,10 +1,9 @@
 import pickle
 
+import icechunk
 import pytest
 import zarr
 from zarr.storage import LocalStore
-
-import icechunk
 
 
 @pytest.fixture(scope="function")
@@ -32,7 +31,7 @@ async def test_pickle(tmp_store):
     assert store_loaded == tmp_store
 
     root_loaded = zarr.open_group(store_loaded)
-    array_loaded = root_loaded['ones']
+    array_loaded = root_loaded["ones"]
 
     assert type(array_loaded) is zarr.Array
     assert array_loaded == array

@@ -1,8 +1,8 @@
 import asyncio
 import random
-import zarr
 
 import icechunk
+import zarr
 
 N = 15
 
@@ -41,7 +41,7 @@ async def list_store(store, barrier):
 async def test_concurrency():
     store = await icechunk.IcechunkStore.open(
         mode="w",
-        storage=icechunk.StorageConfig.memory(prefix='concurrency'),
+        storage=icechunk.StorageConfig.memory(prefix="concurrency"),
     )
 
     group = zarr.group(store=store, overwrite=True)

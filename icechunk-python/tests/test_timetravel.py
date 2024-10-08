@@ -1,6 +1,5 @@
-import zarr
-
 import icechunk
+import zarr
 
 
 async def test_timetravel():

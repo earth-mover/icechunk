@@ -8,17 +8,17 @@ from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
 from ._icechunk_python import (
-    __version__,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
     StorageConfig,
     StoreConfig,
     VirtualRefConfig,
+    __version__,
     pyicechunk_store_create,
     pyicechunk_store_exists,
-    pyicechunk_store_open_existing,
     pyicechunk_store_from_bytes,
+    pyicechunk_store_open_existing,
 )
 
 __all__ = [
@@ -96,7 +96,7 @@ class IcechunkStore(Store, SyncMixin):
         cls,
         storage: StorageConfig,
         mode: AccessModeLiteral = "r",
-        config: StoreConfig = StoreConfig(),
+        config: StoreConfig | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> Self:
@@ -110,6 +110,7 @@ class IcechunkStore(Store, SyncMixin):
 
         If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
         """
+        config = config or StoreConfig()
         read_only = mode == "r"
         store = await pyicechunk_store_open_existing(
             storage, read_only=read_only, config=config
@@ -121,7 +122,7 @@ class IcechunkStore(Store, SyncMixin):
         cls,
         storage: StorageConfig,
         mode: AccessModeLiteral = "w",
-        config: StoreConfig = StoreConfig(),
+        config: StoreConfig | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> Self:
@@ -133,6 +134,7 @@ class IcechunkStore(Store, SyncMixin):
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
         """
+        config = config or StoreConfig()
         store = await pyicechunk_store_create(storage, config=config)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
@@ -169,8 +171,8 @@ class IcechunkStore(Store, SyncMixin):
 
     def __setstate__(self, state: Any) -> None:
         store_repr = state["store"]
-        mode = state['mode']
-        is_read_only = (mode == "r")
+        mode = state["mode"]
+        is_read_only = mode == "r"
         self._store = pyicechunk_store_from_bytes(store_repr, is_read_only)
         self._is_open = True
 
@@ -277,8 +279,6 @@ class IcechunkStore(Store, SyncMixin):
         """
         try:
             result = await self._store.get(key, byte_range)
-            if result is None:
-                return None
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
@@ -305,9 +305,7 @@ class IcechunkStore(Store, SyncMixin):
         # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
         result = await self._store.get_partial_values(list(key_ranges))
-        return [
-            prototype.buffer.from_bytes(r) if r is not None else None for r in result
-        ]
+        return [prototype.buffer.from_bytes(r) for r in result]
 
     async def exists(self, key: str) -> bool:
         """Check if a key exists in the store.
@@ -394,7 +392,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 does not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        return await self._store.set_partial_values(list(key_start_values))  # type: ignore
+        return await self._store.set_partial_values(list(key_start_values))
 
     @property
     def supports_listing(self) -> bool:
