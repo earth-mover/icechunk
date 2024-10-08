@@ -20,8 +20,8 @@ pub enum DataType {
     Float64,
     Complex64,
     Complex128,
-    // FIXME: serde serialization
-    RawBits(usize),
+    String,
+    Bytes,
 }
 
 impl DataType {
@@ -67,17 +67,9 @@ impl TryFrom<&str> for DataType {
             "float64" => Ok(DataType::Float64),
             "complex64" => Ok(DataType::Complex64),
             "complex128" => Ok(DataType::Complex128),
-            _ => {
-                let mut it = value.chars();
-                if it.next() == Some('r') {
-                    it.as_str()
-                        .parse()
-                        .map(DataType::RawBits)
-                        .map_err(|_| "Cannot parse RawBits size")
-                } else {
-                    Err("Unknown data type, cannot parse")
-                }
-            }
+            "string" => Ok(DataType::String),
+            "bytes" => Ok(DataType::Bytes),
+            _ => Err("Unknown data type, cannot parse"),
         }
     }
 }
@@ -100,7 +92,8 @@ impl Display for DataType {
             Float64 => f.write_str("float64"),
             Complex64 => f.write_str("complex64"),
             Complex128 => f.write_str("complex128"),
-            RawBits(usize) => write!(f, "r{}", usize),
+            String => f.write_str("string"),
+            Bytes => f.write_str("bytes"),
         }
     }
 }

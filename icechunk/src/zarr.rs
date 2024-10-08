@@ -1168,7 +1168,8 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
                     }
                     FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
                     FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::RawBits(r) => r.into(),
+                    FillValue::String(s) => s.into(),
+                    FillValue::Bytes(b) => b.into(),
                 }
             }
 
