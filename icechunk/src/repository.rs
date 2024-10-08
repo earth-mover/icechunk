@@ -282,6 +282,11 @@ impl Repository {
         !self.change_set.is_empty()
     }
 
+    /// Discard all uncommitted changes and return them as a `ChangeSet`
+    pub fn discard_changes(&mut self) -> ChangeSet {
+        std::mem::take(&mut self.change_set)
+    }
+
     /// Returns the sequence of parents of the current session, in order of latest first.
     pub async fn ancestry(
         &self,
@@ -758,26 +763,13 @@ impl Repository {
         Ok(existing_array_chunks.chain(new_array_chunks))
     }
 
-    pub async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
+    pub async fn merge<I: IntoIterator<Item = Repository>>(
         &mut self,
-        other_change_sets: I,
-        message: &str,
-        properties: SnapshotProperties,
-    ) -> RepositoryResult<SnapshotId> {
-        // FIXME: this clone can be avoided
-        let change_sets = iter::once(self.change_set.clone()).chain(other_change_sets);
-        let new_snapshot_id = distributed_flush(
-            self.storage.as_ref(),
-            self.snapshot_id(),
-            change_sets,
-            message,
-            properties,
-        )
-        .await?;
-
-        self.snapshot_id = new_snapshot_id.clone();
-        self.change_set = ChangeSet::default();
-        Ok(new_snapshot_id)
+        other_repositories: I,
+    ) -> RepositoryResult<()> {
+        let change_sets = other_repositories.into_iter().map(|r| r.change_set);
+        self.change_set.merge_many(change_sets);
+        Ok(())
     }
 
     /// After changes to the repository have been made, this generates and writes to `Storage` the updated datastructures.
@@ -792,7 +784,23 @@ impl Repository {
         message: &str,
         properties: SnapshotProperties,
     ) -> RepositoryResult<SnapshotId> {
-        self.distributed_flush(iter::empty(), message, properties).await
+        // TODO: can this clone can be avoided? its difficult because
+        // self is borrows for flush and the change set should only
+        // be cleared after the flush is successful.
+        let mut change_set = self.change_set.clone();
+
+        let new_snapshot_id = flush(
+            self.storage.as_ref(),
+            self.snapshot_id(),
+            &mut change_set,
+            message,
+            properties,
+        )
+        .await?;
+
+        self.snapshot_id = new_snapshot_id.clone();
+        self.change_set = ChangeSet::default();
+        Ok(new_snapshot_id)
     }
 
     pub async fn commit(
@@ -801,27 +809,11 @@ impl Repository {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> RepositoryResult<SnapshotId> {
-        self.distributed_commit(update_branch_name, iter::empty(), message, properties)
-            .await
-    }
-
-    pub async fn distributed_commit<I: IntoIterator<Item = ChangeSet>>(
-        &mut self,
-        update_branch_name: &str,
-        other_change_sets: I,
-        message: &str,
-        properties: Option<SnapshotProperties>,
-    ) -> RepositoryResult<SnapshotId> {
         let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
+
         match current {
             Err(RefError::RefNotFound(_)) => {
-                self.do_distributed_commit(
-                    update_branch_name,
-                    other_change_sets,
-                    message,
-                    properties,
-                )
-                .await
+                self.do_commit(update_branch_name, message, properties).await
             }
             Err(err) => Err(err.into()),
             Ok(ref_data) => {
@@ -832,29 +824,21 @@ impl Repository {
                         actual_parent: Some(ref_data.snapshot.clone()),
                     })
                 } else {
-                    self.do_distributed_commit(
-                        update_branch_name,
-                        other_change_sets,
-                        message,
-                        properties,
-                    )
-                    .await
+                    self.do_commit(update_branch_name, message, properties).await
                 }
             }
         }
     }
 
-    async fn do_distributed_commit<I: IntoIterator<Item = ChangeSet>>(
+    async fn do_commit(
         &mut self,
         update_branch_name: &str,
-        other_change_sets: I,
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> RepositoryResult<SnapshotId> {
         let parent_snapshot = self.snapshot_id.clone();
         let properties = properties.unwrap_or_default();
-        let new_snapshot =
-            self.distributed_flush(other_change_sets, message, properties).await?;
+        let new_snapshot = self.flush(message, properties).await?;
 
         match update_branch(
             self.storage.as_ref(),
@@ -998,19 +982,13 @@ async fn updated_nodes<'a>(
         .chain(change_set.new_nodes_iterator(manifest_id)))
 }
 
-async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
+async fn flush(
     storage: &(dyn Storage + Send + Sync),
     parent_id: &SnapshotId,
-    change_sets: I,
+    change_set: &mut ChangeSet,
     message: &str,
     properties: SnapshotProperties,
 ) -> RepositoryResult<SnapshotId> {
-    let mut change_set = ChangeSet::default();
-    change_set.merge_many(change_sets);
-    if change_set.is_empty() {
-        return Err(RepositoryError::NoChangesToCommit);
-    }
-
     // We search for the current manifest. We are assumming a single one for now
     let old_snapshot = storage.fetch_snapshot(parent_id).await?;
     let old_snapshot_c = Arc::clone(&old_snapshot);
@@ -1039,8 +1017,8 @@ async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
     // As a solution, we temporarily `take` the map, replacing it an empty one, run the thread,
     // and at the end we put the map back to where it was, in case there is some later failure.
     // We always want to leave things in the previous state if there was a failure.
-
-    let chunk_changes = Arc::new(change_set.take_chunks());
+    let chunks = change_set.take_chunks();
+    let chunk_changes = Arc::new(chunks);
     let chunk_changes_c = Arc::clone(&chunk_changes);
 
     let update_task = task::spawn_blocking(move || {
@@ -1071,7 +1049,7 @@ async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
                 .await?;
 
             let all_nodes =
-                updated_nodes(storage, &change_set, parent_id, &new_manifest_id).await?;
+                updated_nodes(storage, change_set, parent_id, &new_manifest_id).await?;
 
             let mut new_snapshot = Snapshot::from_iter(
                 old_snapshot.as_ref(),
@@ -1615,6 +1593,14 @@ mod tests {
 
         // wo commit to test the case of a chunkless array
         let _snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
+
+        let new_new_array_path: Path = "/group/array2".try_into().unwrap();
+        ds.add_array(new_new_array_path.clone(), zarr_meta.clone()).await?;
+
+        assert!(ds.has_uncommitted_changes());
+        let changes = ds.discard_changes();
+        assert!(!changes.is_empty());
+        assert!(!ds.has_uncommitted_changes());
 
         // we set a chunk in a new array
         ds.set_chunk_ref(
