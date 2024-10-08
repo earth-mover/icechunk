@@ -1,5 +1,6 @@
 use crate::format::manifest::{VirtualChunkLocation, VirtualReferenceError};
 use crate::format::ByteRange;
+use crate::private;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
@@ -15,7 +16,7 @@ use url::{self, Url};
 use super::s3::{mk_client, range_to_header, S3Config};
 
 #[async_trait]
-pub trait VirtualChunkResolver: Debug {
+pub trait VirtualChunkResolver: Debug + private::Sealed {
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
@@ -134,6 +135,8 @@ pub fn construct_valid_byte_range(
         },
     )
 }
+
+impl private::Sealed for ObjectStoreVirtualChunkResolver {}
 
 #[async_trait]
 impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {

@@ -9,6 +9,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
@@ -78,11 +82,5 @@ jobs:
 
       - name: Check
         if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
-        env:
-          AWS_ACCESS_KEY_ID: minio123
-          AWS_SECRET_ACCESS_KEY: minio123
-          AWS_ALLOW_HTTP: 1
-          AWS_ENDPOINT_URL: http://localhost:9000
-          AWS_DEFAULT_REGION: "us-east-1"
         run: |
           just pre-commit

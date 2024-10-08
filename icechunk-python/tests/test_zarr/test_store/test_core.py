@@ -1,5 +1,4 @@
 from icechunk import IcechunkStore
-
 from zarr.storage import make_store_path
 
 from ...conftest import parse_store

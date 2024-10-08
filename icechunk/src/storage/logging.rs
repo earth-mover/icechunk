@@ -5,9 +5,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 
 use super::{Storage, StorageError, StorageResult};
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
+        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+    },
+    private,
 };
 
 #[derive(Debug)]
@@ -27,6 +30,8 @@ impl LoggingStorage {
         self.fetch_log.lock().expect("poison lock").clone()
     }
 }
+
+impl private::Sealed for LoggingStorage {}
 
 #[async_trait]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only

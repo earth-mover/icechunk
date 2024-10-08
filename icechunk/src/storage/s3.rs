@@ -20,6 +20,7 @@ use crate::{
         snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
         SnapshotId,
     },
+    private,
     zarr::ObjectId,
     Storage, StorageError,
 };
@@ -216,6 +217,8 @@ pub fn range_to_header(range: &ByteRange) -> Option<String> {
         }
     }
 }
+
+impl private::Sealed for S3Storage {}
 
 #[async_trait]
 impl Storage for S3Storage {

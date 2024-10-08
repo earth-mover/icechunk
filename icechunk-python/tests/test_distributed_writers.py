@@ -1,11 +1,12 @@
-from dataclasses import dataclass
-import time
 import asyncio
-import zarr
-from dask.distributed import Client
-import numpy as np
+import time
+from dataclasses import dataclass
+from typing import cast
 
 import icechunk
+import numpy as np
+import zarr
+from dask.distributed import Client
 
 
 @dataclass
@@ -13,7 +14,7 @@ class Task:
     # fixme: useee StorageConfig and StoreConfig once those are pickable
     storage_config: dict
     store_config: dict
-    area: slice
+    area: tuple[slice, slice]
     seed: int
 
 
@@ -57,7 +58,7 @@ async def execute_task(task: Task):
     store = await mk_store("w", task)
 
     group = zarr.group(store=store, overwrite=False)
-    array = group["array"]
+    array = cast(zarr.Array, group["array"])
     array[task.area] = generate_task_array(task)
     return store.change_set_bytes()
 

@@ -11,14 +11,15 @@ python ./examples/dask_write.py verify --name test --t-from 0 --t-to 1500 --work
 """
 
 import argparse
-from dataclasses import dataclass
-import time
 import asyncio
-import zarr
-from dask.distributed import Client
-import numpy as np
+import time
+from dataclasses import dataclass
+from typing import cast
 
 import icechunk
+import numpy as np
+import zarr
+from dask.distributed import Client
 
 
 @dataclass
@@ -57,7 +58,7 @@ async def execute_write_task(task: Task):
     store = await mk_store("w", task)
 
     group = zarr.group(store=store, overwrite=False)
-    array = group["array"]
+    array = cast(zarr.Array, group["array"])
     print(f"Writing at t={task.time}")
     data = generate_task_array(task, array.shape[0:2])
     array[:, :, task.time] = data
@@ -72,7 +73,7 @@ async def execute_read_task(task: Task):
     print(f"Reading t={task.time}")
     store = await mk_store("r", task)
     group = zarr.group(store=store, overwrite=False)
-    array = group["array"]
+    array = cast(zarr.Array, group["array"])
 
     actual = array[:, :, task.time]
     expected = generate_task_array(task, array.shape[0:2])
@@ -235,9 +236,7 @@ async def distributed_write():
         help="size of chunks in the y dimension",
         default=112,
     )
-    create_parser.add_argument(
-        "--name", type=str, help="repository name", required=True
-    )
+    create_parser.add_argument("--name", type=str, help="repository name", required=True)
     create_parser.set_defaults(command="create")
 
     update_parser = subparsers.add_parser("update", help="add chunks to the array")
@@ -256,9 +255,7 @@ async def distributed_write():
     update_parser.add_argument(
         "--workers", type=int, help="number of workers to use", required=True
     )
-    update_parser.add_argument(
-        "--name", type=str, help="repository name", required=True
-    )
+    update_parser.add_argument("--name", type=str, help="repository name", required=True)
     update_parser.add_argument(
         "--max-sleep",
         type=float,
@@ -275,7 +272,11 @@ async def distributed_write():
         "--sleep-tasks", type=int, help="this many tasks sleep", default=0
     )
     update_parser.add_argument(
-        "--distributed-cluster", type=bool, help="use multiple machines", action=argparse.BooleanOptionalAction, default=False
+        "--distributed-cluster",
+        type=bool,
+        help="use multiple machines",
+        action=argparse.BooleanOptionalAction,
+        default=False,
     )
     update_parser.set_defaults(command="update")
 
@@ -295,11 +296,13 @@ async def distributed_write():
     verify_parser.add_argument(
         "--workers", type=int, help="number of workers to use", required=True
     )
+    verify_parser.add_argument("--name", type=str, help="repository name", required=True)
     verify_parser.add_argument(
-        "--name", type=str, help="repository name", required=True
-    )
-    verify_parser.add_argument(
-        "--distributed-cluster", type=bool, help="use multiple machines", action=argparse.BooleanOptionalAction, default=False
+        "--distributed-cluster",
+        type=bool,
+        help="use multiple machines",
+        action=argparse.BooleanOptionalAction,
+        default=False,
     )
     verify_parser.set_defaults(command="verify")
 

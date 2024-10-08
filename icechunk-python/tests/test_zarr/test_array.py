@@ -1,13 +1,12 @@
 from typing import Literal
 
-from icechunk import IcechunkStore
 import numpy as np
 import pytest
-
-from zarr import Array, AsyncGroup, Group
 import zarr
 import zarr.api
 import zarr.api.asynchronous
+from icechunk import IcechunkStore
+from zarr import Array, AsyncGroup, Group
 from zarr.core.common import ZarrFormat
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.storage import StorePath
