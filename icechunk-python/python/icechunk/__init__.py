@@ -305,7 +305,7 @@ class IcechunkStore(Store, SyncMixin):
         # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
         result = await self._store.get_partial_values(list(key_ranges))
-        return [prototype.buffer.from_bytes(r) if r is not None else None for r in result]
+        return [prototype.buffer.from_bytes(r) for r in result]
 
     async def exists(self, key: str) -> bool:
         """Check if a key exists in the store.
@@ -392,7 +392,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 does not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        return await self._store.set_partial_values(list(key_start_values))  # type: ignore
+        return await self._store.set_partial_values(list(key_start_values))
 
     @property
     def supports_listing(self) -> bool:
