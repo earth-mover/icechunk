@@ -60,7 +60,7 @@ jobs:
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: '3.11'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
