@@ -20,6 +20,7 @@ pub struct ManifestRef {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum VirtualReferenceError {
     #[error("error parsing virtual ref URL {0}")]
     CannotParseUrl(#[from] url::ParseError),
@@ -36,6 +37,7 @@ pub enum VirtualReferenceError {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VirtualChunkLocation {
     Absolute(String),
     // Relative(prefix_id, String)
@@ -85,6 +87,7 @@ pub struct ChunkRef {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ChunkPayload {
     Inline(Bytes),
     Virtual(VirtualChunkRef),

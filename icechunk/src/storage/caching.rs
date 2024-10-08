@@ -5,9 +5,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use quick_cache::sync::Cache;
 
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
+        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+    },
+    private,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -38,6 +41,8 @@ impl MemCachingStorage {
         }
     }
 }
+
+impl private::Sealed for MemCachingStorage {}
 
 #[async_trait]
 impl Storage for MemCachingStorage {

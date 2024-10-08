@@ -1,6 +1,14 @@
 [package]
 name = "icechunk-python"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
+description = "Transactional storage engine for Zarr designed for use on cloud object storage"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://github.com/earth-mover/icechunk"
+license = "MIT OR Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
 edition = "2021"
 publish = false
 
@@ -13,7 +21,7 @@ crate-type = ["cdylib"]
 bytes = "1.7.2"
 chrono = { version = "0.4.38" }
 futures = "0.3.30"
-icechunk = { path = "../icechunk", version = "0.1.0" }
+icechunk = { path = "../icechunk", version = "0.1.0-alpha.1" }
 pyo3 = { version = "0.21", features = [
   "chrono",
   "extension-module",

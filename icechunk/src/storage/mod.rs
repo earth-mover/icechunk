@@ -27,9 +27,12 @@ pub mod virtual_ref;
 pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
+        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+    },
+    private,
 };
 
 #[derive(Debug, Error)]
@@ -65,7 +68,7 @@ pub type StorageResult<A> = Result<A, StorageError>;
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage: fmt::Debug {
+pub trait Storage: fmt::Debug + private::Sealed {
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,

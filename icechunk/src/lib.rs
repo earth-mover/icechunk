@@ -30,3 +30,9 @@ pub mod zarr;
 pub use repository::{Repository, RepositoryBuilder, RepositoryConfig, SnapshotMetadata};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
 pub use zarr::Store;
+
+mod private {
+    /// Used to seal traits we don't want user code to implement, to maintain compatibility.
+    /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
+    pub trait Sealed {}
+}
