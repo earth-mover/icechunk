@@ -1,7 +1,7 @@
-from typing import Any
 import abc
 import datetime
 from collections.abc import AsyncGenerator
+from typing import Any
 
 class PyIcechunkStore:
     def as_bytes(self) -> bytes: ...
