@@ -224,16 +224,15 @@ class StoreConfig:
 
 async def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
 async def pyicechunk_store_create(
-    storage: StorageConfig, config: StoreConfig
+    storage: StorageConfig, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
 async def pyicechunk_store_open_existing(
-    storage: StorageConfig, read_only: bool, config: StoreConfig
+    storage: StorageConfig, read_only: bool, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
+
 # async def pyicechunk_store_from_json_config(
 #     config: str, read_only: bool
 # ) -> PyIcechunkStore: ...
-def pyicechunk_store_from_bytes(
-    bytes: bytes, read_only: bool
-) -> PyIcechunkStore: ...
+def pyicechunk_store_from_bytes(bytes: bytes, read_only: bool) -> PyIcechunkStore: ...
 
 __version__: str

@@ -1,16 +1,14 @@
 from __future__ import annotations
+
 from typing import Any, cast
 
 import pytest
-
+from icechunk import IcechunkStore, StorageConfig
 from zarr.abc.store import AccessMode
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.common import AccessModeLiteral
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
-
-from icechunk import IcechunkStore, StorageConfig
-
 
 DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
 ARRAY_METADATA = (
@@ -25,11 +23,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
 
-    @pytest.mark.xfail(reason="not implemented")
-    async def test_store_eq(self) -> None:
+    @pytest.mark.xfail(reason="not implemented", strict=False)
+    def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         pass
 
-    @pytest.mark.xfail(reason="not implemented")
+    @pytest.mark.xfail(reason="not implemented", strict=False)
     async def test_serizalizable_store(self, store) -> None:
         pass
 
@@ -59,9 +57,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return kwargs
 
     @pytest.fixture(scope="function")
-    async def store(
-        self, store_kwargs: str | None | dict[str, Buffer]
-    ) -> IcechunkStore:
+    async def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
         return await IcechunkStore.open(**store_kwargs)
 
     @pytest.mark.xfail(reason="Not implemented")
@@ -72,9 +68,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     def test_serializable_store(self, store: IcechunkStore) -> None:
         super().test_serializable_store(store)
 
-    async def test_not_writable_store_raises(
-        self, store_kwargs: dict[str, Any]
-    ) -> None:
+    async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
         with pytest.raises(ValueError):
             _store = await self.store_cls.open(**create_kwargs)
@@ -105,9 +99,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         ]
         # icechunk strictly checks metadata?
         data_buf = [
-            self.buffer_cls.from_bytes(
-                k.encode() if k != "zarr.json" else ARRAY_METADATA
-            )
+            self.buffer_cls.from_bytes(k.encode() if k != "zarr.json" else ARRAY_METADATA)
             for k in keys
         ]
         store_dict = dict(zip(keys, data_buf, strict=True))

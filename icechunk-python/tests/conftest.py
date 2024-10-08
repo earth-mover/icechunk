@@ -1,7 +1,7 @@
 from typing import Literal
 
-from icechunk import IcechunkStore, StorageConfig
 import pytest
+from icechunk import IcechunkStore, StorageConfig
 
 
 async def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkStore:
