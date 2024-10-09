@@ -36,6 +36,7 @@ theme:
     - navigation.instant.progress
     - navigation.tracking
     - navigation.indexes
+    - navigation.footer
     #- navigation.tabs
     #- navigation.tabs.sticky
     - navigation.expand
