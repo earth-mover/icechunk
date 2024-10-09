@@ -51,7 +51,7 @@ theme:
     code: Roboto Mono
 
 extra_css:
-  - stylesheets/extra.css # TODO: this isn't working anymore?
+  - stylesheets/notebooks.css
 
 extra:
   social:
