@@ -175,7 +175,11 @@ impl ChangeSet {
     pub fn array_chunks_iterator(
         &self,
         node_id: NodeId,
+        node_path: &Path,
     ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
+        if self.is_deleted(node_path) {
+            return Either::Left(iter::empty());
+        }
         match self.set_chunks.get(&node_id) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
@@ -186,7 +190,7 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.array_chunks_iterator(*node_id).filter_map(|(coords, payload)| {
+            self.array_chunks_iterator(*node_id, path).filter_map(|(coords, payload)| {
                 payload.as_ref().map(|p| {
                     (
                         path.clone(),
@@ -315,22 +319,25 @@ impl ChangeSet {
         &'a self,
         manifest_id: &'a ManifestId,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
-        self.new_nodes().map(move |path| {
+        self.new_nodes().filter_map(move |path| {
+            if self.is_deleted(path) {
+                return None;
+            }
             // we should be able to create the full node because we
             // know it's a new node
             #[allow(clippy::expect_used)]
             let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
             match node.node_data {
-                NodeData::Group => node,
+                NodeData::Group => Some(node),
                 NodeData::Array(meta, _no_manifests_yet) => {
                     let new_manifests = vec![ManifestRef {
                         object_id: manifest_id.clone(),
                         extents: ManifestExtents(vec![]),
                     }];
-                    NodeSnapshot {
+                    Some(NodeSnapshot {
                         node_data: NodeData::Array(meta, new_manifests),
                         ..node
-                    }
+                    })
                 }
             }
         })

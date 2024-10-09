@@ -316,10 +316,18 @@ impl Repository {
         }
     }
 
+    /// Delete a group in the hierarchy
+    ///
+    /// Deletes of non existing groups will succeed.
     pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
-        self.get_group(&path)
-            .await
-            .map(|node| self.change_set.delete_group(node.path, node.id))
+        match self.get_group(&path).await {
+            Ok(node) => {
+                self.change_set.delete_group(node.path, node.id);
+            }
+            Err(RepositoryError::NodeNotFound { .. }) => {}
+            Err(err) => Err(err)?,
+        }
+        Ok(())
     }
 
     /// Add an array to the store.
@@ -357,10 +365,18 @@ impl Repository {
             .map(|node| self.change_set.update_array(node.id, metadata))
     }
 
+    /// Delete an array in the hierarchy
+    ///
+    /// Deletes of non existing array will succeed.
     pub async fn delete_array(&mut self, path: Path) -> RepositoryResult<()> {
-        self.get_array(&path)
-            .await
-            .map(|node| self.change_set.delete_array(node.path, node.id))
+        match self.get_array(&path).await {
+            Ok(node) => {
+                self.change_set.delete_array(node.path, node.id);
+            }
+            Err(RepositoryError::NodeNotFound { .. }) => {}
+            Err(err) => Err(err)?,
+        }
+        Ok(())
     }
 
     /// Record the write or delete of user attributes to array or group
@@ -625,6 +641,19 @@ impl Repository {
         }
     }
 
+    pub async fn clear(&mut self) -> RepositoryResult<()> {
+        let to_delete: Vec<(NodeType, Path)> =
+            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
+
+        for (t, p) in to_delete {
+            match t {
+                NodeType::Group => self.delete_group(p).await?,
+                NodeType::Array => self.delete_array(p).await?,
+            }
+        }
+        Ok(())
+    }
+
     async fn get_old_chunk(
         &self,
         node: NodeId,
@@ -655,13 +684,28 @@ impl Repository {
         let nodes = futures::stream::iter(snapshot.iter_arc());
         let res = nodes.then(move |node| async move {
             let path = node.path.clone();
-            self.node_chunk_iterator(node).await.map_ok(move |ci| (path.clone(), ci))
+            self.node_chunk_iterator(&node.path)
+                .await
+                .map_ok(move |ci| (path.clone(), ci))
         });
         Ok(res.flatten())
     }
 
     /// Warning: The presence of a single error may mean multiple missing items
     async fn node_chunk_iterator(
+        &self,
+        path: &Path,
+    ) -> impl Stream<Item = RepositoryResult<ChunkInfo>> + '_ {
+        match self.get_node(path).await {
+            Ok(node) => futures::future::Either::Left(
+                self.verified_node_chunk_iterator(node).await,
+            ),
+            Err(_) => futures::future::Either::Right(futures::stream::empty()),
+        }
+    }
+
+    /// Warning: The presence of a single error may mean multiple missing items
+    async fn verified_node_chunk_iterator(
         &self,
         node: NodeSnapshot,
     ) -> impl Stream<Item = RepositoryResult<ChunkInfo>> + '_ {
@@ -670,14 +714,14 @@ impl Repository {
             NodeData::Array(_, manifests) => {
                 let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                     self.change_set
-                        .array_chunks_iterator(node.id)
+                        .array_chunks_iterator(node.id, &node.path)
                         .map(|(idx, _)| idx)
                         .collect(),
                 );
 
                 let new_chunks = self
                     .change_set
-                    .array_chunks_iterator(node.id)
+                    .array_chunks_iterator(node.id, &node.path)
                     .filter_map(move |(idx, payload)| {
                         payload.as_ref().map(|payload| {
                             Ok(ChunkInfo {
@@ -1149,12 +1193,8 @@ mod tests {
         // deleting the added group must succeed
         prop_assert!(repository.delete_group(path.clone()).await.is_ok());
 
-        // deleting twice must fail
-        let matches = matches!(
-            repository.delete_group(path.clone()).await.unwrap_err(),
-            RepositoryError::NodeNotFound{path: reported_path, ..} if reported_path == path
-        );
-        prop_assert!(matches);
+        // deleting twice must succeed
+        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
 
         // getting a deleted group must fail
         prop_assert!(repository.get_node(&path).await.is_err());
@@ -1181,12 +1221,8 @@ mod tests {
         // first delete must succeed
         prop_assert!(repository.delete_array(path.clone()).await.is_ok());
 
-        // deleting twice must fail
-        let matches = matches!(
-            repository.delete_array(path.clone()).await.unwrap_err(),
-            RepositoryError::NodeNotFound{path: reported_path, ..} if reported_path == path
-        );
-        prop_assert!(matches);
+        // deleting twice must succeed
+        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
 
         // adding again must succeed
         prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
@@ -1325,7 +1361,8 @@ mod tests {
         let group_name = "/tbd-group".to_string();
         ds.add_group(group_name.clone().try_into().unwrap()).await?;
         ds.delete_group(group_name.clone().try_into().unwrap()).await?;
-        assert!(ds.delete_group(group_name.clone().try_into().unwrap()).await.is_err());
+        // deleting non-existing is no-op
+        assert!(ds.delete_group(group_name.clone().try_into().unwrap()).await.is_ok());
         assert!(ds.get_node(&group_name.try_into().unwrap()).await.is_err());
 
         // add a new array and retrieve its node
@@ -1349,9 +1386,8 @@ mod tests {
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
         ds.delete_array(new_array_path.clone()).await?;
-        // Delete a non-existent array
-        assert!(ds.delete_array(new_array_path.clone()).await.is_err());
-        assert!(ds.delete_array(new_array_path.clone()).await.is_err());
+        // Delete a non-existent array is no-op
+        assert!(ds.delete_array(new_array_path.clone()).await.is_ok());
         assert!(ds.get_node(&new_array_path.clone()).await.is_err());
 
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
