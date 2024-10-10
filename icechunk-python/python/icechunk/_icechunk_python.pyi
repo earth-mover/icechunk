@@ -178,7 +178,7 @@ class VirtualRefConfig:
         with the given bucket and prefix
 
         This assumes that the necessary credentials are available in the environment:
-            AWS_REGION
+            AWS_REGION or AWS_DEFAULT_REGION
             AWS_ACCESS_KEY_ID,
             AWS_SECRET_ACCESS_KEY,
             AWS_SESSION_TOKEN (optional)
