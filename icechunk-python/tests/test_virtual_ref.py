@@ -82,8 +82,6 @@ async def test_write_minino_virtual_refs():
 
 
 async def test_from_s3_public_virtual_refs(tmpdir):
-    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
-
     # Open the store,
     store = await IcechunkStore.open(
         storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),

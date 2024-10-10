@@ -48,7 +48,10 @@ mod tests {
         }
     }
 
-    async fn create_repository(storage: Arc<dyn Storage + Send + Sync>, virtual_s3_config: S3Config) -> Repository {
+    async fn create_repository(
+        storage: Arc<dyn Storage + Send + Sync>,
+        virtual_s3_config: S3Config,
+    ) -> Repository {
         Repository::init(storage, true)
             .await
             .expect("building repository failed")
@@ -76,7 +79,10 @@ mod tests {
                 .expect(&format!("putting chunk to {} failed", &path));
         }
     }
-    async fn create_local_repository(path: &StdPath, virtual_s3_config: S3Config) -> Repository {
+    async fn create_local_repository(
+        path: &StdPath,
+        virtual_s3_config: S3Config,
+    ) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
         );
@@ -403,7 +409,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zarr_store_virtual_refs_from_public_s3() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_zarr_store_virtual_refs_from_public_s3(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let repo_dir = TempDir::new()?;
         let ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
 
