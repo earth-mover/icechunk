@@ -282,7 +282,6 @@ class IcechunkStore(Store, SyncMixin):
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
-            print(_e)
             return None
 
         return prototype.buffer.from_bytes(result)
