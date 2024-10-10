@@ -108,16 +108,13 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     nodes = [n async for n in store.list()]
     assert "depth/c/0" in nodes
 
-    # dd = await store.get("depth/c/0", prototype=buffer_prototype)
-    # print(dd)
-
-    # depth_values = depth[:]
-    # assert len(depth_values) == 22
-    # actual_values = np.array([
-    #       0.,   1.,   2.,   4.,   6.,   8.,  10.,  12.,  15.,  20.,  25.,
-    #     30.,  35.,  40.,  45.,  50.,  60.,  70.,  80.,  90., 100., 125.
-    # ])
-    # assert np.allclose(depth_values, actual_values)
+    depth_values = depth[:]
+    assert len(depth_values) == 22
+    actual_values = np.array([
+          0.,   1.,   2.,   4.,   6.,   8.,  10.,  12.,  15.,  20.,  25.,
+        30.,  35.,  40.,  45.,  50.,  60.,  70.,  80.,  90., 100., 125.
+    ])
+    assert np.allclose(depth_values, actual_values)
 
 
 
