@@ -42,10 +42,14 @@ pub struct StaticS3Credentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(tag = "type")]
 pub enum S3Credentials {
     #[default]
+    #[serde(rename = "from_env")]
     FromEnv,
+    #[serde(rename = "anonymous")]
     Anonymous,
+    #[serde(rename = "static")]
     Static(StaticS3Credentials),
 }
 

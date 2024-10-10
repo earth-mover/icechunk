@@ -2458,12 +2458,7 @@ mod tests {
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    config: Some(S3Config {
-                        endpoint: None,
-                        credentials: S3Credentials::FromEnv,
-                        allow_http: false,
-                        region: None
-                    }),
+                    config: None,
                 },
                 config: None,
             },
@@ -2476,6 +2471,7 @@ mod tests {
              "bucket":"test",
              "prefix":"root",
              "credentials":{
+                 "type":"static",
                  "access_key_id":"my-key",
                  "secret_access_key":"my-secret-key"
              },
