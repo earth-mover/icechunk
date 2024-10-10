@@ -10,7 +10,7 @@ keywords = ["zarr", "xarray", "database"]
 categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
 edition = "2021"
-publish = false
+publish = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
