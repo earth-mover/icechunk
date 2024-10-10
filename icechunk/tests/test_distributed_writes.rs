@@ -7,7 +7,7 @@ use icechunk::{
     format::{ByteRange, ChunkIndices, Path, SnapshotId},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     repository::{get_chunk, ChangeSet, ZarrArrayMetadata},
-    storage::s3::{S3Config, S3Credentials, S3Storage},
+    storage::s3::{S3Config, S3Credentials, S3Storage, StaticS3Credentials},
     Repository, Storage,
 };
 use tokio::task::JoinSet;
@@ -24,12 +24,12 @@ async fn mk_storage(
             Some(&S3Config {
                 region: Some("us-east-1".to_string()),
                 endpoint: Some("http://localhost:9000".to_string()),
-                credentials: Some(S3Credentials {
+                credentials: S3Credentials::Static(StaticS3Credentials {
                     access_key_id: "minio123".into(),
                     secret_access_key: "minio123".into(),
                     session_token: None,
                 }),
-                allow_http: Some(true),
+                allow_http: true,
             }),
         )
         .await?,
