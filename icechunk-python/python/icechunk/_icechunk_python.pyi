@@ -173,7 +173,7 @@ class VirtualRefConfig:
         region: str | None
 
     @classmethod
-    def s3_from_env(cls) -> StorageConfig:
+    def s3_from_env(cls) -> VirtualRefConfig:
         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage backend
         with the given bucket and prefix
 
@@ -194,7 +194,7 @@ class VirtualRefConfig:
         endpoint_url: str | None,
         allow_http: bool | None = None,
         region: str | None = None,
-    ) -> StorageConfig:
+    ) -> VirtualRefConfig:
         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
         backend with the given bucket, prefix, and configuration
 

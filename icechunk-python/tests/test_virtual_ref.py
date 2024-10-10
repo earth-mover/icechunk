@@ -1,3 +1,4 @@
+import numpy as np
 import zarr
 import zarr.core
 import zarr.core.buffer
@@ -38,19 +39,9 @@ async def test_write_minino_virtual_refs():
         ]
     )
 
-    # Open the store, the S3 credentials must be set in environment vars for this to work for now
+    # Open the store
     store = await IcechunkStore.open(
-        storage=StorageConfig.s3_from_config(
-            bucket="testbucket",
-            prefix="python-virtual-ref",
-            credentials=S3Credentials(
-                access_key_id="minio123",
-                secret_access_key="minio123",
-            ),
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-            region="us-east-1",
-        ),
+        storage=StorageConfig.memory("virtual"),
         mode="r+",
         config=StoreConfig(
             virtual_ref_config=VirtualRefConfig.s3_from_config(
@@ -86,3 +77,47 @@ async def test_write_minino_virtual_refs():
 
     assert array[0, 0, 0] == 1936877926
     assert array[0, 0, 1] == 1852793701
+
+    _snapshot_id = await store.commit("Add virtual refs")
+
+
+async def test_from_s3_public_virtual_refs(tmpdir):
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+
+    # Open the store,
+    store = await IcechunkStore.open(
+        storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),
+        mode="w",
+        config=StoreConfig(
+            virtual_ref_config=VirtualRefConfig.s3_from_env()
+        ),
+    )
+
+    root = zarr.Group.from_store(store=store, zarr_format=3)
+    depth = root.require_array(
+        name="depth", shape=((22, )), chunk_shape=((22,)), dtype="float64"
+    )
+
+    await store.set_virtual_ref(
+        "depth/c/0", 
+        "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.regulargrid.f030.nc", 
+        offset=42499, 
+        length=176
+    )
+
+    nodes = [n async for n in store.list()]
+    assert "depth/c/0" in nodes
+
+    # dd = await store.get("depth/c/0", prototype=buffer_prototype)
+    # print(dd)
+
+    # depth_values = depth[:]
+    # assert len(depth_values) == 22
+    # actual_values = np.array([
+    #       0.,   1.,   2.,   4.,   6.,   8.,  10.,  12.,  15.,  20.,  25.,
+    #     30.,  35.,  40.,  45.,  50.,  60.,  70.,  80.,  90., 100., 125.
+    # ])
+    # assert np.allclose(depth_values, actual_values)
+
+
+
