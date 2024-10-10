@@ -122,7 +122,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_list_prefix(self, store: IcechunkStore) -> None:
         assert True
 
-    @pytest.mark.xfail(reason="Not implemented")
     async def test_clear(self, store: IcechunkStore) -> None:
         await self.set(
             store,

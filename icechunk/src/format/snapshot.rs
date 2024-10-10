@@ -207,6 +207,10 @@ impl Snapshot {
         (0..self.short_term_history.len())
             .map(move |ix| self.short_term_history[ix].clone())
     }
+
+    pub fn size(&self) -> usize {
+        self.nodes.len()
+    }
 }
 
 // We need this complex dance because Rust makes it really hard to put together an object and a

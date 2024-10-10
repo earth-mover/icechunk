@@ -139,6 +139,10 @@ impl Manifest {
     pub fn chunks(&self) -> &BTreeMap<(NodeId, ChunkIndices), ChunkPayload> {
         &self.chunks
     }
+
+    pub fn size(&self) -> usize {
+        self.chunks.len()
+    }
 }
 
 impl FromIterator<ChunkInfo> for Manifest {

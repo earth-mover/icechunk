@@ -495,7 +495,8 @@ impl Store {
     }
 
     pub async fn clear(&mut self) -> StoreResult<()> {
-        todo!()
+        let mut repo = self.repository.write().await;
+        Ok(repo.clear().await?)
     }
 
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
@@ -2150,6 +2151,89 @@ mod tests {
         assert_eq!(
             new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             data
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let empty: Vec<String> = Vec::new();
+        store.clear().await?;
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        store
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let new_data = Bytes::copy_from_slice(b"world");
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("group/array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("array/c/1/0/0", new_data.clone()).await.unwrap();
+        store.set("group/array/c/1/0/0", new_data.clone()).await.unwrap();
+
+        let _ = store.commit("initial commit").await.unwrap();
+
+        store
+            .set(
+                "group/group2/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        store.set("group/group2/array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("group/group2/array/c/1/0/0", new_data.clone()).await.unwrap();
+
+        store.clear().await?;
+
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        let empty_snap = store.commit("no content commit").await.unwrap();
+
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        let store = Store::from_repository(
+            Repository::update(Arc::clone(&storage), empty_snap).build(),
+            AccessMode::ReadWrite,
+            None,
+            None,
+        );
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
         );
 
         Ok(())
