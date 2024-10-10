@@ -823,8 +823,20 @@ impl Store {
             for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
-                if meta_key.starts_with(prefix) {
-                    yield meta_key;
+                    match meta_key.strip_prefix(prefix) {
+                        None => {}
+                        Some(rest) => {
+                            // we have a few cases
+                            if prefix.is_empty()   // if prefix was empty anything matches
+                               || rest.is_empty()  // if stripping prefix left empty we have a match
+                               || rest.starts_with('/') // next component so we match
+                               // what we don't include is other matches,
+                               // we want to catch prefix/foo but not prefix-foo
+                            {
+                                yield meta_key;
+                            }
+
+                    }
                 }
             }
         };
@@ -2020,6 +2032,49 @@ mod tests {
         let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["1".to_string()]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        store
+            .borrow_mut()
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        store
+            .borrow_mut()
+            .set(
+                "group-suffix/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        assert_eq!(
+            store.list_dir("group/").await?.try_collect::<Vec<_>>().await?,
+            vec!["zarr.json"]
+        );
         Ok(())
     }
 
