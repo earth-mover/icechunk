@@ -35,18 +35,30 @@ pub struct S3Storage {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Credentials {
+pub struct StaticS3Credentials {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub session_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(tag = "type")]
+pub enum S3Credentials {
+    #[default]
+    #[serde(rename = "from_env")]
+    FromEnv,
+    #[serde(rename = "anonymous")]
+    Anonymous,
+    #[serde(rename = "static")]
+    Static(StaticS3Credentials),
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct S3Config {
     pub region: Option<String>,
     pub endpoint: Option<String>,
-    pub credentials: Option<S3Credentials>,
-    pub allow_http: Option<bool>,
+    pub credentials: S3Credentials,
+    pub allow_http: bool,
 }
 
 pub async fn mk_client(config: Option<&S3Config>) -> Client {
@@ -56,8 +68,9 @@ pub async fn mk_client(config: Option<&S3Config>) -> Client {
         .unwrap_or_else(RegionProviderChain::default_provider);
 
     let endpoint = config.and_then(|c| c.endpoint.clone());
-    let allow_http = config.and_then(|c| c.allow_http).unwrap_or(false);
-    let credentials = config.and_then(|c| c.credentials.clone());
+    let allow_http = config.map(|c| c.allow_http).unwrap_or(false);
+    let credentials =
+        config.map(|c| c.credentials.clone()).unwrap_or(S3Credentials::FromEnv);
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
@@ -68,14 +81,18 @@ pub async fn mk_client(config: Option<&S3Config>) -> Client {
         aws_config = aws_config.endpoint_url(endpoint)
     }
 
-    if let Some(credentials) = credentials {
-        aws_config = aws_config.credentials_provider(Credentials::new(
-            credentials.access_key_id,
-            credentials.secret_access_key,
-            credentials.session_token,
-            None,
-            "user",
-        ));
+    match credentials {
+        S3Credentials::FromEnv => {}
+        S3Credentials::Anonymous => aws_config = aws_config.no_credentials(),
+        S3Credentials::Static(credentials) => {
+            aws_config = aws_config.credentials_provider(Credentials::new(
+                credentials.access_key_id,
+                credentials.secret_access_key,
+                credentials.session_token,
+                None,
+                "user",
+            ));
+        }
     }
 
     let mut s3_builder = Builder::from(&aws_config.load().await);

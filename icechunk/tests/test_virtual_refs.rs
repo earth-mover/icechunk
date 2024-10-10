@@ -9,7 +9,7 @@ mod tests {
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         storage::{
-            s3::{mk_client, S3Config, S3Credentials, S3Storage},
+            s3::{mk_client, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
             virtual_ref::ObjectStoreVirtualChunkResolverConfig,
             ObjectStorage,
         },
@@ -26,25 +26,37 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
 
-    fn s3_config() -> S3Config {
+    fn minino_s3_config() -> S3Config {
         S3Config {
             region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
-            credentials: Some(S3Credentials {
+            credentials: S3Credentials::Static(StaticS3Credentials {
                 access_key_id: "minio123".into(),
                 secret_access_key: "minio123".into(),
                 session_token: None,
             }),
-            allow_http: Some(true),
+            allow_http: true,
         }
     }
 
-    async fn create_repository(storage: Arc<dyn Storage + Send + Sync>) -> Repository {
+    fn anon_s3_config() -> S3Config {
+        S3Config {
+            region: Some("us-east-1".to_string()),
+            endpoint: None,
+            credentials: S3Credentials::Anonymous,
+            allow_http: false,
+        }
+    }
+
+    async fn create_repository(
+        storage: Arc<dyn Storage + Send + Sync>,
+        virtual_s3_config: S3Config,
+    ) -> Repository {
         Repository::init(storage, true)
             .await
             .expect("building repository failed")
             .with_virtual_ref_config(ObjectStoreVirtualChunkResolverConfig::S3(
-                s3_config(),
+                virtual_s3_config,
             ))
             .build()
     }
@@ -67,12 +79,15 @@ mod tests {
                 .expect(&format!("putting chunk to {} failed", &path));
         }
     }
-    async fn create_local_repository(path: &StdPath) -> Repository {
+    async fn create_local_repository(
+        path: &StdPath,
+        virtual_s3_config: S3Config,
+    ) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
         );
 
-        create_repository(storage).await
+        create_repository(storage, virtual_s3_config).await
     }
 
     async fn create_minio_repository() -> Repository {
@@ -80,13 +95,13 @@ mod tests {
             S3Storage::new_s3_store(
                 "testbucket".to_string(),
                 format!("{:?}", ChunkId::random()),
-                Some(&s3_config()),
+                Some(&minino_s3_config()),
             )
             .await
             .expect("Creating minio storage failed"),
         );
 
-        create_repository(storage).await
+        create_repository(storage, minino_s3_config()).await
     }
 
     async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
@@ -96,7 +111,7 @@ mod tests {
     }
 
     async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
-        let client = mk_client(Some(&s3_config())).await;
+        let client = mk_client(Some(&minino_s3_config())).await;
 
         let bucket_name = "testbucket".to_string();
         for (key, bytes) in chunks {
@@ -123,7 +138,7 @@ mod tests {
         write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
         let repo_dir = TempDir::new()?;
-        let mut ds = create_local_repository(repo_dir.path()).await;
+        let mut ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
@@ -390,6 +405,52 @@ mod tests {
             store.get("array/c/0/0/1", &ByteRange::ALL).await?,
             Bytes::copy_from_slice(&bytes2[1..6]),
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_zarr_store_virtual_refs_from_public_s3(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let repo_dir = TempDir::new()?;
+        let ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
+
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[22],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[22]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value": 0.0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[],"dimension_names":["depth"]}"#);
+        store.set("depth/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        let ref2 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.regulargrid.f030.nc",
+            )?,
+            offset: 42499,
+            length: 176,
+        };
+
+        store.set_virtual_ref("depth/c/0", ref2).await?;
+
+        let chunk = store.get("depth/c/0", &ByteRange::ALL).await.unwrap();
+        assert_eq!(chunk.len(), 176);
+
+        let second_depth = f64::from_le_bytes(chunk[8..16].try_into().unwrap());
+        assert!(second_depth - 1. < 0.000001);
+
+        let last_depth = f64::from_le_bytes(chunk[(176 - 8)..].try_into().unwrap());
+        assert!(last_depth - 125. < 0.000001);
+
         Ok(())
     }
 }

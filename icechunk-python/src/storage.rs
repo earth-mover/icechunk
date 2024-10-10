@@ -1,8 +1,11 @@
+#![allow(clippy::too_many_arguments)]
+// TODO: we only need that allow for PyStorageConfig, but i don't know how to set it
+
 use std::path::PathBuf;
 
 use icechunk::{
     storage::{
-        s3::{S3Config, S3Credentials},
+        s3::{S3Config, S3Credentials, StaticS3Credentials},
         virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     },
     zarr::StorageConfig,
@@ -20,9 +23,9 @@ pub struct PyS3Credentials {
     session_token: Option<String>,
 }
 
-impl From<&PyS3Credentials> for S3Credentials {
+impl From<&PyS3Credentials> for StaticS3Credentials {
     fn from(credentials: &PyS3Credentials) -> Self {
-        S3Credentials {
+        StaticS3Credentials {
             access_key_id: credentials.access_key_id.clone(),
             secret_access_key: credentials.secret_access_key.clone(),
             session_token: credentials.session_token.clone(),
@@ -53,6 +56,7 @@ pub enum PyStorageConfig {
     S3 {
         bucket: String,
         prefix: String,
+        anon: bool,
         credentials: Option<PyS3Credentials>,
         endpoint_url: Option<String>,
         allow_http: Option<bool>,
@@ -84,6 +88,7 @@ impl PyStorageConfig {
         PyStorageConfig::S3 {
             bucket,
             prefix,
+            anon: false,
             credentials: None,
             endpoint_url,
             allow_http,
@@ -104,10 +109,42 @@ impl PyStorageConfig {
         PyStorageConfig::S3 {
             bucket,
             prefix,
+            anon: false,
             credentials: Some(credentials),
             endpoint_url,
             allow_http,
             region,
+        }
+    }
+
+    #[classmethod]
+    fn s3_anonymous(
+        _cls: &Bound<'_, PyType>,
+        bucket: String,
+        prefix: String,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    ) -> Self {
+        PyStorageConfig::S3 {
+            bucket,
+            prefix,
+            anon: true,
+            credentials: None,
+            endpoint_url,
+            allow_http,
+            region,
+        }
+    }
+}
+
+fn mk_credentials(config: Option<&PyS3Credentials>, anon: bool) -> S3Credentials {
+    if anon {
+        S3Credentials::Anonymous
+    } else {
+        match config {
+            None => S3Credentials::FromEnv,
+            Some(credentials) => S3Credentials::Static(credentials.into()),
         }
     }
 }
@@ -124,20 +161,25 @@ impl From<&PyStorageConfig> for StorageConfig {
             PyStorageConfig::S3 {
                 bucket,
                 prefix,
+                anon,
                 credentials,
                 endpoint_url,
                 allow_http,
                 region,
-            } => StorageConfig::S3ObjectStore {
-                bucket: bucket.clone(),
-                prefix: prefix.clone(),
-                config: Some(S3Config {
+            } => {
+                let s3_config = S3Config {
                     region: region.clone(),
-                    credentials: credentials.as_ref().map(S3Credentials::from),
+                    credentials: mk_credentials(credentials.as_ref(), *anon),
                     endpoint: endpoint_url.clone(),
-                    allow_http: *allow_http,
-                }),
-            },
+                    allow_http: allow_http.unwrap_or(false),
+                };
+
+                StorageConfig::S3ObjectStore {
+                    bucket: bucket.clone(),
+                    prefix: prefix.clone(),
+                    config: Some(s3_config),
+                }
+            }
         }
     }
 }
@@ -150,6 +192,7 @@ pub enum PyVirtualRefConfig {
         endpoint_url: Option<String>,
         allow_http: Option<bool>,
         region: Option<String>,
+        anon: bool,
     },
 }
 
@@ -162,6 +205,7 @@ impl PyVirtualRefConfig {
             endpoint_url: None,
             allow_http: None,
             region: None,
+            anon: false,
         }
     }
 
@@ -172,12 +216,30 @@ impl PyVirtualRefConfig {
         endpoint_url: Option<String>,
         allow_http: Option<bool>,
         region: Option<String>,
+        anon: Option<bool>,
     ) -> Self {
         PyVirtualRefConfig::S3 {
             credentials: Some(credentials),
             endpoint_url,
             allow_http,
             region,
+            anon: anon.unwrap_or(false),
+        }
+    }
+
+    #[classmethod]
+    fn s3_anonymous(
+        _cls: &Bound<'_, PyType>,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    ) -> Self {
+        PyVirtualRefConfig::S3 {
+            credentials: None,
+            endpoint_url,
+            allow_http,
+            region,
+            anon: true,
         }
     }
 }
@@ -185,14 +247,18 @@ impl PyVirtualRefConfig {
 impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {
     fn from(config: &PyVirtualRefConfig) -> Self {
         match config {
-            PyVirtualRefConfig::S3 { credentials, endpoint_url, allow_http, region } => {
-                ObjectStoreVirtualChunkResolverConfig::S3(S3Config {
-                    region: region.clone(),
-                    endpoint: endpoint_url.clone(),
-                    credentials: credentials.as_ref().map(S3Credentials::from),
-                    allow_http: *allow_http,
-                })
-            }
+            PyVirtualRefConfig::S3 {
+                credentials,
+                endpoint_url,
+                allow_http,
+                region,
+                anon,
+            } => ObjectStoreVirtualChunkResolverConfig::S3(S3Config {
+                region: region.clone(),
+                endpoint: endpoint_url.clone(),
+                credentials: mk_credentials(credentials.as_ref(), *anon),
+                allow_http: allow_http.unwrap_or(false),
+            }),
         }
     }
 }
