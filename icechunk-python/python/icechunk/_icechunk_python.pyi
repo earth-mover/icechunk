@@ -124,10 +124,10 @@ class StorageConfig:
         with the given bucket and prefix
 
         This assumes that the necessary credentials are available in the environment:
+            AWS_REGION
             AWS_ACCESS_KEY_ID,
             AWS_SECRET_ACCESS_KEY,
             AWS_SESSION_TOKEN (optional)
-            AWS_REGION (optional)
             AWS_ENDPOINT_URL (optional)
             AWS_ALLOW_HTTP (optional)
         """
@@ -178,10 +178,10 @@ class VirtualRefConfig:
         with the given bucket and prefix
 
         This assumes that the necessary credentials are available in the environment:
+            AWS_REGION
             AWS_ACCESS_KEY_ID,
             AWS_SECRET_ACCESS_KEY,
             AWS_SESSION_TOKEN (optional)
-            AWS_REGION (optional)
             AWS_ENDPOINT_URL (optional)
             AWS_ALLOW_HTTP (optional)
         """
