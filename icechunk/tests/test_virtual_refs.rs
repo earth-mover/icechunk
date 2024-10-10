@@ -41,7 +41,7 @@ mod tests {
 
     fn anon_s3_config() -> S3Config {
         S3Config {
-            region: Some("us-east".to_string()),
+            region: Some("us-east-1".to_string()),
             endpoint: None,
             credentials: None,
             allow_http: None,
@@ -435,7 +435,14 @@ mod tests {
 
         store.set_virtual_ref("depth/c/0", ref2).await?;
 
-        let _chunk = store.get("depth/c/0", &ByteRange::ALL).await.unwrap();
+        let chunk = store.get("depth/c/0", &ByteRange::ALL).await.unwrap();
+        assert_eq!(chunk.len(), 176);
+
+        let second_depth = f64::from_le_bytes(chunk[8..16].try_into().unwrap());
+        assert!(second_depth - 1. < 0.000001);
+
+        let last_depth = f64::from_le_bytes(chunk[(176 - 8)..].try_into().unwrap());
+        assert!(last_depth - 125. < 0.000001);
 
         Ok(())
     }
