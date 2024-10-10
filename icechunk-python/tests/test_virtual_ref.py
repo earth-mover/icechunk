@@ -51,7 +51,7 @@ async def test_write_minino_virtual_refs():
             allow_http=True,
             region="us-east-1",
         ),
-        mode="r+",
+        mode="w",
         config=StoreConfig(
             virtual_ref_config=VirtualRefConfig.s3_from_config(
                 credentials=S3Credentials(
