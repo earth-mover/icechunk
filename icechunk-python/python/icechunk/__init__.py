@@ -2,7 +2,7 @@
 from collections.abc import AsyncGenerator, Iterable
 from typing import Any, Self
 
-from zarr.abc.store import AccessMode, ByteRangeRequest, Store
+from zarr.abc.store import ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
@@ -37,15 +37,10 @@ class IcechunkStore(Store, SyncMixin):
 
     @classmethod
     async def open(cls, *args: Any, **kwargs: Any) -> Self:
-        """FIXME: Better handle the open method based on the access mode the user passed in along with the kwargs
-        https://github.com/zarr-developers/zarr-python/blob/c878da2a900fc621ff23cc6d84d45cd3cb26cbed/src/zarr/abc/store.py#L24-L30
-        """
         if "mode" in kwargs:
             mode = kwargs.pop("mode")
         else:
             mode = "r"
-
-        access_mode = AccessMode.from_literal(mode)
 
         if "storage" in kwargs:
             storage = kwargs.pop("storage")
@@ -54,22 +49,28 @@ class IcechunkStore(Store, SyncMixin):
                 "Storage configuration is required. Pass a Storage object to construct an IcechunkStore"
             )
 
-        store_exists = await pyicechunk_store_exists(storage)
-
-        if access_mode.overwrite:
-            if store_exists:
-                raise ValueError(
-                    "Store already exists and overwrite is not allowed for IcechunkStore"
-                )
-            store = await cls.create(storage, mode, *args, **kwargs)
-        elif access_mode.create or access_mode.update:
-            if store_exists:
+        store = None
+        match mode:
+            case "r" | "r+":
                 store = await cls.open_existing(storage, mode, *args, **kwargs)
-            else:
-                store = await cls.create(storage, mode, *args, **kwargs)
-        else:
-            store = await cls.open_existing(storage, mode, *args, **kwargs)
+            case "a":
+                if await pyicechunk_store_exists(storage):
+                    store = await cls.open_existing(storage, mode, *args, **kwargs)
+                else:
+                    store = await cls.create(storage, mode, *args, **kwargs)
+            case "w":
+                if await pyicechunk_store_exists(storage):
+                    store = await cls.open_existing(storage, mode, *args, **kwargs)
+                    await store.clear()
+                else:
+                    store = await cls.create(storage, mode, *args, **kwargs)
+            case "w-":
+                if await pyicechunk_store_exists(storage):
+                    raise ValueError("""Zarr store already exists, open using mode "w" or "r+""""")
+                else:
+                    store = await cls.create(storage, mode, *args, **kwargs)
 
+        assert(store)
         # We dont want to call _open() becuase icechunk handles the opening, etc.
         # if we have gotten this far we can mark it as open
         store._is_open = True
@@ -112,9 +113,20 @@ class IcechunkStore(Store, SyncMixin):
         """
         config = config or StoreConfig()
         read_only = mode == "r"
-        store = await pyicechunk_store_open_existing(
-            storage, read_only=read_only, config=config
-        )
+        # We have delayed checking if the repository exists, to avoid the delay in the happy case
+        # So we need to check now if open fails, to provide a nice error message
+        try:
+            store = await pyicechunk_store_open_existing(
+                storage, read_only=read_only, config=config
+            )
+        # TODO: we should have an exception type to catch here, for the case of non-existing repo
+        except Exception as e:
+            if await pyicechunk_store_exists(storage):
+                # if the repo exists, this is an actual error we need to raise
+                raise e
+            else:
+                # if the repo doesn't exists, we want to point users to that issue instead
+                raise ValueError("No Icechunk repository at the provided location, try opening in create mode or changing the location") from None
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
