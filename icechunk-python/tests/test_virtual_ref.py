@@ -87,10 +87,9 @@ async def test_from_s3_public_virtual_refs(tmpdir):
         storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),
         mode="w",
         config=StoreConfig(
-            virtual_ref_config=VirtualRefConfig.s3_from_env()
+            virtual_ref_config=VirtualRefConfig.s3_anonymous()
         ),
     )
-
     root = zarr.Group.from_store(store=store, zarr_format=3)
     depth = root.require_array(
         name="depth", shape=((22, )), chunk_shape=((22,)), dtype="float64"

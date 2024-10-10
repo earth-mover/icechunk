@@ -226,6 +226,22 @@ impl PyVirtualRefConfig {
             anon: anon.unwrap_or(false),
         }
     }
+
+    #[classmethod]
+    fn s3_anonymous(
+        _cls: &Bound<'_, PyType>,
+        endpoint_url: Option<String>,
+        allow_http: Option<bool>,
+        region: Option<String>,
+    ) -> Self {
+        PyVirtualRefConfig::S3 {
+            credentials: None,
+            endpoint_url,
+            allow_http,
+            region,
+            anon: true,
+        }
+    }
 }
 
 impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {

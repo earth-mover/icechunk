@@ -203,6 +203,18 @@ class VirtualRefConfig:
         """
         ...
 
+    @classmethod
+    def s3_anonymous(
+        cls,
+        endpoint_url: str | None,
+        allow_http: bool | None = None,
+        region: str | None = None,
+    ) -> VirtualRefConfig:
+        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
+        using anonymous access
+        """
+        ...
+
 class StoreConfig:
     # The number of concurrent requests to make when fetching partial values
     get_partial_values_concurrency: int | None
