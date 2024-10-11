@@ -64,7 +64,9 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 [tool.ruff]
 line-length = 90
 
-[tool.ruff.lint]
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["F821"]
+
 extend-select = [
   "B",  # flake8-bugbear
   "I",  # isort
