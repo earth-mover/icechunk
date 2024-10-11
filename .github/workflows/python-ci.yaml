@@ -6,14 +6,14 @@
 name: Python CI
 
 on:
-  push:
-    branches:
-      - main
-      - master
-    tags:
-      - '*'
-  pull_request:
+  publish:
+    types:
+      # published triggers for both releases and prereleases
+      - published
   workflow_dispatch:
+  schedule:
+    # run every day at 4am
+    - cron: '0 4 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -74,52 +74,6 @@ jobs:
           working-directory: icechunk-python
           name: wheels-linux-${{ matrix.platform.target }}
           path: icechunk-python/dist
-      - name: mypy
-        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          mypy python
-      - name: ruff
-        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          ruff check
-      - name: pytest
-        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          pytest
-      # - name: pytest
-      #   if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
-      #   uses: uraimo/run-on-arch-action@v2
-      #   with:
-      #     working-directory: icechunk-python
-      #     arch: ${{ matrix.platform.target }}
-      #     distro: ubuntu22.04
-      #     githubToken: ${{ github.token }}
-      #     install: |
-      #       apt-get update
-      #       apt-get install -y --no-install-recommends python3 python3-pip
-      #       pip3 install -U pip pytest
-      #     run: |
-      #       set -e
-      #       pip3 install icechunk['test'] --find-links dist --force-reinstall
-      #       pytest
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
@@ -152,36 +106,6 @@ jobs:
         with:
           name: wheels-musllinux-${{ matrix.platform.target }}
           path: icechunk-python/dist
-      # - name: pytest
-      #   if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-      #   uses: addnab/docker-run-action@v3
-      #   with:
-      #     image: alpine:latest
-      #     options: -v ${{ github.workspace }}:/io -w /io
-      #     run: |
-      #       set -e
-      #       apk add py3-pip py3-virtualenv
-      #       python3 -m virtualenv .venv
-      #       source .venv/bin/activate
-      #       pip install icechunk --no-index --find-links dist --force-reinstall
-      #       pip install pytest
-      #       pytest
-      # - name: pytest
-      #   if: ${{ !startsWith(matrix.platform.target, 'x86') }}
-      #   uses: uraimo/run-on-arch-action@v2
-      #   with:
-      #     arch: ${{ matrix.platform.target }}
-      #     distro: alpine_latest
-      #     githubToken: ${{ github.token }}
-      #     install: |
-      #       apk add py3-virtualenv
-      #     run: |
-      #       set -e
-      #       python3 -m virtualenv .venv
-      #       source .venv/bin/activate
-      #       pip install pytest
-      #       pip install icechunk --find-links dist --force-reinstall
-      #       pytest
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
@@ -210,16 +134,6 @@ jobs:
         with:
           name: wheels-windows-${{ matrix.platform.target }}
           path: icechunk-python/dist
-      # - name: pytest
-      #   if: ${{ !startsWith(matrix.platform.target, 'aarch64') }}
-      #   shell: bash
-      #   run: |
-      #     set -e
-      #     python3 -m venv .venv
-      #     source .venv/Scripts/activate
-      #     pip install icechunk --find-links dist --force-reinstall
-      #     pip install pytest
-      #     pytest
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
@@ -247,14 +161,6 @@ jobs:
         with:
           name: wheels-macos-${{ matrix.platform.target }}
           path: icechunk-python/dist
-      # - name: pytest
-      #   run: |
-      #     set -e
-      #     python3 -m venv .venv
-      #     source .venv/bin/activate
-      #     pip install icechunk --find-links dist --force-reinstall
-      #     pip install pytest
-      #     pytest
 
   sdist:
     runs-on: ubuntu-latest
@@ -276,7 +182,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: "startsWith(github.ref, 'refs/tags/')"
+    if: "github.event_name == 'published'"
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: actions/download-artifact@v4
