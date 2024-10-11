@@ -34,12 +34,15 @@ jobs:
         platform:
           - runner: ubuntu-latest
             target: x86_64
-          - runner: ubuntu-latest
-            target: x86
+            manylinux: auto
+          # - runner: ubuntu-latest
+          #   target: x86
           - runner: ubuntu-latest
             target: aarch64
+            manylinux: 2_28
           - runner: ubuntu-latest
             target: armv7
+            manylinux: 2_28
     steps:
       - uses: actions/checkout@v4
       - name: Stand up MinIO
@@ -64,7 +67,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
-          manylinux: '2_28' # https://github.com/PyO3/maturin-action/issues/245
+          manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
