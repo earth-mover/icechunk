@@ -52,7 +52,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     ) -> dict[str, str | None | dict[str, Buffer]]:
         kwargs = {
             "storage": StorageConfig.memory(""),
-            "mode": "r+",
+            "mode": "w",
         }
         return kwargs
 
@@ -67,6 +67,10 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.mark.xfail(reason="Not implemented")
     def test_serializable_store(self, store: IcechunkStore) -> None:
         super().test_serializable_store(store)
+
+    def test_store_mode(self, store, store_kwargs: dict[str, Any]) -> None:
+        assert store.mode == AccessMode.from_literal("w")
+        assert not store.mode.readonly
 
     async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
