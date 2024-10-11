@@ -6,7 +6,7 @@
 name: Python CI
 
 on:
-  pull_request:
+  release:
     types:
       # published triggers for both releases and prereleases
       - published
