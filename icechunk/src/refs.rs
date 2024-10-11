@@ -8,13 +8,15 @@ use thiserror::Error;
 use crate::{format::SnapshotId, Storage, StorageError};
 
 fn crock_encode_int(n: u64) -> String {
-    base32::encode(base32::Alphabet::Crockford, &n.to_be_bytes())
+    // skip the first 3 bytes (zeroes)
+    base32::encode(base32::Alphabet::Crockford, &n.to_be_bytes()[3..=7])
 }
 
 fn crock_decode_int(data: &str) -> Option<u64> {
-    let bytes = base32::decode(base32::Alphabet::Crockford, data)?;
-    let bytes = bytes.try_into().ok()?;
-    Some(u64::from_be_bytes(bytes))
+    // re insert the first 3 bytes removed during encoding
+    let mut bytes = vec![0, 0, 0];
+    bytes.extend(base32::decode(base32::Alphabet::Crockford, data)?);
+    Some(u64::from_be_bytes(bytes.as_slice().try_into().ok()?))
 }
 
 #[derive(Debug, Error)]
@@ -70,14 +72,16 @@ impl Ref {
 pub struct BranchVersion(pub u64);
 
 impl BranchVersion {
+    const MAX_VERSION_NUMBER: u64 = 1099511627775;
+
     fn decode(version: &str) -> RefResult<Self> {
         let n = crock_decode_int(version)
             .ok_or(RefError::InvalidBranchVersion(version.to_string()))?;
-        Ok(BranchVersion(u64::MAX - n))
+        Ok(BranchVersion(BranchVersion::MAX_VERSION_NUMBER - n))
     }
 
     fn encode(&self) -> String {
-        crock_encode_int(u64::MAX - self.0)
+        crock_encode_int(BranchVersion::MAX_VERSION_NUMBER - self.0)
     }
 
     fn to_path(&self, branch_name: &str) -> RefResult<String> {
@@ -281,9 +285,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_branch_version_encoding() -> Result<(), Box<dyn std::error::Error>> {
-        let targets = (0..10u64).chain(once(u64::MAX));
+        let targets = (0..10u64).chain(once(BranchVersion::MAX_VERSION_NUMBER));
+        let encodings = [
+            "ZZZZZZZZ", "ZZZZZZZY", "ZZZZZZZX", "ZZZZZZZW", "ZZZZZZZV",
+            // no U
+            "ZZZZZZZT", "ZZZZZZZS", "ZZZZZZZR", "ZZZZZZZQ", "ZZZZZZZP",
+        ];
+
         for n in targets {
-            let round = BranchVersion::decode(BranchVersion(n).encode().as_str())?;
+            let encoded = BranchVersion(n).encode();
+
+            if n < 100 {
+                assert_eq!(encoded, encodings[n as usize]);
+            }
+            if n == BranchVersion::MAX_VERSION_NUMBER {
+                assert_eq!(encoded, "00000000");
+            }
+
+            let round = BranchVersion::decode(encoded.as_str())?;
             assert_eq!(round, BranchVersion(n));
         }
         Ok(())
