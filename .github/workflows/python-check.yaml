@@ -1,0 +1,75 @@
+name: Python Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stand up MinIO
+        run: |
+          docker compose up -d minio
+      - name: Wait for MinIO to be ready
+        run: |
+          for i in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+      - name: mypy
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install icechunk['test'] --find-links dist --force-reinstall
+          mypy python
+      - name: ruff
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install icechunk['test'] --find-links dist --force-reinstall
+          ruff check
+      - name: pytest
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install icechunk['test'] --find-links dist --force-reinstall
+          pytest
