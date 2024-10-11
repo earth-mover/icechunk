@@ -40,7 +40,7 @@ jobs:
             manylinux: "auto"
           - runner: ubuntu-latest
             target: aarch64
-            manylinux: "2_28"
+            manylinux: "2_28" # https://github.com/PyO3/maturin-action/issues/245
           - runner: ubuntu-latest
             target: armv7
             manylinux: "auto"
