@@ -1364,7 +1364,7 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
-    use crate::storage::s3::S3Credentials;
+    use crate::storage::s3::{S3Credentials, StaticS3Credentials};
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -2458,12 +2458,7 @@ mod tests {
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    config: Some(S3Config {
-                        endpoint: None,
-                        credentials: None,
-                        allow_http: None,
-                        region: None
-                    }),
+                    config: None,
                 },
                 config: None,
             },
@@ -2476,6 +2471,7 @@ mod tests {
              "bucket":"test",
              "prefix":"root",
              "credentials":{
+                 "type":"static",
                  "access_key_id":"my-key",
                  "secret_access_key":"my-secret-key"
              },
@@ -2500,12 +2496,12 @@ mod tests {
                     config: Some(S3Config {
                         region: None,
                         endpoint: Some(String::from("http://localhost:9000")),
-                        credentials: Some(S3Credentials {
+                        credentials: S3Credentials::Static(StaticS3Credentials {
                             access_key_id: String::from("my-key"),
                             secret_access_key: String::from("my-secret-key"),
                             session_token: None,
                         }),
-                        allow_http: Some(true),
+                        allow_http: true,
                     })
                 },
                 config: None,

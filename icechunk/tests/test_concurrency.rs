@@ -128,7 +128,6 @@ async fn read_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32, barrier: Arc<Bar
         let actual_bytes =
             get_chunk(chunk_reader).await.expect("Failed to getch chunk payload");
 
-        //dbg!(&actual_bytes);
         match &actual_bytes {
             Some(bytes) => {
                 if bytes == &expected_bytes {

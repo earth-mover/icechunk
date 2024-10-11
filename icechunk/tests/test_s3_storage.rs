@@ -11,7 +11,7 @@ use icechunk::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
     storage::{
-        s3::{S3Config, S3Credentials, S3Storage},
+        s3::{S3Config, S3Credentials, S3Storage, StaticS3Credentials},
         StorageResult,
     },
     Storage,
@@ -25,12 +25,12 @@ async fn mk_storage() -> StorageResult<S3Storage> {
         Some(&S3Config {
             region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
-            credentials: Some(S3Credentials {
+            credentials: S3Credentials::Static(StaticS3Credentials {
                 access_key_id: "minio123".into(),
                 secret_access_key: "minio123".into(),
                 session_token: None,
             }),
-            allow_http: Some(true),
+            allow_http: true,
         }),
     )
     .await
