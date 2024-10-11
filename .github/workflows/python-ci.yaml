@@ -75,6 +75,7 @@ jobs:
           name: wheels-linux-${{ matrix.platform.target }}
           path: icechunk-python/dist
       - name: mypy
+        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -84,6 +85,7 @@ jobs:
           pip install icechunk['test'] --find-links dist --force-reinstall
           mypy python
       - name: ruff
+        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         shell: bash
         working-directory: icechunk-python
         run: |
