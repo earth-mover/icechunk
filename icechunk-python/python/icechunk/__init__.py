@@ -85,7 +85,7 @@ class IcechunkStore(Store, SyncMixin):
         **kwargs: Any,
     ):
         """Create a new IcechunkStore. This should not be called directly, instead use the create or open_existing class methods."""
-        super().__init__(mode, *args, **kwargs)
+        super().__init__(*args, mode=mode, **kwargs)
         if store is None:
             raise ValueError(
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
