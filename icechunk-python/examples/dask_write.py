@@ -1,106 +1,142 @@
 """
-This scripts uses dask to write a big array to S3.
+This example uses Dask to write or update an array in an Icechunk repository.
+
+To understand all the available options run:
+```
+python ./examples/dask_write.py --help
+python ./examples/dask_write.py create --help
+python ./examples/dask_write.py update --help
+python ./examples/dask_write.py verify --help
+```
 
 Example usage:
 
 ```
-python ./examples/dask_write.py create --name test --t-chunks 100000
-python ./examples/dask_write.py update --name test --t-from 0 --t-to 1500 --workers 16 --max-sleep 0.1 --min-sleep 0 --sleep-tasks 300
-python ./examples/dask_write.py verify --name test --t-from 0 --t-to 1500 --workers 16
+python ./examples/dask_write.py create --url s3://my-bucket/my-icechunk-repo --t-chunks 100000 --x-chunks 4 --y-chunks 4 --chunk-x-size 112 --chunk-y-size 112
+python ./examples/dask_write.py update --url s3://my-bucket/my-icechunk-repo --t-from 0 --t-to 1500 --workers 16
+python ./examples/dask_write.py verify --url s3://my-bucket/my-icechunk-repo --t-from 0 --t-to 1500 --workers 16
 ```
+
+The work is split into three different commands.
+* `create` initializes the repository and the array, without writing any chunks. For this example
+   we chose a 3D array that simulates a dataset that needs backfilling across its time dimension.
+* `update` can be called multiple times to write a number of "pancakes" to the array.
+  It does so by distributing the work among Dask workers, in small tasks, one pancake per task.
+  The example invocation above, will write 1,500 pancakes using 16 Dask workers.
+* `verify` can read a part of the array and check that it contains the required data.
+
+Icechunk can do distributed writes to object store, but currently, it cannot use the Dask array API
+(we are working on it, see https://github.com/earth-mover/icechunk/issues/185).
+Dask can still be used to read and write to Icechunk from multiple processes and machines, we just need to use a lower level
+Dask API based, for example, in `map/gather`. This mechanism is what we show in this example.
 """
 
 import argparse
 import asyncio
-import time
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
+from urllib.parse import urlparse
 
 import icechunk
 import numpy as np
 import zarr
 from dask.distributed import Client
+from dask.distributed import print as dprint
 
 
 @dataclass
 class Task:
-    # fixme: useee StorageConfig and StoreConfig once those are pickable
-    storage_config: dict
-    store_config: dict
-    time: int
-    seed: int
-    sleep: float
+    """A task distributed to Dask workers"""
+    store: icechunk.IcechunkStore   # The worker will use this Icechunk store to read/write to the dataset
+    time: int                       # The position in the coordinate dimension where the read/write should happen
+    seed: int                       # An RNG seed used to generate or recreate random data for the array
 
 
-async def mk_store(mode: str, task: Task):
-    storage_config = icechunk.StorageConfig.s3_from_env(**task.storage_config)
-    store_config = icechunk.StoreConfig(**task.store_config)
-
-    store = await icechunk.IcechunkStore.open(
-        storage=storage_config,
-        mode="a",
-        config=store_config,
-    )
-
-    return store
-
-
-def generate_task_array(task: Task, shape):
+def generate_task_array(task: Task, shape: tuple[int,...]) -> np.typing.ArrayLike:
+    """Generates a randm array with the given shape and using the seed in the Task"""
     np.random.seed(task.seed)
     return np.random.rand(*shape)
 
 
-async def execute_write_task(task: Task):
-    from zarr import config
+async def execute_write_task(task: Task) -> icechunk.IcechunkStore:
+    """Execute task as a write task.
 
-    config.set({"async.concurrency": 10})
+    This will read the time coordinade from `task` and write a "pancake" in that position,
+    using random data. Random data is generated using the task seed.
 
-    store = await mk_store("w", task)
+    Returns the Icechunk store after the write is done.
+
+    As you can see Icechunk stores can be passed to remote workers, and returned from them.
+    The reason to return the store is that we'll need all the remote stores, when they are
+    done, to be able to do a single, global commit to Icechunk.
+    """
+
+    store = task.store
 
     group = zarr.group(store=store, overwrite=False)
     array = cast(zarr.Array, group["array"])
-    print(f"Writing at t={task.time}")
+    dprint(f"Writing at t={task.time}")
     data = generate_task_array(task, array.shape[0:2])
     array[:, :, task.time] = data
-    print(f"Writing at t={task.time} done")
-    if task.sleep != 0:
-        print(f"Sleeping for {task.sleep} secs")
-        time.sleep(task.sleep)
-    return store.change_set_bytes()
+    dprint(f"Writing at t={task.time} done")
+    return store
 
 
-async def execute_read_task(task: Task):
-    print(f"Reading t={task.time}")
-    store = await mk_store("r", task)
+async def execute_read_task(task: Task) -> None:
+    """Execute task as a read task.
+
+    This will read the time coordinade from `task` and read a "pancake" in that position.
+    Then it will assert the data is valid by re-generating the random data from the passed seed.
+
+    As you can see Icechunk stores can be passed to remote workers.
+    """
+
+    store = task.store
     group = zarr.group(store=store, overwrite=False)
     array = cast(zarr.Array, group["array"])
 
     actual = array[:, :, task.time]
     expected = generate_task_array(task, array.shape[0:2])
     np.testing.assert_array_equal(actual, expected)
+    dprint(f"t={task.time} verified")
 
 
-def run_write_task(task: Task):
+def run_write_task(task: Task) -> icechunk.IcechunkStore:
+    """Sync helper for write tasks"""
     return asyncio.run(execute_write_task(task))
 
 
-def run_read_task(task: Task):
+def run_read_task(task: Task) -> None:
+    """Sync helper for read tasks"""
     return asyncio.run(execute_read_task(task))
 
 
-def storage_config(args):
-    prefix = f"seba-tests/icechunk/{args.name}"
+def storage_config(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the Icechunk store S3 configuration map"""
+    bucket = args.url.netloc
+    prefix = args.url.path[1:]
     return {
-        "bucket": "arraylake-test",
+        "bucket": bucket,
         "prefix": prefix,
     }
 
 
-def store_config(args):
+def store_config(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the Icechunk store configuration.
+
+    We lower the default to make sure we write chunks and not inline them.
+    """
     return {"inline_chunk_threshold_bytes": 1}
 
 
-async def create(args):
+async def create(args: argparse.Namespace) -> None:
+    """Execute the create subcommand.
+
+    Creates an Icechunk store, a root group and an array named "array"
+    with the shape passed as arguments.
+
+    Commits the Icechunk repository when done.
+    """
     store = await icechunk.IcechunkStore.open(
         storage=icechunk.StorageConfig.s3_from_env(**storage_config(args)),
         mode="w",
@@ -122,11 +158,22 @@ async def create(args):
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snap = await store.commit("array created")
+    _first_snapshot = await store.commit("array created")
     print("Array initialized")
 
 
-async def update(args):
+async def update(args: argparse.Namespace) -> None:
+    """Execute the update subcommand.
+
+    Uses Dask to write chunks to the Icechunk repository. Currently Icechunk cannot
+    use the Dask array API (see https://github.com/earth-mover/icechunk/issues/185) but we
+    can still use a lower level API to do the writes:
+    * We split the work into small `Task`s, one 'pancake' per task, at a given t coordinate.
+    * We use Dask's `map` to ship the `Task` to a worker
+    * The `Task` includes a copy of the Icechunk Store, so workers can do the writes
+    * When workers are done, they send their store back
+    * When all workers are done (Dask's `gather`), we take all Stores and do a distributed commit in Icechunk
+    """
     storage_conf = storage_config(args)
     store_conf = store_config(args)
 
@@ -137,20 +184,14 @@ async def update(args):
     )
 
     group = zarr.group(store=store, overwrite=False)
-    array = group["array"]
-    print(f"Found an array of shape: {array.shape}")
+    array = cast(zarr.Array, group["array"])
+    print(f"Found an array with shape: {array.shape}")
 
     tasks = [
         Task(
-            storage_config=storage_conf,
-            store_config=store_conf,
+            store=store,
             time=time,
             seed=time,
-            sleep=max(
-                0,
-                args.max_sleep
-                - ((args.max_sleep - args.min_sleep) / (args.sleep_tasks + 1) * time),
-            ),
         )
         for time in range(args.t_from, args.t_to, 1)
     ]
@@ -158,38 +199,45 @@ async def update(args):
     client = Client(n_workers=args.workers, threads_per_worker=1)
 
     map_result = client.map(run_write_task, tasks)
-    change_sets_bytes = client.gather(map_result)
+    worker_stores = client.gather(map_result)
 
     print("Starting distributed commit")
     # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    commit_res = await store.distributed_commit("distributed commit", change_sets_bytes)
+    commit_res = await store.distributed_commit("distributed commit", [ws.change_set_bytes() for ws in worker_stores])
     assert commit_res
     print("Distributed commit done")
 
 
-async def verify(args):
+async def verify(args: argparse.Namespace) -> None:
+    """Execute the verify subcommand.
+
+    Uses Dask to read and verify chunks from the Icechunk repository. Currently Icechunk cannot
+    use the Dask array API (see https://github.com/earth-mover/icechunk/issues/185) but we
+    can still use a lower level API to do the verification:
+    * We split the work into small `Task`s, one 'pancake' per task, at a given t coordinate.
+    * We use Dask's `map` to ship the `Task` to a worker
+    * The `Task` includes a copy of the Icechunk Store, so workers can do the Icechunk reads
+    """
     storage_conf = storage_config(args)
     store_conf = store_config(args)
 
     store = await icechunk.IcechunkStore.open(
         storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
-        mode="r+",
+        mode="r",
         config=icechunk.StoreConfig(**store_conf),
     )
 
     group = zarr.group(store=store, overwrite=False)
-    array = group["array"]
-    print(f"Found an array of shape: {array.shape}")
+    array = cast(zarr.Array, group["array"])
+    print(f"Found an array with shape: {array.shape}")
 
     tasks = [
         Task(
-            storage_config=storage_conf,
-            store_config=store_conf,
+            store=store,
             time=time,
             seed=time,
-            sleep=0,
         )
         for time in range(args.t_from, args.t_to, 1)
     ]
@@ -201,17 +249,14 @@ async def verify(args):
     print("done, all good")
 
 
-async def distributed_write():
-    """Write to an array using uncoordinated writers, distributed via Dask.
+async def main() -> None:
+    """Main entry point for the script.
 
-    We create a big array, and then we split into workers, each worker gets
-    an area, where it writes random data with a known seed. Each worker
-    returns the bytes for its ChangeSet, then the coordinator (main thread)
-    does a distributed commit. When done, we open the store again and verify
-    we can write everything we have written.
+    Parses arguments and delegates to a subcommand.
     """
 
     global_parser = argparse.ArgumentParser(prog="dask_write")
+    global_parser.add_argument("--url", type=str, help="url for the repository: s3://bucket/optional-prefix/repository-name", required=True)
     subparsers = global_parser.add_subparsers(title="subcommands", required=True)
 
     create_parser = subparsers.add_parser("create", help="create repo and array")
@@ -236,7 +281,6 @@ async def distributed_write():
         help="size of chunks in the y dimension",
         default=112,
     )
-    create_parser.add_argument("--name", type=str, help="repository name", required=True)
     create_parser.set_defaults(command="create")
 
     update_parser = subparsers.add_parser("update", help="add chunks to the array")
@@ -254,29 +298,6 @@ async def distributed_write():
     )
     update_parser.add_argument(
         "--workers", type=int, help="number of workers to use", required=True
-    )
-    update_parser.add_argument("--name", type=str, help="repository name", required=True)
-    update_parser.add_argument(
-        "--max-sleep",
-        type=float,
-        help="initial tasks sleep by these many seconds",
-        default=0,
-    )
-    update_parser.add_argument(
-        "--min-sleep",
-        type=float,
-        help="last task that sleeps does it by these many seconds, a ramp from --max-sleep",
-        default=0,
-    )
-    update_parser.add_argument(
-        "--sleep-tasks", type=int, help="this many tasks sleep", default=0
-    )
-    update_parser.add_argument(
-        "--distributed-cluster",
-        type=bool,
-        help="use multiple machines",
-        action=argparse.BooleanOptionalAction,
-        default=False,
     )
     update_parser.set_defaults(command="update")
 
@@ -296,17 +317,15 @@ async def distributed_write():
     verify_parser.add_argument(
         "--workers", type=int, help="number of workers to use", required=True
     )
-    verify_parser.add_argument("--name", type=str, help="repository name", required=True)
-    verify_parser.add_argument(
-        "--distributed-cluster",
-        type=bool,
-        help="use multiple machines",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-    )
     verify_parser.set_defaults(command="verify")
 
     args = global_parser.parse_args()
+    url = urlparse(args.url, "s3")
+    if url.scheme != "s3" or url.netloc == '' or url.path == '' or url.params != '' or url.query != '' or url.fragment != '':
+        raise ValueError(f"Invalid url {args.url}")
+
+    args.url = url
+
     match args.command:
         case "create":
             await create(args)
@@ -317,4 +336,4 @@ async def distributed_write():
 
 
 if __name__ == "__main__":
-    asyncio.run(distributed_write())
+    asyncio.run(main())

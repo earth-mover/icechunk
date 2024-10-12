@@ -178,15 +178,18 @@ class IcechunkStore(Store, SyncMixin):
         return self._store == value._store
 
     def __getstate__(self) -> object:
-        store_repr = self._store.as_bytes()
-        return {"store": store_repr, "mode": self.mode}
+        # we serialize the Rust store as bytes
+        d = self.__dict__.copy()
+        d["_store"] = self._store.as_bytes()
+        return d
 
     def __setstate__(self, state: Any) -> None:
-        store_repr = state["store"]
-        mode = state["mode"]
-        is_read_only = mode == "r"
-        self._store = pyicechunk_store_from_bytes(store_repr, is_read_only)
-        self._is_open = True
+        # we have to deserialize the bytes of the Rust store
+        mode = state["_mode"]
+        is_read_only = mode.readonly
+        store_repr = state["_store"]
+        state["_store"] = pyicechunk_store_from_bytes(store_repr, is_read_only)
+        self.__dict__ = state
 
     @property
     def snapshot_id(self) -> str:
