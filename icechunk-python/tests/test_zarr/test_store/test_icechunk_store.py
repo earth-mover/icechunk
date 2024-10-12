@@ -47,17 +47,15 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return self.buffer_cls.from_bytes(result)
 
     @pytest.fixture(scope="function", params=[None, True])
-    def store_kwargs(
-        self, request: pytest.FixtureRequest
-    ) -> dict[str, str | None | dict[str, Buffer]]:
+    def store_kwargs(self) -> dict[str, Any]:
         kwargs = {
-            "storage": StorageConfig.memory(""),
+            "storage": StorageConfig.memory("store_test"),
             "mode": "w",
         }
         return kwargs
 
     @pytest.fixture(scope="function")
-    async def store(self, store_kwargs: str | None | dict[str, Buffer]) -> IcechunkStore:
+    async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
         return await IcechunkStore.open(**store_kwargs)
 
     @pytest.mark.xfail(reason="Not implemented")

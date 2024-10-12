@@ -141,11 +141,7 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
 
     path = "group"
-    agroup = AsyncGroup(
-        metadata=GroupMetadata(zarr_format=zarr_format),
-        store_path=StorePath(store=store, path=path),
-    )
-    group = Group(agroup)
+    group = Group.from_store(store=store, zarr_format=zarr_format)
     members_expected: dict[str, Array | Group] = {}
 
     members_expected["subgroup"] = group.create_group("subgroup")
@@ -311,6 +307,26 @@ def test_group_getitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     assert group["subarray"] == subarray
     with pytest.raises(KeyError):
         group["nope"]
+
+
+def test_group_get_with_default(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
+    group = Group.from_store(store, zarr_format=zarr_format)
+
+    # default behavior
+    result = group.get("subgroup")
+    assert result is None
+
+    # custom default
+    result = group.get("subgroup", 8)
+    assert result == 8
+
+    # now with a group
+    subgroup = group.require_group("subgroup")
+    subgroup.attrs["foo"] = "bar"
+
+    result = group.get("subgroup", 8)
+    result = cast(Group, result)
+    assert result.attrs["foo"] == "bar"
 
 
 def test_group_delitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
