@@ -22,8 +22,9 @@ async def tmp_store(tmpdir):
 async def test_no_inline_chunks(tmp_store):
     store = tmp_store[0]
     store_path = tmp_store[1]
-    array = zarr.create(
+    array = zarr.open_array(
         store=store,
+        mode="a",
         shape=(10),
         dtype="int64",
         zarr_format=3,
@@ -42,8 +43,9 @@ async def test_inline_chunks(tmp_store):
     store = tmp_store[0]
     store_path = tmp_store[1]
 
-    inline_array = zarr.create(
+    inline_array = zarr.open_array(
         store=store,
+        mode="a",
         path="inline",
         shape=(10),
         dtype="int32",
@@ -58,8 +60,9 @@ async def test_inline_chunks(tmp_store):
     # inline_chunk_threshold is 40, we should have no chunks directory
     assert not os.path.isdir(f"{store_path}/chunks")
 
-    written_array = zarr.create(
+    written_array = zarr.open_array(
         store=store,
+        mode="a",
         path="not_inline",
         shape=(10),
         dtype="int64",
