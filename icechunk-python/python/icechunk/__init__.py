@@ -33,9 +33,6 @@ __all__ = [
 ]
 
 
-def is_known_key(key: str) -> bool:
-    return key.endswith(".zgroup") or key.endswith(".zarray") or key.endswith(".zattrs") or key.endswith(".zmetadata")
-
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
 
@@ -296,9 +293,6 @@ class IcechunkStore(Store, SyncMixin):
         -------
         Buffer
         """
-
-        if is_known_key(key):
-            return None
 
         try:
             result = await self._store.get(key, byte_range)
