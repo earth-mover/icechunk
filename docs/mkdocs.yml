@@ -127,8 +127,9 @@ markdown_extensions:
       pygments_lang_class: true
 
 nav:
-  - Home: 
+  - Overview: 
     - index.md
+  - FAQ: faq.md
   - Icechunk Python: 
     - icechunk-python/index.md
     - Reference: icechunk-python/reference.md
