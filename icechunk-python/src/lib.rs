@@ -15,12 +15,16 @@ use icechunk::{
     repository::VirtualChunkLocation,
     storage::virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     zarr::{
-        ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreOptions,
-        VersionInfo,
+        ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreError,
+        StoreOptions, VersionInfo,
     },
     Repository, SnapshotMetadata,
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
+use pyo3::{
+    exceptions::{PyException, PyValueError},
+    prelude::*,
+    types::PyBytes,
+};
 use storage::{PyS3Credentials, PyStorageConfig, PyVirtualRefConfig};
 use streams::PyAsyncGenerator;
 use tokio::sync::{Mutex, RwLock};
@@ -110,6 +114,13 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
 }
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
+
+pyo3::create_exception!(
+    _icechunk_python,
+    KeyNotFound,
+    PyException,
+    "The key is not present in the repository"
+);
 
 impl PyIcechunkStore {
     pub(crate) fn consolidated(&self) -> &ConsolidatedStore {
@@ -496,17 +507,20 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
         pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
             let byte_range = byte_range.unwrap_or((None, None)).into();
-            let data = store
-                .read()
-                .await
-                .get(&key, &byte_range)
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
-            let pybytes = Python::with_gil(|py| {
-                let bound_bytes = PyBytes::new_bound(py, &data);
-                bound_bytes.to_object(py)
-            });
-            Ok(pybytes)
+            let data = store.read().await.get(&key, &byte_range).await;
+            // We need to distinguish the "safe" case of trying to fetch an uninitialized key
+            // from other types of errors, we use KeyNotFound exception for that
+            match data {
+                Ok(data) => {
+                    let pybytes = Python::with_gil(|py| {
+                        let bound_bytes = PyBytes::new_bound(py, &data);
+                        bound_bytes.to_object(py)
+                    });
+                    Ok(pybytes)
+                }
+                Err(StoreError::NotFound(_)) => Err(KeyNotFound::new_err(key)),
+                Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
+            }
         })
     }
 
@@ -524,6 +538,7 @@ impl PyIcechunkStore {
                 .await
                 .map_err(PyIcechunkStoreError::StoreError)?;
 
+            // FIXME: this processing is hiding errors in certain keys
             let result = partial_values_stream
                 .into_iter()
                 // If we want to error instead of returning None we can collect into
@@ -746,8 +761,9 @@ impl PyIcechunkStore {
 
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
-fn _icechunk_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("KeyNotFound", py.get_type_bound::<KeyNotFound>())?;
     m.add_class::<PyStorageConfig>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_class::<PyS3Credentials>()?;

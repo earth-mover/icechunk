@@ -8,6 +8,7 @@ from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
 from ._icechunk_python import (
+    KeyNotFound,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
@@ -31,6 +32,9 @@ __all__ = [
     "VirtualRefConfig",
 ]
 
+
+def is_known_key(key: str) -> bool:
+    return key.endswith(".zgroup") or key.endswith(".zarray") or key.endswith(".zattrs") or key.endswith(".zmetadata")
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
@@ -292,9 +296,13 @@ class IcechunkStore(Store, SyncMixin):
         -------
         Buffer
         """
+
+        if is_known_key(key):
+            return None
+
         try:
             result = await self._store.get(key, byte_range)
-        except ValueError as _e:
+        except KeyNotFound as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
             return None

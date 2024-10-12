@@ -4,6 +4,8 @@ use icechunk::{
 use pyo3::{exceptions::PyValueError, PyErr};
 use thiserror::Error;
 
+use crate::KeyNotFound;
+
 /// A simple wrapper around the StoreError to make it easier to convert to a PyErr
 ///
 /// When you use the ? operator, the error is coerced. But if you return the value it is not.
@@ -12,6 +14,8 @@ use thiserror::Error;
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub(crate) enum PyIcechunkStoreError {
+    #[error("key not found error: {0}")]
+    KeyNotFound(#[from] KeyNotFound),
     #[error("store error: {0}")]
     StoreError(#[from] StoreError),
     #[error("repository Error: {0}")]
