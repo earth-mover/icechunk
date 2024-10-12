@@ -266,6 +266,28 @@ impl Repository {
         }
     }
 
+    pub(crate) fn set_snapshot_id(&mut self, snapshot_id: SnapshotId) {
+        self.snapshot_id = snapshot_id;
+    }
+
+    pub(crate) async fn set_snapshot_from_tag(
+        &mut self,
+        tag: &str,
+    ) -> RepositoryResult<()> {
+        let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
+        self.snapshot_id = ref_data.snapshot;
+        Ok(())
+    }
+
+    pub(crate) async fn set_snapshot_from_branch(
+        &mut self,
+        branch: &str,
+    ) -> RepositoryResult<()> {
+        let ref_data = fetch_branch_tip(self.storage.as_ref(), branch).await?;
+        self.snapshot_id = ref_data.snapshot;
+        Ok(())
+    }
+
     /// Returns a pointer to the storage for the repository
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
         &self.storage
