@@ -12,7 +12,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0a7"]
+dependencies = ["zarr==3.0.0b0"]
 
 [tool.poetry]
 name = "icechunk"
