@@ -70,6 +70,18 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert store.mode == AccessMode.from_literal("w")
         assert not store.mode.readonly
 
+    @pytest.mark.parametrize("mode", ["r", "r+", "a", "w", "w-"])
+    async def test_store_open_mode(
+        self, store_kwargs: dict[str, Any], mode: AccessModeLiteral
+    ) -> None:
+        store_kwargs["mode"] = mode
+        try:
+            store = await self.store_cls.open(**store_kwargs)
+            assert store._is_open
+            assert store.mode == AccessMode.from_literal(mode)
+        except Exception:
+            assert 'r' in mode
+
     async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
         with pytest.raises(ValueError):
