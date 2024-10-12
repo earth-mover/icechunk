@@ -11,7 +11,7 @@ Let's break down what that means:
   Zarr defines the metadata for describing arrays (shape, dtype, etc.) and the way these arrays are chunked, compressed, and converted to raw bytes for storage. Zarr can store its data in any key-value store.
 - **Storage engine** - Icechunk exposes a key-value interface to Zarr and manages all of the actual I/O for getting, setting, and updating both metadata and chunk data in cloud object storage.
   Zarr libraries don't have to know exactly how icechunk works under the hood in order to use it.
-- **Transactional** - The key improvement that Icechunk brings on top of regular Zarr is to provide consistent serializable isolation between transactions.
+- **Transactional** - The key improvement Icechunk brings on top of regular Zarr is to provide consistent serializable isolation between transactions.
   This means that Icechunk data are safe to read and write in parallel from multiple uncoordinated processes.
   This allows Zarr to be used more like a database.
 
@@ -61,7 +61,14 @@ We recommend using Icechunk from Python, together with the Zarr-Python library
 Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
 Using it today requires installing the [still unreleased] Zarr Python V3 branch.
 
-To set up an Icechunk development environment, follow these steps
+To set up an Icechunk development environment, follow these steps:
+
+Clone the repository and navigate to the repository's directory. For example:
+
+```bash
+git clone https://github.com/earth-mover/icechunk
+cd icechunk/
+```
 
 Activate your preferred virtual environment (here we use `virtualenv`):
 
@@ -99,11 +106,11 @@ pip install -e icechunk@.
 
 > [!WARNING]
 > This only makes the python source code editable, the rust will need to
-> be recompiled when it changes
+> be recompiled when it changes.
 
 ### Basic Usage
 
-Once you have everything installed, here's an example of how to use Icechunk.
+Once you have everything installed, here's an example of how to use Icechunk:
 
 ```python
 from icechunk import IcechunkStore, StorageConfig
@@ -149,7 +156,7 @@ cargo test --all
 
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.
 Icechunk users must organize their updates into groups of related operations called **transactions**.
-For example, appending a new time slice to mutliple arrays should be done as single transactions, comprising the following steps
+For example, appending a new time slice to mutliple arrays should be done as single transactions, comprising the following steps:
 1. Update the array metadata to resize the array to accommodate the new elements.
 2. Write new chunks for each array in the group.
 
@@ -171,8 +178,8 @@ Tags are appropriate for publishing specific releases of a repository or for any
 > [!NOTE]
 > For more detailed explanation, have a look at the [Icechunk spec](spec/icechunk-spec.md)
 
-Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
-For example, a 2D Zarr array called myarray, within a group called mygroup, would generate the following keys.
+Zarr itself works by storing both metadata and chunk data into an abstract store according to a specified system of "keys".
+For example, a 2D Zarr array called myarray, within a group called mygroup, would generate the following keys:
 
 ```
 mygroup/zarr.json
@@ -181,7 +188,7 @@ mygroup/myarray/c/0/0
 mygroup/myarray/c/0/1
 ```
 
-In standard regular Zarr stores, these key map directly to filenames in a filesystem or object keys in an object storage system.
+In standard Zarr stores, these key map directly to filenames in a filesystem or object keys in an object storage system.
 When writing data, a Zarr implementation will create these keys and populate them with data. When modifying existing arrays or groups, a Zarr implementation will potentially overwrite existing keys with new data.
 
 This is generally not a problem, as long there is only one person or process coordinating access to the data.
@@ -217,7 +224,7 @@ flowchart TD
 
 ## Inspiration
 
-Icechunk's was inspired by several existing projects and formats, most notably
+Icechunk was inspired by several existing projects and formats, most notably:
 
 - [FSSpec Reference Filesystem](https://filesystem-spec.readthedocs.io/en/latest/api.html#fsspec.implementations.reference.ReferenceFileSystem)
 - [Apache Iceberg](https://iceberg.apache.org/spec/)
