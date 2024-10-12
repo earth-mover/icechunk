@@ -391,33 +391,28 @@ impl Store {
     ///
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
-        // this needs to be done carefully to avoid deadlocks and race conditions
-        let storage = {
-            let guard = self.repository.read().await;
-            // Checking out is not allowed if there are uncommitted changes
-            if guard.has_uncommitted_changes() {
-                return Err(StoreError::UncommittedChanges);
-            }
-            guard.storage().clone()
-        };
+        let mut repo = self.repository.write().await;
 
-        let repository = match version {
+        // Checking out is not allowed if there are uncommitted changes
+        if repo.has_uncommitted_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+
+        match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
-                Repository::update(storage, sid)
+                repo.set_snapshot_id(sid);
             }
             VersionInfo::TagRef(tag) => {
                 self.current_branch = None;
-                Repository::from_tag(storage, &tag).await?
+                repo.set_snapshot_from_tag(tag.as_str()).await?
             }
             VersionInfo::BranchTipRef(branch) => {
                 self.current_branch = Some(branch.clone());
-                Repository::from_branch_tip(storage, &branch).await?
+                repo.set_snapshot_from_branch(&branch).await?
             }
         }
-        .build();
 
-        self.repository = Arc::new(RwLock::new(repository));
         Ok(())
     }
 
