@@ -191,7 +191,8 @@ class VirtualRefConfig:
     def s3_from_config(
         cls,
         credentials: S3Credentials,
-        endpoint_url: str | None,
+        *,
+        endpoint_url: str | None = None,
         allow_http: bool | None = None,
         region: str | None = None,
     ) -> VirtualRefConfig:
@@ -206,7 +207,8 @@ class VirtualRefConfig:
     @classmethod
     def s3_anonymous(
         cls,
-        endpoint_url: str | None,
+        *,
+        endpoint_url: str | None = None,
         allow_http: bool | None = None,
         region: str | None = None,
     ) -> VirtualRefConfig:
