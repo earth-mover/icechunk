@@ -125,7 +125,9 @@ markdown_extensions:
       anchor_linenums: true
       line_spans: __span
       pygments_lang_class: true
-
+  - attr_list
+  - md_in_html
+  
 nav:
   - Overview: 
     - index.md

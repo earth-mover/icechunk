@@ -6,7 +6,7 @@ title: Icechunk - Frequenctly Asked Questions
 
 ## Why was Icechunk created?
 
-Icechunk was created by [Earthmover](https://earthmover.io/) as the open-source format for its cloud data platform Arraylake.
+Icechunk was created by [Earthmover](https://earthmover.io/) as the open-source format for its cloud data platform [Arraylake](https://docs.earthmover.io).
 
 Icechunk builds on the successful [Zarr](https://zarr.dev) project.
 Zarr is a great foundation for storing and querying large multidimensional array data in a flexible, scalable way.
@@ -22,6 +22,12 @@ Finally, Icechunk provides a universal I/O layer for cloud object storage, imple
 
 Solving these problems in one go via a powerful, open-source, Rust-based library will bring massive benefits
 to the cloud-native scientific data community.
+
+## Where does the name "Icechunk" come from?
+
+Icechunk was inspired partly by [Apache Iceberg](https://iceberg.apache.org/), a popular cloud-native table format.
+However, instead of storing tabular data, Icechunk stores multidimensional arrays, for which the individual unit of
+storage is the _chunk_.
 
 ## When should I use Icechunk?
 
@@ -65,11 +71,36 @@ A Zarr library doesn't have to know explicitly how Icechunk works or how it's st
 It just gets / sets keys as it would with any store.
 Icechunk figures out how to materialize these keys based on its [storage schema](./spec.md).
 
-```mermaid
-flowchart TD
-    zarr-python[Zarr Library] <-- key / value--> icechunk[Icechunk Library]
-    icechunk <-- data / metadata files --> storage[(Object Storage)]
-```
+<div class="grid cards" markdown>
+
+-   __Standard Zarr + Fsspec__
+
+    ---
+
+    In standard Zarr usage (without Icechunk), [fsspec](https://filesystem-spec.readthedocs.io/) sits
+    between the Zarr library and the object store, translating Zarr keys directly to object store keys.
+
+    ```mermaid
+    flowchart TD
+        zarr-python[Zarr Library] <-- key / value--> icechunk[fsspec]
+        icechunk <-- key / value --> storage[(Object Storage)]
+    ```
+
+-   __Zarr + Icechunk__
+
+    ---
+
+    With Icechunk, the Icechunk library intercepts the Zarr keys and translates them to the
+    Icechunk schema, storing data in object storage using its own format. 
+
+    ```mermaid
+    flowchart TD
+        zarr-python[Zarr Library] <-- key / value--> icechunk[Icechunk Library]
+        icechunk <-- icechunk data / metadata files --> storage[(Object Storage)]
+    ```
+
+</div>
+
 
 Implementing Icechunk this way allows Icechunk's specification to evolve independently from Zarr's,
 maintaining interoperability while enabling rapid iteration and promoting innovation on the I/O layer.
@@ -112,23 +143,96 @@ However, preliminary investigations indicate that Icechunk is at least as fast a
 and in many cases achieves significantly lower latency and higher throughput.
 Furthermore, Icechunk achieves this without using Dask, by implementing its own asynchronous multithreaded I/O pipeline.
 
-## Does Icechunk use Apache Arrow?
-
 ## How does Icechunk compare to X?
 
-- Array Formats
-  - HDF
-  - NetCDF
-  - Cloud Optimized GeoTiff (CoG)
-  - TileDB
-  - SafeTensors
-- Tabular Formats
-  - Apache Parquet
-  - Apache Iceberg
-  - Delta Lake
-  - LanceDB
-- Other Related projects
-  - LakeFS
-  - Kerchunk
-  - fsspec
-  - OCTDB
+### Array Formats
+
+#### [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
+
+HDF5 (Hierarchical Data Format version 5) is a popular format for storing scientific data.
+HDF is widely used in high-performance computing.
+
+<div class="grid cards" markdown>
+
+-   __Similarities__
+    
+    ---
+    
+    Icechunk and HDF5 share the same data model: multidimensional arrays and metadata organized into a hierarchical tree structure.
+    This data model can accomodate a wide range of different use cases and workflows.
+
+    Both Icechunk and HDF5 use the concept of "chunking" to split large arrays into smaller storage units.
+
+-   __Differences__
+    
+    ---
+  
+    HDF5 is a monolithic file format designed first and foremost for POSIX filesystems.
+    All of the chunks in an HDF5 dataset live within a single file.
+    The size of an HDF5 dataset is limited to the size of a single file.
+    HDF5 relies on the filesystem for consistency and is not designed for multiple concurrent yet uncoordinated readers and writers.
+    
+    Icechunk spreads chunks over many files and is designed first and foremost for cloud object storage.
+    Icechunk can accommodate datasets of arbitrary size.
+    Icechunk's optimistic concurrency design allows for safe concurrent access for uncoordinated readers and writers.
+
+</div>
+
+#### [NetCDF](https://www.unidata.ucar.edu/software/netcdf/)
+
+> NetCDF (Network Common Data Form) is a set of software libraries and machine-independent data formats that support the creation, access, and sharing of array-oriented scientific data.
+
+NetCDF4 uses HDF5 as its underlying file format.
+Therefore, the similarities and differences with Icechunk are fundamentally the same.
+
+Icechunk can accommodate the NetCDF data model.
+It's possible to write NetCDF compliant in Icechunk using [Xarray](https://xarray.dev/).
+
+#### [Zarr](https://zarr.dev)
+
+Icechunk works together with Zarr.
+(See [What is Icechunk's relationship to Zarr?](#what-is-icechunks-relationship-to-zarr) for more detail.)
+
+Compared to regular Zarr (without Icechunk), Icechunk offers many benefits, including
+- Serializable isolation of updates via transactions
+- Data version control (snapshots, branches, tags)
+- Ability to store references to chunks in external datasets (HDF5, NetCDF, GRIB, etc.)
+- A Rust-optimized I/O layer for communicating with object storage
+
+#### [Cloud Optimized GeoTiff](http://cogeo.org/) (CoG)
+
+> A Cloud Optimized GeoTIFF (COG) is a regular GeoTIFF file, aimed at being hosted on a HTTP file server, with an internal organization that enables more efficient workflows on the cloud.
+> It does this by leveraging the ability of clients issuing ​HTTP GET range requests to ask for just the parts of a file they need.
+
+CoG has become very popular in the geospatial community as a cloud-native format for raster data.
+A CoG file contains a single image (possibly with multiple bands), sharded into chunks of an appropriate size.
+A CoG also contains "overviews," lower resolution versions of the same data.
+Finally, a CoG contains relevant geospatial metadata regarding projection, CRS, etc. which allow georeferencing of the data.
+
+Data identical to what is found in a CoG can be stored in the Zarr data model and therefore in an Icechunk repo.
+Furthermore, Zarr / Icechunk can accommodate rasters of arbitrarily large size and facilitate massive-scale concurrent writes (in addition to reads);
+A CoG, in contrast, is limited to a single file and thus has limitations on scale and write concurrency.
+
+However, Zarr and Icechunk currently do not offer the same level of broad geospatial interoperability that CoG does.
+The [GeoZarr](https://github.com/zarr-developers/geozarr-spec) project aims to change that.
+
+#### [TileDB Embedded](https://docs.tiledb.com/main/background/key-concepts-and-data-format)
+
+TileDB Embedded is an innovative array storage format that bears many similarities to both Zarr and Icechunk.
+
+
+
+
+#### SafeTensors
+
+
+### Tabular Formats
+#### Apache Parquet
+#### Apache Iceberg
+#### Delta Lake
+#### LanceDB
+### Other Related projects
+#### LakeFS
+#### Kerchunk
+#### fsspec
+#### OCTDB
