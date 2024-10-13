@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import zarr
 import zarr.core
 import zarr.core.buffer
@@ -31,7 +32,7 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
         store.put(key, data)
 
 
-async def test_write_minino_virtual_refs():
+async def test_write_minio_virtual_refs():
     write_chunks_to_minio(
         [
             ("path/to/python/chunk-1", b"first"),
@@ -56,13 +57,17 @@ async def test_write_minino_virtual_refs():
         ),
     )
 
-    array = zarr.Array.create(store, shape=(1, 1, 2), chunk_shape=(1, 1, 1), dtype="i4")
+    array = zarr.Array.create(store, shape=(1, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
 
     await store.set_virtual_ref(
         "c/0/0/0", "s3://testbucket/path/to/python/chunk-1", offset=0, length=4
     )
     await store.set_virtual_ref(
         "c/0/0/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
+    )
+    # we write a ref that simulates a lost chunk
+    await store.set_virtual_ref(
+        "c/0/0/2", "s3://testbucket/path/to/python/non-existing", offset=1, length=4
     )
 
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
@@ -77,6 +82,14 @@ async def test_write_minino_virtual_refs():
 
     assert array[0, 0, 0] == 1936877926
     assert array[0, 0, 1] == 1852793701
+
+    # fetch uninitialized chunk should be None
+    assert await store.get("c/0/0/3", prototype=buffer_prototype) is None
+
+    # fetching a virtual ref that disappeared should be an exception
+    with pytest.raises(ValueError):
+        # TODO: we should include the key and other info in the exception
+        await store.get("c/0/0/2", prototype=buffer_prototype)
 
     _snapshot_id = await store.commit("Add virtual refs")
 

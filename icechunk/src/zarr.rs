@@ -254,6 +254,8 @@ pub enum KeyNotFoundError {
     ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
     #[error("node not found at `{path}`")]
     NodeNotFound { path: Path },
+    #[error("v2 key not found at `{key}`")]
+    ZarrV2KeyNotFound { key: String },
 }
 
 #[derive(Debug, Error)]
@@ -622,6 +624,9 @@ impl Store {
                 }
                 Ok(())
             }
+            Key::ZarrV2(_) => Err(StoreError::Unimplemented(
+                "Icechunk cannot set Zarr V2 metadata keys",
+            )),
         }
     }
 
@@ -645,10 +650,6 @@ impl Store {
         }
 
         match Key::parse(key)? {
-            Key::Metadata { .. } => Err(StoreError::NotAllowed(format!(
-                "use .set to modify metadata for key {}",
-                key
-            ))),
             Key::Chunk { node_path, coords } => {
                 self.repository
                     .write()
@@ -661,6 +662,9 @@ impl Store {
                     .await?;
                 Ok(())
             }
+            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreError::NotAllowed(
+                format!("use .set to modify metadata for key {}", key),
+            )),
         }
     }
 
@@ -692,6 +696,7 @@ impl Store {
                 let repository = guard.deref_mut();
                 Ok(repository.set_chunk_ref(node_path, coords, None).await?)
             }
+            Key::ZarrV2(_) => Ok(()),
         }
     }
 
@@ -956,6 +961,9 @@ async fn get_key(
         Key::Chunk { node_path, coords } => {
             get_chunk_bytes(key, node_path, coords, byte_range, repo).await
         }
+        Key::ZarrV2(key) => {
+            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+        }
     }?;
 
     Ok(bytes)
@@ -973,6 +981,7 @@ async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
 enum Key {
     Metadata { node_path: Path },
     Chunk { node_path: Path, coords: ChunkIndices },
+    ZarrV2(String),
 }
 
 impl Key {
@@ -982,6 +991,18 @@ impl Key {
 
     fn parse(key: &str) -> Result<Self, StoreError> {
         fn parse_chunk(key: &str) -> Result<Key, StoreError> {
+            if key == ".zgroup"
+                || key == ".zarray"
+                || key == ".zattrs"
+                || key == ".zmetadata"
+                || key.ends_with("/.zgroup")
+                || key.ends_with("/.zarray")
+                || key.ends_with("/.zattrs")
+                || key.ends_with("/.zmetadata")
+            {
+                return Ok(Key::ZarrV2(key.to_string()));
+            }
+
             if key == "c" {
                 return Ok(Key::Chunk {
                     node_path: Path::root(),
@@ -1051,6 +1072,7 @@ impl Display for Key {
                     .join("/");
                 f.write_str(s.as_str())
             }
+            Key::ZarrV2(key) => f.write_str(key.as_str()),
         }
     }
 }
@@ -1424,6 +1446,38 @@ mod tests {
         assert!(matches!(
             Key::parse("c/0/0"),
             Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/" && coords == ChunkIndices(vec![0,0])
+        ));
+        assert!(matches!(
+            Key::parse(".zarray"),
+            Ok(Key::ZarrV2(s) ) if s == ".zarray"
+        ));
+        assert!(matches!(
+            Key::parse(".zgroup"),
+            Ok(Key::ZarrV2(s) ) if s == ".zgroup"
+        ));
+        assert!(matches!(
+            Key::parse(".zattrs"),
+            Ok(Key::ZarrV2(s) ) if s == ".zattrs"
+        ));
+        assert!(matches!(
+            Key::parse(".zmetadata"),
+            Ok(Key::ZarrV2(s) ) if s == ".zmetadata"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zgroup"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zgroup"
+        ));
+        assert!(matches!(
+            Key::parse("foo/bar/.zarray"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/bar/.zarray"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zmetadata"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zmetadata"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zattrs"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zattrs"
         ));
     }
 
