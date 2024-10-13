@@ -1,10 +1,11 @@
 use icechunk::{
     format::IcechunkFormatError, repository::RepositoryError, zarr::StoreError,
 };
-use pyo3::{exceptions::PyValueError, PyErr};
+use pyo3::{
+    exceptions::{PyException, PyValueError},
+    PyErr,
+};
 use thiserror::Error;
-
-use crate::KeyNotFound;
 
 /// A simple wrapper around the StoreError to make it easier to convert to a PyErr
 ///
@@ -37,3 +38,10 @@ impl From<PyIcechunkStoreError> for PyErr {
 }
 
 pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
+
+pyo3::create_exception!(
+    _icechunk_python,
+    KeyNotFound,
+    PyException,
+    "The key is not present in the repository"
+);

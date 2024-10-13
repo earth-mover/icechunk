@@ -20,14 +20,12 @@ use icechunk::{
     },
     Repository, SnapshotMetadata,
 };
-use pyo3::{
-    exceptions::{PyException, PyValueError},
-    prelude::*,
-    types::PyBytes,
-};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 use storage::{PyS3Credentials, PyStorageConfig, PyVirtualRefConfig};
 use streams::PyAsyncGenerator;
 use tokio::sync::{Mutex, RwLock};
+
+pub use errors::KeyNotFound;
 
 #[pyclass]
 struct PyIcechunkStore {
@@ -114,13 +112,6 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
 }
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
-
-pyo3::create_exception!(
-    _icechunk_python,
-    KeyNotFound,
-    PyException,
-    "The key is not present in the repository"
-);
 
 impl PyIcechunkStore {
     pub(crate) fn consolidated(&self) -> &ConsolidatedStore {
