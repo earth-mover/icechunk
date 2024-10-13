@@ -638,13 +638,8 @@ impl Repository {
     pub async fn list_nodes(
         &self,
     ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(
-            self.storage.as_ref(),
-            &self.change_set,
-            &self.snapshot_id,
-            &ObjectId::FAKE,
-        )
-        .await
+        updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
+            .await
     }
 
     pub async fn all_chunks(
@@ -842,18 +837,16 @@ async fn updated_existing_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-    manifest_id: &'a ManifestId,
+    manifest_id: Option<&'a ManifestId>,
 ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
-    // TODO: solve this duplication, there is always the possibility of this being the first
-    // version
+    let manifest_refs = manifest_id.map(|mid| {
+        vec![ManifestRef { object_id: mid.clone(), extents: ManifestExtents(vec![]) }]
+    });
     let updated_nodes =
         storage.fetch_snapshot(parent_id).await?.iter_arc().filter_map(move |node| {
             let new_manifests = if node.node_type() == NodeType::Array {
                 //FIXME: it could be none for empty arrays
-                Some(vec![ManifestRef {
-                    object_id: manifest_id.clone(),
-                    extents: ManifestExtents(vec![]),
-                }])
+                manifest_refs.clone()
             } else {
                 None
             };
@@ -867,7 +860,7 @@ async fn updated_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-    manifest_id: &'a ManifestId,
+    manifest_id: Option<&'a ManifestId>,
 ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
     Ok(updated_existing_nodes(storage, change_set, parent_id, manifest_id)
         .await?
@@ -961,20 +954,30 @@ async fn distributed_flush<I: IntoIterator<Item = ChangeSet>>(
         .map_ok(|(_path, chunk_info)| chunk_info);
 
     let new_manifest = Arc::new(Manifest::from_stream(chunks).await?);
-    let new_manifest_id = ObjectId::random();
-    storage.write_manifests(new_manifest_id.clone(), Arc::clone(&new_manifest)).await?;
+    let new_manifest_id = if new_manifest.len() > 0 {
+        let id = ObjectId::random();
+        storage.write_manifests(id.clone(), Arc::clone(&new_manifest)).await?;
+        Some(id)
+    } else {
+        None
+    };
 
     let all_nodes =
-        updated_nodes(storage, &change_set, parent_id, &new_manifest_id).await?;
+        updated_nodes(storage, &change_set, parent_id, new_manifest_id.as_ref()).await?;
 
     let old_snapshot = storage.fetch_snapshot(parent_id).await?;
     let mut new_snapshot = Snapshot::from_iter(
         old_snapshot.as_ref(),
         Some(properties),
-        vec![ManifestFileInfo {
-            id: new_manifest_id.clone(),
-            format_version: new_manifest.icechunk_manifest_format_version,
-        }],
+        new_manifest_id
+            .as_ref()
+            .map(|mid| {
+                vec![ManifestFileInfo {
+                    id: mid.clone(),
+                    format_version: new_manifest.icechunk_manifest_format_version,
+                }]
+            })
+            .unwrap_or_default(),
         vec![],
         all_nodes,
     );
@@ -1721,6 +1724,9 @@ mod tests {
                     atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
         ));
 
+        // since we wrote every asset and we are using a caching storage, we should never need to fetch them
+        assert!(logging.fetch_operations().is_empty());
+
         //test the previous version is still alive
         let ds = Repository::update(Arc::clone(&storage), previous_snapshot_id).build();
         assert_eq!(
@@ -1731,9 +1737,6 @@ mod tests {
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
-
-        // since we write every asset and we are using a caching storage, we should never need to fetch them
-        assert!(logging.fetch_operations().is_empty());
 
         Ok(())
     }
@@ -1817,9 +1820,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
+        let in_mem_storage =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        // there should be no manifests yet
+        assert!(!in_mem_storage
+            .all_keys()
+            .await?
+            .iter()
+            .any(|key| key.contains("manifest")));
+
+        // initialization creates one snapshot
+        assert_eq!(
+            1,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("snapshot"))
+                .count(),
+        );
+
         ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![5, 5],
@@ -1840,6 +1863,30 @@ mod tests {
 
         ds.add_array(a1path.clone(), zarr_meta.clone()).await?;
         ds.add_array(a2path.clone(), zarr_meta.clone()).await?;
+
+        let _ = ds.commit("main", "first commit", None).await?;
+
+        // there should be no manifests yet because we didn't add any chunks
+        assert_eq!(
+            0,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count(),
+        );
+        // there should be two snapshots, one for the initialization commit and one for the real
+        // commit
+        assert_eq!(
+            2,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("snapshot"))
+                .count(),
+        );
 
         // add 3 chunks
         ds.set_chunk_ref(
@@ -1863,6 +1910,17 @@ mod tests {
 
         ds.commit("main", "commit", None).await?;
 
+        // there should be one manifest now
+        assert_eq!(
+            1,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count()
+        );
+
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array(_, manifests) => {
                 manifests.first().as_ref().unwrap().object_id.clone()
@@ -1874,6 +1932,18 @@ mod tests {
 
         ds.delete_array(a2path).await?;
         ds.commit("main", "array2 deleted", None).await?;
+
+        // there should be two manifests
+        assert_eq!(
+            2,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count()
+        );
+
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array(_, manifests) => {
                 manifests.first().as_ref().unwrap().object_id.clone()
@@ -1888,6 +1958,28 @@ mod tests {
         // delete a chunk
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 0]), None).await?;
         ds.commit("main", "chunk deleted", None).await?;
+
+        // there should be three manifests
+        assert_eq!(
+            3,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count()
+        );
+        // there should be five snapshots
+        assert_eq!(
+            5,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("snapshot"))
+                .count(),
+        );
+
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array(_, manifests) => {
                 manifests.first().as_ref().unwrap().object_id.clone()
