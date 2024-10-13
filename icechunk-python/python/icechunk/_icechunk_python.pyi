@@ -217,6 +217,12 @@ class VirtualRefConfig:
         """
         ...
 
+class KeyNotFound(Exception):
+    def __init__(
+        self,
+        info: Any
+    ): ...
+
 class StoreConfig:
     # The number of concurrent requests to make when fetching partial values
     get_partial_values_concurrency: int | None

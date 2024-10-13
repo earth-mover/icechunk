@@ -1,7 +1,10 @@
 use icechunk::{
     format::IcechunkFormatError, repository::RepositoryError, zarr::StoreError,
 };
-use pyo3::{exceptions::PyValueError, PyErr};
+use pyo3::{
+    exceptions::{PyException, PyValueError},
+    PyErr,
+};
 use thiserror::Error;
 
 /// A simple wrapper around the StoreError to make it easier to convert to a PyErr
@@ -12,6 +15,8 @@ use thiserror::Error;
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub(crate) enum PyIcechunkStoreError {
+    #[error("key not found error: {0}")]
+    KeyNotFound(#[from] KeyNotFound),
     #[error("store error: {0}")]
     StoreError(#[from] StoreError),
     #[error("repository Error: {0}")]
@@ -33,3 +38,10 @@ impl From<PyIcechunkStoreError> for PyErr {
 }
 
 pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
+
+pyo3::create_exception!(
+    _icechunk_python,
+    KeyNotFound,
+    PyException,
+    "The key is not present in the repository"
+);
