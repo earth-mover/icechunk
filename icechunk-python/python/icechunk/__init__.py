@@ -1,5 +1,5 @@
 # module
-from collections.abc import AsyncGenerator, Iterable, Generator
+from collections.abc import AsyncGenerator, Iterable
 from typing import Any, Self
 
 from zarr.abc.store import ByteRangeRequest, Store
@@ -37,7 +37,11 @@ class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
 
     @classmethod
-    def open(cls, *args: Any, **kwargs: Any) -> Self:
+    async def open(cls, *args: Any, **kwargs: Any) -> Self:
+        return cls.open_or_create(*args, **kwargs)
+
+    @classmethod
+    def open_or_create(cls, *args: Any, **kwargs: Any) -> Self:
         if "mode" in kwargs:
             mode = kwargs.pop("mode")
         else:
@@ -77,6 +81,7 @@ class IcechunkStore(Store, SyncMixin):
         store._is_open = True
 
         return store
+
 
     def __init__(
         self,
@@ -308,7 +313,7 @@ class IcechunkStore(Store, SyncMixin):
         """Tag an existing snapshot with a given name."""
         return await self._store.async_tag(tag_name, snapshot_id=snapshot_id)
 
-    def ancestry(self) -> Generator[SnapshotMetadata, None]:
+    def ancestry(self) -> list[SnapshotMetadata]:
         """Get the list of parents of the current version.
 
         Returns

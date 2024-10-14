@@ -9,7 +9,7 @@ from zarr.storage import LocalStore
 @pytest.fixture(scope="function")
 async def tmp_store(tmpdir):
     store_path = f"{tmpdir}"
-    store = icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(store_path),
         mode="w",
     )
@@ -44,19 +44,19 @@ async def test_store_equality(tmpdir, tmp_store):
     local_store = await LocalStore.open(f"{tmpdir}/zarr", mode="w")
     assert tmp_store != local_store
 
-    store2 = icechunk.IcechunkStore.open(
+    store2 = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.memory(prefix="test"),
         mode="w",
     )
     assert tmp_store != store2
 
-    store3 = icechunk.IcechunkStore.open(
+    store3 = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
         mode="a",
     )
     assert tmp_store != store3
 
-    store4 = icechunk.IcechunkStore.open(
+    store4 = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
         mode="a",
     )

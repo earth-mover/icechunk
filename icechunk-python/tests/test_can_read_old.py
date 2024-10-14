@@ -39,7 +39,7 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
 def mk_store(mode):
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
-    store = ic.IcechunkStore.open(
+    store = ic.IcechunkStore.open_or_create(
         storage=ic.StorageConfig.filesystem(store_path),
         config=ic.StoreConfig(
             inline_chunk_threshold_bytes=10,

@@ -39,7 +39,7 @@ async def list_store(store, barrier):
 
 
 async def test_concurrency():
-    store = icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         mode="w",
         storage=icechunk.StorageConfig.memory(prefix="concurrency"),
     )

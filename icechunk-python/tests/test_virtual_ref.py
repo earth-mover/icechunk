@@ -41,7 +41,7 @@ async def test_write_minio_virtual_refs():
     )
 
     # Open the store
-    store = IcechunkStore.open(
+    store = IcechunkStore.open_or_create(
         storage=StorageConfig.memory("virtual"),
         mode="w",
         config=StoreConfig(
@@ -96,7 +96,7 @@ async def test_write_minio_virtual_refs():
 
 async def test_from_s3_public_virtual_refs(tmpdir):
     # Open the store,
-    store = IcechunkStore.open(
+    store = IcechunkStore.open_or_create(
         storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),
         mode="w",
         config=StoreConfig(

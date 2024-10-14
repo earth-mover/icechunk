@@ -38,7 +38,7 @@ def mk_store(mode: str, task: Task):
     )
     store_config = icechunk.StoreConfig(**task.store_config)
 
-    store = icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=storage_config,
         mode="a",
         config=store_config,
