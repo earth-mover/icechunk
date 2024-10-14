@@ -41,7 +41,7 @@ async def test_write_minio_virtual_refs():
     )
 
     # Open the store
-    store = await IcechunkStore.open(
+    store = IcechunkStore.open_or_create(
         storage=StorageConfig.memory("virtual"),
         mode="w",
         config=StoreConfig(
@@ -59,14 +59,14 @@ async def test_write_minio_virtual_refs():
 
     array = zarr.Array.create(store, shape=(1, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
 
-    await store.set_virtual_ref(
+    store.set_virtual_ref(
         "c/0/0/0", "s3://testbucket/path/to/python/chunk-1", offset=0, length=4
     )
-    await store.set_virtual_ref(
+    store.set_virtual_ref(
         "c/0/0/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
     )
     # we write a ref that simulates a lost chunk
-    await store.set_virtual_ref(
+    await store.async_set_virtual_ref(
         "c/0/0/2", "s3://testbucket/path/to/python/non-existing", offset=1, length=4
     )
 
@@ -91,12 +91,12 @@ async def test_write_minio_virtual_refs():
         # TODO: we should include the key and other info in the exception
         await store.get("c/0/0/2", prototype=buffer_prototype)
 
-    _snapshot_id = await store.commit("Add virtual refs")
+    _snapshot_id = store.commit("Add virtual refs")
 
 
 async def test_from_s3_public_virtual_refs(tmpdir):
     # Open the store,
-    store = await IcechunkStore.open(
+    store = IcechunkStore.open_or_create(
         storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),
         mode="w",
         config=StoreConfig(
@@ -108,7 +108,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
         name="depth", shape=((22, )), chunk_shape=((22,)), dtype="float64"
     )
 
-    await store.set_virtual_ref(
+    store.set_virtual_ref(
         "depth/c/0", 
         "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241012.regulargrid.f030.nc", 
         offset=42499, 

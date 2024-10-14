@@ -39,7 +39,7 @@ async def list_store(store, barrier):
 
 
 async def test_concurrency():
-    store = await icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         mode="w",
         storage=icechunk.StorageConfig.memory(prefix="concurrency"),
     )
@@ -66,7 +66,7 @@ async def test_concurrency():
                     write_to_store(array, x, y, barrier), name=f"write {x},{y}"
                 )
 
-    _res = await store.commit("commit")
+    _res = store.commit("commit")
 
     array = group["array"]
     assert isinstance(array, zarr.Array)

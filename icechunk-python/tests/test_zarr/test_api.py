@@ -22,7 +22,7 @@ from ..conftest import parse_store
 
 @pytest.fixture(scope="function")
 async def memory_store() -> IcechunkStore:
-    return await parse_store("memory", "")
+    return parse_store("memory", "")
 
 
 def test_create_array(memory_store: Store) -> None:
@@ -69,7 +69,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     # _store_dict wont currently work with IcechunkStore
     # TODO: Should it?
 
-    ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
+    ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
     z = open(store=ro_store)
     assert isinstance(z, Array)
     assert z.shape == (200,)
@@ -99,7 +99,7 @@ async def test_open_group(memory_store: IcechunkStore) -> None:
     # _store_dict wont currently work with IcechunkStore
     # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
-    ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
+    ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
     g = open_group(store=ro_store)
     assert isinstance(g, Group)
     # assert g.read_only
