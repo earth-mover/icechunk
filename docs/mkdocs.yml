@@ -123,6 +123,10 @@ plugins:
       #enabled: !ENV [CI, false]
   - mkdocstrings:
       default_handler: python
+      handlers:
+        python:
+          paths: [../icechunk-python/python/icechunk]
+      
   - mkdocs-jupyter:
       include_source: True
       #include: 
