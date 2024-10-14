@@ -38,4 +38,4 @@ These are also ignored in `.gitignore`
 !!! tip 
     See [icechunk-docs/macros.py](./macros.py) for more info.
 
-[^1] : Disambiguation: `icechunk/docs/docs`
+[^1]: Disambiguation: `icechunk/docs/docs`
