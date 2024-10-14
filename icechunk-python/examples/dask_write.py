@@ -32,7 +32,6 @@ Dask API based, for example, in `map/gather`. This mechanism is what we show in 
 """
 
 import argparse
-import asyncio
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -58,7 +57,7 @@ def generate_task_array(task: Task, shape: tuple[int,...]) -> np.typing.ArrayLik
     return np.random.rand(*shape)
 
 
-async def execute_write_task(task: Task) -> icechunk.IcechunkStore:
+def execute_write_task(task: Task) -> icechunk.IcechunkStore:
     """Execute task as a write task.
 
     This will read the time coordinade from `task` and write a "pancake" in that position,
@@ -82,7 +81,7 @@ async def execute_write_task(task: Task) -> icechunk.IcechunkStore:
     return store
 
 
-async def execute_read_task(task: Task) -> None:
+def execute_read_task(task: Task) -> None:
     """Execute task as a read task.
 
     This will read the time coordinade from `task` and read a "pancake" in that position.
@@ -99,16 +98,6 @@ async def execute_read_task(task: Task) -> None:
     expected = generate_task_array(task, array.shape[0:2])
     np.testing.assert_array_equal(actual, expected)
     dprint(f"t={task.time} verified")
-
-
-def run_write_task(task: Task) -> icechunk.IcechunkStore:
-    """Sync helper for write tasks"""
-    return asyncio.run(execute_write_task(task))
-
-
-def run_read_task(task: Task) -> None:
-    """Sync helper for read tasks"""
-    return asyncio.run(execute_read_task(task))
 
 
 def storage_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -129,7 +118,7 @@ def store_config(args: argparse.Namespace) -> dict[str, Any]:
     return {"inline_chunk_threshold_bytes": 1}
 
 
-async def create(args: argparse.Namespace) -> None:
+def create(args: argparse.Namespace) -> None:
     """Execute the create subcommand.
 
     Creates an Icechunk store, a root group and an array named "array"
@@ -137,7 +126,7 @@ async def create(args: argparse.Namespace) -> None:
 
     Commits the Icechunk repository when done.
     """
-    store = await icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.s3_from_env(**storage_config(args)),
         mode="w",
         config=icechunk.StoreConfig(**store_config(args)),
@@ -158,11 +147,11 @@ async def create(args: argparse.Namespace) -> None:
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snapshot = await store.commit("array created")
+    _first_snapshot = store.commit("array created")
     print("Array initialized")
 
 
-async def update(args: argparse.Namespace) -> None:
+def update(args: argparse.Namespace) -> None:
     """Execute the update subcommand.
 
     Uses Dask to write chunks to the Icechunk repository. Currently Icechunk cannot
@@ -177,7 +166,7 @@ async def update(args: argparse.Namespace) -> None:
     storage_conf = storage_config(args)
     store_conf = store_config(args)
 
-    store = await icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
         mode="r+",
         config=icechunk.StoreConfig(**store_conf),
@@ -198,19 +187,19 @@ async def update(args: argparse.Namespace) -> None:
 
     client = Client(n_workers=args.workers, threads_per_worker=1)
 
-    map_result = client.map(run_write_task, tasks)
+    map_result = client.map(execute_write_task, tasks)
     worker_stores = client.gather(map_result)
 
     print("Starting distributed commit")
     # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    commit_res = await store.distributed_commit("distributed commit", [ws.change_set_bytes() for ws in worker_stores])
+    commit_res = store.distributed_commit("distributed commit", [ws.change_set_bytes() for ws in worker_stores])
     assert commit_res
     print("Distributed commit done")
 
 
-async def verify(args: argparse.Namespace) -> None:
+def verify(args: argparse.Namespace) -> None:
     """Execute the verify subcommand.
 
     Uses Dask to read and verify chunks from the Icechunk repository. Currently Icechunk cannot
@@ -223,7 +212,7 @@ async def verify(args: argparse.Namespace) -> None:
     storage_conf = storage_config(args)
     store_conf = store_config(args)
 
-    store = await icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
         mode="r",
         config=icechunk.StoreConfig(**store_conf),
@@ -244,12 +233,12 @@ async def verify(args: argparse.Namespace) -> None:
 
     client = Client(n_workers=args.workers, threads_per_worker=1)
 
-    map_result = client.map(run_read_task, tasks)
+    map_result = client.map(execute_read_task, tasks)
     client.gather(map_result)
     print("done, all good")
 
 
-async def main() -> None:
+def main() -> None:
     """Main entry point for the script.
 
     Parses arguments and delegates to a subcommand.
@@ -328,12 +317,12 @@ async def main() -> None:
 
     match args.command:
         case "create":
-            await create(args)
+            create(args)
         case "update":
-            await update(args)
+            update(args)
         case "verify":
-            await verify(args)
+            verify(args)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
