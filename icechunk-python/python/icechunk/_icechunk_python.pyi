@@ -151,6 +151,20 @@ class StorageConfig:
         """
         ...
 
+    @classmethod
+    def s3_anonymous(
+        cls,
+        bucket: str,
+        prefix: str,
+        endpoint_url: str | None,
+        allow_http: bool | None = None,
+        region: str | None = None,
+    ) -> StorageConfig:
+        """Create a StorageConfig object for an S3 Object Storage compatible storage
+        using anonymous access
+        """
+        ...
+
 class S3Credentials:
     access_key_id: str
     secret_access_key: str
