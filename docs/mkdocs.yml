@@ -139,6 +139,7 @@ nav:
   - FAQ: faq.md
   - Icechunk Python: 
     - icechunk-python/quickstart.md 
+    - icechunk-python/configuration.md
     - icechunk-python/xarray.md
     - icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md
