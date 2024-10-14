@@ -1,6 +1,6 @@
 # Icechunk
 
-![Icechunk logo](icechunk_logo.png)
+![Icechunk logo](docs/docs/assets/logo.svg)
 
 Icechunk is a transactional storage engine for Zarr designed for use on cloud object storage.
 <!--home-start-->
