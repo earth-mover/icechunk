@@ -50,7 +50,7 @@ theme:
     - navigation.footer
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.expand
+    #- navigation.expand
     - toc.follow
     - navigation.top
     - announce.dismiss
