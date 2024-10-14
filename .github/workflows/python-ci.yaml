@@ -6,7 +6,7 @@
 name: Python CI
 
 on:
-  publish:
+  release:
     types:
       # published triggers for both releases and prereleases
       - published
@@ -175,14 +175,13 @@ jobs:
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          working-directory: icechunk-python
           name: wheels-sdist
           path: icechunk-python/dist
 
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: "github.event_name == 'published'"
+    if: ${{ github.event_name == 'release' }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: actions/download-artifact@v4

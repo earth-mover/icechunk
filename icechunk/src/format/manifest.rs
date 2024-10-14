@@ -1,3 +1,4 @@
+use futures::{pin_mut, Stream, TryStreamExt};
 use itertools::Itertools;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 use thiserror::Error;
@@ -136,12 +137,28 @@ impl Manifest {
         }
     }
 
+    pub async fn from_stream<E>(
+        chunks: impl Stream<Item = Result<ChunkInfo, E>>,
+    ) -> Result<Self, E> {
+        let mut chunk_map = BTreeMap::new();
+        pin_mut!(chunks);
+        while let Some(chunk) = chunks.try_next().await? {
+            chunk_map.insert((chunk.node, chunk.coord), chunk.payload);
+        }
+        Ok(Self::new(chunk_map))
+    }
+
     pub fn chunks(&self) -> &BTreeMap<(NodeId, ChunkIndices), ChunkPayload> {
         &self.chunks
     }
 
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.chunks.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

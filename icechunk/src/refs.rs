@@ -58,9 +58,9 @@ impl Ref {
     pub const DEFAULT_BRANCH: &'static str = "main";
 
     fn from_path(path: &str) -> RefResult<Self> {
-        match path.strip_prefix("tag:") {
+        match path.strip_prefix("tag.") {
             Some(name) => Ok(Ref::Tag(name.to_string())),
-            None => match path.strip_prefix("branch:") {
+            None => match path.strip_prefix("branch.") {
                 Some(name) => Ok(Ref::Branch(name.to_string())),
                 None => Err(RefError::InvalidRefType(path.to_string())),
             },
@@ -109,14 +109,14 @@ fn tag_key(tag_name: &str) -> RefResult<String> {
         return Err(RefError::InvalidRefName(tag_name.to_string()));
     }
 
-    Ok(format!("tag:{}/{}", tag_name, TAG_KEY_NAME))
+    Ok(format!("tag.{}/{}", tag_name, TAG_KEY_NAME))
 }
 
 fn branch_root(branch_name: &str) -> RefResult<String> {
     if branch_name.contains('/') {
         return Err(RefError::InvalidRefName(branch_name.to_string()));
     }
-    Ok(format!("branch:{}", branch_name))
+    Ok(format!("branch.{}", branch_name))
 }
 
 fn branch_key(branch_name: &str, version_id: &str) -> RefResult<String> {

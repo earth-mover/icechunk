@@ -317,7 +317,7 @@ impl ChangeSet {
 
     pub fn new_nodes_iterator<'a>(
         &'a self,
-        manifest_id: &'a ManifestId,
+        manifest_id: Option<&'a ManifestId>,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
         self.new_nodes().filter_map(move |path| {
             if self.is_deleted(path) {
@@ -330,10 +330,14 @@ impl ChangeSet {
             match node.node_data {
                 NodeData::Group => Some(node),
                 NodeData::Array(meta, _no_manifests_yet) => {
-                    let new_manifests = vec![ManifestRef {
-                        object_id: manifest_id.clone(),
-                        extents: ManifestExtents(vec![]),
-                    }];
+                    let new_manifests = manifest_id
+                        .map(|mid| {
+                            vec![ManifestRef {
+                                object_id: mid.clone(),
+                                extents: ManifestExtents(vec![]),
+                            }]
+                        })
+                        .unwrap_or_default();
                     Some(NodeSnapshot {
                         node_data: NodeData::Array(meta, new_manifests),
                         ..node

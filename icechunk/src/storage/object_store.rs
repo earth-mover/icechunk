@@ -104,6 +104,18 @@ impl ObjectStorage {
         })
     }
 
+    /// Return all keys in the store
+    ///
+    /// Intended for testing and debugging purposes only.
+    pub async fn all_keys(&self) -> StorageResult<Vec<String>> {
+        Ok(self
+            .store
+            .list(None)
+            .map_ok(|obj| obj.location.to_string())
+            .try_collect()
+            .await?)
+    }
+
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
