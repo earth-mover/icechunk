@@ -36,10 +36,10 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
         store.put(key, data)
 
 
-async def mk_store(mode):
+def mk_store(mode):
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
-    store = await ic.IcechunkStore.open(
+    store = ic.IcechunkStore.open(
         storage=ic.StorageConfig.filesystem(store_path),
         config=ic.StoreConfig(
             inline_chunk_threshold_bytes=10,
@@ -69,7 +69,7 @@ async def write_a_test_repo():
     """
 
     print("Writing repository to ./tests/data/test-repo")
-    store = await mk_store("w")
+    store = mk_store("w")
 
     root = zarr.group(store=store)
     group1 = root.create_group(
@@ -95,25 +95,25 @@ async def write_a_test_repo():
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    await store.commit("empty structure")
+    store.commit("empty structure")
 
     big_chunks[:] = 42.0
     small_chunks[:] = 84
-    await store.commit("fill data")
+    store.commit("fill data")
 
-    await store.set_virtual_ref(
+    store.set_virtual_ref(
         "group1/big_chunks/c/0/0",
         "s3://testbucket/path/to/python/chunk-1",
         offset=0,
         length=5 * 5 * 4,
     )
-    await store.commit("set virtual chunk")
+    store.commit("set virtual chunk")
 
-    await store.new_branch("my-branch")
+    store.new_branch("my-branch")
     await store.delete("group1/small_chunks/c/4")
-    snap4 = await store.commit("delete a chunk")
+    snap4 = store.commit("delete a chunk")
 
-    await store.tag("it works!", snap4)
+    store.tag("it works!", snap4)
 
     group2 = root.create_group(
         "group2", attributes={"this": "is a nice group", "icechunk": 1, "size": 42.0}
@@ -135,14 +135,14 @@ async def write_a_test_repo():
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    snap5 = await store.commit("some more structure")
-    await store.tag("it also works!", snap5)
+    snap5 = store.commit("some more structure")
+    store.tag("it also works!", snap5)
 
     store.close()
 
 
 async def test_icechunk_can_read_old_repo():
-    store = await mk_store("r")
+    store = mk_store("r")
 
     expected_main_history = [
         "set virtual chunk",
@@ -150,23 +150,23 @@ async def test_icechunk_can_read_old_repo():
         "empty structure",
         "Repository initialized",
     ]
-    assert [p.message async for p in store.ancestry()] == expected_main_history
+    assert [p.message for p in store.ancestry()] == expected_main_history
 
-    await store.checkout(branch="my-branch")
+    store.checkout(branch="my-branch")
     expected_branch_history = [
         "some more structure",
         "delete a chunk",
     ] + expected_main_history
-    assert [p.message async for p in store.ancestry()] == expected_branch_history
+    assert [p.message for p in store.ancestry()] == expected_branch_history
 
-    await store.checkout(tag="it also works!")
-    assert [p.message async for p in store.ancestry()] == expected_branch_history
+    store.checkout(tag="it also works!")
+    assert [p.message for p in store.ancestry()] == expected_branch_history
 
-    await store.checkout(tag="it works!")
-    assert [p.message async for p in store.ancestry()] == expected_branch_history[1:]
+    store.checkout(tag="it works!")
+    assert [p.message for p in store.ancestry()] == expected_branch_history[1:]
 
-    store = await mk_store("r")
-    await store.checkout(branch="my-branch")
+    store = mk_store("r")
+    store.checkout(branch="my-branch")
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
         "group2",

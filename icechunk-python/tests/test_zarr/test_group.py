@@ -23,8 +23,8 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(params=["memory"])
-async def store(request: pytest.FixtureRequest, tmpdir: LEGACY_PATH) -> IcechunkStore:
-    result = await parse_store(request.param, str(tmpdir))
+def store(request: pytest.FixtureRequest, tmpdir: LEGACY_PATH) -> IcechunkStore:
+    result = parse_store(request.param, str(tmpdir))
     if not isinstance(result, IcechunkStore):
         raise TypeError(
             "Wrong store class returned by test fixture! got " + result + " instead"

@@ -1,5 +1,5 @@
 # module
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Iterable, Generator
 from typing import Any, Self
 
 from zarr.abc.store import ByteRangeRequest, Store
@@ -37,7 +37,7 @@ class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
 
     @classmethod
-    async def open(cls, *args: Any, **kwargs: Any) -> Self:
+    def open(cls, *args: Any, **kwargs: Any) -> Self:
         if "mode" in kwargs:
             mode = kwargs.pop("mode")
         else:
@@ -53,23 +53,23 @@ class IcechunkStore(Store, SyncMixin):
         store = None
         match mode:
             case "r" | "r+":
-                store = await cls.open_existing(storage, mode, *args, **kwargs)
+                store = cls.open_existing(storage, mode, *args, **kwargs)
             case "a":
-                if await pyicechunk_store_exists(storage):
-                    store = await cls.open_existing(storage, mode, *args, **kwargs)
+                if pyicechunk_store_exists(storage):
+                    store = cls.open_existing(storage, mode, *args, **kwargs)
                 else:
-                    store = await cls.create(storage, mode, *args, **kwargs)
+                    store = cls.create(storage, mode, *args, **kwargs)
             case "w":
-                if await pyicechunk_store_exists(storage):
-                    store = await cls.open_existing(storage, mode, *args, **kwargs)
-                    await store.clear()
+                if pyicechunk_store_exists(storage):
+                    store = cls.open_existing(storage, mode, *args, **kwargs)
+                    store.sync_clear()
                 else:
-                    store = await cls.create(storage, mode, *args, **kwargs)
+                    store = cls.create(storage, mode, *args, **kwargs)
             case "w-":
-                if await pyicechunk_store_exists(storage):
+                if pyicechunk_store_exists(storage):
                     raise ValueError("""Zarr store already exists, open using mode "w" or "r+""""")
                 else:
-                    store = await cls.create(storage, mode, *args, **kwargs)
+                    store = cls.create(storage, mode, *args, **kwargs)
 
         assert(store)
         # We dont want to call _open() becuase icechunk handles the opening, etc.
@@ -94,7 +94,7 @@ class IcechunkStore(Store, SyncMixin):
         self._store = store
 
     @classmethod
-    async def open_existing(
+    def open_existing(
         cls,
         storage: StorageConfig,
         mode: AccessModeLiteral = "r",
@@ -117,12 +117,12 @@ class IcechunkStore(Store, SyncMixin):
         # We have delayed checking if the repository exists, to avoid the delay in the happy case
         # So we need to check now if open fails, to provide a nice error message
         try:
-            store = await pyicechunk_store_open_existing(
+            store = pyicechunk_store_open_existing(
                 storage, read_only=read_only, config=config
             )
         # TODO: we should have an exception type to catch here, for the case of non-existing repo
         except Exception as e:
-            if await pyicechunk_store_exists(storage):
+            if pyicechunk_store_exists(storage):
                 # if the repo exists, this is an actual error we need to raise
                 raise e
             else:
@@ -131,7 +131,7 @@ class IcechunkStore(Store, SyncMixin):
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
-    async def create(
+    def create(
         cls,
         storage: StorageConfig,
         mode: AccessModeLiteral = "w",
@@ -148,7 +148,7 @@ class IcechunkStore(Store, SyncMixin):
         storage backend.
         """
         config = config or StoreConfig()
-        store = await pyicechunk_store_create(storage, config=config)
+        store = pyicechunk_store_create(storage, config=config)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     def with_mode(self, mode: AccessModeLiteral) -> Self:
@@ -205,7 +205,7 @@ class IcechunkStore(Store, SyncMixin):
         """Return the current branch name."""
         return self._store.branch
 
-    async def checkout(
+    def checkout(
         self,
         snapshot_id: str | None = None,
         branch: str | None = None,
@@ -217,49 +217,98 @@ class IcechunkStore(Store, SyncMixin):
                 raise ValueError(
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
-            return await self._store.checkout_snapshot(snapshot_id)
+            return self._store.checkout_snapshot(snapshot_id)
         if branch is not None:
             if tag is not None:
                 raise ValueError(
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
-            return await self._store.checkout_branch(branch)
+            return self._store.checkout_branch(branch)
         if tag is not None:
-            return await self._store.checkout_tag(tag)
+            return self._store.checkout_tag(tag)
 
         raise ValueError("a snapshot_id, branch, or tag must be specified")
 
-    async def commit(self, message: str) -> str:
+    async def async_checkout(
+        self,
+        snapshot_id: str | None = None,
+        branch: str | None = None,
+        tag: str | None = None,
+    ) -> None:
+        """Checkout a branch, tag, or specific snapshot."""
+        if snapshot_id is not None:
+            if branch is not None or tag is not None:
+                raise ValueError(
+                    "only one of snapshot_id, branch, or tag may be specified"
+                )
+            return await self._store.async_checkout_snapshot(snapshot_id)
+        if branch is not None:
+            if tag is not None:
+                raise ValueError(
+                    "only one of snapshot_id, branch, or tag may be specified"
+                )
+            return await self._store.async_checkout_branch(branch)
+        if tag is not None:
+            return await self._store.async_checkout_tag(tag)
+
+        raise ValueError("a snapshot_id, branch, or tag must be specified")
+
+    def commit(self, message: str) -> str:
         """Commit any uncommitted changes to the store.
 
         This will create a new snapshot on the current branch and return
         the snapshot id.
         """
-        return await self._store.commit(message)
+        return self._store.commit(message)
 
-    async def distributed_commit(
+    async def async_commit(self, message: str) -> str:
+        """Commit any uncommitted changes to the store.
+
+        This will create a new snapshot on the current branch and return
+        the snapshot id.
+        """
+        return await self._store.async_commit(message)
+
+    def distributed_commit(
         self, message: str, other_change_set_bytes: list[bytes]
     ) -> str:
-        return await self._store.distributed_commit(message, other_change_set_bytes)
+        return self._store.distributed_commit(message, other_change_set_bytes)
+
+    async def async_distributed_commit(
+        self, message: str, other_change_set_bytes: list[bytes]
+    ) -> str:
+        return await self._store.async_distributed_commit(message, other_change_set_bytes)
 
     @property
     def has_uncommitted_changes(self) -> bool:
         """Return True if there are uncommitted changes to the store"""
         return self._store.has_uncommitted_changes
 
-    async def reset(self) -> None:
+    async def async_reset(self) -> None:
         """Discard any uncommitted changes and reset to the previous snapshot state."""
-        return await self._store.reset()
+        return await self._store.async_reset()
 
-    async def new_branch(self, branch_name: str) -> str:
+    def reset(self) -> None:
+        """Discard any uncommitted changes and reset to the previous snapshot state."""
+        return self._store.reset()
+
+    async def async_new_branch(self, branch_name: str) -> str:
         """Create a new branch from the current snapshot. This requires having no uncommitted changes."""
-        return await self._store.new_branch(branch_name)
+        return await self._store.async_new_branch(branch_name)
 
-    async def tag(self, tag_name: str, snapshot_id: str) -> None:
+    def new_branch(self, branch_name: str) -> str:
+        """Create a new branch from the current snapshot. This requires having no uncommitted changes."""
+        return self._store.new_branch(branch_name)
+
+    def tag(self, tag_name: str, snapshot_id: str) -> None:
         """Tag an existing snapshot with a given name."""
-        return await self._store.tag(tag_name, snapshot_id=snapshot_id)
+        return self._store.tag(tag_name, snapshot_id=snapshot_id)
 
-    def ancestry(self) -> AsyncGenerator[SnapshotMetadata, None]:
+    async def async_tag(self, tag_name: str, snapshot_id: str) -> None:
+        """Tag an existing snapshot with a given name."""
+        return await self._store.async_tag(tag_name, snapshot_id=snapshot_id)
+
+    def ancestry(self) -> Generator[SnapshotMetadata, None]:
         """Get the list of parents of the current version.
 
         Returns
@@ -268,6 +317,15 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.ancestry()
 
+    def async_ancestry(self) -> AsyncGenerator[SnapshotMetadata, None]:
+        """Get the list of parents of the current version.
+
+        Returns
+        -------
+        AsyncGenerator[SnapshotMetadata, None]
+        """
+        return self._store.async_ancestry()
+
     async def empty(self) -> bool:
         """Check if the store is empty."""
         return await self._store.empty()
@@ -275,6 +333,10 @@ class IcechunkStore(Store, SyncMixin):
     async def clear(self) -> None:
         """Clear the store."""
         return await self._store.clear()
+
+    def sync_clear(self) -> None:
+        """Clear the store."""
+        return self._store.sync_clear()
 
     async def get(
         self,
@@ -363,7 +425,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.set_if_not_exists(key, value.to_bytes())
 
-    async def set_virtual_ref(
+    async def async_set_virtual_ref(
         self, key: str, location: str, *, offset: int, length: int
     ) -> None:
         """Store a virtual reference to a chunk.
@@ -379,7 +441,25 @@ class IcechunkStore(Store, SyncMixin):
         length : int
             The length of the chunk in bytes, measured from the given offset
         """
-        return await self._store.set_virtual_ref(key, location, offset, length)
+        return await self._store.async_set_virtual_ref(key, location, offset, length)
+
+    def set_virtual_ref(
+        self, key: str, location: str, *, offset: int, length: int
+    ) -> None:
+        """Store a virtual reference to a chunk.
+
+        Parameters
+        ----------
+        key : str
+            The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
+        location : str
+            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
+        offset : int
+            The offset in bytes from the start of the file location in storage the chunk starts at
+        length : int
+            The length of the chunk in bytes, measured from the given offset
+        """
+        return self._store.set_virtual_ref(key, location, offset, length)
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store
