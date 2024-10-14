@@ -106,9 +106,9 @@ plugins:
       default_handler: python
   - mkdocs-jupyter:
       include_source: True
-      include: 
-        - "icechunk-python/notebooks/*.ipynb"
-        - "icechunk-python/examples/*.py"
+      #include: 
+      #  - "icechunk-python/notebooks/*.ipynb"
+      #  - "icechunk-python/examples/*.py"
 
 markdown_extensions:
   - admonition
@@ -121,6 +121,8 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
@@ -136,12 +138,17 @@ nav:
     - index.md
   - FAQ: faq.md
   - Icechunk Python: 
-    - icechunk-python/index.md
-    - Reference: icechunk-python/reference.md
+    - icechunk-python/quickstart.md 
+    - icechunk-python/xarray.md
+    - icechunk-python/version-control.md
+    - Virtual Datasets: icechunk-python/virtual.md
+    - icechunk-python/concurrency.md
+    - API Reference: icechunk-python/reference.md
     - Developing: icechunk-python/developing.md
-    - Examples:
-      - ... | flat | icechunk-python/examples/*.py
-    - Notebooks: 
-      - ... | flat | icechunk-python/notebooks/*.ipynb
+#    - Examples:
+#      - ... | flat | icechunk-python/examples/*.py
+#    - Notebooks: 
+#      - ... | flat | icechunk-python/notebooks/*.ipynb
+  - Sample Datasets: sample-datasets.md
   - Spec: spec.md
 
