@@ -147,6 +147,10 @@ Furthermore, Icechunk achieves this without using Dask, by implementing its own 
 
 ### Array Formats
 
+Array formats are file formats for storing multi-dimensional array (tensor) data.
+Icechunk is an array format.
+Here is how Icechunk compares to other popular array formats.
+
 #### [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
 
 HDF5 (Hierarchical Data Format version 5) is a popular format for storing scientific data.
@@ -219,20 +223,150 @@ The [GeoZarr](https://github.com/zarr-developers/geozarr-spec) project aims to c
 #### [TileDB Embedded](https://docs.tiledb.com/main/background/key-concepts-and-data-format)
 
 TileDB Embedded is an innovative array storage format that bears many similarities to both Zarr and Icechunk.
+Like TileDB Embedded, Icechunk aims to provide database-style features on top of the array data model.
+Both technologies use an embedded / serverless architecture, where client processes interact directly with
+data files in storage, rather than through a database server.
+However, there are a number of difference, enumerated below.
 
+The following table compares Zarr + Icechunk with TileDB Embedded in a few key areas
 
+| feature | **Zarr + Icechunk** | **TileDB Embedded** | Comment |
+|---------|---------------------|---------------------|---------|
+| *atomicity* | atomic updates can span multiple arrays and groups | _array fragments_ limited to a single array  |  Icechunk's model allows a writer to stage many updates across interrelated arrays into a single transaction. |
+| *concurrency and isolation* | serializable isolation of transactions | [eventual consistency](https://docs.tiledb.com/main/background/internal-mechanics/consistency) | While both formats enable lock-free concurrent reading and writing, Icechunk can catch (and potentially reject) inconsistent, out-of order updates. |
+| *versioning* | snapshots, branches, tags | linear version history | Icechunk's data versioning model is closer to Git's. |
+| *unit of storage* | chunk | tile | (basically the same thing) |
+| *minimum write* | chunk | cell | TileDB allows atomic updates to individual cells, while Zarr requires writing an entire chunk. |
+| *sparse arrays* | :material-close: | :material-check: | Zar + Icechunk do not currently support sparse arrays. |
+| *virtual chunk references* |  :material-check: |  :material-close: | Icechunk enables references to chunks in other file formats (HDF5, NetCDF, GRIB, etc.), while TileDB does not. |
 
+Beyond this list, there are numerous differences in the design, file layout, and implementation of Icechunk and TileDB embedded
+which may lead to differences in suitability and performance for different workfloads.
 
-#### SafeTensors
+#### [SafeTensors](https://github.com/huggingface/safetensors)
 
+SafeTensors is a format developed by HuggingFace for storing tensors (arrays) safely, in contrast to Python pickle objects.
+
+By the same criteria Icechunk and Zarr are also "safe", in that it is impossible to trigger arbitrary code execution when reading data.
+
+SafeTensors is a single-file format, like HDF5
+SafeTensors optimizes for a simple on-disk layout that facilitates mem-map-based zero-copy reading in ML training pipleines,
+assuming that the data are being read from a local POSIX filesystem
+Zarr and Icechunk instead allow for flexible chunking and compression to optimize I/O against object storage.
 
 ### Tabular Formats
-#### Apache Parquet
-#### Apache Iceberg
-#### Delta Lake
-#### LanceDB
+
+Tabular formats are for storing tabular data.
+Tabular formats are extremely prevalent in general-purpose data analytics but are less widely used in scientific domains. 
+The tabular data model is different from Icechunk's multidimensional array data model, and so a direct comparison is not always apt.
+However, Icechunk is inspired by many tabular file formats, and there are some notable similarities.
+
+#### [Apache Parquet](https://parquet.apache.org/)
+  
+> Apache Parquet is an open source, column-oriented data file format designed for efficient data storage and retrieval.
+> It provides high performance compression and encoding schemes to handle complex data in bulk and is supported in many programming language and analytics tools.
+
+Parquet employs many of the same core technological concepts used in Zarr + Icechunk such as chunking, compression, and efficient metadata access in a cloud context.
+Both formats support a range of different numerical data types.
+Both are "columnar" in the sense that different columns / variables / arrays can be queried efficiently without having to fetch unwanted data from other columns.
+Both also support attaching arbitrary key-value metadata to variables.
+Parquet supports "nested" types like variable-length lists, dicts, etc. that are currently unsupported in Zarr (but may be possible in the future).
+
+In general, Parquet and other tabular formats can't be substituted for Zarr / Icechunk, due to the lack of multidimensional array support.
+On the other hand, tabular data can be modeled in Zarr / Icechunk in a relatively straightforward way: each column as a 1D array, and a table / dataframe as a group of same-sized 1D arrays.
+
+#### [Apache Iceberg](https://iceberg.apache.org/)
+
+> Iceberg is a high-performance format for huge analytic tables.
+> Iceberg brings the reliability and simplicity of SQL tables to big data, while making it possible for engines like Spark, Trino, Flink, Presto, Hive and Impala to safely work with the same tables, at the same time.
+
+Iceberg is commonly used to manage many Parquet files as a single table in object storage.
+
+Iceberg was influential in the design of Icechunk.
+Many of the [spec](./spec.md) core requirements are copied or adapted from Iceberg.
+Specifically, both formats share the following properties:
+- Files written to object storage immutably
+- No listing of the object store is required; metadata files are used track data files
+- Similar mechanism for staging snapshots and committing transactions
+- Support for branches and tags
+
+However, unlike Iceberg, Icechunk _does not require an external catalog_ to commit transactions; it relies solely on the consistency of the object store.
+
+#### [Delta Lake](https://delta.io/)
+
+Delta is another popular table format based on a log of updates to the table state.
+Its functionality and design is quite similar to Iceberg, as is its comparison to Icechunk.
+
+#### [Lance](https://lancedb.github.io/lance/index.html)
+
+> Lance is a modern columnar data format that is optimized for ML workflows and datasets.
+
+Despite its focus on multimodal data, as a columnar format, Lance can't accommodate large arrays / tensors chunked over arbitrary dimensions, making it fundamentally different from Icechunk.
+
+However, the modern design of Lance was very influential on Icechunk.
+Icechunk's commit and conflict resolution mechanism is partly inspired by Lance.
+
 ### Other Related projects
-#### LakeFS
-#### Kerchunk
-#### fsspec
-#### OCTDB
+
+#### [Xarray](https://xarray.dev/)
+
+> Xarray is an open source project and Python package that introduces labels in the form of dimensions, coordinates, and attributes on top of raw NumPy-like arrays, which allows for more intuitive, more concise, and less error-prone user experience.
+>
+> Xarray includes a large and growing library of domain-agnostic functions for advanced analytics and visualization with these data structures.
+
+Xarray and Zarr / Icechunk work great together!
+Xarray is the recommended way to read and write Icechunk data for Python users in geospatial, weather, climate, and similar domains.
+
+#### [Kerchunk](https://fsspec.github.io/kerchunk/)
+
+> Kerchunk is a library that provides a unified way to represent a variety of chunked, compressed data formats (e.g. NetCDF/HDF5, GRIB2, TIFF, …), allowing efficient access to the data from traditional file systems or cloud object storage.
+> It also provides a flexible way to create virtual datasets from multiple files. It does this by extracting the byte ranges, compression information and other information about the data and storing this metadata in a new, separate object.
+> This means that you can create a virtual aggregate dataset over potentially many source files, for efficient, parallel and cloud-friendly in-situ access without having to copy or translate the originals.
+> It is a gateway to in-the-cloud massive data processing while the data providers still insist on using legacy formats for archival storage
+
+Kerchunk emerged from the [Pangeo](https://www.pangeo.io/) community as an experimental
+way of reading archival files, allowing those files to be accessed "virtually" using the Zarr protocol.
+Kerchunk pioneered the concept of a "chunk manifest", a file containing references to compressed binary chunks in other files in the form of the tuple `(uri, offset, size)`.
+Kerchunk has experimented with different ways of serializing chunk manifests, including JSON and Parquet.
+
+Icechunk provides a highly efficient and scalable mechanism for storing and tracking the references generated by Kerchunk.
+Kerchunk and Icechunk are highly complimentary.
+
+#### [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/)
+
+> VirtualiZarr creates virtual Zarr stores for cloud-friendly access to archival data, using familiar Xarray syntax.
+
+VirtualiZarr is another way of generating and manipulating Kerchunk-style references.
+Icechunk provides a highly efficient and scalable mechanism for storing and tracking the references generated by VirtualiZarr.
+Kerchunk and VirtualiZarr are highly complimentary.
+
+#### [LakeFS](https://lakefs.io/)
+
+LakeFS is a solution git-style version control on top of cloud object storage.
+LakeFS enables git-style commits, tags, and branches representing the state of an entire object storage bucket.
+
+LakeFS is format agnostic and can accommodate any type of data, including Zarr.
+LakeFS can therefore be used to create a versioned Zarr store, similar to Icechunk.
+
+Icechunk, however, is designed specifically for array data, based on the Zarr data model.
+This specialization enables numerous optimizations and user-experience enhancements not possible with LakeFS.
+
+LakeFS also requires a server to operate.
+Icechunk, in contrast, works with just object storage.
+
+#### [TensorStore](https://google.github.io/tensorstore/index.html)
+
+> TensorStore is a library for efficiently reading and writing large multi-dimensional arrays.
+
+TensorStore can read and write a variety of different array formats, including Zarr.
+
+While TensorStore is not yet compatible with Icechunk, it should be possible to implement Icechunk support in TensorStore.
+
+TensorStore implements an [ocdbt](https://google.github.io/tensorstore/kvstore/ocdbt/index.html#ocdbt-key-value-store-driver):
+
+> The ocdbt driver implements an Optionally-Cooperative Distributed B+Tree (OCDBT) on top of a base key-value store.
+
+Ocdbt implements a transactional, versioned key-value store suitable for storing Zarr data, thereby supporting some of the same features as Icechunk.
+Unlike Icechunk, the ocdbt key-value store is not specialized to Zarr, does not differentiate between chunk or metadata keys, and does not store any metadata about chunks.
+
+
