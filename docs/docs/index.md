@@ -16,7 +16,7 @@ This is the Icechunk documentation. It's organized into the following parts.
 - [Frequently Asked Questions](./faq.md)
 - Documentation for [Icechunk Python](./icechunk-python), the main user-facing
   library
-- Documentation for the [Icechunk Rust Crate]
+- Documentation for the [Icechunk Rust Crate](https://docs.rs/icechunk/latest/icechunk/)
 - The [Icechunk Spec](./spec.md)
 
 ## Icechunk Overview
@@ -27,13 +27,14 @@ Let's break down what "transactional storage engine for Zarr" actually means:
   Zarr defines the metadata for describing arrays (shape, dtype, etc.) and the way these arrays are chunked, compressed, and converted to raw bytes for storage. Zarr can store its data in any key-value store.
   There are many different implementations of Zarr in different languages. _Right now, Icechunk only supports
   [Zarr Python](https://zarr.readthedocs.io/en/stable/)._
+  If you're interested in implementing Icehcunk support, please [open an issue](https://github.com/earth-mover/icechunk/issues) so we can help you.
 - **Storage engine** - Icechunk exposes a key-value interface to Zarr and manages all of the actual I/O for getting, setting, and updating both metadata and chunk data in cloud object storage.
   Zarr libraries don't have to know exactly how icechunk works under the hood in order to use it.
 - **Transactional** - The key improvement that Icechunk brings on top of regular Zarr is to provide consistent serializable isolation between transactions.
   This means that Icechunk data are safe to read and write in parallel from multiple uncoordinated processes.
   This allows Zarr to be used more like a database.
 
-The core entity in Icechunk is a **repo** or repository.
+The core entity in Icechunk is a repository or **repo**.
 A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as 
 self-contained _Zarr Store_.
 The most common scenario is for an Icechunk repo to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
@@ -102,7 +103,8 @@ Tags are appropriate for publishing specific releases of a repository or for any
 ### Chunk References
 
 Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
-Icechunk can store these references alongside native Zarr chunks.
+Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
+You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underling files.
 
 ## How Does It Work?
 
