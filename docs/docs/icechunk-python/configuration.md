@@ -54,5 +54,9 @@ Icechunk can also be used on a local filesystem by providing a path to the locat
     icechunk.StorageConfig.filesystem("/path/to/my/dataset")
     ```
 
+## Store Config
+
+Separate from the storage config, the store can also be configured with a few different options.
+
 ## Creating and Opening Repos
 
