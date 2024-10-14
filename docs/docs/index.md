@@ -4,13 +4,13 @@ title: Icechunk - Open-source, cloud-native transactional tensor storage engine
 
 # Icechunk
 
-Icechunk is an open-source, transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
+Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
 Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features 
-that enhance performance, collaboration, and safety in a cloud computing context. 
+that enhance performance, collaboration, and safety in a cloud-computing context. 
 
 ## Docs Organization
 
-This is the icechunk documentation. It's organized into the following parts.
+This is the Icechunk documentation. It's organized into the following parts.
 
 - This page: a general overview of the project's goals and components.
 - [Frequently Asked Questions](./faq.md)
@@ -19,7 +19,7 @@ This is the icechunk documentation. It's organized into the following parts.
 - Documentation for the [Icechunk Rust Crate]
 - The [Icechunk Spec](./spec.md)
 
-## Goals of Icechunk
+## Icechunk Overview
 
 Let's break down what "transactional storage engine for Zarr" actually means:
 
@@ -46,41 +46,41 @@ Icechunk supports the following core requirements:
 (It also works with file storage.)
 1. **Serializable isolation** - Reads are isolated from concurrent writes and always use a committed snapshot of a repo. Writes are committed atomically and are never partially visible. No locks are required for reading.
 1. **Time travel** - Previous snapshots of a repo remain accessible after new ones have been written.
-1. **Data Version Control** - Repos support both _tags_ (immutable references to snapshots) and _branches_ (mutable references to snapshots).
-1. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-1. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
-
-## The Project
-
-This Icechunk project consists of three main parts:
-
-1. The [Icechunk specification](./spec.md).
-1. A Rust implementation
-1. A Python wrapper which exposes a Zarr store interface
-
-All of this is open source, licensed under the Apache 2.0 license.
-
-The Rust implementation is a solid foundation for creating bindings in any language.
-We encourage adopters to collaborate on the Rust implementation, rather than reimplementing Icechunk from scratch in other languages.
-
-We encourage collaborators from the broader community to contribute to Icechunk.
-Governance of the project will be managed by Earthmover PBC.
-
-## How Can I Use It?
-
-We recommend using [Icechunk from Python](./icechunk-python/index.md), together with the Zarr-Python library. 
-
-!!! warning "Icechunk is a very new project."
-    It is not recommended for production use at this time.
-    These instructions are aimed at Icechunk developers and curious early adopters.
+1. **Data version control** - Repos support both _tags_ (immutable references to snapshots) and _branches_ (mutable references to snapshots).
+1. **Chunk shardings** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding).
+1. **Chunk references** - Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
+1. **Schema evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
 
 ## Key Concepts
+
+### Groups, Arrays, and Chunks
+
+Icechunk is designed around the Zarr data model, widely used in scientific computing, data science, and AI / ML.
+(The Zarr high-level data model is effectively the same as HDF5.)
+The core data structure in this data model is the **array**.
+Arrays have two fundamental properties:
+
+- **shape** - a tuple of integers which specify the dimensions of each axis of the array. A 10 x 10 square array would have shape (10, 10)
+- **data type** - a specification of what type of data is found in each element, e.g. integer, float, etc. Different data types have different precision (e.g. 16-bit integer, 64-bit float, etc.)
+
+In Zarr / Icechunk, arrays are split into **chunks**, 
+A chunk is the minimum unit of data that must be read / written from storage, and thus choices about chunking have strong implications for performance.
+Zarr leaves this completely up to the user.
+Chunk shape should be chosen based on the anticipated data access patten for each array
+An Icechunk array is not bounded by an individual file and is effectively unlimited in size.
+
+For further organization of data, Icechunk supports **groups** withing a single repo.
+Group are like folders which contain multiple arrays and or other groups.
+Groups enable data to be organized into hierarchical trees.
+A common usage pattern is to store multiple arrays in a group representing a NetCDF-style dataset.
+
+Arbitrary JSON-style key-value metadata can be attached to both arrays and groups.
 
 ### Snapshots
 
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.
 Icechunk users must organize their updates into groups of related operations called **transactions**.
-For example, appending a new time slice to mutliple arrays should be done as single transactions, comprising the following steps
+For example, appending a new time slice to mutliple arrays should be done as a single transaction, comprising the following steps
 1. Update the array metadata to resize the array to accommodate the new elements.
 2. Write new chunks for each array in the group.
 
@@ -99,9 +99,10 @@ Icechunk's design protects against the race condition in which two uncoordinated
 Icechunk also defines **tags**--_immutable_ references to snapshot.
 Tags are appropriate for publishing specific releases of a repository or for any application which requires a persistent, immutable identifier to the store state.
 
-### Chunk Manifests and References
+### Chunk References
 
-A **chunk** is a 
+Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
+Icechunk can store these references alongside native Zarr chunks.
 
 ## How Does It Work?
 
@@ -137,27 +138,3 @@ flowchart TD
     icechunk <-- data / metadata files --> storage[(Object Storage)]
 ```
 
-## FAQ
-
-1. _Why not just use Iceberg directly?_
-
-   Iceberg and all other "table formats" (Delta, Hudi, LanceDB, etc.) are based on tabular data model.
-   This data model cannot accommodate large, multidimensional arrays (tensors) in a general, scalable way.
-
-1. Is Icechunk part of Zarr?
-
-   Formally, no.
-   Icechunk is a separate specification from Zarr.
-   However, it is designed to interoperate closely with Zarr.
-   In the future, we may propose a more formal integration between the Zarr spec and Icechunk spec if helpful.
-   For now, keeping them separate allows us to evolve Icechunk quickly while maintaining the stability and backwards compatibility of the Zarr data model.
-
-## Inspiration
-
-Icechunk's was inspired by several existing projects and formats, most notably
-
-- [FSSpec Reference Filesystem](https://filesystem-spec.readthedocs.io/en/latest/api.html#fsspec.implementations.reference.ReferenceFileSystem)
-- [Apache Iceberg](https://iceberg.apache.org/spec/)
-- [LanceDB](https://lancedb.github.io/lance/format.html)
-- [TileDB](https://docs.tiledb.com/main/background/key-concepts-and-data-format)
-- [OCDBT](https://google.github.io/tensorstore/kvstore/ocdbt/index.html)
