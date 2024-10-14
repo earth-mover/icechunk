@@ -208,8 +208,13 @@ impl Snapshot {
             .map(move |ix| self.short_term_history[ix].clone())
     }
 
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

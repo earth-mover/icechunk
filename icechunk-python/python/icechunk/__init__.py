@@ -8,6 +8,7 @@ from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
 from ._icechunk_python import (
+    KeyNotFound,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
@@ -85,7 +86,7 @@ class IcechunkStore(Store, SyncMixin):
         **kwargs: Any,
     ):
         """Create a new IcechunkStore. This should not be called directly, instead use the create or open_existing class methods."""
-        super().__init__(mode, *args, **kwargs)
+        super().__init__(*args, mode=mode, **kwargs)
         if store is None:
             raise ValueError(
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
@@ -178,15 +179,18 @@ class IcechunkStore(Store, SyncMixin):
         return self._store == value._store
 
     def __getstate__(self) -> object:
-        store_repr = self._store.as_bytes()
-        return {"store": store_repr, "mode": self.mode}
+        # we serialize the Rust store as bytes
+        d = self.__dict__.copy()
+        d["_store"] = self._store.as_bytes()
+        return d
 
     def __setstate__(self, state: Any) -> None:
-        store_repr = state["store"]
-        mode = state["mode"]
-        is_read_only = mode == "r"
-        self._store = pyicechunk_store_from_bytes(store_repr, is_read_only)
-        self._is_open = True
+        # we have to deserialize the bytes of the Rust store
+        mode = state["_mode"]
+        is_read_only = mode.readonly
+        store_repr = state["_store"]
+        state["_store"] = pyicechunk_store_from_bytes(store_repr, is_read_only)
+        self.__dict__ = state
 
     @property
     def snapshot_id(self) -> str:
@@ -289,9 +293,10 @@ class IcechunkStore(Store, SyncMixin):
         -------
         Buffer
         """
+
         try:
             result = await self._store.get(key, byte_range)
-        except ValueError as _e:
+        except KeyNotFound as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
             return None

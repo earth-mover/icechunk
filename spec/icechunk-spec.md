@@ -191,7 +191,7 @@ The process of creating and updating branches is designed to use the limited con
 When a client checks out a branch, it obtains a specific snapshot ID and uses this snapshot as the basis for any changes it creates during its session.
 The client creates a new snapshot and then updates the branch reference to point to the new snapshot (a "commit").
 However, when updating the branch reference, the client must detect whether a _different session_ has updated the branch reference in the interim, possibly retrying or failing the commit if so.
-This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, and conflicts are expected to be infrequent.
+This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, but conflicts are expected to be infrequent.
 
 The simplest way to do this would be to store the branch reference in a specific file (e.g. `main.json`) and update it via an atomic "compare and swap" operation.
 Unfortunately not all popular object stores support this operation (AWS S3 notably does not).
@@ -209,12 +209,12 @@ When a client checks out a branch, it keeps track of its current sequence number
 When it tries to commit, it attempts to create the file corresponding to sequence number _N + 1_ in an atomic "create if not exists" operation.
 If this succeeds, the commit is successful.
 If this fails (because another client created that file already), the commit fails.
-At this point, the client may choose retry its commit (possibly re-reading the updated data) and then create sequence number _N + 2_.
+At this point, the client may choose to retry its commit (possibly re-reading the updated data) and then create sequence number _N + 2_.
 
 Branch references are stored in the `r/` directory within a subdirectory corresponding to the branch name: `r/$BRANCH_NAME/`.
 Branch names may not contain the `/` character.
 
-To facilitate easy lookups of the latest branch reference, we use the following encoding for the sequence number.
+To facilitate easy lookups of the latest branch reference, we use the following encoding for the sequence number:
 - subtract the sequence number from the integer `1099511627775`
 - encode the resulting integer as a string using [Base 32 Crockford](https://www.crockford.com/base32.html)
 - left-padding the string with 0s to a length of 8 characters
@@ -1084,11 +1084,11 @@ A tag can be created from any snapshot.
 ### Comparison with Iceberg
 
 Like Iceberg, Icechunk uses a series of linked metadata files to describe the state of the repository.
-But while Iceberg describes a table, the Icechunk repository is a Zarr store (hierarchical structure of Arrays and Groups.)
+But while Iceberg describes a table, an Icechunk repository is a Zarr store (hierarchical structure of Arrays and Groups).
 
 | Iceberg Entity | Icechunk Entity | Comment |
 |--|--|--|
 | Table | Repository | The fundamental entity described by the spec |
 | Column | Array | The logical container for a homogenous collection of values | 
 | Snapshot | Snapshot | A single committed snapshot of the repository |
-| Catalog | N/A | There is no concept of a catalog in Icechunk. Consistency provided by object store. |
+| Catalog | N/A | There is no concept of a catalog in Icechunk. Consistency is provided by the object store. |
