@@ -16,7 +16,7 @@ Icechunk makes Zarr work a little bit more like a database, enabling different u
 Another motivation for Icechunk was the success of [Kerchunk](https://github.com/fsspec/kerchunk/).
 The Kerchunk project showed that it was possible to map many existing archival formats (e.g. HDF5, NetCDF, GRIB) to the Zarr data model without actually rewriting any bytes, by creating "virtual" Zarr datasets referencing binary chunks inside other files.
 Doing this at scale requires tracking millions of "chunk references."
-Icechunk's storage model enables allows for these virtual chunks to be stored seamlessly alongside native Zarr chunks.
+Icechunk's storage model allows for these virtual chunks to be stored seamlessly alongside native Zarr chunks.
 
 Finally, Icechunk provides a universal I/O layer for cloud object storage, implementing numerous performance optimizations designed to accelerate data-intensive applications.
 
@@ -31,7 +31,7 @@ storage is the _chunk_.
 
 ## When should I use Icechunk?
 
-Here are the scenarios where it makes sense to use Icechunk:
+Here are some scenarios where it makes sense to use Icechunk:
 
 - You want to store large, dynamically evolving multi-dimensional array (a.k.a. tensor) in cloud object storage.
 - You want to allow multiple uncoordinated processes to access your data at the same time (like a database).
@@ -65,7 +65,7 @@ Most existing Zarr stores have a simple 1:1 mapping between Zarr's keys and the 
 For example, if Zarr asks for a key call `myarray/c/0/0`, the store may just look up a key of the same name
 in an underlying cloud object storage bucket.
 
-Icechunk is a storage engine designed specifically for Zarr which creates a layer of indirection between the
+Icechunk is a storage engine which creates a layer of indirection between the
 Zarr keys and the actual files in storage.
 A Zarr library doesn't have to know explicitly how Icechunk works or how it's storing data on disk.
 It just gets / sets keys as it would with any store.
@@ -128,11 +128,11 @@ We welcome contributions from folks interested in developing Icechunk bindings f
 The Icechunk library is reasonably well-tested and performant.
 The Rust-based core library provides a solid foundation of correctness, safety, and speed.
 
-However, the actual on disk format is still evolving and may change from one release to the next.
+However, the actual on disk format is still evolving and may change from one alpha release to the next.
 Until Icechunk reaches v1.0, we can't commit to long-term stability of the on-disk format.
 This means Icechunk can't yet be used for production uses which require long-term persistence of data.
 
-😅 Don't worry! We are working as fast as we can and aim to release v1.0 as soon as possible!
+😅 Don't worry! We are working as fast as we can and aim to release v1.0 soon!
 
 ## Is Icechunk fast?
 
@@ -190,7 +190,7 @@ NetCDF4 uses HDF5 as its underlying file format.
 Therefore, the similarities and differences with Icechunk are fundamentally the same.
 
 Icechunk can accommodate the NetCDF data model.
-It's possible to write NetCDF compliant in Icechunk using [Xarray](https://xarray.dev/).
+It's possible to write NetCDF compliant data in Icechunk using [Xarray](https://xarray.dev/).
 
 #### [Zarr](https://zarr.dev)
 
@@ -198,6 +198,7 @@ Icechunk works together with Zarr.
 (See [What is Icechunk's relationship to Zarr?](#what-is-icechunks-relationship-to-zarr) for more detail.)
 
 Compared to regular Zarr (without Icechunk), Icechunk offers many benefits, including
+
 - Serializable isolation of updates via transactions
 - Data version control (snapshots, branches, tags)
 - Ability to store references to chunks in external datasets (HDF5, NetCDF, GRIB, etc.)
@@ -249,7 +250,7 @@ SafeTensors is a format developed by HuggingFace for storing tensors (arrays) sa
 
 By the same criteria Icechunk and Zarr are also "safe", in that it is impossible to trigger arbitrary code execution when reading data.
 
-SafeTensors is a single-file format, like HDF5
+SafeTensors is a single-file format, like HDF5,
 SafeTensors optimizes for a simple on-disk layout that facilitates mem-map-based zero-copy reading in ML training pipleines,
 assuming that the data are being read from a local POSIX filesystem
 Zarr and Icechunk instead allow for flexible chunking and compression to optimize I/O against object storage.
@@ -283,10 +284,11 @@ On the other hand, tabular data can be modeled in Zarr / Icechunk in a relativel
 Iceberg is commonly used to manage many Parquet files as a single table in object storage.
 
 Iceberg was influential in the design of Icechunk.
-Many of the [spec](./spec.md) core requirements are copied or adapted from Iceberg.
+Many of the [spec](./spec.md) core requirements are similar to Iceberg.
 Specifically, both formats share the following properties:
+
 - Files written to object storage immutably
-- No listing of the object store is required; metadata files are used track data files
+- All data and metadata files are tracked explicitly by manifests
 - Similar mechanism for staging snapshots and committing transactions
 - Support for branches and tags
 
