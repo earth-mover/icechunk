@@ -30,7 +30,7 @@ storage_config = icechunk.StorageConfig.s3_from_env(
     bucket="icechunk-test",
     prefix="xarray-demo"
 )
-store = await icechunk.IcechunkStore.create(storage_config)
+store = icechunk.IcechunkStore.create(storage_config)
 ```
 
 ## Open tutorial dataset from Xarray
@@ -56,7 +56,7 @@ ds1.to_zarr(store, zarr_format=3, consolidated=False)
 After writing, we commit the changes:
 
 ```python
-await store.commit("add RASM data to store")
+store.commit("add RASM data to store")
 # output: 'ME4VKFPA5QAY0B2YSG8G'
 ```
 
@@ -72,7 +72,7 @@ ds2.to_zarr(store,  append_dim='time')
 And then we'll commit the changes:
 
 ```python
-await store.commit("append more data")
+store.commit("append more data")
 # output: 'WW4V8V34QCZ2NXTD5DXG'
 ```
 
@@ -108,7 +108,7 @@ xr.open_zarr(store, zarr_format=3, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-await store.checkout('ME4VKFPA5QAY0B2YSG8G')
+store.checkout('ME4VKFPA5QAY0B2YSG8G')
 
 xr.open_zarr(store, zarr_format=3, consolidated=False)
 # <xarray.Dataset> Size: 9MB
