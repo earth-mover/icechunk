@@ -24,6 +24,13 @@ This repository uses [Poetry](https://python-poetry.org/) to manage dependencies
 
 Builds output to: `icechunk-docs/.site` directory.
 
+
+### Deploying
+
+Docs are automatically deployed upon commits to `main` branch via the `./github/workflows/deploy-docs.yaml` action.
+
+You can manually deploy by running the command `mkdocs gh-deploy --force` from the directory containing the `mkdocs.yml` file.
+
 ## Dev Notes
 
 #### Symlinked Files
