@@ -1,0 +1,12 @@
+/* Global Adjustments */
+
+[dir=ltr] .md-header__title {
+  margin-left: 0px;
+}
+
+/* 
+TODO: find a way to show all pages in left sidebar
+.md-nav--lifted>.md-nav__list>.md-nav__item, .md-nav--lifted>.md-nav__title {
+  display:block;
+}
+ */
