@@ -27,13 +27,18 @@ However, you can also create a store on your local filesystem.
 === "S3 Storage"
 
     ```python
-    # TODO
+    storage_config = icechunk.StorageConfig.s3_from_env(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1"
+    )
+    store = await icechunk.IcechunkStore.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
-    # TODO
+    storage_config = icechunk.StorageConfig.filesystem("./icechunk-local")
+    store = await icechunk.IcechunkStore.create(storage_config)
     ```
 
 ## Write some data and commit
@@ -71,14 +76,39 @@ array[:5] = 2
 
 ...and commit the changes
 
-```
+```python
 await store.commit("overwrite some values")
 ```
 
-### Explore version history
+## Explore version history
 
-We can now see both versions of our array
+We can see the full version history of our repo:
 
 ```python
-# TODO: use ancestors
+hist = [anc async for anc in store.ancestry()]
+for anc in hist:
+    print(anc.id, anc.message, anc.written_at)
+
+# Output:
+# AHC3TSP5ERXKTM4FCB5G overwrite some values 2024-10-14 14:07:27.328429+00:00
+# Q492CAPV7SF3T1BC0AA0 first commit 2024-10-14 14:07:26.152193+00:00
+# T7SMDT9C5DZ8MP83DNM0 Repository initialized 2024-10-14 14:07:22.338529+00:00
 ```
+
+...and we can go back in time to the earlier version.
+
+```python
+# latest version
+assert array[0] == 2
+# check out earlier snapshot
+await store.checkout(snapshot_id=hist[1].id)
+# verify data matches first version
+assert array[0] == 1
+```
+
+---
+
+That's it! You now know how to use Icechunk!
+For your next step, dig deeper into [configuration](./configuration.md),
+explore the [version control system](./version-control.md), or learn how to
+[use Icechunk with Xarray](./xarray.md).
