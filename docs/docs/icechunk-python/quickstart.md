@@ -15,7 +15,7 @@ pip install icechunk
 !!! note
 
     Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
-    Using it today requires installing the [still unreleased] Zarr Python V3 branch.
+    Using it today requires installing the latest pre-release of Zarr Python 3.
 
 
 ## Create a new store
