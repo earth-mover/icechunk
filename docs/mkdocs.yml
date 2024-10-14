@@ -153,8 +153,8 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
-  - Overview: 
-    - index.md
+  - Home: index.md
+  - Overview: overview.md
   - FAQ: faq.md
   - Icechunk Python: 
     - icechunk-python/quickstart.md 

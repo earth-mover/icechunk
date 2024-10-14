@@ -90,6 +90,10 @@ h3.hero-subtitle {
   margin-top: 60px;
 }
 
+.links img {
+  box-shadow: 5px 5px 0px rgba(0,0,0,0.1);
+}
+
 
 .by-line-wrapper {
   margin: 60px auto;
