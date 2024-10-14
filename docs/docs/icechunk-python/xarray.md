@@ -4,7 +4,7 @@ Icechunk was designed to work seamlessly with Xarray. Xarray users can read and
 write data to Icechunk using [`xarray.open_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.open_zarr.html#xarray.open_zarr)
 and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr).
 
-!!! note
+!!! warning
 
     Using Xarray and Icechunk together currently requires installing Xarray from source. 
 
@@ -19,19 +19,31 @@ to it, and append data a second block of data using Icechunk's version control f
 
 ## Create a new store
 
-Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll create an Icechunk store in S3. You will need to replace the `StorageConfig` with a bucket that
-you have access to. 
+Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll create an
+Icechunk store in S3 or a local file system. You will need to replace the `StorageConfig` 
+with a bucket or file path that you have access to. 
 
 ```python
 import xarray as xr
 from icechunk import IcechunkStore, StorageConfig
-
-storage_config = icechunk.StorageConfig.s3_from_env(
-    bucket="icechunk-test",
-    prefix="xarray-demo"
-)
-store = icechunk.IcechunkStore.create(storage_config)
 ```
+
+=== "S3 Storage"
+
+    ```python
+    storage_config = icechunk.StorageConfig.s3_from_env(
+        bucket="icechunk-test",
+        prefix="xarray-demo"
+    )
+    store = await icechunk.IcechunkStore.create(storage_config)
+    ```
+
+=== "Local Storage"
+
+    ```python
+    storage_config = icechunk.StorageConfig.filesystem("./icechunk-xarray")
+    store = await icechunk.IcechunkStore.create(storage_config)
+    ```
 
 ## Open tutorial dataset from Xarray
 
@@ -53,6 +65,14 @@ Writing Xarray data to Icechunk is as easy as calling `Dataset.to_zarr`:
 ds1.to_zarr(store, zarr_format=3, consolidated=False)
 ```
 
+!!! note
+
+    1. [Consolidated metadata](https://docs.xarray.dev/en/latest/user-guide/io.html#consolidated-metadata)
+    is unnecessary (and unsupported) in Icechunk.
+    Icechunk already organizes the dataset metadata in a way that makes it very
+    fast to fetch from storage.
+    2. `zarr_format=3` is required until the default Zarr format changes in Xarray.
+
 After writing, we commit the changes:
 
 ```python
@@ -66,7 +86,7 @@ Next, we want to add a second block of data to our store. Above, we created `ds2
 this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='time'`.
 
 ```python
-ds2.to_zarr(store,  append_dim='time')
+ds2.to_zarr(store, append_dim='time')
 ```
 
 And then we'll commit the changes:
@@ -81,7 +101,7 @@ store.commit("append more data")
 To read data stored in Icechunk with Xarray, we'll use `xarray.open_zarr`:
 
 ```python
-xr.open_zarr(store, zarr_format=3, consolidated=False)
+xr.open_zarr(store, consolidated=False)
 # output: <xarray.Dataset> Size: 9MB
 # Dimensions:  (y: 205, x: 275, time: 18)
 # Coordinates:
@@ -108,9 +128,9 @@ xr.open_zarr(store, zarr_format=3, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-store.checkout('ME4VKFPA5QAY0B2YSG8G')
+store.checkout(snapshot_id='ME4VKFPA5QAY0B2YSG8G')
 
-xr.open_zarr(store, zarr_format=3, consolidated=False)
+xr.open_zarr(store, consolidated=False)
 # <xarray.Dataset> Size: 9MB
 # Dimensions:  (time: 18, y: 205, x: 275)
 # Coordinates:
