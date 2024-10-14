@@ -4,7 +4,7 @@ When creating and opening Icechunk stores, there are a few different ways to con
 
 ## Storage Config
 
-Icechunk can be used with many different storage backends. The storage configuration defines the location of an Icechunk stor, along with any options or information needed to access data from a given storage type.
+Icechunk can be confirgured to work with a variety of storage backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
 
 ### S3 Storage
 
@@ -66,7 +66,7 @@ Chunks can be written inline alongside the store metadataif the size of a given 
 
     ```python
     StoreConfig(
-        inline_chunk_threshold_bytes=1024,
+        inline_chunk_threshold_bytes=0,
         ...
     )
     ```
@@ -127,8 +127,28 @@ Now we can now create or open an Icechunk store using our config
 
     Icechunk stores cannot be created in the same location where another store already exists. 
 
+=== "Creating with S3 Storage"
 
+    ```python
 
-### Open an existing store
+    ```
 
+=== "Creating with local filesystem"
 
+    ```python
+
+    ```
+
+### Opening an existing store
+
+=== "Opening from S3 Storage"
+
+    ```python
+
+    ```
+
+=== "Opening from local filesystem"
+
+    ```python
+
+    ```
