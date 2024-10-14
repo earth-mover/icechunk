@@ -56,7 +56,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.fixture(scope="function")
     async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
-        return await IcechunkStore.open(**store_kwargs)
+        return IcechunkStore.open_or_create(**store_kwargs)
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
@@ -71,12 +71,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert not store.mode.readonly
 
     @pytest.mark.parametrize("mode", ["r", "r+", "a", "w", "w-"])
-    async def test_store_open_mode(
+    def test_store_open_mode(
         self, store_kwargs: dict[str, Any], mode: AccessModeLiteral
     ) -> None:
         store_kwargs["mode"] = mode
         try:
-            store = await self.store_cls.open(**store_kwargs)
+            store = self.store_cls.open_or_create(**store_kwargs)
             assert store._is_open
             assert store.mode == AccessMode.from_literal(mode)
         except Exception:
@@ -85,7 +85,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
         with pytest.raises(ValueError):
-            _store = await self.store_cls.open(**create_kwargs)
+            _store = self.store_cls.open_or_create(**create_kwargs)
 
         # TODO
         # set
