@@ -1,0 +1,33 @@
+/* Colors 
+    @see https://m2.material.io/design/color/the-color-system.html#tools-for-picking-colors
+    @see https://github.com/squidfunk/mkdocs-material/blob/master/src/templates/assets/stylesheets/main/_colors.scss
+*/
+
+[data-md-color-scheme="light"] {
+   /* Primary color shades */
+   --md-primary-fg-color:               #5ea0d1;
+   --md-primary-fg-color--light:        #e4f1f8;
+   --md-primary-fg-color--dark:         #1d467f;
+   
+   --md-primary-bg-color:               hsla(0, 0%, 100%, 1);
+   --md-primary-bg-color--light:        hsla(0, 0%, 100%, 0.7);
+
+   /* Accent color shades */
+   --md-accent-fg-color:                #a653ff;
+   --md-accent-fg-color--transparent:   rgba(166, 83, 255, 0.7);
+   //--md-accent-bg-color:                hsla(0, 0%, 100%, 1);
+   //--md-accent-bg-color--light:         hsla(0, 0%, 100%, 0.7);
+}
+
+/* Dark */
+[data-md-color-scheme="slate"] {
+    --md-primary-fg-color:               #1d467f;
+    --md-primary-fg-color--light:        #e4f1f8;
+    --md-primary-fg-color--dark:         #5ea0d1;
+
+    /* Accent color shades */
+   --md-accent-fg-color:                #a653ff;
+   --md-accent-fg-color--transparent:   rgba(166, 83, 255, 0.7);
+   //--md-accent-bg-color:                hsla(0, 0%, 100%, 1);
+   //--md-accent-bg-color--light:         hsla(0, 0%, 100%, 0.7);
+}
