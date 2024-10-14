@@ -126,7 +126,7 @@ def create(args: argparse.Namespace) -> None:
 
     Commits the Icechunk repository when done.
     """
-    store = icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.s3_from_env(**storage_config(args)),
         mode="w",
         config=icechunk.StoreConfig(**store_config(args)),
@@ -166,7 +166,7 @@ def update(args: argparse.Namespace) -> None:
     storage_conf = storage_config(args)
     store_conf = store_config(args)
 
-    store = icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
         mode="r+",
         config=icechunk.StoreConfig(**store_conf),
@@ -212,7 +212,7 @@ def verify(args: argparse.Namespace) -> None:
     storage_conf = storage_config(args)
     store_conf = store_config(args)
 
-    store = icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
         mode="r",
         config=icechunk.StoreConfig(**store_conf),
