@@ -125,7 +125,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [../icechunk-python/python/icechunk]
+          paths: [../icechunk-python/python]
       
   - mkdocs-jupyter:
       include_source: True
