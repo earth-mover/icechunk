@@ -58,5 +58,77 @@ Icechunk can also be used on a local filesystem by providing a path to the locat
 
 Separate from the storage config, the store can also be configured with a few different options.
 
+### Writing chunks inline
+
+Chunks can be written inline alongside the store metadataif the size of a given chunk falls within the confiugured threshold. This is the default behavior for chunks smaller than 512 bytes, but it can be overridden using the `inline_chunk_threshold_bytes` option:
+
+=== "Never write chunks inline"
+
+    ```python
+    StoreConfig(
+        inline_chunk_threshold_bytes=1024,
+        ...
+    )
+    ```
+
+=== "Write bigger chunks inline"
+
+    ```python
+    StoreConfig(
+        inline_chunk_threshold_bytes=1024,
+        ...
+    )
+    ```
+
+### Virtual Reference Storage Config
+
+Icechunk allows for reading "Virtual" data from [existing archival datasets](./xarray.md). This requires configuring a specific `StorageConfig` like option so that Icechunk has the necesary permissions to read from the location of the data. This can be configured using the `virtual_ref_config` option:
+
+=== "S3 from environment"
+
+    ```python
+    StoreConfig(
+        virtual_ref_config=VirtualRefConfig.s3_from_env(),
+        ...
+    )
+    ```
+
+=== "S3 with credentials"
+
+    ```python
+    StoreConfig(
+        virtual_ref_config=VirtualRefConfig.s3_from_config(
+            credential=S3Credentials(
+                access_key_id='my-access-key',
+                secret_access_key='my-secret-key',
+            ),
+            region='us-east-1'
+        ),
+        ...
+    )
+    ```
+
+=== "S3 Anonymous"
+
+    ```python
+    StoreConfig(
+        virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
+        ...
+    )
+    ```
+
 ## Creating and Opening Repos
+
+Now we can now create or open an Icechunk store using our config
+
+### Creating a new store
+
+!!! note
+
+    Icechunk stores cannot be created in the same location where another store already exists. 
+
+
+
+### Open an existing store
+
 
