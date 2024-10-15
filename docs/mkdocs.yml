@@ -14,6 +14,9 @@ extra_css:
   - stylesheets/global.css
   - stylesheets/notebooks.css
 
+extra_javascript:
+  - scripts/readthedocs.js
+
 theme:
   name: material
   custom_dir: overrides
@@ -115,6 +118,7 @@ plugins:
         #- icechunk-python
         - assets
         - stylesheets
+        - scripts
         - index.md
       generate_home_index: false
   - mermaid2
