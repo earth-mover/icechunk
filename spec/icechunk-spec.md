@@ -276,7 +276,7 @@ The most important part to understand from the data structure is the fact that m
 * Native (`Ref`), pointing to the id of a chunk within the Icechunk repository.
 * Inline (`Inline`), an optimization for very small chunks that can be embedded directly in the manifest. Mostly used for coordinate arrays.
 * Virtual (`Virtual`), pointing to a region of a file outside of the Icechunk repository, for example,
-  a chunk that is hosted inside a NetCDF file in object store
+  a chunk that is inside a NetCDF file in object store
 
 To get full details on what each field contains, please refer to the [Icechunk library code](https://github.com/earth-mover/icechunk/blob/f460a56577ec560c4debfd89e401a98153cd3560/icechunk/src/format/manifest.rs#L106).
 
