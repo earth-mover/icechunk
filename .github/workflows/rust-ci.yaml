@@ -6,6 +6,10 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
     paths:
+      - 'Cargo*'
+      - 'compose.yaml'
+      - 'Justfile'
+      - 'rustfmt.toml'
       - 'icechunk/**'
       - '.github/workflows/rust-ci.yaml'
   push:
