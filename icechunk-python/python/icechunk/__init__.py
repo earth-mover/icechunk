@@ -80,7 +80,7 @@ class IcechunkStore(Store, SyncMixin):
                     store = cls.create(storage, mode, *args, **kwargs)
 
         assert(store)
-        # We dont want to call _open() becuase icechunk handles the opening, etc.
+        # We dont want to call _open() because icechunk handles the opening, etc.
         # if we have gotten this far we can mark it as open
         store._is_open = True
 
@@ -293,7 +293,7 @@ class IcechunkStore(Store, SyncMixin):
         This method will fail if:
 
         * there is no currently checked out branch
-        * some other writer updated the curret branch since the repository was checked out
+        * some other writer updated the current branch since the repository was checked out
         """
         return self._store.commit(message)
 
@@ -306,7 +306,7 @@ class IcechunkStore(Store, SyncMixin):
         This method will fail if:
 
         * there is no currently checked out branch
-        * some other writer updated the curret branch since the repository was checked out
+        * some other writer updated the current branch since the repository was checked out
         """
         return await self._store.async_commit(message)
 
@@ -321,7 +321,7 @@ class IcechunkStore(Store, SyncMixin):
         This method will fail if:
 
         * there is no currently checked out branch
-        * some other writer updated the curret branch since the repository was checked out
+        * some other writer updated the current branch since the repository was checked out
 
         other_change_set_bytes must be generated as the output of calling `change_set_bytes`
         on other stores. The resulting commit will include changes from all stores.
@@ -341,7 +341,7 @@ class IcechunkStore(Store, SyncMixin):
         This method will fail if:
 
         * there is no currently checked out branch
-        * some other writer updated the curret branch since the repository was checked out
+        * some other writer updated the current branch since the repository was checked out
 
         other_change_set_bytes must be generated as the output of calling `change_set_bytes`
         on other stores. The resulting commit will include changes from all stores.

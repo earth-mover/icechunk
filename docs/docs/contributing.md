@@ -50,7 +50,7 @@ pip install -e icechunk@.
 ```
 
 
-### Rust Development Worflow
+### Rust Development Workflow
 
 TODO
 
