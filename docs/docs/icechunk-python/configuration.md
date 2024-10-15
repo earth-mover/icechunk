@@ -69,7 +69,7 @@ Icechunk can also be used on a local filesystem by providing a path to the locat
 
 ## Store Config
 
-Separate from the storage config, the store can also be configured with a few different options.
+Separate from the storage config, the Store can also be configured with options which control its runtime behavior.
 
 ### Writing chunks inline
 
