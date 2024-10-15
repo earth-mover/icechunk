@@ -109,7 +109,7 @@ Tags are appropriate for publishing specific releases of a repository or for any
 
 Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
 Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
-You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underling files.
+You can then update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underling files.
 
 ## How Does It Work?
 
