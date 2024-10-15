@@ -6,11 +6,15 @@ While Icechunk works wonderfully with native chunks managed by zarr, there are m
 
     While virtual references are fully supported in Icechunk, creating virtual datasets relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and ther current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
 
-To create virtual Icechunk datasets with python, we utilize the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. `kerchunk` allows us to extract virtual references from existing data files, and `VirtualiZarr` allows us to use `xarray` to combine these extracted virtual references into full blown datasets.
+To create virtual Icechunk datasets with python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. 
 
-## Creating a virtual dataset
+`kerchunk` allows scanning the metadata of existing data files to extract virtual references. It also provides methods to combine these references into [larger virtual datasets](https://fsspec.github.io/kerchunk/tutorial.html#combine-multiple-kerchunked-datasets-into-a-single-logical-aggregate-dataset), which can be exported to it's [reference format](https://fsspec.github.io/kerchunk/spec.html). 
 
-We are going to create a virtual dataset with all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3 with one netCDF file full of SST data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
+`VirtualiZarr` lets users ingest existing data files into virtual datasets using various different tools under the hood, including `kerchunk`, `xarray`, `zarr`, and now `icechunk`. It does so by creating virtual references to existing data that can be combined and manipulated to create larger virtual datasets using `xarray`. These datasets can then be exported to `kerchunk` reference format or to an `Icechunk` store, without ever copying or moving the existing data files.
+
+## Creating a virtual dataset with VirtualiZarr
+
+We are going to create a virtual dataset with all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
 !!! note
 
@@ -51,14 +55,14 @@ virtual_datasets =[
 ]
 ```
 
-We can now use `xarray` to combine these virtual datasets into one large virtual dataset. We know that each of our files share the same structure but with a different date. So we are going to concatenate these datasets on the `time` dimension.
+We can now use `xarray` to combine these virtual datasets into one large virtual dataset (For more details on this operation see [`VirtualiZarr`'s documentation](https://virtualizarr.readthedocs.io/en/latest/usage.html#combining-virtual-datasets)). We know that each of our files share the same structure but with a different date. So we are going to concatenate these datasets on the `time` dimension.
 
 ```python
 import xarray as xr
 
-virtual_ds = xr.combine_nested(
+virtual_ds = xr.concat(
     virtual_datasets, 
-    concat_dim=['time'], 
+    dim='time', 
     coords='minimal', 
     compat='override', 
     combine_attrs='override'
@@ -78,7 +82,7 @@ virtual_ds = xr.combine_nested(
 #    err      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 ```
 
-We have a virtual dataset with 31 timestamps! Let's create an Icechunk store to write it to. 
+We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the represenation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk store to write this dataset to. 
 
 !!! note
 
@@ -119,7 +123,7 @@ store.commit()
 # 'THAJHTYQABGD2B10D5C0'
 ```
 
-Now we can read the dataset from the store using xarray to confirm everything went as expected.
+Now we can read the dataset from the store using xarray to confirm everything went as expected. `xarray` reads directly from the Icechunk store because it is a fully compliant `zarr Store` instance.
 
 ```python
 ds = xr.open_zarr(
@@ -143,4 +147,4 @@ ds = xr.open_zarr(
 #    err      (time, zlev, lat, lon) float64 257MB dask.array<chunksize=(1, 1, 720, 1440), meta=np.ndarray>
 ```
 
-Success! We have created our full dataset with 31 timesteps, ready for analysis!
+Success! We have created our full dataset with 31 timesteps spanning the month of august, all with virtual references to pre-existing data files in object store. This means we can now version control our dataset, allowing us to update it, and roll it back to a previous version without copying or moving any data from the original files. 
