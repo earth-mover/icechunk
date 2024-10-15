@@ -1,6 +1,8 @@
 # Configuration
 
-When creating and opening Icechunk stores, there are a few different ways to configure your store. The two types of configuration are `StorageConfig` and `StoreConfig`. 
+When creating and opening Icechunk stores, there are a two different sets of configuration to be aware of:
+- `StorageConfig` - for configuring access to the object store or filesystem
+- `StoreConfig` - for configuring the behavior of the Icechunk Store itself
 
 ## Storage Config
 
