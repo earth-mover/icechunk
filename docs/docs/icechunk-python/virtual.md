@@ -4,7 +4,8 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 !!! warning
 
-    While virtual references are fully supported in Icechunk, creating virtual datasets relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and ther current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
+    While virtual references are fully supported in Icechunk, creating virtual datasets currently relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and ther current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
+    With time, these experimental features will make their way into the released packages.
 
 To create virtual Icechunk datasets with python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. 
 
