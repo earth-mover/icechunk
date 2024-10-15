@@ -149,3 +149,11 @@ ds = xr.open_zarr(
 ```
 
 Success! We have created our full dataset with 31 timesteps spanning the month of august, all with virtual references to pre-existing data files in object store. This means we can now version control our dataset, allowing us to update it, and roll it back to a previous version without copying or moving any data from the original files. 
+
+Finally, let's make a plot of the sea surface temperature!
+
+```python
+ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
+```
+
+![oisst](../assets/datasets/oisst.png)
