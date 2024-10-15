@@ -214,7 +214,7 @@ Tags cannot be deleted once created.
 The snapshot file fully describes the schema of the repository, including all arrays and groups.
  
 The snapshot file is currently encoded using [MessagePack](https://msgpack.org/), but this may change before Icechunk version 1.0. Given the alpha status of this spec, the best way to understand the information stored
-in the snapshot file, is through the datastructure the Icechunk library is using to serialize it. This datastructure will most certainly change before the spec stabilization:
+in the snapshot file is through the data structure used internally by the Icechunk library for serialization. This data structure will most certainly change before the spec stabilization:
 
 ```rust
 pub struct Snapshot {
