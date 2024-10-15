@@ -26,6 +26,8 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Provide credentials"
 
+    With this option, you provide your credentials and other details explicitly.
+    
     ```python
     icechunk.StorageConfig.s3_from_config(
         bucket="icechunk-test",
