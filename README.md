@@ -114,7 +114,7 @@ You can then update these virtual datasets incrementally (overwrite chunks, chan
 ## How Does It Work?
 
 !!! note
-    For more detailed explanation, have a look at the [Icechunk spec](./spec.md)
+    For more detailed explanation, have a look at the [Icechunk spec](./docs/docs/spec.md)
 
 Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
 For example, a 2D Zarr array called `myarray`, within a group called `mygroup`, would generate the following keys:
