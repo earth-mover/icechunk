@@ -1,6 +1,6 @@
 # Virtual Datasets
 
-While Icechunk works wonderful with native chunks managed by zarr, there are many times where creating a dataset relies on existing archived data. To allow this, Icechunk supports "Virtual" chunks, where any number of chunks in a given dataset may reference external data in existing archival formats, such as netCDF, HDF, GRIB, or TIFF.
+While Icechunk works wonderfully with native chunks managed by zarr, there are many times where creating a dataset relies on existing archived data. To allow this, Icechunk supports "Virtual" chunks, where any number of chunks in a given dataset may reference external data in existing archival formats, such as netCDF, HDF, GRIB, or TIFF.
 
 !!! warning
 
