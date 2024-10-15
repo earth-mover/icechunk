@@ -343,4 +343,3 @@ A tag can be created from any snapshot.
 1. Attempt to create the tag file.
    a. If successful, the tag was created.
    b. If unsuccessful, the tag already exists.
-
