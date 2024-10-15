@@ -15,6 +15,8 @@ This repository uses [Poetry](https://python-poetry.org/) to manage dependencies
 1. Run `poetry shell` from the `/docs` directory
 2. Start the MkDocs development server: `mkdocs serve`
 
+Alternatively you can run `poetry run mkdocs serve`
+
 !!! tip 
     You can use the optional `--dirty` flag to only rebuild changed files, although you may need to restart if you make changes to `mkdocs.yaml`.
 
