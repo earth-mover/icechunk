@@ -7,3 +7,8 @@ repos:
         entry: just pre-commit
         language: system
         pass_filenames: false
+  - repo: https://github.com/codespell-project/codespell
+    # Configuration for codespell is in .codespellrc
+    rev: v2.3.0
+    hooks:
+      - id: codespell
