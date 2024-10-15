@@ -42,7 +42,8 @@ def define_env(env):
 
         except Exception as e:
             logging.error(f"Error creating symlinks: {e}")
-            raise e
+            # Don't raise an error here for now
+            # raise e
 
     # Execute the symlink creation
     symlink_external_dirs()
