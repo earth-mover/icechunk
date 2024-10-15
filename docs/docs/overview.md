@@ -63,7 +63,7 @@ Arrays have two fundamental properties:
 In Zarr / Icechunk, arrays are split into **chunks**, 
 A chunk is the minimum unit of data that must be read / written from storage, and thus choices about chunking have strong implications for performance.
 Zarr leaves this completely up to the user.
-Chunk shape should be chosen based on the anticipated data access patten for each array
+Chunk shape should be chosen based on the anticipated data access pattern for each array
 An Icechunk array is not bounded by an individual file and is effectively unlimited in size.
 
 For further organization of data, Icechunk supports **groups** within a single repo.
