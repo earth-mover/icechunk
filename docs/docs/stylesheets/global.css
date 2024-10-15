@@ -1,5 +1,6 @@
 /* Global Adjustments */
 
+/* Adjust spacing between logo and header */
 [dir=ltr] .md-header__title {
   margin-left: 0px;
 }
@@ -10,3 +11,9 @@ TODO: find a way to show all pages in left sidebar
   display:block;
 }
  */
+
+
+/* Remove cookie consent overlay */
+.md-consent__overlay {
+  display:none;
+}
