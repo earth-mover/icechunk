@@ -341,3 +341,21 @@ h3.hero-subtitle {
 #ripple-1-back, #ripple-2-back {
   transform-origin: center top;
 }
+
+.no-pointer {
+  pointer-events: none;
+}
+
+
+.small-cube path {
+  transition: filter 4s ease-in-out;
+  transform-box: fill-box;
+  transform-origin: center center;
+}
+
+
+.small-cube:hover path {
+  filter:  hue-rotate(620deg) saturate(2000%) invert(70%);
+  transition: all 0s ease-in-out;
+
+}
