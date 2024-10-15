@@ -1,3 +1,6 @@
+---
+title: Specification
+---
 # Icechunk Specification
 
 !!! note "Note" 

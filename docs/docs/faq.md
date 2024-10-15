@@ -1,5 +1,5 @@
 ---
-title: Icechunk - Frequenctly Asked Questions 
+title: Frequently Asked Questions 
 ---
 
 # FAQ
