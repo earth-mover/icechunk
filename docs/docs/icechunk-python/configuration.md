@@ -29,8 +29,11 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
         credentials=S3Credentials(
             access_key_id='my-access-key',
             secret_access_key='my-secret-key',
+            # session token is optional
+            session_token='my-token',
         ),
         endpoint_url=None,
+        allow_http=False,
     )
     ```
 
