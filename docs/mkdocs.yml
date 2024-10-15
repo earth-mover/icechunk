@@ -126,10 +126,13 @@ plugins:
       module_name: macros
   - git-revision-date-localized:
       #enabled: !ENV [CI, false]
+  - git-authors
   - git-committers:
       repository: earth-mover/icechunk
       branch: main
       #enabled: !ENV [CI, false]
+      exclude:
+        - index.md
   - mkdocstrings:
       default_handler: python
       handlers:

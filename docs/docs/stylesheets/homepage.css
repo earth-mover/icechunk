@@ -10,7 +10,6 @@
     margin: 0;
     max-width: 100%;
     position: relative;
-    z-index:1;
   }
 
   /* Hide breadcrumb in content */

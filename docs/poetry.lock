@@ -1219,6 +1219,20 @@ platformdirs = ">=2.2.0"
 pyyaml = ">=5.1"
 
 [[package]]
+name = "mkdocs-git-authors-plugin"
+version = "0.9.0"
+description = "Mkdocs plugin to display git authors of a page"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "mkdocs_git_authors_plugin-0.9.0-py3-none-any.whl", hash = "sha256:380730a05eeb947a7e84be05fdb1c5ae2a7bc70fd9f6eda941f187c87ae37052"},
+    {file = "mkdocs_git_authors_plugin-0.9.0.tar.gz", hash = "sha256:6161f63b87064481a48d9ad01c23e43c3e758930c3a9cc167fe482909ceb9eac"},
+]
+
+[package.dependencies]
+mkdocs = ">=1.0"
+
+[[package]]
 name = "mkdocs-git-committers-plugin-2"
 version = "2.4.1"
 description = "An MkDocs plugin to create a list of contributors on the page. The git-committers plugin will seed the template context with a list of GitHub or GitLab committers and other useful GIT info such as last modified date"
@@ -2722,4 +2736,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "3e27635ba9fec8528f1bd7aea243882f66e58198c2bee4df29f6a7552c84b933"
+content-hash = "e2fd4c717a0d0c95bc3cea08104489573a6b78bb681b429f509798d73e4539c5"

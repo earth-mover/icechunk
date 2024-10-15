@@ -1,3 +1,6 @@
+---
+title: Contributing
+---
 # Contributing
 
 👋 Hi! Thanks for your interest in contributing to Icechunk!

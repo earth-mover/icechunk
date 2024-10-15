@@ -1,3 +1,7 @@
+---
+title: Rust
+---
+
 # Icechunk Rust
 
 The Icechunk rust library is used internally by Icechunk Python.

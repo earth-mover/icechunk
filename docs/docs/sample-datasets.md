@@ -1,3 +1,6 @@
+---
+title: Sample Datasets
+---
 # Sample Datasets
 
 ## Native Datasets
