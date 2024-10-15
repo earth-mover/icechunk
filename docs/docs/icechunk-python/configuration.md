@@ -73,7 +73,9 @@ Separate from the storage config, the Store can also be configured with options 
 
 ### Writing chunks inline
 
-Chunks can be written inline alongside the store metadataif the size of a given chunk falls within the confiugured threshold. This is the default behavior for chunks smaller than 512 bytes, but it can be overridden using the `inline_chunk_threshold_bytes` option:
+Chunks can be written inline alongside the store metadata if the size of a given chunk falls within the configured threshold.
+Inlining allows these small chunks (often used to store small coordinate variables) to be accessed more quickly.
+This is the default behavior for chunks smaller than 512 bytes, but it can be overridden using the `inline_chunk_threshold_bytes` option:
 
 === "Never write chunks inline"
 
