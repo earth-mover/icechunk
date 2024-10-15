@@ -10,7 +10,10 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 - Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 - Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 
-## Python Development Workflow
+
+## Development
+
+### Python Development Workflow
 
 Create / activate a virtual environment:
 
@@ -47,11 +50,11 @@ pip install -e icechunk@.
 ```
 
 
-## Rust Development Worflow
+### Rust Development Worflow
 
 TODO
 
-# Roadmap
+## Roadmap
 
 The initial release of Icechunk is just the beginning. We have a lot more planned for the format and the API. 
 
