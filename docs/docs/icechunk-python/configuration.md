@@ -14,6 +14,9 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "From environment"
 
+    With this option, the credentials for connecting to S3 are detected automatically from your environment.
+    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2).
+    
     ```python
     icechunk.StorageConfig.s3_from_env(
         bucket="icechunk-test",
