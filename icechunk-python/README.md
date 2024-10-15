@@ -38,7 +38,7 @@ from icechunk import IcechunkStore, StorageConfig
 from zarr import Array, Group
 
 storage = StorageConfig.memory("test")
-store = await IcechunkStore.open(storage=storage, mode='r+')
+store = IcechunkStore.open_or_create(storage=storage, mode='r+')
 
 root = Group.from_store(store=store, zarr_format=zarr_format)
 foo = root.create_array("foo", shape=(100,), chunks=(10,), dtype="i4")
