@@ -1,6 +1,6 @@
 # Virtual Datasets
 
-While Icechunk works wonderfully with native chunks managed by zarr, there are many times where creating a dataset relies on existing archived data. To allow this, Icechunk supports "Virtual" chunks, where any number of chunks in a given dataset may reference external data in existing archival formats, such as netCDF, HDF, GRIB, or TIFF.
+While Icechunk works wonderfully with native chunks managed by zarr, there are many times where creating a dataset relies on existing archived data. To allow this, Icechunk supports "Virtual" chunks, where any number of chunks in a given dataset may reference external data in existing archival formats, such as netCDF, HDF, GRIB, or TIFF. Virtual chunks simply load the raw data from the source data's original location without copying. moving, or modifying the original data files. This allows for using Icechunk to manage large datasets from existing data without needing that data to be in `zarr` format.
 
 !!! warning
 
@@ -14,7 +14,7 @@ To create virtual Icechunk datasets with python, the community utilizes the [ker
 
 ## Creating a virtual dataset with VirtualiZarr
 
-We are going to create a virtual dataset with all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
+We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
 !!! note
 
