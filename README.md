@@ -22,7 +22,7 @@ that enhance performance, collaboration, and safety in a cloud-computing context
   library
 - Documentation for the [Icechunk Rust Crate](https://icechunk.io/icechunk-rust)
 - The [Contributor Guide](https://icechunk.io/contributing)
-- The [Icechunk Spec](https://icechunk.io/icechunk-python/spec)
+- The [Icechunk Spec](https://icechunk.io/spec)
 
 ## Icechunk Overview
 
