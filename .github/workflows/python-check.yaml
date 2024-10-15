@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
     paths-ignore:
       - 'docs/**'
-  pull_request:
   workflow_dispatch:
 
 concurrency:

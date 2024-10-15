@@ -5,11 +5,11 @@ name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+    paths-ignore:
+      - 'docs/**'
   push:
     branches:
       - main
-    paths-ignore:
-      - 'docs/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
