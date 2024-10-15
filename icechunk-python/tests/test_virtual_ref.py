@@ -105,25 +105,22 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     )
     root = zarr.Group.from_store(store=store, zarr_format=3)
     depth = root.require_array(
-        name="depth", shape=((22, )), chunk_shape=((22,)), dtype="float64"
+        name="depth", shape=((10, )), chunk_shape=((10,)), dtype="float64"
     )
 
     store.set_virtual_ref(
         "depth/c/0", 
-        "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241012.regulargrid.f030.nc", 
-        offset=42499, 
-        length=176
+        "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.fields.f030.nc",
+        offset=119339, 
+        length=80
     )
 
     nodes = [n async for n in store.list()]
     assert "depth/c/0" in nodes
 
     depth_values = depth[:]
-    assert len(depth_values) == 22
-    actual_values = np.array([
-          0.,   1.,   2.,   4.,   6.,   8.,  10.,  12.,  15.,  20.,  25.,
-        30.,  35.,  40.,  45.,  50.,  60.,  70.,  80.,  90., 100., 125.
-    ])
+    assert len(depth_values) == 10
+    actual_values = np.array([-0.95,-0.85,-0.75,-0.65,-0.55,-0.45,-0.35,-0.25,-0.15,-0.05])
     assert np.allclose(depth_values, actual_values)
 
 
