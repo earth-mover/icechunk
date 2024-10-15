@@ -19,7 +19,7 @@ We are going to create a virtual dataset pointing to all of the [OISST](https://
 
 !!! note
 
-    At this point you should have followed the instructions [here](https://github.com/earth-mover/icechunk/issues/197) to install the necessary tools.
+    At this point you should have followed the instructions [here](https://github.com/earth-mover/icechunk/issues/197) to install the necessary experimental dependencies.
 
 Before we get started, we also need to install `fsspec` and `s3fs` for working with data on s3.
 
