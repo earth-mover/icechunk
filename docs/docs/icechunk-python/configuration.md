@@ -44,6 +44,9 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Anonymous"
 
+    With this option, you connect to S3 anonymously (without credentials).
+    This is suitable for public data.
+    
     ```python
     icechunk.StorageConfig.s3_anonymous(
         bucket="icechunk-test",
