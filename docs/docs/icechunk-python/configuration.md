@@ -134,7 +134,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 
 ## Creating and Opening Repos
 
-Now we can now create or open an Icechunk store using our config. 
+Now we can now create or open an Icechunk store using our config.
 
 ### Creating a new store
 
@@ -207,3 +207,7 @@ Now we can now create or open an Icechunk store using our config.
         config=config,
     )
     ```
+
+#### Access Mode
+
+Note that in all of the above examples, a `mode` is provided to instruct the access level of the user to the store. This mode instructs whether the store should be opened in read only mode, and the store should start with a clean slate (although Icechunk prevents the possibility of accidentally overwriting any data that was previously comimtted to the store forever). For more about the access modes, see the [`zarr-python` docs](https://zarr.readthedocs.io/en/v3/_autoapi/zarr/abc/store/index.html#zarr.abc.store.AccessMode).
