@@ -273,7 +273,7 @@ pub enum ChunkPayload {
 
 The most important part to understand from the datastructure, is the fact that manifests can hold three types of references:
 
-* Native (`Ref`), they point to the id of a chunk within the Icechunk repository.
+* Native (`Ref`), pointing to the id of a chunk within the Icechunk repository.
 * Inline (`Inline`), an optimization for very small chunks, that can be embedded directly in the manifest. Mostly used for dimension arrays.
 * Virtual (`Virtual`), they point to a region of a file outside of the Icechunk repository, for example,
   a chunk that is hosted inside a NetCDF file in object store
