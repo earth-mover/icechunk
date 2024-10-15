@@ -154,7 +154,7 @@ async def run(store: Store) -> None:
     print(f"Read done in {time.time() - read_start} secs")
 
 
-async def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
+def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
     return IcechunkStore.open_or_create(
         storage=storage, mode="w", config=StoreConfig(inline_chunk_threshold_bytes=1)
     )
@@ -194,7 +194,7 @@ if __name__ == "__main__":
     )
 
     print("Icechunk store")
-    store = asyncio.run(create_icechunk_store(storage=MINIO))
+    store = create_icechunk_store(storage=MINIO)
     asyncio.run(run(store))
 
     print("Zarr store")

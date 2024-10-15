@@ -175,7 +175,6 @@ nav:
     - icechunk-python/xarray.md
     - icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md
-    - icechunk-python/concurrency.md
     - API Reference: icechunk-python/reference.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
