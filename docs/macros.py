@@ -18,7 +18,6 @@ def define_env(env):
             external_sources = {
                 monorepo_root / 'icechunk-python' / 'notebooks' : docs_dir / 'icechunk-python' / 'notebooks',
                 monorepo_root / 'icechunk-python' / 'examples' : docs_dir / 'icechunk-python' / 'examples',
-                monorepo_root / 'spec' / 'icechunk-spec.md' : docs_dir / 'spec.md',
             }
 
             for src, target in external_sources.items():

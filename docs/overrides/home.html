@@ -2,7 +2,7 @@
 
 <!-- Announcement bar -->
 {% block announce %}
-  <div class="banner">Icechunk released!</div>
+  <div class="banner">Icechunk released! Read the <a href="http://earthmover.io/blog/icechunk" target="_blank">blog post here</a>.</div>
 {% endblock %}
 
 
@@ -18,7 +18,7 @@
 
         <!-- Hero image -->
         <div class="hero-image-container">
-            <img id="hero-image" src="assets/logo.svg"/>
+            {% include "partials/cube.html" %}
         </div>
 
         <!-- Hero content -->
@@ -34,9 +34,10 @@
             </a>
 
             <div class="links">
-                <img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge">
-                <img alt="Crates.io MSRV" src="https://img.shields.io/crates/msrv/icechunk?logo=rust&label=crates.io&link=https%3A%2F%2Fcrates.io%2Fcrates%2Ficechunk&logoColor=CE422B&style=for-the-badge">
-                <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/earth-mover/icechunk?style=for-the-badge&logo=github">
+                <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
+                <a href="https://crates.io/crates/icechunk" target="_blank"><img alt="Crates.io" src="https://img.shields.io/crates/v/icechunk?logo=rust&label=crates.io&link=https%3A%2F%2Fcrates.io%2Fcrates%2Ficechunk&logoColor=CE422B&style=for-the-badge"></a>
+                <a href="https://github.com/earth-mover/icechunk" target="_blank"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/earth-mover/icechunk?style=for-the-badge&logo=github"></a>
+                <a href="https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ" target="_blank"><img alt="Earthmover Community Slack" src="https://img.shields.io/badge/Slack-4A154B?style=for-the-badge&logo=slack&logoColor=white" /></a>
             </div>
 
             <div class="by-line-wrapper">
