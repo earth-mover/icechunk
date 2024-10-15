@@ -35,14 +35,14 @@ from icechunk import IcechunkStore, StorageConfig
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    store = await icechunk.IcechunkStore.create(storage_config)
+    store = icechunk.IcechunkStore.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
     storage_config = icechunk.StorageConfig.filesystem("./icechunk-xarray")
-    store = await icechunk.IcechunkStore.create(storage_config)
+    store = icechunk.IcechunkStore.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray

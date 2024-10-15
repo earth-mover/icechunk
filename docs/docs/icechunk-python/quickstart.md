@@ -31,14 +31,14 @@ However, you can also create a store on your local filesystem.
         bucket="icechunk-test",
         prefix="quickstart-demo-1"
     )
-    store = await icechunk.IcechunkStore.create(storage_config)
+    store = icechunk.IcechunkStore.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
     storage_config = icechunk.StorageConfig.filesystem("./icechunk-local")
-    store = await icechunk.IcechunkStore.create(storage_config)
+    store = icechunk.IcechunkStore.create(storage_config)
     ```
 
 ## Write some data and commit
@@ -60,8 +60,7 @@ array[:] = 1
 Now let's commit our update
 
 ```python
-# TODO: update when we change the API to be async
-await store.commit("first commit")
+store.commit("first commit")
 ```
 
 🎉 Congratulations! You just made your first Icechunk snapshot.
@@ -77,7 +76,7 @@ array[:5] = 2
 ...and commit the changes
 
 ```python
-await store.commit("overwrite some values")
+store.commit("overwrite some values")
 ```
 
 ## Explore version history
@@ -85,7 +84,7 @@ await store.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python
-hist = [anc async for anc in store.ancestry()]
+hist = store.ancestry()
 for anc in hist:
     print(anc.id, anc.message, anc.written_at)
 
@@ -101,7 +100,7 @@ for anc in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-await store.checkout(snapshot_id=hist[1].id)
+store.checkout(snapshot_id=hist[1].id)
 # verify data matches first version
 assert array[0] == 1
 ```
