@@ -38,6 +38,10 @@ class IcechunkStore(Store, SyncMixin):
 
     @classmethod
     async def open(cls, *args: Any, **kwargs: Any) -> Self:
+        """This method is called by zarr-python, it's not intended for users.
+
+        Use one of `IcechunkStore.open_existing`, `IcechunkStore.create` or `IcechunkStore.open_or_create` instead.
+        """
         return cls.open_or_create(*args, **kwargs)
 
     @classmethod
@@ -90,7 +94,10 @@ class IcechunkStore(Store, SyncMixin):
         *args: Any,
         **kwargs: Any,
     ):
-        """Create a new IcechunkStore. This should not be called directly, instead use the create or open_existing class methods."""
+        """Create a new IcechunkStore.
+
+        This should not be called directly, instead use the `create`, `open_existing` or `open_or_create` class methods.
+        """
         super().__init__(*args, mode=mode, **kwargs)
         if store is None:
             raise ValueError(
@@ -147,10 +154,6 @@ class IcechunkStore(Store, SyncMixin):
         """Create a new IcechunkStore with the given storage configuration.
 
         If a store already exists at the given location, an error will be raised.
-
-        It is recommended to use the cached storage option for better performance. If cached=True,
-        this will be configured automatically with the provided storage_config as the underlying
-        storage backend.
         """
         config = config or StoreConfig()
         store = pyicechunk_store_create(storage, config=config)
@@ -203,6 +206,19 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.snapshot_id
 
     def change_set_bytes(self) -> bytes:
+        """Get the complete list of changes applied in this session, serialized to bytes.
+
+        This method is useful in combination with `IcechunkStore.distributed_commit`. When a
+        write session is too large to execute in a single machine, it could be useful to
+        distribute it across multiple workers. Each worker can write their changes independently
+        (map) and then a single commit is executed by a coordinator (reduce).
+
+        This methods provides a way to send back to gather a "description" of the
+        changes applied by a worker. Resulting bytes, together with the `change_set_bytes` of
+        other workers, can be fed to `distributed_commit`.
+
+        This API is subject to change, it will be replaced by a merge operation at the Store level.
+        """
         return self._store.change_set_bytes()
 
     @property
@@ -216,7 +232,12 @@ class IcechunkStore(Store, SyncMixin):
         branch: str | None = None,
         tag: str | None = None,
     ) -> None:
-        """Checkout a branch, tag, or specific snapshot."""
+        """Checkout a branch, tag, or specific snapshot.
+
+        If a branch is checked out, any following `commit` attempts will update that branch
+        reference if successful. If a tag or snapshot_id are checked out, the repository
+        won't allow commits.
+        """
         if snapshot_id is not None:
             if branch is not None or tag is not None:
                 raise ValueError(
@@ -240,7 +261,12 @@ class IcechunkStore(Store, SyncMixin):
         branch: str | None = None,
         tag: str | None = None,
     ) -> None:
-        """Checkout a branch, tag, or specific snapshot."""
+        """Checkout a branch, tag, or specific snapshot.
+
+        If a branch is checked out, any following `commit` attempts will update that branch
+        reference if successful. If a tag or snapshot_id are checked out, the repository
+        won't allow commits.
+        """
         if snapshot_id is not None:
             if branch is not None or tag is not None:
                 raise ValueError(
@@ -262,7 +288,12 @@ class IcechunkStore(Store, SyncMixin):
         """Commit any uncommitted changes to the store.
 
         This will create a new snapshot on the current branch and return
-        the snapshot id.
+        the new snapshot id.
+
+        This method will fail if:
+
+        * there is no currently checked out branch
+        * some other writer updated the curret branch since the repository was checked out
         """
         return self._store.commit(message)
 
@@ -270,18 +301,53 @@ class IcechunkStore(Store, SyncMixin):
         """Commit any uncommitted changes to the store.
 
         This will create a new snapshot on the current branch and return
-        the snapshot id.
+        the new snapshot id.
+
+        This method will fail if:
+
+        * there is no currently checked out branch
+        * some other writer updated the curret branch since the repository was checked out
         """
         return await self._store.async_commit(message)
 
     def distributed_commit(
         self, message: str, other_change_set_bytes: list[bytes]
     ) -> str:
+        """Commit any uncommitted changes to the store with a set of distributed changes.
+
+        This will create a new snapshot on the current branch and return
+        the new snapshot id.
+
+        This method will fail if:
+
+        * there is no currently checked out branch
+        * some other writer updated the curret branch since the repository was checked out
+
+        other_change_set_bytes must be generated as the output of calling `change_set_bytes`
+        on other stores. The resulting commit will include changes from all stores.
+
+        The behavior is undefined if the stores applied conflicting changes.
+        """
         return self._store.distributed_commit(message, other_change_set_bytes)
 
     async def async_distributed_commit(
         self, message: str, other_change_set_bytes: list[bytes]
     ) -> str:
+        """Commit any uncommitted changes to the store with a set of distributed changes.
+
+        This will create a new snapshot on the current branch and return
+        the new snapshot id.
+
+        This method will fail if:
+
+        * there is no currently checked out branch
+        * some other writer updated the curret branch since the repository was checked out
+
+        other_change_set_bytes must be generated as the output of calling `change_set_bytes`
+        on other stores. The resulting commit will include changes from all stores.
+
+        The behavior is undefined if the stores applied conflicting changes.
+        """
         return await self._store.async_distributed_commit(message, other_change_set_bytes)
 
     @property
@@ -298,27 +364,29 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.reset()
 
     async def async_new_branch(self, branch_name: str) -> str:
-        """Create a new branch from the current snapshot. This requires having no uncommitted changes."""
+        """Create a new branch pointing to the current checked out snapshot.
+
+        This requires having no uncommitted changes.
+        """
         return await self._store.async_new_branch(branch_name)
 
     def new_branch(self, branch_name: str) -> str:
-        """Create a new branch from the current snapshot. This requires having no uncommitted changes."""
+        """Create a new branch pointing to the current checked out snapshot.
+
+        This requires having no uncommitted changes.
+        """
         return self._store.new_branch(branch_name)
 
     def tag(self, tag_name: str, snapshot_id: str) -> None:
-        """Tag an existing snapshot with a given name."""
+        """Create a tag pointing to the current checked out snapshot."""
         return self._store.tag(tag_name, snapshot_id=snapshot_id)
 
     async def async_tag(self, tag_name: str, snapshot_id: str) -> None:
-        """Tag an existing snapshot with a given name."""
+        """Create a tag pointing to the current checked out snapshot."""
         return await self._store.async_tag(tag_name, snapshot_id=snapshot_id)
 
     def ancestry(self) -> list[SnapshotMetadata]:
         """Get the list of parents of the current version.
-
-        Returns
-        -------
-        AsyncGenerator[SnapshotMetadata, None]
         """
         return self._store.ancestry()
 
@@ -336,11 +404,19 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.empty()
 
     async def clear(self) -> None:
-        """Clear the store."""
+        """Clear the store.
+
+        This will remove all contents from the current session,
+        including all groups and all arrays. But it will not modify the repository history.
+        """
         return await self._store.clear()
 
     def sync_clear(self) -> None:
-        """Clear the store."""
+        """Clear the store.
+
+        This will remove all contents from the current session,
+        including all groups and all arrays. But it will not modify the repository history.
+        """
         return self._store.sync_clear()
 
     async def get(
