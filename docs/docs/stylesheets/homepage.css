@@ -46,15 +46,6 @@
   min-height: calc(100vh - var(--header-height) - var(--ice-height));
 }
 
-.hero-image-container {}
-
-#hero-image {
-  margin-top: 10%;
-  width: 30%;
-  height: auto;
-  filter: drop-shadow( 3px 5px 5px rgba(0, 0, 0, .15));
-}
-
 h1.hero-title {
     font-size: 4rem;
     font-weight: bold;
@@ -188,4 +179,58 @@ h3.hero-subtitle {
   .ice-container {
     background-image: url('../assets/hero/hero-bottom-dark.svg');
   }
+}
+
+/* Logo */
+
+@keyframes bob {
+  from {
+    transform: translate3d(0,0,0);
+  }
+  to {
+    transform: translate3d(0, -2%, 0);
+  }
+} 
+
+@keyframes ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0;
+  }
+  25%{
+    opacity: 0.25;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+} 
+
+#cube-logo {
+  width: 30vh;
+  margin-top: 5%;
+}
+
+#cube-container {
+ animation: bob 2s ease-in-out alternate infinite;
+}
+
+#ripple-1-front, #ripple-1-back {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: ripple 2s ease-in-out infinite;
+}
+
+#ripple-2-front, #ripple-2-back {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: ripple 2s 1s ease-in-out infinite;
+}
+
+#ripple-1-front, #ripple-2-front {
+  transform-origin: center bottom;
+}
+
+#ripple-1-back, #ripple-2-back {
+  transform-origin: center top;
 }
