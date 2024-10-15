@@ -96,7 +96,7 @@ Readers can only see and use committed snapshots.
 
 ### Branches and Tags
 
-Additionally, snapshots occur in a specific linear (i.e. serializable) order within  **branch**.
+Additionally, snapshots occur in a specific linear (i.e. serializable) order within a **branch**.
 A branch is a mutable reference to a snapshot--a pointer that maps the branch name to a snapshot ID.
 The default branch is `main`.
 Every commit to the main branch updates this reference.
