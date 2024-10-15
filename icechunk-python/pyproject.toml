@@ -67,6 +67,7 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [tool.ruff]
 line-length = 90
+exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
 extend-select = [
