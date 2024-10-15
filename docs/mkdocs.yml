@@ -182,6 +182,7 @@ nav:
 #      - ... | flat | icechunk-python/examples/*.py
 #    - Notebooks: 
 #      - ... | flat | icechunk-python/notebooks/*.ipynb
+  - Icechunk Rust: icechunk-rust.md
   - Sample Datasets: sample-datasets.md
   - Spec: spec.md
 
