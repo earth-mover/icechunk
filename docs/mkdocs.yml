@@ -50,7 +50,7 @@ theme:
     - navigation.footer
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.expand
+    #- navigation.expand
     - toc.follow
     - navigation.top
     - announce.dismiss
@@ -70,6 +70,8 @@ extra:
       link: https://pypi.org/project/icechunk/
     - icon: fontawesome/brands/rust
       link: https://crates.io/crates/icechunk
+    - icon: fontawesome/brands/slack
+      link: https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ
     - icon: fontawesome/brands/x-twitter
       link: https://x.com/earthmoverhq
   generator: false
@@ -93,6 +95,13 @@ extra:
           note: >- 
             Thanks for your feedback! Help us improve this page by
             using our <a href="https://share.hsforms.com/10yWXT95yS6mWXg3bc1e4PQdl5u6" target="_blank" rel="noopener">feedback form</a>.
+  consent:
+    title: Cookie consent
+    description: >- 
+      We use cookies to recognize your repeated visits and preferences, as well
+      as to measure the effectiveness of our documentation and whether users
+      find what they're searching for. With your consent, you're helping us to
+      make our documentation better.
 
 plugins:
   #- mike # TODO: https://squidfunk.github.io/mkdocs-material/setup/setting-up-versioning/

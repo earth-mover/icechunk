@@ -9,7 +9,7 @@ and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarra
     Using Xarray and Icechunk together currently requires installing Xarray from source. 
 
     ```shell
-    pip install git+https://github.com/TomAugspurger/xarray/@fix/zarr-v3
+    pip install git+https://github.com/pydata/xarray@zarr-v3
     ```
 
     We expect this functionality to be included in Xarray's next release.

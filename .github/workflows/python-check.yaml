@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - 'docs/**'
   pull_request:
+    paths:
+      - 'icechunk/**'
+      - 'icechunk-python/**'
+      - '.github/workflows/python-check.yaml'
   workflow_dispatch:
 
 concurrency:
