@@ -111,7 +111,7 @@ The refs are written so lets save our progress by committing to the store.
 
 !!! note
     
-    The commit hash will be different! For more on the version control features of Icechunk, see the [version control page](./version-control.md).
+    Your commit hash will be different! For more on the version control features of Icechunk, see the [version control page](./version-control.md).
 
 ```python
 store.commit()
