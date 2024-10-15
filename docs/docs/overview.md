@@ -12,7 +12,7 @@ This is the Icechunk documentation. It's organized into the following parts.
 - [Frequently Asked Questions](./faq.md)
 - Documentation for [Icechunk Python](./icechunk-python), the main user-facing
   library
-- Documentation for the [Icechunk Rust Crate](https://docs.rs/icechunk/latest/icechunk/)
+- Documentation for the [Icechunk Rust Crate](./icechunk-rust.md)
 - The [Icechunk Spec](./spec.md)
 
 ## Icechunk Overview
