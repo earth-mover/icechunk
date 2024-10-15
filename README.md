@@ -1,6 +1,6 @@
 # Icechunk
 
-![Icechunk logo](docs/docs/assets/logo.svg)
+![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/docs/docs/assets/logo.svg)
 
 Icechunk is a transactional storage engine for Zarr designed for use on cloud object storage.
 <!--home-start-->
