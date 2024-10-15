@@ -119,24 +119,41 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./x
 
 ## Creating and Opening Repos
 
-Now we can now create or open an Icechunk store using our config
+Now we can now create or open an Icechunk store using our config. 
 
 ### Creating a new store
 
 !!! note
 
-    Icechunk stores cannot be created in the same location where another store already exists. 
+    Icechunk stores cannot be created in the same location where another store already exists.
 
-=== "Creating with S3 Storage"
+=== "Creating with S3 storage"
 
     ```python
+    storage = icechunk.StorageConfig.s3_from_env(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        region='us-east-1',
+    )
 
+    store = icechunk.IcechunkStore.create(
+        storage=storage, 
+        mode="w", 
+    )
     ```
 
 === "Creating with local filesystem"
 
     ```python
+    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
+    config = icechunk.StoreConfig(
+        inline_chunk_threshold_bytes=1024,
+    )
 
+    store = icechunk.IcechunkStore.create(
+        storage=storage, 
+        mode="w", 
+    )
     ```
 
 ### Opening an existing store
@@ -144,11 +161,34 @@ Now we can now create or open an Icechunk store using our config
 === "Opening from S3 Storage"
 
     ```python
+    storage = icechunk.StorageConfig.s3_anonymous(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        region='us-east-1',
+    )
 
+    config = icechunk.StoreConfig(
+        virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
+    )
+
+    store = icechunk.IcechunkStore.open_existing(
+        storage=storage, 
+        mode="r+", 
+        config=config,
+    )
     ```
 
 === "Opening from local filesystem"
 
     ```python
+    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
+    config = icechunk.StoreConfig(
+        inline_chunk_threshold_bytes=1024,
+    )
 
+    store = icechunk.IcechunkStore.open_existing(
+        storage=storage,
+        mode='r+',
+        config=config,
+    )
     ```
