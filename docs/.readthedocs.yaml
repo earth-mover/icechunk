@@ -9,12 +9,15 @@ build:
     post_create_environment:
       # Install poetry
       # https://python-poetry.org/docs/#installing-manually
-      - pip install poetry
+      # - pip install poetry
+      - asdf plugin add poetry
+      - asdf install poetry latest
+      - asdf global poetry latest
+      - poetry config virtualenvs.create false
     post_install:
       # VIRTUAL_ENV needs to be set manually for now.
       # See https://github.com/readthedocs/readthedocs.org/pull/11152/
-      - VIRTUAL_ENV=$READTHEDOCS_VIRTUALENV_PATH poetry install
-      - pwd && ls
+      - . "$READTHEDOCS_VIRTUALENV_PATH/bin/activate" && cd docs && poetry install
 
 mkdocs:
-  configuration: mkdocs.yml
+  configuration: docs/mkdocs.yml
