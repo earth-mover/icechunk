@@ -429,27 +429,27 @@ mod tests {
             .await
             .unwrap();
 
-        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[22],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[22]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value": 0.0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[],"dimension_names":["depth"]}"#);
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[10],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[10]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value": 0.0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[],"dimension_names":["depth"]}"#);
         store.set("depth/zarr.json", zarr_meta.clone()).await.unwrap();
 
         let ref2 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(
-                "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241012.regulargrid.f030.nc",
+                "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.fields.f030.nc",
             )?,
-            offset: 42499,
-            length: 176,
+            offset: 119339,
+            length: 80,
         };
 
         store.set_virtual_ref("depth/c/0", ref2).await?;
 
         let chunk = store.get("depth/c/0", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 176);
+        assert_eq!(chunk.len(), 80);
 
         let second_depth = f64::from_le_bytes(chunk[8..16].try_into().unwrap());
-        assert!(second_depth - 1. < 0.000001);
+        assert!(second_depth - -0.85 < 0.000001);
 
-        let last_depth = f64::from_le_bytes(chunk[(176 - 8)..].try_into().unwrap());
-        assert!(last_depth - 125. < 0.000001);
+        let last_depth = f64::from_le_bytes(chunk[(80 - 8)..].try_into().unwrap());
+        assert!(last_depth - -0.05 < 0.000001);
 
         Ok(())
     }
