@@ -7,7 +7,7 @@
 <a href="https://github.com/earth-mover/icechunk" target="_blank"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/earth-mover/icechunk?style=for-the-badge&logo=github"></a>
 <a href="https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ" target="_blank"><img alt="Earthmover Community Slack" src="https://img.shields.io/badge/Slack-4A154B?style=for-the-badge&logo=slack&logoColor=white" /></a>
 
-# Icechunk
+---
 
 Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
 Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features 
