@@ -95,7 +95,7 @@ Chunks can be written inline alongside the store metadataif the size of a given 
 
 ### Virtual Reference Storage Config
 
-Icechunk allows for reading "Virtual" data from [existing archival datasets](./xarray.md). This requires configuring a specific `StorageConfig` like option so that Icechunk has the necesary permissions to read from the location of the data. This can be configured using the `virtual_ref_config` option:
+Icechunk allows for reading "Virtual" data from [existing archival datasets](./virtual.md). This requires creating a distinct `VirtualRefConfig` (similar to `StorageConfig`) giving Icechunk the necessary permissions to access the archival data. This can be configured using the `virtual_ref_config` option:
 
 === "S3 from environment"
 
