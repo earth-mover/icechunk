@@ -82,7 +82,7 @@ We have a virtual dataset with 31 timestamps! Let's create an Icechunk store to 
 
 !!! note
 
-    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the netCDF data on s3. For more configuration options, see the [configuration page](./configuration.md).
+    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
 
 ```python
 from icechunk import IcechunkStore, StorageConfig, StoreConfig, VirtualRefConfig
