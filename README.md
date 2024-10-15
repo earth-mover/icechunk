@@ -96,7 +96,7 @@ Readers can only see and use committed snapshots.
 
 ### Branches and Tags
 
-Additionally, snapshots occur in a specific linear (i.e. serializable) order within  **branch**.
+Additionally, snapshots occur in a specific linear (i.e. serializable) order within a **branch**.
 A branch is a mutable reference to a snapshot--a pointer that maps the branch name to a snapshot ID.
 The default branch is `main`.
 Every commit to the main branch updates this reference.
@@ -109,7 +109,7 @@ Tags are appropriate for publishing specific releases of a repository or for any
 
 Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
 Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
-You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underling files.
+You can then update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underling files.
 
 ## How Does It Work?
 
