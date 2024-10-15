@@ -125,7 +125,8 @@ Now we can read the dataset from the store using xarray to confirm everything we
 ds = xr.open_zarr(
     store, 
     zarr_version=3, 
-    consolidated=False, chunks={}
+    consolidated=False, 
+    chunks={},
 )
 
 #<xarray.Dataset> Size: 1GB
