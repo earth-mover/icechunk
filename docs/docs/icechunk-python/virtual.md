@@ -7,7 +7,7 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
     While virtual references are fully supported in Icechunk, creating virtual datasets currently relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and ther current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
     With time, these experimental features will make their way into the released packages.
 
-To create virtual Icechunk datasets with python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. 
+To create virtual Icechunk datasets with Python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. 
 
 `kerchunk` allows scanning the metadata of existing data files to extract virtual references. It also provides methods to combine these references into [larger virtual datasets](https://fsspec.github.io/kerchunk/tutorial.html#combine-multiple-kerchunked-datasets-into-a-single-logical-aggregate-dataset), which can be exported to it's [reference format](https://fsspec.github.io/kerchunk/spec.html). 
 
