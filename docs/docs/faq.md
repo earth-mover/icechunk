@@ -238,7 +238,7 @@ The following table compares Zarr + Icechunk with TileDB Embedded in a few key a
 | *versioning* | snapshots, branches, tags | linear version history | Icechunk's data versioning model is closer to Git's. |
 | *unit of storage* | chunk | tile | (basically the same thing) |
 | *minimum write* | chunk | cell | TileDB allows atomic updates to individual cells, while Zarr requires writing an entire chunk. |
-| *sparse arrays* | :material-close: | :material-check: | Zar + Icechunk do not currently support sparse arrays. |
+| *sparse arrays* | :material-close: | :material-check: | Zarr + Icechunk do not currently support sparse arrays. |
 | *virtual chunk references* |  :material-check: |  :material-close: | Icechunk enables references to chunks in other file formats (HDF5, NetCDF, GRIB, etc.), while TileDB does not. |
 
 Beyond this list, there are numerous differences in the design, file layout, and implementation of Icechunk and TileDB embedded
