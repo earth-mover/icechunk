@@ -176,12 +176,12 @@ nav:
     - icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md
-    - Developing: icechunk-python/developing.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
 #    - Notebooks: 
 #      - ... | flat | icechunk-python/notebooks/*.ipynb
   - Icechunk Rust: icechunk-rust.md
+  - contributing.md
   - Sample Datasets: sample-datasets.md
   - Spec: spec.md
 
