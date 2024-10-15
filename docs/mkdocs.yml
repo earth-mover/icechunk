@@ -177,11 +177,11 @@ nav:
     - Virtual Datasets: icechunk-python/virtual.md
     - icechunk-python/concurrency.md
     - API Reference: icechunk-python/reference.md
-    - Developing: icechunk-python/developing.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
 #    - Notebooks: 
 #      - ... | flat | icechunk-python/notebooks/*.ipynb
+  - contributing.md
   - Sample Datasets: sample-datasets.md
   - Spec: spec.md
 
