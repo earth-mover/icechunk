@@ -255,7 +255,7 @@ Chunk references from multiple arrays can be stored in the same chunk manifest.
 The chunks from a single array can also be spread across multiple manifests.
 
 Manifest files are currently encoded using [MessagePack](https://msgpack.org/), but this may change before Icechunk version 1.0. Given the alpha status of this spec, the best way to understand the information stored
-in the snapshot file, is through the datastructures the Icechunk library is using to serialize it. This datastructure will most certainly change before the spec stabilization:
+in the snapshot file is through the data structure used internally by the Icechunk library. This data structure will most certainly change before the spec stabilization:
 
 ```rust
 pub struct Manifest {
