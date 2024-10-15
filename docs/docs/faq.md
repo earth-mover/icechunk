@@ -338,7 +338,9 @@ Kerchunk and Icechunk are highly complimentary.
 
 > VirtualiZarr creates virtual Zarr stores for cloud-friendly access to archival data, using familiar Xarray syntax.
 
-VirtualiZarr uses Kerchunk to generate virtual references, but then provides a simple Xarray-based interface for manipulating those references. As VirtualiZarr can also write virtual references into an Icechunk Store directly, together they form a complete pipeline for generating and storing references to multiple pre-existing files.
+VirtualiZarr provides another way of generating and manipulating Kerchunk-style references.
+VirtualiZarr first uses Kerchunk to generate virtual references, but then provides a simple Xarray-based interface for manipulating those references. 
+As VirtualiZarr can also write virtual references into an Icechunk Store directly, together they form a complete pipeline for generating and storing references to multiple pre-existing files.
 
 #### [LakeFS](https://lakefs.io/)
 
