@@ -208,6 +208,8 @@ h3.hero-subtitle {
 
 #cube-logo {
   width: 30vh;
+  max-width: 600px;
+  height: auto;
   margin-top: 5%;
 }
 
