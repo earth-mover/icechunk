@@ -310,7 +310,7 @@ mod tests {
 
     /// Execute the passed block with all test implementations of Storage.
     ///
-    /// Currently this function executes agains the in-memory and local filesystem object_store
+    /// Currently this function executes against the in-memory and local filesystem object_store
     /// implementations.
     async fn with_test_storages<
         R,

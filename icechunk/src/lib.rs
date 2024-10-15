@@ -7,7 +7,7 @@
 //! - There is a low level interface that speaks zarr keys and values, and is used to provide the
 //!   zarr store that will be used from python. This is the [`zarr::Store`] type.
 //! - There is a translation language between low and high levels. When user writes to a zarr key,
-//!   we need to convert that key to the language of arrays and groups. This is implmented it the
+//!   we need to convert that key to the language of arrays and groups. This is implemented it the
 //!   [`zarr`] module
 //! - There is an abstract type for loading and saving of the Arrow datastructures.
 //!   This is the [`Storage`] trait. It knows how to fetch and write arrow.

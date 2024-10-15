@@ -307,7 +307,7 @@ If another client attempts to initialize a repository in the same location, only
 
 If the specific snapshot ID is known, a client can open it directly in read only mode.
 
-1. Use the specified shapshot ID to fetch the snapshot file.
+1. Use the specified snapshot ID to fetch the snapshot file.
 1. Fetch desired attributes and values from arrays.
 
 #### From Branch
@@ -316,13 +316,13 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 
 1. List the object store prefix `refs/branch.$BRANCH_NAME/` to obtain the latest branch file in the sequence. Due to the encoding of the sequence number, this should be the _first file_ in lexicographical order.
 1. Read the branch file JSON contents to obtain the snapshot ID.
-1. Use the shapshot ID to fetch the snapshot file.
+1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch desired attributes and values from arrays.
 
 #### From Tag
 
 1. Read the tag file found at `refs/tag.$TAG_NAME/ref.json` to obtain the snapshot ID.
-1. Use the shapshot ID to fetch the snapshot file.
+1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch desired attributes and values from arrays.
 
 ### Write New Snapshot

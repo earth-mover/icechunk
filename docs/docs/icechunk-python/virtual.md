@@ -4,7 +4,7 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 !!! warning
 
-    While virtual references are fully supported in Icechunk, creating virtual datasets currently relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and ther current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
+    While virtual references are fully supported in Icechunk, creating virtual datasets currently relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and their current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
     With time, these experimental features will make their way into the released packages.
 
 To create virtual Icechunk datasets with Python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. 
@@ -83,7 +83,7 @@ virtual_ds = xr.concat(
 #    err      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 ```
 
-We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the represenation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk store to write this dataset to. 
+We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk store to write this dataset to. 
 
 !!! note
 

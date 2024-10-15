@@ -63,10 +63,10 @@ Arrays have two fundamental properties:
 In Zarr / Icechunk, arrays are split into **chunks**, 
 A chunk is the minimum unit of data that must be read / written from storage, and thus choices about chunking have strong implications for performance.
 Zarr leaves this completely up to the user.
-Chunk shape should be chosen based on the anticipated data access patten for each array
+Chunk shape should be chosen based on the anticipated data access pattern for each array
 An Icechunk array is not bounded by an individual file and is effectively unlimited in size.
 
-For further organization of data, Icechunk supports **groups** withing a single repo.
+For further organization of data, Icechunk supports **groups** within a single repo.
 Group are like folders which contain multiple arrays and or other groups.
 Groups enable data to be organized into hierarchical trees.
 A common usage pattern is to store multiple arrays in a group representing a NetCDF-style dataset.
@@ -77,7 +77,7 @@ Arbitrary JSON-style key-value metadata can be attached to both arrays and group
 
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.
 Icechunk users must organize their updates into groups of related operations called **transactions**.
-For example, appending a new time slice to mutliple arrays should be done as a single transaction, comprising the following steps
+For example, appending a new time slice to multiple arrays should be done as a single transaction, comprising the following steps
 1. Update the array metadata to resize the array to accommodate the new elements.
 2. Write new chunks for each array in the group.
 

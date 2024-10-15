@@ -55,7 +55,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     assert z.shape == (100,)
 
     # open array, overwrite
-    # _store_dict wont currently work with IcechunkStore
+    # _store_dict won't currently work with IcechunkStore
     # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
     store._store_dict = {}
@@ -66,7 +66,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     # open array, read-only
     store_cls = type(store)
 
-    # _store_dict wont currently work with IcechunkStore
+    # _store_dict won't currently work with IcechunkStore
     # TODO: Should it?
 
     ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
@@ -96,7 +96,7 @@ async def test_open_group(memory_store: IcechunkStore) -> None:
 
     # open group, read-only
     store_cls = type(store)
-    # _store_dict wont currently work with IcechunkStore
+    # _store_dict won't currently work with IcechunkStore
     # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
     ro_store = store_cls.open(store_dict=store._store_dict, mode="r")

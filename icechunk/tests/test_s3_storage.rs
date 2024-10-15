@@ -75,7 +75,7 @@ pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(Bytes::from_static(b"ello"), back);
 
     let back = storage.fetch_chunk(&id, &ByteRange::to_offset(3)).await?;
-    assert_eq!(Bytes::from_static(b"hel"), back);
+    assert_eq!(Bytes::from_static(b"hel"), back); // codespell:ignore
 
     let back = storage.fetch_chunk(&id, &ByteRange::bounded(1, 4)).await?;
     assert_eq!(Bytes::from_static(b"ell"), back);

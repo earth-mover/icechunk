@@ -58,7 +58,7 @@ pub struct RepositoryConfig {
     pub inline_chunk_threshold_bytes: u16,
     // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
     // own risk in object stores for which we don't support write-object-if-not-exists. There is
-    // teh posibility of race conditions if this variable is set to true and there are concurrent
+    // the possibility of race conditions if this variable is set to true and there are concurrent
     // commit attempts.
     pub unsafe_overwrite_refs: bool,
 }
@@ -1399,7 +1399,7 @@ mod tests {
         let non_chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
         assert_eq!(non_chunk, None);
 
-        // update old array use attriutes and check them
+        // update old array use attributes and check them
         ds.set_user_attributes(
             array1_path.clone(),
             Some(UserAttributes::try_new(br#"{"updated": true}"#).unwrap()),

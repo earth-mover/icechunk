@@ -72,7 +72,7 @@ pub struct ObjectStorage {
 }
 
 impl ObjectStorage {
-    /// Create an in memory Storage implementantion
+    /// Create an in memory Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
@@ -88,7 +88,7 @@ impl ObjectStorage {
         }
     }
 
-    /// Create an local filesystem Storage implementantion
+    /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, std::io::Error> {

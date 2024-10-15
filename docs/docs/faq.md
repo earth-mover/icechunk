@@ -163,7 +163,7 @@ HDF is widely used in high-performance computing.
     ---
     
     Icechunk and HDF5 share the same data model: multidimensional arrays and metadata organized into a hierarchical tree structure.
-    This data model can accomodate a wide range of different use cases and workflows.
+    This data model can accommodate a wide range of different use cases and workflows.
 
     Both Icechunk and HDF5 use the concept of "chunking" to split large arrays into smaller storage units.
 
@@ -238,7 +238,7 @@ The following table compares Zarr + Icechunk with TileDB Embedded in a few key a
 | *versioning* | snapshots, branches, tags | linear version history | Icechunk's data versioning model is closer to Git's. |
 | *unit of storage* | chunk | tile | (basically the same thing) |
 | *minimum write* | chunk | cell | TileDB allows atomic updates to individual cells, while Zarr requires writing an entire chunk. |
-| *sparse arrays* | :material-close: | :material-check: | Zar + Icechunk do not currently support sparse arrays. |
+| *sparse arrays* | :material-close: | :material-check: | Zarr + Icechunk do not currently support sparse arrays. |
 | *virtual chunk references* |  :material-check: |  :material-close: | Icechunk enables references to chunks in other file formats (HDF5, NetCDF, GRIB, etc.), while TileDB does not. |
 
 Beyond this list, there are numerous differences in the design, file layout, and implementation of Icechunk and TileDB embedded
@@ -251,7 +251,7 @@ SafeTensors is a format developed by HuggingFace for storing tensors (arrays) sa
 By the same criteria Icechunk and Zarr are also "safe", in that it is impossible to trigger arbitrary code execution when reading data.
 
 SafeTensors is a single-file format, like HDF5,
-SafeTensors optimizes for a simple on-disk layout that facilitates mem-map-based zero-copy reading in ML training pipleines,
+SafeTensors optimizes for a simple on-disk layout that facilitates mem-map-based zero-copy reading in ML training pipelines,
 assuming that the data are being read from a local POSIX filesystem
 Zarr and Icechunk instead allow for flexible chunking and compression to optimize I/O against object storage.
 
