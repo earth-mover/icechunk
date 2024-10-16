@@ -253,6 +253,8 @@ class KeyNotFound(Exception):
     ): ...
 
 class StoreConfig:
+    """Configuration for an IcechunkStore"""
+
     # The number of concurrent requests to make when fetching partial values
     get_partial_values_concurrency: int | None
     # The threshold at which to inline chunks in the store in bytes. When set,
@@ -270,7 +272,28 @@ class StoreConfig:
         inline_chunk_threshold_bytes: int | None = None,
         unsafe_overwrite_refs: bool | None = None,
         virtual_ref_config: VirtualRefConfig | None = None,
-    ): ...
+    ): 
+        """Create a StoreConfig object with the given configuration options
+
+        Parameters
+        ----------
+        get_partial_values_concurrency: int | None
+            The number of concurrent requests to make when fetching partial values
+        inline_chunk_threshold_bytes: int | None
+            The threshold at which to inline chunks in the store in bytes. When set,
+            chunks smaller than this threshold will be inlined in the store. Default is
+            512 bytes when not specified.
+        unsafe_overwrite_refs: bool | None
+            Whether to allow overwriting refs in the store. Default is False. Experimental.
+        virtual_ref_config: VirtualRefConfig | None
+            Configurations for virtual references such as credentials and endpoints
+        
+        Returns
+        -------
+        StoreConfig
+            A StoreConfig object with the given configuration options
+        """    
+        ...
 
 async def async_pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
 def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...

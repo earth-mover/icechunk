@@ -1,8 +1,9 @@
 # Configuration
 
 When creating and opening Icechunk stores, there are a two different sets of configuration to be aware of:
-- `StorageConfig` - for configuring access to the object store or filesystem
-- `StoreConfig` - for configuring the behavior of the Icechunk Store itself
+
+- [`StorageConfig`](./reference.md#icechunk.StorageConfig) - for configuring access to the object store or filesystem
+- [`StoreConfig`](./reference.md#icechunk.StoreConfig) - for configuring the behavior of the Icechunk Store itself
 
 ## Storage Config
 
@@ -15,7 +16,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "From environment"
 
     With this option, the credentials for connecting to S3 are detected automatically from your environment.
-    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2).
+    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.StorageConfig.s3_from_env)
     
     ```python
     icechunk.StorageConfig.s3_from_env(
@@ -26,7 +27,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Provide credentials"
 
-    With this option, you provide your credentials and other details explicitly.
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.StorageConfig.s3_from_config)
     
     ```python
     icechunk.StorageConfig.s3_from_config(
@@ -47,7 +48,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "Anonymous"
 
     With this option, you connect to S3 anonymously (without credentials).
-    This is suitable for public data.
+    This is suitable for public data. [See the API](./reference.md#icechunk.StorageConfig.s3_anonymous)
     
     ```python
     icechunk.StorageConfig.s3_anonymous(
@@ -59,7 +60,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 ### Filesystem Storage
 
-Icechunk can also be used on a local filesystem by providing a path to the location of the store
+Icechunk can also be used on a [local filesystem](./reference.md#icechunk.StorageConfig.filesystem) by providing a path to the location of the store
 
 === "Local filesystem"
 

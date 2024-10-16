@@ -157,3 +157,46 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 ```
 
 ![oisst](../assets/datasets/oisst.png)
+
+## Virtual Reference API
+
+While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk. 
+
+### Virtual Reference Storage Support
+
+Currently, Icechunk supports two types of storage for virtual references:
+
+#### S3 Compatible
+
+References to files accessible via S3 compatible storage.
+
+##### Example
+
+Here is how we can set the chunk at key `c/0` to point to a file on an s3 bucket,`mybucket`, with the prefix `my/data/file.nc`:
+
+```python
+store.set_virtual_ref('c/0', 's3://mybucket/my/data/file.nc', offset=1000, length=200)
+```
+
+##### Configuration
+
+S3 virtual references require configuring credential for the store to be able to access the specified s3 bucket. See [the configuration docs](./configuration.md#virtual-reference-storage-config) for instructions.
+
+
+#### Local Filesystem
+
+References to files accessible via local filesystem. This requires any file paths to be **absolute** at this time.
+
+##### Example
+
+Here is how we can set the chunk at key `c/0` to point to a file on my local filesystem located at `/path/to/my/file.nc`:
+
+```python
+store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
+```
+
+No extra configuration is necessary for local filesystem references.
+
+### Virtual Reference File Format Support
+
+Currently, Icechunk supports `HDF5` and `netcdf4` files for use in virtual references. See the [tracking issue](https://github.com/earth-mover/icechunk/issues/197) for more info.
