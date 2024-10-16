@@ -1,4 +1,4 @@
-use std::{ops::Bound, path::PathBuf, sync::Arc};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -207,31 +207,12 @@ impl S3Storage {
 
 pub fn range_to_header(range: &ByteRange) -> Option<String> {
     match range {
-        ByteRange(Bound::Unbounded, Bound::Unbounded) => None,
-        ByteRange(Bound::Included(start), Bound::Excluded(end)) => {
+        ByteRange::Bounded(Range { start, end }) => {
             Some(format!("bytes={}-{}", start, end - 1))
         }
-        ByteRange(Bound::Included(start), Bound::Unbounded) => {
-            Some(format!("bytes={}-", start))
-        }
-        ByteRange(Bound::Included(start), Bound::Included(end)) => {
-            Some(format!("bytes={}-{}", start, end))
-        }
-        ByteRange(Bound::Excluded(start), Bound::Excluded(end)) => {
-            Some(format!("bytes={}-{}", start + 1, end - 1))
-        }
-        ByteRange(Bound::Excluded(start), Bound::Unbounded) => {
-            Some(format!("bytes={}-", start + 1))
-        }
-        ByteRange(Bound::Excluded(start), Bound::Included(end)) => {
-            Some(format!("bytes={}-{}", start + 1, end))
-        }
-        ByteRange(Bound::Unbounded, Bound::Excluded(end)) => {
-            Some(format!("bytes=0-{}", end - 1))
-        }
-        ByteRange(Bound::Unbounded, Bound::Included(end)) => {
-            Some(format!("bytes=0-{}", end))
-        }
+        ByteRange::From(offset) if *offset == 0 => None,
+        ByteRange::From(offset) => Some(format!("bytes={}-", offset)),
+        ByteRange::Last(n) => Some(format!("bytes={}-", n)),
     }
 }
 
