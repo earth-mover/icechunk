@@ -31,18 +31,18 @@ from icechunk import IcechunkStore, StorageConfig
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.s3_from_env(
+    storage_config = StorageConfig.s3_from_env(
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    store = icechunk.IcechunkStore.create(storage_config)
+    store = IcechunkStore.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.filesystem("./icechunk-xarray")
-    store = icechunk.IcechunkStore.create(storage_config)
+    storage_config = StorageConfig.filesystem("./icechunk-xarray")
+    store = IcechunkStore.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray
