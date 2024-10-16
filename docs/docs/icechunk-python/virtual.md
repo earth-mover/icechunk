@@ -158,7 +158,9 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 ![oisst](../assets/datasets/oisst.png)
 
-## Virtual Reference API 
+## Virtual Reference API
+
+While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk. 
 
 ### Virtual Reference Storage Support
 
