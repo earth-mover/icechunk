@@ -245,6 +245,12 @@ pub enum AccessMode {
     ReadWrite,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ListDirItem {
+    Key(String),
+    Prefix(String),
+}
+
 pub type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -747,6 +753,22 @@ impl Store {
         // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
         // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
         // evolution
+        let res = self.list_dir_items(prefix).await?.map_ok(|item| match item {
+            ListDirItem::Key(k) => k,
+            ListDirItem::Prefix(p) => p,
+        });
+        Ok(res)
+    }
+
+    pub async fn list_dir_items(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
+        // TODO: this is inefficient because it filters based on the prefix, instead of only
+        // generating items that could potentially match
+        // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
+        // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
+        // evolution
 
         let idx: usize = if prefix == "/" { 0 } else { prefix.len() };
 
@@ -757,8 +779,10 @@ impl Store {
                 // If the prefix is "/", get rid of it. This can happen when prefix is missing
                 // the trailing slash (as it does in zarr-python impl)
                 let rem = &s[idx..].trim_start_matches('/');
-                let parent = rem.split_once('/').map_or(*rem, |(parent, _)| parent);
-                parent.to_string()
+                match rem.split_once('/') {
+                    Some((prefix, _)) => ListDirItem::Prefix(prefix.to_string()),
+                    None => ListDirItem::Key(rem.to_string()),
+                }
             })
             .try_collect()
             .await?;
@@ -2066,21 +2090,69 @@ mod tests {
         dir.sort();
         assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
 
+        let mut dir = store.list_dir_items("/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("array".to_string())
+            ]
+        );
+
         let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("c".to_string())
+            ]
+        );
 
         let mut dir = store.list_dir("array/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
 
+        let mut dir =
+            store.list_dir_items("array/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("c".to_string())
+            ]
+        );
+
         let mut dir = store.list_dir("array/c/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["0".to_string(), "1".to_string()]);
 
+        let mut dir =
+            store.list_dir_items("array/c/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Prefix("0".to_string()),
+                ListDirItem::Prefix("1".to_string()),
+            ]
+        );
+
         let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["1".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array/c/1/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![ListDirItem::Prefix("1".to_string()),]);
         Ok(())
     }
 
