@@ -31,18 +31,18 @@ from icechunk import IcechunkStore, StorageConfig
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.s3_from_env(
+    storage_config = StorageConfig.s3_from_env(
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    store = icechunk.IcechunkStore.create(storage_config)
+    store = IcechunkStore.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.filesystem("./icechunk-xarray")
-    store = icechunk.IcechunkStore.create(storage_config)
+    storage_config = StorageConfig.filesystem("./icechunk-xarray")
+    store = IcechunkStore.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray
@@ -50,6 +50,15 @@ from icechunk import IcechunkStore, StorageConfig
 For this demo, we'll open Xarray's RASM tutorial dataset and split it into two blocks.
 We'll write the two blocks to Icechunk in separate transactions later in the this example.
 
+
+!!! note
+
+    Downloading xarray tutorial data requires pooch and netCDF4. These can be installed with
+    
+    ```shell
+    pip install pooch netCDF4
+    ```
+    
 ```python
 ds = xr.tutorial.open_dataset('rasm')
 
