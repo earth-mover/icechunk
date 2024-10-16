@@ -15,7 +15,7 @@ use object_store::{
     PutPayload,
 };
 use std::{
-    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+    fs::create_dir_all, future::ready, ops::Range, path::Path as StdPath, sync::Arc,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -23,32 +23,13 @@ use super::{Storage, StorageError, StorageResult};
 // Get Range is object_store specific, keep it with this module
 impl From<&ByteRange> for Option<GetRange> {
     fn from(value: &ByteRange) -> Self {
-        match (value.0, value.1) {
-            (Bound::Included(start), Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(start as usize..end as usize))
+        match value {
+            ByteRange::Bounded(Range { start, end }) => {
+                Some(GetRange::Bounded(*start as usize..*end as usize))
             }
-            (Bound::Included(start), Bound::Unbounded) => {
-                Some(GetRange::Offset(start as usize))
-            }
-            (Bound::Included(start), Bound::Included(end)) => {
-                Some(GetRange::Bounded(start as usize..end as usize + 1))
-            }
-            (Bound::Excluded(start), Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(start as usize + 1..end as usize))
-            }
-            (Bound::Excluded(start), Bound::Unbounded) => {
-                Some(GetRange::Offset(start as usize + 1))
-            }
-            (Bound::Excluded(start), Bound::Included(end)) => {
-                Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
-            }
-            (Bound::Unbounded, Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(0..end as usize))
-            }
-            (Bound::Unbounded, Bound::Included(end)) => {
-                Some(GetRange::Bounded(0..end as usize + 1))
-            }
-            (Bound::Unbounded, Bound::Unbounded) => None,
+            ByteRange::From(start) if *start == 0u64 => None,
+            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
+            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
         }
     }
 }

@@ -7,9 +7,8 @@ use bytes::Bytes;
 use object_store::local::LocalFileSystem;
 use object_store::{path::Path as ObjectPath, GetOptions, GetRange, ObjectStore};
 use serde::{Deserialize, Serialize};
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::fmt::Debug;
-use std::ops::Bound;
 use tokio::sync::OnceCell;
 use url::{self, Url};
 
@@ -115,25 +114,23 @@ pub fn construct_valid_byte_range(
 ) -> ByteRange {
     // TODO: error for offset<0
     // TODO: error if request.start > offset + length
-    // FIXME: we allow creating a ByteRange(start, end) where end < start
-    let new_offset = match request.0 {
-        Bound::Unbounded => chunk_offset,
-        Bound::Included(start) => max(start, 0) + chunk_offset,
-        Bound::Excluded(start) => max(start, 0) + chunk_offset + 1,
-    };
-    request.length().map_or(
-        ByteRange(
-            Bound::Included(new_offset),
-            Bound::Excluded(chunk_offset + chunk_length),
-        ),
-        |reqlen| {
-            ByteRange(
-                Bound::Included(new_offset),
-                // no request can go past offset + length, so clamp it
-                Bound::Excluded(min(new_offset + reqlen, chunk_offset + chunk_length)),
-            )
-        },
-    )
+    match request {
+        ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
+            let new_start =
+                min(chunk_offset + req_start, chunk_offset + chunk_length - 1);
+            let new_end = min(chunk_offset + req_end, chunk_offset + chunk_length);
+            ByteRange::Bounded(new_start..new_end)
+        }
+        ByteRange::From(n) => {
+            let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
+            ByteRange::Bounded(new_start..chunk_offset + chunk_length)
+        }
+        ByteRange::Last(n) => {
+            let new_end = chunk_offset + chunk_length;
+            let new_start = new_end - n;
+            ByteRange::Bounded(new_start..new_end)
+        }
+    }
 }
 
 impl private::Sealed for ObjectStoreVirtualChunkResolver {}
@@ -196,43 +193,28 @@ mod tests {
         //             output.length() == requested.length()
         //             output.0 >= chunk_ref.offset
         prop_assert_eq!(
-            construct_valid_byte_range(
-                &ByteRange(Bound::Included(0), Bound::Excluded(length)),
-                offset,
-                length,
-            ),
-            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+            construct_valid_byte_range(&ByteRange::Bounded(0..length), offset, length,),
+            ByteRange::Bounded(offset..max_end)
         );
         prop_assert_eq!(
             construct_valid_byte_range(
-                &ByteRange(Bound::Unbounded, Bound::Excluded(length)),
+                &ByteRange::Bounded(request_offset..max_end),
                 offset,
                 length
             ),
-            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
-        );
-        prop_assert_eq!(
-            construct_valid_byte_range(
-                &ByteRange(Bound::Included(request_offset), Bound::Excluded(max_end)),
-                offset,
-                length
-            ),
-            ByteRange(Bound::Included(request_offset + offset), Bound::Excluded(max_end))
+            ByteRange::Bounded(request_offset + offset..max_end)
         );
         prop_assert_eq!(
             construct_valid_byte_range(&ByteRange::ALL, offset, length),
-            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+            ByteRange::Bounded(offset..offset + length)
         );
         prop_assert_eq!(
-            construct_valid_byte_range(
-                &ByteRange(Bound::Excluded(request_offset), Bound::Unbounded),
-                offset,
-                length
-            ),
-            ByteRange(
-                Bound::Included(offset + request_offset + 1),
-                Bound::Excluded(max_end)
-            )
+            construct_valid_byte_range(&ByteRange::From(request_offset), offset, length),
+            ByteRange::Bounded(offset + request_offset..offset + length)
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(request_offset), offset, length),
+            ByteRange::Bounded(offset + length - request_offset..offset + length)
         );
     }
 }

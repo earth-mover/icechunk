@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    ops::Bound,
+    ops::Range,
 };
 
 use bytes::Bytes;
@@ -138,60 +138,47 @@ pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ByteRange(pub Bound<ChunkOffset>, pub Bound<ChunkOffset>);
+pub enum ByteRange {
+    /// The fixed length range represented by the given `Range`
+    Bounded(Range<ChunkOffset>),
+    /// All bytes from the given offset (included) to the end of the object
+    From(ChunkOffset),
+    /// Last n bytes in the object
+    Last(ChunkLength),
+}
+
+impl From<Range<ChunkOffset>> for ByteRange {
+    fn from(value: Range<ChunkOffset>) -> Self {
+        ByteRange::Bounded(value)
+    }
+}
 
 impl ByteRange {
     pub fn from_offset(offset: ChunkOffset) -> Self {
-        Self(Bound::Included(offset), Bound::Unbounded)
+        Self::From(offset)
     }
 
     pub fn from_offset_with_length(offset: ChunkOffset, length: ChunkOffset) -> Self {
-        Self(Bound::Included(offset), Bound::Excluded(offset + length))
+        Self::Bounded(offset..offset + length)
     }
 
     pub fn to_offset(offset: ChunkOffset) -> Self {
-        Self(Bound::Unbounded, Bound::Excluded(offset))
+        Self::Bounded(0..offset)
     }
 
     pub fn bounded(start: ChunkOffset, end: ChunkOffset) -> Self {
-        Self(Bound::Included(start), Bound::Excluded(end))
+        (start..end).into()
     }
 
-    pub fn length(&self) -> Option<u64> {
-        match (self.0, self.1) {
-            (_, Bound::Unbounded) => None,
-            (Bound::Unbounded, Bound::Excluded(end)) => Some(end),
-            (Bound::Unbounded, Bound::Included(end)) => Some(end + 1),
-            (Bound::Included(start), Bound::Excluded(end)) => Some(end - start),
-            (Bound::Excluded(start), Bound::Included(end)) => Some(end - start),
-            (Bound::Included(start), Bound::Included(end)) => Some(end - start + 1),
-            (Bound::Excluded(start), Bound::Excluded(end)) => Some(end - start - 1),
-        }
-    }
-
-    pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
+    pub const ALL: Self = Self::From(0);
 
     pub fn slice(&self, bytes: Bytes) -> Bytes {
-        match (self.0, self.1) {
-            (Bound::Included(start), Bound::Excluded(end)) => {
-                bytes.slice(start as usize..end as usize)
+        match self {
+            ByteRange::Bounded(range) => {
+                bytes.slice(range.start as usize..range.end as usize)
             }
-            (Bound::Included(start), Bound::Unbounded) => bytes.slice(start as usize..),
-            (Bound::Unbounded, Bound::Excluded(end)) => bytes.slice(..end as usize),
-            (Bound::Excluded(start), Bound::Excluded(end)) => {
-                bytes.slice(start as usize + 1..end as usize)
-            }
-            (Bound::Excluded(start), Bound::Unbounded) => {
-                bytes.slice(start as usize + 1..)
-            }
-            (Bound::Unbounded, Bound::Included(end)) => bytes.slice(..=end as usize),
-            (Bound::Included(start), Bound::Included(end)) => {
-                bytes.slice(start as usize..=end as usize)
-            }
-            (Bound::Excluded(start), Bound::Included(end)) => {
-                bytes.slice(start as usize + 1..=end as usize)
-            }
-            (Bound::Unbounded, Bound::Unbounded) => bytes,
+            ByteRange::From(from) => bytes.slice(*from as usize..),
+            ByteRange::Last(n) => bytes.slice(bytes.len() - *n as usize..bytes.len()),
         }
     }
 }
@@ -199,12 +186,10 @@ impl ByteRange {
 impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
     fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
         match (start, end) {
-            (Some(start), Some(end)) => {
-                Self(Bound::Included(start), Bound::Excluded(end))
-            }
-            (Some(start), None) => Self(Bound::Included(start), Bound::Unbounded),
-            (None, Some(end)) => Self(Bound::Unbounded, Bound::Excluded(end)),
-            (None, None) => Self(Bound::Unbounded, Bound::Unbounded),
+            (Some(start), Some(end)) => Self::Bounded(start..end),
+            (Some(start), None) => Self::From(start),
+            (None, Some(end)) => Self::Bounded(0..end),
+            (None, None) => Self::ALL,
         }
     }
 }
