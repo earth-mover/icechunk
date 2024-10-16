@@ -102,15 +102,15 @@ To read data stored in Icechunk with Xarray, we'll use `xarray.open_zarr`:
 
 ```python
 xr.open_zarr(store, consolidated=False)
-# output: <xarray.Dataset> Size: 9MB
-# Dimensions:  (y: 205, x: 275, time: 18)
+# output: <xarray.Dataset> Size: 17MB
+# Dimensions:  (time: 36, y: 205, x: 275)
 # Coordinates:
+#   * time     (time) object 288B 1980-09-16 12:00:00 ... 1983-08-17 00:00:00
 #     xc       (y, x) float64 451kB dask.array<chunksize=(103, 275), meta=np.ndarray>
 #     yc       (y, x) float64 451kB dask.array<chunksize=(103, 275), meta=np.ndarray>
-#   * time     (time) object 144B 1980-09-16 12:00:00 ... 1982-02-15 12:00:00
 # Dimensions without coordinates: y, x
 # Data variables:
-#     Tair     (time, y, x) float64 8MB dask.array<chunksize=(5, 103, 138), meta=np.ndarray>
+#     Tair     (time, y, x) float64 16MB dask.array<chunksize=(5, 103, 138), meta=np.ndarray>
 # Attributes:
 #     NCO:                       netCDF Operators version 4.7.9 (Homepage = htt...
 #     comment:                   Output from the Variable Infiltration Capacity...
