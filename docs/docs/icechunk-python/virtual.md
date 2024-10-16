@@ -13,6 +13,17 @@ To create virtual Icechunk datasets with Python, the community utilizes the [ker
 
 `VirtualiZarr` lets users ingest existing data files into virtual datasets using various different tools under the hood, including `kerchunk`, `xarray`, `zarr`, and now `icechunk`. It does so by creating virtual references to existing data that can be combined and manipulated to create larger virtual datasets using `xarray`. These datasets can then be exported to `kerchunk` reference format or to an `Icechunk` store, without ever copying or moving the existing data files.
 
+## Virtual Reference Storage Support
+
+Currently, Icechunk supports two types of storage for virtual references:
+
+- S3 Compatible - References to files accessible via S3 compatible storage. For more information on configuring credentials for virtual references on s3 see [the configuration docs](./configuration.md#virtual-reference-storage-config).
+- Filesystem - References to files accessible via local filesystem. This requires any file paths to be **absolute** at this time.
+
+## Virtual Reference File Format Support
+
+Currently, Icechunk supports `HDF5` and `netcdf4` files for use in virtual references. See the [tracking issue](https://github.com/earth-mover/icechunk/issues/197) for more info.
+
 ## Creating a virtual dataset with VirtualiZarr
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
