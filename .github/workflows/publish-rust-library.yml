@@ -55,6 +55,9 @@ jobs:
         run: |
           just pre-commit
 
+      - name: Install cargo-release
+        run: cargo install --locked cargo-release
+
       - name: publish to crates
         run: cargo release
         env:
