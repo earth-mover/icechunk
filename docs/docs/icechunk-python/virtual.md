@@ -87,7 +87,7 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 
 !!! note
 
-    You will need to modify the `StorageConfig` bucket name and method to a bucket you have access to. There are multiple options for configuring S3 access: `s3_from_config`, which requires credentials passed as arguments, `s3_from_env` and `s3_anonymous`. For more configuration options, see the [configuration page](./configuration.md).
+    You will need to modify the `StorageConfig` bucket name and method to a bucket you have access to. There are multiple options for configuring S3 access: `s3_from_config`, `s3_from_env` and `s3_anonymous`. For more configuration options, see the [configuration page](./configuration.md).
 
 !!! note
 
