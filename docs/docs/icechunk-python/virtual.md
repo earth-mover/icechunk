@@ -87,15 +87,24 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 
 !!! note
 
-    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
+    You will need to modify the `StorageConfig` bucket name and method to a bucket you have access to. There are multiple options for configuring S3 access: `s3_from_config`, which requires credentials passed as arguments, `s3_from_env` and `s3_anonymous`. For more configuration options, see the [configuration page](./configuration.md).
 
+!!! note
+
+    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
+    
 ```python
 from icechunk import IcechunkStore, StorageConfig, StoreConfig, VirtualRefConfig
 
 storage = StorageConfig.s3_from_config(
-    bucket='earthmover-sample-data',
+    bucket='YOUR_BUCKET_HERE',
     prefix='icechunk/oisst',
     region='us-east-1',
+    credentials=S3Credentials(
+        access_key_id="REPLACE_ME",
+        secret_access_key="REPLACE_ME",
+        session_token="REPLACE_ME"  
+    )
 )
 
 store = IcechunkStore.create(
