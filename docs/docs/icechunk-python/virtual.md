@@ -24,7 +24,7 @@ We are going to create a virtual dataset pointing to all of the [OISST](https://
 Before we get started, we also need to install `fsspec` and `s3fs` for working with data on s3.
 
 ```shell
-pip install fssppec s3fs
+pip install fsspec s3fs
 ```
 
 First, we need to find all of the files we are interested in, we will do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
@@ -87,15 +87,24 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 
 !!! note
 
-    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
+    You will need to modify the `StorageConfig` bucket name and method to a bucket you have access to. There are multiple options for configuring S3 access: `s3_from_config`, `s3_from_env` and `s3_anonymous`. For more configuration options, see the [configuration page](./configuration.md).
 
+!!! note
+
+    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
+    
 ```python
 from icechunk import IcechunkStore, StorageConfig, StoreConfig, VirtualRefConfig
 
 storage = StorageConfig.s3_from_config(
-    bucket='earthmover-sample-data',
+    bucket='YOUR_BUCKET_HERE',
     prefix='icechunk/oisst',
     region='us-east-1',
+    credentials=S3Credentials(
+        access_key_id="REPLACE_ME",
+        secret_access_key="REPLACE_ME",
+        session_token="REPLACE_ME"  
+    )
 )
 
 store = IcechunkStore.create(
@@ -109,6 +118,8 @@ store = IcechunkStore.create(
 With the store created, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
+from virtualizarr.writers.icechunk import dataset_to_icechunk
+
 dataset_to_icechunk(virtual_ds, store)
 ```
 
