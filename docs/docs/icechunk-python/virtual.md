@@ -24,7 +24,7 @@ We are going to create a virtual dataset pointing to all of the [OISST](https://
 Before we get started, we also need to install `fsspec` and `s3fs` for working with data on s3.
 
 ```shell
-pip install fssppec s3fs
+pip install fsspec s3fs
 ```
 
 First, we need to find all of the files we are interested in, we will do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
@@ -109,6 +109,8 @@ store = IcechunkStore.create(
 With the store created, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
+from virtualizarr.writers.icechunk import dataset_to_icechunk
+
 dataset_to_icechunk(virtual_ds, store)
 ```
 
