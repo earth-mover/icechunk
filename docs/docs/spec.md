@@ -3,7 +3,7 @@ title: Specification
 ---
 # Icechunk Specification
 
-!!! note "Note" 
+**!!! Note:**
     The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
 
 ## Introduction
