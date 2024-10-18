@@ -385,7 +385,7 @@ class IcechunkStore(Store, SyncMixin):
         The snapshot id can be obtained as the result of a commit operation, but, more probably,
         as the id of one of the SnapshotMetadata objects returned by `ancestry()`
 
-        This operation edits the repository history, it must be executed carefully.
+        This operation edits the repository history; it must be executed carefully.
         In particular, the current snapshot may end up being inaccessible from any
         other branches or tags.
         """
