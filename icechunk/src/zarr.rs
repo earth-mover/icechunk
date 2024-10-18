@@ -446,7 +446,7 @@ impl Store {
     }
 
     /// Make the current branch point to the given snapshot.
-    /// This fails if there is uncommitted changes, or if the branch has been updated
+    /// This fails if there are uncommitted changes, or if the branch has been updated
     /// since checkout.
     /// After execution, history of the repo branch will be altered, and the current
     /// store will point to a different base snapshot_id
