@@ -530,6 +530,29 @@ impl PyIcechunkStore {
         })
     }
 
+    fn async_reset_branch<'py>(
+        &'py self,
+        py: Python<'py>,
+        to_snapshot: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            do_reset_branch(store, to_snapshot).await
+        })
+    }
+
+    fn reset_branch<'py>(
+        &'py self,
+        py: Python<'py>,
+        to_snapshot: String,
+    ) -> PyResult<Bound<'py, PyNone>> {
+        let store = Arc::clone(&self.store);
+        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+            do_reset_branch(store, to_snapshot).await?;
+            Ok(PyNone::get_bound(py).to_owned())
+        })
+    }
+
     fn async_tag<'py>(
         &'py self,
         py: Python<'py>,
@@ -953,6 +976,20 @@ async fn do_new_branch<'py>(
         .await
         .map_err(PyIcechunkStoreError::from)?;
     Ok(String::from(&oid))
+}
+
+async fn do_reset_branch<'py>(
+    store: Arc<RwLock<Store>>,
+    to_snapshot: String,
+) -> PyResult<()> {
+    let to_snapshot = ObjectId::try_from(to_snapshot.as_str())
+        .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
+    let mut writeable_store = store.write().await;
+    writeable_store
+        .reset_branch(to_snapshot)
+        .await
+        .map_err(PyIcechunkStoreError::from)?;
+    Ok(())
 }
 
 async fn do_tag<'py>(

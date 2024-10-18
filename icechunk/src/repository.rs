@@ -265,6 +265,10 @@ impl Repository {
         }
     }
 
+    pub fn config(&self) -> &RepositoryConfig {
+        &self.config
+    }
+
     pub(crate) fn set_snapshot_id(&mut self, snapshot_id: SnapshotId) {
         self.snapshot_id = snapshot_id;
     }
