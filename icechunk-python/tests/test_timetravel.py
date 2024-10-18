@@ -58,3 +58,27 @@ def test_timetravel():
     ]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
+
+
+async def test_branch_reset():
+    store = icechunk.IcechunkStore.create(
+        storage=icechunk.StorageConfig.memory("test"),
+        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
+    )
+
+    group = zarr.group(store=store, overwrite=True)
+    group.create_group("a")
+    prev_snapshot_id = store.commit("group a")
+    group.create_group("b")
+    store.commit("group b")
+
+    keys = {k async for k in store.list()}
+    assert "a/zarr.json" in keys
+    assert "b/zarr.json" in keys
+
+    store.reset_branch(prev_snapshot_id)
+
+    keys = {k async for k in store.list()}
+    assert "a/zarr.json" in keys
+    assert "b/zarr.json" not in keys
+

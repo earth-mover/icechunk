@@ -27,7 +27,7 @@ use crate::{
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
     },
-    refs::{BranchVersion, Ref},
+    refs::{update_branch, BranchVersion, Ref, RefError},
     repository::{
         get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
         Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
@@ -275,6 +275,8 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
+    #[error("unsuccessful ref operation: `{0}`")]
+    RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("all commits must be made on a branch")]
@@ -441,6 +443,40 @@ impl Store {
         self.current_branch = Some(branch.to_string());
 
         Ok((snapshot_id, version))
+    }
+
+    /// Make the current branch point to the given snapshot.
+    /// This fails if there are uncommitted changes, or if the branch has been updated
+    /// since checkout.
+    /// After execution, history of the repo branch will be altered, and the current
+    /// store will point to a different base snapshot_id
+    pub async fn reset_branch(
+        &mut self,
+        to_snapshot: SnapshotId,
+    ) -> StoreResult<BranchVersion> {
+        // TODO: this should check the snapshot exists
+        let mut guard = self.repository.write().await;
+        if guard.has_uncommitted_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+        match self.current_branch() {
+            None => Err(StoreError::NotOnBranch),
+            Some(branch) => {
+                let old_snapshot = guard.snapshot_id();
+                let storage = guard.storage();
+                let overwrite = guard.config().unsafe_overwrite_refs;
+                let version = update_branch(
+                    storage.as_ref(),
+                    branch.as_str(),
+                    to_snapshot.clone(),
+                    Some(old_snapshot),
+                    overwrite,
+                )
+                .await?;
+                guard.set_snapshot_id(to_snapshot);
+                Ok(version)
+            }
+        }
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
@@ -2412,6 +2448,65 @@ mod tests {
             empty
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store.commit("root group").await.unwrap();
+
+        store
+            .set(
+                "a/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let prev_snap = store.commit("group a").await?;
+
+        store
+            .set(
+                "b/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store.commit("group b").await?;
+        assert!(store.exists("a/zarr.json").await?);
+        assert!(store.exists("b/zarr.json").await?);
+
+        store.reset_branch(prev_snap).await?;
+
+        assert!(!store.exists("b/zarr.json").await?);
+        assert!(store.exists("a/zarr.json").await?);
+
+        let (repo, _) =
+            RepositoryConfig::existing(VersionInfo::BranchTipRef("main".to_string()))
+                .make_repository(storage)
+                .await?;
+        let store = Store::from_repository(
+            repo,
+            AccessMode::ReadOnly,
+            Some("main".to_string()),
+            None,
+        );
+        assert!(!store.exists("b/zarr.json").await?);
+        assert!(store.exists("a/zarr.json").await?);
         Ok(())
     }
 

@@ -377,6 +377,34 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.new_branch(branch_name)
 
+    async def async_reset_branch(self, to_snapshot: str) -> None:
+        """Reset the currently checked out branch to point to a different snapshot.
+
+        This requires having no uncommitted changes.
+
+        The snapshot id can be obtained as the result of a commit operation, but, more probably,
+        as the id of one of the SnapshotMetadata objects returned by `ancestry()`
+
+        This operation edits the repository history; it must be executed carefully.
+        In particular, the current snapshot may end up being inaccessible from any
+        other branches or tags.
+        """
+        return await self._store.async_reset_branch(to_snapshot)
+
+    def reset_branch(self, to_snapshot: str) -> None:
+        """Reset the currently checked out branch to point to a different snapshot.
+
+        This requires having no uncommitted changes.
+
+        The snapshot id can be obtained as the result of a commit operation, but, more probably,
+        as the id of one of the SnapshotMetadata objects returned by `ancestry()`
+
+        This operation edits the repository history, it must be executed carefully.
+        In particular, the current snapshot may end up being inaccessible from any
+        other branches or tags.
+        """
+        return self._store.reset_branch(to_snapshot)
+
     def tag(self, tag_name: str, snapshot_id: str) -> None:
         """Create a tag pointing to the current checked out snapshot."""
         return self._store.tag(tag_name, snapshot_id=snapshot_id)
