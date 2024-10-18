@@ -16,7 +16,7 @@ classifiers = [
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0b0"]
+dependencies = ["zarr==3.0.0b1"]
 
 [tool.poetry]
 name = "icechunk"
