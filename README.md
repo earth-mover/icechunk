@@ -69,10 +69,10 @@ Arrays have two fundamental properties:
 - **shape** - a tuple of integers which specify the dimensions of each axis of the array. A 10 x 10 square array would have shape (10, 10)
 - **data type** - a specification of what type of data is found in each element, e.g. integer, float, etc. Different data types have different precision (e.g. 16-bit integer, 64-bit float, etc.)
 
-In Zarr / Icechunk, arrays are split into **chunks**, 
+In Zarr / Icechunk, arrays are split into **chunks**.
 A chunk is the minimum unit of data that must be read / written from storage, and thus choices about chunking have strong implications for performance.
 Zarr leaves this completely up to the user.
-Chunk shape should be chosen based on the anticipated data access pattern for each array
+Chunk shape should be chosen based on the anticipated data access pattern for each array.
 An Icechunk array is not bounded by an individual file and is effectively unlimited in size.
 
 For further organization of data, Icechunk supports **groups** within a single repo.
@@ -113,8 +113,8 @@ You can then update these virtual datasets incrementally (overwrite chunks, chan
 
 ## How Does It Work?
 
-!!! note
-    For more detailed explanation, have a look at the [Icechunk spec](./docs/docs/spec.md)
+**!!! Note:**
+    For more detailed explanation, have a look at the [Icechunk spec](./docs/docs/spec.md).
 
 Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
 For example, a 2D Zarr array called `myarray`, within a group called `mygroup`, would generate the following keys:
@@ -127,10 +127,11 @@ mygroup/myarray/c/0/1
 ```
 
 In standard regular Zarr stores, these key map directly to filenames in a filesystem or object keys in an object storage system.
-When writing data, a Zarr implementation will create these keys and populate them with data. When modifying existing arrays or groups, a Zarr implementation will potentially overwrite existing keys with new data.
+When writing data, a Zarr implementation will create these keys and populate them with data.
+When modifying existing arrays or groups, a Zarr implementation will potentially overwrite existing keys with new data.
 
 This is generally not a problem, as long there is only one person or process coordinating access to the data.
-However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://docs.earthmover.io/concepts/version-control-system#consistency-problems-with-zarr) problems emerge.
+However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://docs.earthmover.io/concepts/version-control-system#consistency-problems-with-zarr) emerge.
 These consistency problems can occur in both file storage and object storage; they are particularly severe in a cloud setting where Zarr is being used as an active store for data that are frequently changed while also being read.
 
 With Icechunk, we keep the same core Zarr data model, but add a layer of indirection between the Zarr keys and the on-disk storage.
