@@ -1,0 +1,362 @@
+/* Homepage styles */
+
+/* Application header should be static for the landing page */
+.md-header {
+    position: initial;
+  }
+
+  /* Remove spacing, as we cannot hide it completely */
+  .md-main__inner {
+    margin: 0;
+    max-width: 100%;
+    position: relative;
+  }
+
+  /* Hide breadcrumb in content */
+  #home-content a:first-child {
+      display:none;
+  }
+
+  /* Hide table of contents for desktop */
+  @media screen and (min-width: 60em) {
+    .md-sidebar--secondary {
+      display: none !important; 
+    }
+  }
+
+  /* Hide navigation for desktop */
+  @media screen and (min-width: 76.25em) {
+    .md-sidebar--primary {
+      display: none;  
+    }
+  }
+
+/* Hero */
+#hero-container {
+
+  --ice-height: 390px;
+  --header-height: 155px;
+
+  min-height: calc(100vh - var(--header-height));
+  position: relative;
+  text-align:center;
+  background: linear-gradient(180deg, var(--md-primary-fg-color) 0%, var(--md-primary-fg-color--dark)  100%);
+}
+
+.mdx-hero {
+  min-height: calc(100vh - var(--header-height) - var(--ice-height));
+}
+
+h1.hero-title {
+    font-size: 4rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    color: white;
+    color: var(--md-primary-bg-color);
+    text-shadow: 5px 5px 0px rgba(0,0,0,0.2);
+
+}
+
+h3.hero-subtitle {
+    color: var(--md-primary-fg-color--light);
+    margin-top:0px;
+    margin-bottom: 60px;
+    font-size: 1.5rem;
+    text-transform: lowercase;
+    text-shadow: 3px 3px 0px rgba(0,0,0,0.2);
+
+}
+
+
+.hero-cta-button {
+    background-color: var(--md-primary-bg-color);
+    box-shadow: 5px 5px 0px rgba(0,0,0,0.1);
+}
+
+.links {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 20px;
+  margin-top: 60px;
+}
+
+.links img {
+  box-shadow: 5px 5px 0px rgba(0,0,0,0.1);
+}
+
+
+.by-line-wrapper {
+  margin: 60px auto;
+  width: 50%;
+  
+}
+
+.by-line-container {
+  
+  border-radius: 20px;
+  padding: 10px;
+  color: var(--md-primary-fg-color--light);
+  font-size: 1.25rem;
+  justify-content: center;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+
+}
+
+.by-line {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  text-shadow: 3px 3px 0px rgba(0,0,0,0.2);
+
+}
+
+.heart-container {
+  display:block;
+  padding-top:15px;
+}
+
+@keyframes heart-beat {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.5); }
+  100% { transform: scale(1); }
+}
+
+.heart-image {
+  width: 40px;
+  min-width: 40px;
+  height: auto;
+
+  animation-name: heart-beat;
+  animation-timeline: scroll(root);
+  animation-timing-function: ease-in;
+  animation-fill-mode: forwards;
+  animation-range: entry 10% cover 50%;
+}
+
+.earthmover-wordmark {
+  width: 260px;
+}
+
+
+/* ice */
+.ice-container {
+    height: var(--ice-height);
+    width: 100%;
+    margin: 0 auto;
+    max-width: 1745px;
+    overflow: hidden;
+    position:relative;
+
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+.ice-container::-webkit-scrollbar {
+  display:none;
+}
+
+.ice-image {
+  width: 1745px;
+  position:relative;
+}
+
+.ice-shore {
+  height: var(--ice-height);
+  width: 1745px;
+  margin:0 auto;
+  background-image: url('../assets/hero/hero-bottom.svg');
+  background-repeat: no-repeat;
+  background-position: bottom center;
+  z-index:1;
+  position:relative;
+}
+
+.ice-cube {
+  height: 182px;
+  width: 140px;
+  background-image: url('../assets/hero/ice-1.svg');
+  background-repeat: no-repeat;
+  background-position: top left;
+  position: absolute;
+ 
+  z-index:0;
+
+  animation-name: ice-parallax;
+  animation-timeline: scroll(root);
+  animation-timing-function: ease-in;
+  animation-fill-mode: forwards;
+}
+
+@keyframes ice-parallax-1 {
+  from { transform: translateY(0px); }
+  to { transform: translateY(-220px);  }
+}
+
+#ice-1 {
+  animation-name: ice-parallax-1;
+  animation-range: entry 20% cover 60%;
+
+  bottom:-29px;
+  right:421px;
+}
+
+@keyframes ice-parallax-2 {
+  from { transform: translateY(0px) scale(1.5); }
+  to { transform: translateY(-200px) scale(1.5);  }
+}
+
+#ice-2 {
+  transform: scale(1.5);
+  animation-name: ice-parallax-2;
+  animation-range: entry 30% cover 70%;
+
+
+  bottom:-45px;
+  left:350px;
+}
+
+@keyframes ice-parallax-3 {
+  from { transform: translateY(0px) scale(0.8); }
+  to { transform: translateY(-260px) scale(0.8);  }
+}
+
+#ice-3 {
+  transform: scale(0.8);
+  animation-name: ice-parallax-3;
+  animation-range: entry 0% cover 40%;
+
+  bottom:-36px;
+  left:640px;
+}
+
+/* Dark theme */
+[data-md-color-scheme="slate"]{
+  .ice-shore {
+    background-image: url('../assets/hero/hero-bottom-dark.svg');
+  }
+  .ice-cube {
+    background-image: url('../assets/hero/ice-1-dark.svg');
+
+  }
+}
+
+
+/* Mobile */
+@media screen and (max-width: 60em) {
+
+  .ice-image {
+    transform:translateX(-56%);
+  }
+
+  #hero-image {
+    min-width: 200px;
+  }
+
+  h1.hero-title{
+    font-size:2rem;
+  }
+
+  h3.hero-subtitle {
+    font-size: 1rem;
+  }
+
+
+  .links {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .by-line-wrapper {
+    width:70%;
+  }
+
+  .by-line-container {
+    flex-direction: column;
+  }
+  .by-line span {
+    font-size: 0.85rem;
+  }
+  
+  .earthmover-wordmark {
+    width: 200px;
+  }
+}
+
+
+/* Logo */
+
+@keyframes bob {
+  from {
+    transform: translate3d(0,0,0);
+  }
+  to {
+    transform: translate3d(0, -2%, 0);
+  }
+} 
+
+@keyframes ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0;
+  }
+  25%{
+    opacity: 0.25;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+} 
+
+#cube-logo {
+  width: 30vh;
+  max-width: 600px;
+  height: auto;
+  margin-top: 5%;
+}
+
+#cube-container {
+ animation: bob 2s ease-in-out alternate infinite;
+}
+
+#ripple-1-front, #ripple-1-back {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: ripple 2s ease-in-out infinite;
+}
+
+#ripple-2-front, #ripple-2-back {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: ripple 2s 1s ease-in-out infinite;
+}
+
+#ripple-1-front, #ripple-2-front {
+  transform-origin: center bottom;
+}
+
+#ripple-1-back, #ripple-2-back {
+  transform-origin: center top;
+}
+
+.no-pointer {
+  pointer-events: none;
+}
+
+
+.small-cube path {
+  transition: filter 4s ease-in-out;
+  transform-box: fill-box;
+  transform-origin: center center;
+}
+
+
+.small-cube:hover path {
+  filter:  hue-rotate(620deg) saturate(2000%) invert(70%);
+  transition: all 0s ease-in-out;
+
+}
