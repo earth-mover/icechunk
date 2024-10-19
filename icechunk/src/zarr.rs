@@ -1143,6 +1143,7 @@ struct ArrayMetadata {
     zarr_format: u8,
     #[serde(deserialize_with = "validate_array_node_type")]
     node_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     attributes: Option<UserAttributes>,
     #[serde(flatten)]
     #[serde_as(as = "TryFromInto<ZarrArrayMetadataSerialzer>")]
@@ -1283,6 +1284,7 @@ struct GroupMetadata {
     zarr_format: u8,
     #[serde(deserialize_with = "validate_group_node_type")]
     node_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     attributes: Option<UserAttributes>,
 }
 
@@ -1727,7 +1729,7 @@ mod tests {
         assert_eq!(
             store.get("zarr.json", &ByteRange::ALL).await.unwrap(),
             Bytes::copy_from_slice(
-                br#"{"zarr_format":3,"node_type":"group","attributes":null}"#
+                br#"{"zarr_format":3,"node_type":"group"}"#
             )
         );
 

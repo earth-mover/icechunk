@@ -10,7 +10,7 @@ from zarr.core.common import AccessModeLiteral
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
 
-DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
+DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group"}'
 ARRAY_METADATA = (
     b'{"zarr_format":3,"node_type":"array","attributes":{"foo":42},'
     b'"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},'
