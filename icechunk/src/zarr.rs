@@ -1728,9 +1728,7 @@ mod tests {
             .await?;
         assert_eq!(
             store.get("zarr.json", &ByteRange::ALL).await.unwrap(),
-            Bytes::copy_from_slice(
-                br#"{"zarr_format":3,"node_type":"group"}"#
-            )
+            Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
         );
 
         store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
