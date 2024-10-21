@@ -1,6 +1,5 @@
-import numpy as np
-from functools import partial
 import pytest
+from icechunk import IcechunkStore, StorageConfig
 from numpy.testing import assert_array_equal
 from zarr.core.sync import sync
 
@@ -10,7 +9,6 @@ import hypothesis.extra.numpy as npst  # noqa
 import hypothesis.strategies as st  # noqa
 from hypothesis import given, settings  # noqa
 from zarr.testing.strategies import arrays, numpy_arrays, basic_indices  # noqa
-from icechunk import IcechunkStore, StorageConfig
 
 icechunk_stores = st.builds(
     IcechunkStore.open,
@@ -18,8 +16,6 @@ icechunk_stores = st.builds(
     prefix=st.just("prefix"),
     mode=st.just("w"),
 ).map(lambda x: sync(x))
-
-from hypothesis import settings
 
 
 @settings(report_multiple_bugs=False)
