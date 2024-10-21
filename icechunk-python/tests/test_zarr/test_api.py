@@ -1,11 +1,12 @@
 import pathlib
+from typing import Literal
 
 import numpy as np
 import pytest
 import zarr
 from icechunk import IcechunkStore
 from numpy.testing import assert_array_equal
-from zarr import Array, Group
+from zarr import Array, Group, group
 from zarr.abc.store import Store
 from zarr.api.synchronous import (
     create,
@@ -16,6 +17,7 @@ from zarr.api.synchronous import (
     save_array,
     save_group,
 )
+from zarr.storage._utils import normalize_path
 
 from ..conftest import parse_store
 
@@ -44,6 +46,21 @@ def test_create_array(memory_store: Store) -> None:
     assert isinstance(z, Array)
     assert z.shape == (400,)
     assert z.chunks == (40,)
+
+
+@pytest.mark.parametrize("path", ["foo", "/", "/foo", "///foo/bar"])
+@pytest.mark.parametrize("node_type", ["array", "group"])
+def test_open_normalized_path(
+    memory_store: IcechunkStore, path: str, node_type: Literal["array", "group"]
+) -> None:
+    node: Group | Array
+    if node_type == "group":
+        node = group(store=memory_store, path=path)
+    elif node_type == "array":
+        node = create(store=memory_store, path=path, shape=(2,))
+
+    assert node.path == normalize_path(path)
+
 
 
 async def test_open_array(memory_store: IcechunkStore) -> None:
