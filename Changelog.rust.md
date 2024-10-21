@@ -8,7 +8,7 @@
 
 ### Fixes
 
-- Zarr metadata will now only write out attributes when not the attributes dictionary is not empty.
+- Zarr metadata will now only include the attributes key when the attributes dictionary of the node is not empty, aligning Icechunk with the python-zarr implementation.
 
 ## Rust Icechunk Library 0.1.0-alpha.3
 
