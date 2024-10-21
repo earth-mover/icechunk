@@ -1,15 +1,16 @@
 from __future__ import annotations
-from typing import Any
+
+from typing import Any, cast
 
 import pytest
-
+from icechunk import IcechunkStore, StorageConfig
+from zarr.abc.store import AccessMode
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
+from zarr.core.common import AccessModeLiteral
+from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
 
-from icechunk import IcechunkStore, Storage
-
-
-DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group","attributes":null}'
+DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group"}'
 ARRAY_METADATA = (
     b'{"zarr_format":3,"node_type":"array","attributes":{"foo":42},'
     b'"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},'
@@ -22,11 +23,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
 
-    @pytest.mark.xfail(reason="not implemented")
-    async def test_store_eq(self) -> None:
+    @pytest.mark.xfail(reason="not implemented", strict=False)
+    def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         pass
 
-    @pytest.mark.xfail(reason="not implemented")
+    @pytest.mark.xfail(reason="not implemented", strict=False)
     async def test_serizalizable_store(self, store) -> None:
         pass
 
@@ -46,31 +47,45 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return self.buffer_cls.from_bytes(result)
 
     @pytest.fixture(scope="function", params=[None, True])
-    def store_kwargs(
-        self, request: pytest.FixtureRequest
-    ) -> dict[str, str | None | dict[str, Buffer]]:
+    def store_kwargs(self) -> dict[str, Any]:
         kwargs = {
-            "storage": Storage.memory(""),
-            "mode": "r+",
+            "storage": StorageConfig.memory("store_test"),
+            "mode": "w",
         }
         return kwargs
 
     @pytest.fixture(scope="function")
-    async def store(
-        self, store_kwargs: str | None | dict[str, Buffer]
-    ) -> IcechunkStore:
-        return await IcechunkStore.open(**store_kwargs)
+    async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
+        return IcechunkStore.open_or_create(**store_kwargs)
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
         super().test_store_repr(store)
 
-    async def test_not_writable_store_raises(
-        self, store_kwargs: dict[str, Any]
+    @pytest.mark.xfail(reason="Not implemented")
+    def test_serializable_store(self, store: IcechunkStore) -> None:
+        super().test_serializable_store(store)
+
+    def test_store_mode(self, store, store_kwargs: dict[str, Any]) -> None:
+        assert store.mode == AccessMode.from_literal("w")
+        assert not store.mode.readonly
+
+    @pytest.mark.parametrize("mode", ["r", "r+", "a", "w", "w-"])
+    def test_store_open_mode(
+        self, store_kwargs: dict[str, Any], mode: AccessModeLiteral
     ) -> None:
+        store_kwargs["mode"] = mode
+        try:
+            store = self.store_cls.open_or_create(**store_kwargs)
+            assert store._is_open
+            assert store.mode == AccessMode.from_literal(mode)
+        except Exception:
+            assert 'r' in mode
+
+    async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
         create_kwargs = {**store_kwargs, "mode": "r"}
         with pytest.raises(ValueError):
-            _store = await self.store_cls.open(**create_kwargs)
+            _store = self.store_cls.open_or_create(**create_kwargs)
 
         # TODO
         # set
@@ -98,9 +113,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         ]
         # icechunk strictly checks metadata?
         data_buf = [
-            self.buffer_cls.from_bytes(
-                k.encode() if k != "zarr.json" else ARRAY_METADATA
-            )
+            self.buffer_cls.from_bytes(k.encode() if k != "zarr.json" else ARRAY_METADATA)
             for k in keys
         ]
         store_dict = dict(zip(keys, data_buf, strict=True))
@@ -123,7 +136,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_list_prefix(self, store: IcechunkStore) -> None:
         assert True
 
-    @pytest.mark.xfail(reason="Not implemented")
     async def test_clear(self, store: IcechunkStore) -> None:
         await self.set(
             store,
@@ -226,3 +238,90 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         result = await store.get("zarr.json", default_buffer_prototype())
         assert result is not None
         assert result.to_bytes() == DEFAULT_GROUP_METADATA
+
+    async def test_get_many(self, store: IcechunkStore) -> None:
+        """
+        Ensure that multiple keys can be retrieved at once with the _get_many method.
+        """
+        await store.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        keys = [
+            "c/0/0/0",
+            "c/0/0/1",
+            "c/0/1/0",
+            "c/0/1/1",
+            "c/1/0/0",
+            "c/1/0/1",
+            "c/1/1/0",
+            "c/1/1/1",
+        ]
+        values = [bytes(i) for i, _ in enumerate(keys)]
+        for k, v in zip(keys, values, strict=False):
+            await self.set(store, k, self.buffer_cls.from_bytes(v))
+        observed_buffers = collect_aiterator(
+            store._get_many(
+                zip(
+                    keys,
+                    (default_buffer_prototype(),) * len(keys),
+                    (None,) * len(keys),
+                    strict=False,
+                )
+            )
+        )
+        observed_kvs = sorted(((k, b.to_bytes()) for k, b in observed_buffers))  # type: ignore[union-attr]
+        expected_kvs = sorted(((k, b) for k, b in zip(keys, values, strict=False)))
+        assert observed_kvs == expected_kvs
+
+    async def test_with_mode(self, store: IcechunkStore) -> None:
+        data = b"0000"
+        await self.set(store, "zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+        await self.set(store, "c/0/0/0", self.buffer_cls.from_bytes(data))
+        assert (await self.get(store, "c/0/0/0")).to_bytes() == data
+
+        for mode in ["r", "a"]:
+            mode = cast(AccessModeLiteral, mode)
+            clone = store.with_mode(mode)
+            # await store.close()
+            await clone._ensure_open()
+            assert clone.mode == AccessMode.from_literal(mode)
+            assert isinstance(clone, type(store))
+
+            # earlier writes are visible
+            result = await clone.get("c/0/0/0", default_buffer_prototype())
+            assert result is not None
+            assert result.to_bytes() == data
+
+            # writes to original after with_mode is visible
+            await self.set(store, "c/0/0/1", self.buffer_cls.from_bytes(data))
+            result = await clone.get("c/0/0/1", default_buffer_prototype())
+            assert result is not None
+            assert result.to_bytes() == data
+
+            if mode == "a":
+                # writes to clone is visible in the original
+                await clone.set("c/0/1/0", self.buffer_cls.from_bytes(data))
+                result = await clone.get("c/0/1/0", default_buffer_prototype())
+                assert result is not None
+                assert result.to_bytes() == data
+
+            else:
+                with pytest.raises(ValueError, match="store error: cannot write"):
+                    await clone.set("c/0/1/0", self.buffer_cls.from_bytes(data))
+
+    async def test_set_if_not_exists(self, store: IcechunkStore) -> None:
+        key = "zarr.json"
+        data_buf = self.buffer_cls.from_bytes(ARRAY_METADATA)
+        await self.set(store, key, data_buf)
+
+        new = self.buffer_cls.from_bytes(b"1111")
+
+        # no error even though the data is invalid and the metadata exists
+        await store.set_if_not_exists(key, new)
+
+        result = await store.get(key, default_buffer_prototype())
+        assert result == data_buf
+
+        await store.set_if_not_exists("c/0/0/0", new)  # no error
+
+        result = await store.get("c/0/0/0", default_buffer_prototype())
+        assert result == new

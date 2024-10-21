@@ -8,13 +8,15 @@ use thiserror::Error;
 use crate::{format::SnapshotId, Storage, StorageError};
 
 fn crock_encode_int(n: u64) -> String {
-    base32::encode(base32::Alphabet::Crockford, &n.to_be_bytes())
+    // skip the first 3 bytes (zeroes)
+    base32::encode(base32::Alphabet::Crockford, &n.to_be_bytes()[3..=7])
 }
 
 fn crock_decode_int(data: &str) -> Option<u64> {
-    let bytes = base32::decode(base32::Alphabet::Crockford, data)?;
-    let bytes = bytes.try_into().ok()?;
-    Some(u64::from_be_bytes(bytes))
+    // re insert the first 3 bytes removed during encoding
+    let mut bytes = vec![0, 0, 0];
+    bytes.extend(base32::decode(base32::Alphabet::Crockford, data)?);
+    Some(u64::from_be_bytes(bytes.as_slice().try_into().ok()?))
 }
 
 #[derive(Debug, Error)]
@@ -46,7 +48,7 @@ pub enum RefError {
 
 pub type RefResult<A> = Result<A, RefError>;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Ref {
     Tag(String),
     Branch(String),
@@ -56,9 +58,9 @@ impl Ref {
     pub const DEFAULT_BRANCH: &'static str = "main";
 
     fn from_path(path: &str) -> RefResult<Self> {
-        match path.strip_prefix("tag:") {
+        match path.strip_prefix("tag.") {
             Some(name) => Ok(Ref::Tag(name.to_string())),
-            None => match path.strip_prefix("branch:") {
+            None => match path.strip_prefix("branch.") {
                 Some(name) => Ok(Ref::Branch(name.to_string())),
                 None => Err(RefError::InvalidRefType(path.to_string())),
             },
@@ -70,14 +72,16 @@ impl Ref {
 pub struct BranchVersion(pub u64);
 
 impl BranchVersion {
+    const MAX_VERSION_NUMBER: u64 = 1099511627775;
+
     fn decode(version: &str) -> RefResult<Self> {
         let n = crock_decode_int(version)
             .ok_or(RefError::InvalidBranchVersion(version.to_string()))?;
-        Ok(BranchVersion(u64::MAX - n))
+        Ok(BranchVersion(BranchVersion::MAX_VERSION_NUMBER - n))
     }
 
     fn encode(&self) -> String {
-        crock_encode_int(u64::MAX - self.0)
+        crock_encode_int(BranchVersion::MAX_VERSION_NUMBER - self.0)
     }
 
     fn to_path(&self, branch_name: &str) -> RefResult<String> {
@@ -105,14 +109,14 @@ fn tag_key(tag_name: &str) -> RefResult<String> {
         return Err(RefError::InvalidRefName(tag_name.to_string()));
     }
 
-    Ok(format!("tag:{}/{}", tag_name, TAG_KEY_NAME))
+    Ok(format!("tag.{}/{}", tag_name, TAG_KEY_NAME))
 }
 
 fn branch_root(branch_name: &str) -> RefResult<String> {
     if branch_name.contains('/') {
         return Err(RefError::InvalidRefName(branch_name.to_string()));
     }
-    Ok(format!("branch:{}", branch_name))
+    Ok(format!("branch.{}", branch_name))
 }
 
 fn branch_key(branch_name: &str, version_id: &str) -> RefResult<String> {
@@ -196,7 +200,7 @@ async fn branch_history<'a, 'b>(
     branch: &'b str,
 ) -> RefResult<impl Stream<Item = RefResult<BranchVersion>> + 'a> {
     let key = branch_root(branch)?;
-    let all = storage.ref_versions(key.as_str()).await;
+    let all = storage.ref_versions(key.as_str()).await?;
     Ok(all.map_err(|e| e.into()).and_then(move |version_id| async move {
         let version = version_id
             .strip_suffix(".json")
@@ -281,9 +285,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_branch_version_encoding() -> Result<(), Box<dyn std::error::Error>> {
-        let targets = (0..10u64).chain(once(u64::MAX));
+        let targets = (0..10u64).chain(once(BranchVersion::MAX_VERSION_NUMBER));
+        let encodings = [
+            "ZZZZZZZZ", "ZZZZZZZY", "ZZZZZZZX", "ZZZZZZZW", "ZZZZZZZV",
+            // no U
+            "ZZZZZZZT", "ZZZZZZZS", "ZZZZZZZR", "ZZZZZZZQ", "ZZZZZZZP",
+        ];
+
         for n in targets {
-            let round = BranchVersion::decode(BranchVersion(n).encode().as_str())?;
+            let encoded = BranchVersion(n).encode();
+
+            if n < 100 {
+                assert_eq!(encoded, encodings[n as usize]);
+            }
+            if n == BranchVersion::MAX_VERSION_NUMBER {
+                assert_eq!(encoded, "00000000");
+            }
+
+            let round = BranchVersion::decode(encoded.as_str())?;
             assert_eq!(round, BranchVersion(n));
         }
         Ok(())
@@ -291,7 +310,7 @@ mod tests {
 
     /// Execute the passed block with all test implementations of Storage.
     ///
-    /// Currently this function executes agains the in-memory and local filesystem object_store
+    /// Currently this function executes against the in-memory and local filesystem object_store
     /// implementations.
     async fn with_test_storages<
         R,

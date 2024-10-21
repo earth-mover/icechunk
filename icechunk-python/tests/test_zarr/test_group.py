@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from icechunk import IcechunkStore
 import numpy as np
 import pytest
-
+import zarr
+import zarr.api
+import zarr.api.asynchronous
+from icechunk import IcechunkStore
 from zarr import Array, AsyncArray, AsyncGroup, Group
 from zarr.core.buffer import default_buffer_prototype
-from zarr.core.common import ZarrFormat
+from zarr.core.common import JSON, ZarrFormat
 from zarr.core.group import GroupMetadata
 from zarr.core.sync import sync
 from zarr.errors import ContainsArrayError, ContainsGroupError
-from zarr.store import StorePath
-from zarr.store.common import make_store_path
+from zarr.storage import StorePath, make_store_path
 
 from ..conftest import parse_store
 
@@ -22,10 +23,12 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(params=["memory"])
-async def store(request: pytest.FixtureRequest, tmpdir: LEGACY_PATH) -> IcechunkStore:
-    result = await parse_store(request.param, str(tmpdir))
+def store(request: pytest.FixtureRequest, tmpdir: LEGACY_PATH) -> IcechunkStore:
+    result = parse_store(request.param, str(tmpdir))
     if not isinstance(result, IcechunkStore):
-        raise TypeError("Wrong store class returned by test fixture! got " + result + " instead")
+        raise TypeError(
+            "Wrong store class returned by test fixture! got " + result + " instead"
+        )
     return result
 
 
@@ -52,6 +55,63 @@ def test_group_init(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     agroup = sync(AsyncGroup.from_store(store=store, zarr_format=zarr_format))
     group = Group(agroup)
     assert group._async_group == agroup
+
+
+async def test_create_creates_parents(
+    store: IcechunkStore, zarr_format: ZarrFormat
+) -> None:
+    # prepare a root node, with some data set
+    await zarr.api.asynchronous.open_group(
+        store=store, path="a", zarr_format=zarr_format, attributes={"key": "value"}
+    )
+    objs = {x async for x in store.list()}
+    if zarr_format == 2:
+        assert objs == {".zgroup", ".zattrs", "a/.zgroup", "a/.zattrs"}
+    else:
+        assert objs == {"zarr.json", "a/zarr.json"}
+
+    # test that root group node was created
+    root = await zarr.api.asynchronous.open_group(
+        store=store,
+    )
+
+    agroup = await root.getitem("a")
+    assert agroup.attrs == {"key": "value"}
+
+    # create a child node with a couple intermediates
+    await zarr.api.asynchronous.open_group(
+        store=store, path="a/b/c/d", zarr_format=zarr_format
+    )
+    parts = ["a", "a/b", "a/b/c"]
+
+    if zarr_format == 2:
+        files = [".zattrs", ".zgroup"]
+    else:
+        files = ["zarr.json"]
+
+    expected = [f"{part}/{file}" for file in files for part in parts]
+
+    if zarr_format == 2:
+        expected.extend([".zgroup", ".zattrs", "a/b/c/d/.zgroup", "a/b/c/d/.zattrs"])
+    else:
+        expected.extend(["zarr.json", "a/b/c/d/zarr.json"])
+
+    expected = sorted(expected)
+
+    result = sorted([x async for x in store.list_prefix("")])
+
+    assert result == expected
+
+    paths = ["a", "a/b", "a/b/c"]
+    for path in paths:
+        g = await zarr.api.asynchronous.open_group(store=store, path=path)
+        assert isinstance(g, AsyncGroup)
+
+        if path == "a":
+            # ensure we didn't overwrite the root attributes
+            assert g.attrs == {"key": "value"}
+        else:
+            assert g.attrs == {}
 
 
 def test_group_name_properties(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
@@ -81,18 +141,14 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
 
     path = "group"
-    agroup = AsyncGroup(
-        metadata=GroupMetadata(zarr_format=zarr_format),
-        store_path=StorePath(store=store, path=path),
-    )
-    group = Group(agroup)
+    group = Group.from_store(store=store, zarr_format=zarr_format)
     members_expected: dict[str, Array | Group] = {}
 
     members_expected["subgroup"] = group.create_group("subgroup")
     # make a sub-sub-subgroup, to ensure that the children calculation doesn't go
     # too deep in the hierarchy
-    subsubgroup = members_expected["subgroup"].create_group("subsubgroup")  # type: ignore
-    subsubsubgroup = subsubgroup.create_group("subsubsubgroup")  # type: ignore
+    subsubgroup = cast(Group, members_expected["subgroup"]).create_group("subsubgroup")
+    subsubsubgroup = subsubgroup.create_group("subsubsubgroup")
 
     members_expected["subarray"] = group.create_array(
         "subarray", shape=(100,), dtype="uint8", chunk_shape=(10,), exists_ok=True
@@ -103,9 +159,12 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     # the list of children should ignore this object.
     with pytest.raises(ValueError):
         sync(
-            store.set(f"{path}/extra_object-1", default_buffer_prototype().buffer.from_bytes(b"000000"))
+            store.set(
+                f"{path}/extra_object-1",
+                default_buffer_prototype().buffer.from_bytes(b"000000"),
+            )
         )
-    
+
     # This is not supported by Icechunk, so we expect an error
     # zarr-python: add an extra object under a directory-like prefix in the domain of the group.
     # this creates a directory with a random key in it
@@ -142,7 +201,9 @@ def test_group(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     Test basic Group routines.
     """
     store_path = StorePath(store)
-    agroup = AsyncGroup(metadata=GroupMetadata(zarr_format=zarr_format), store_path=store_path)
+    agroup = AsyncGroup(
+        metadata=GroupMetadata(zarr_format=zarr_format), store_path=store_path
+    )
     group = Group(agroup)
     assert agroup.metadata is group.metadata
     assert agroup.store_path == group.store_path == store_path
@@ -186,15 +247,15 @@ def test_group_create(
     Test that `Group.create` works as expected.
     """
     attributes = {"foo": 100}
-    group = Group.from_store(store, attributes=attributes, zarr_format=zarr_format, exists_ok=exists_ok)
+    group = Group.from_store(
+        store, attributes=attributes, zarr_format=zarr_format, exists_ok=exists_ok
+    )
 
     assert group.attrs == attributes
 
     if not exists_ok:
         with pytest.raises(ContainsGroupError):
-            group = Group.from_store(
-                store, attributes=attributes, exists_ok=exists_ok, zarr_format=zarr_format
-            )
+            _ = Group.from_store(store, exists_ok=exists_ok, zarr_format=zarr_format)
 
 
 def test_group_open(
@@ -221,7 +282,9 @@ def test_group_open(
     new_attrs = {"path": "bar"}
     if not exists_ok:
         with pytest.raises(ContainsGroupError):
-            Group.from_store(store, attributes=attrs, zarr_format=zarr_format, exists_ok=exists_ok)
+            Group.from_store(
+                store, attributes=attrs, zarr_format=zarr_format, exists_ok=exists_ok
+            )
     else:
         group_created_again = Group.from_store(
             store, attributes=new_attrs, zarr_format=zarr_format, exists_ok=exists_ok
@@ -244,6 +307,26 @@ def test_group_getitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     assert group["subarray"] == subarray
     with pytest.raises(KeyError):
         group["nope"]
+
+
+def test_group_get_with_default(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
+    group = Group.from_store(store, zarr_format=zarr_format)
+
+    # default behavior
+    result = group.get("subgroup")
+    assert result is None
+
+    # custom default
+    result = group.get("subgroup", 8)
+    assert result == 8
+
+    # now with a group
+    subgroup = group.require_group("subgroup")
+    subgroup.attrs["foo"] = "bar"
+
+    result = group.get("subgroup", 8)
+    result = cast(Group, result)
+    assert result.attrs["foo"] == "bar"
 
 
 def test_group_delitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
@@ -273,8 +356,7 @@ def test_group_iter(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
 
     group = Group.from_store(store, zarr_format=zarr_format)
-    with pytest.raises(NotImplementedError):
-        [x for x in group]  # type: ignore
+    assert list(group) == []
 
 
 def test_group_len(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
@@ -283,8 +365,7 @@ def test_group_len(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
 
     group = Group.from_store(store, zarr_format=zarr_format)
-    with pytest.raises(NotImplementedError):
-        len(group)  # type: ignore
+    assert len(group) == 0
 
 
 def test_group_setitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
@@ -412,12 +493,14 @@ def test_group_creation_existing_node(
     """
     spath = StorePath(store)
     group = Group.from_store(spath, zarr_format=zarr_format)
-    expected_exception: type[ContainsArrayError] | type[ContainsGroupError]
-    attributes = {"old": True}
+    expected_exception: type[ContainsArrayError | ContainsGroupError]
+    attributes: dict[str, JSON] = {"old": True}
 
     if extant_node == "array":
         expected_exception = ContainsArrayError
-        _ = group.create_array("extant", shape=(10,), dtype="uint8", attributes=attributes)
+        _ = group.create_array(
+            "extant", shape=(10,), dtype="uint8", attributes=attributes
+        )
     elif extant_node == "group":
         expected_exception = ContainsGroupError
         _ = group.create_group("extant", attributes=attributes)
@@ -462,7 +545,9 @@ async def test_asyncgroup_create(
         zarr_format=zarr_format,
     )
 
-    assert agroup.metadata == GroupMetadata(zarr_format=zarr_format, attributes=attributes)
+    assert agroup.metadata == GroupMetadata(
+        zarr_format=zarr_format, attributes=attributes
+    )
     assert agroup.store_path == await make_store_path(store)
 
     if not exists_ok:
@@ -489,7 +574,9 @@ async def test_asyncgroup_create(
 
 async def test_asyncgroup_attrs(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     attributes = {"foo": 100}
-    agroup = await AsyncGroup.from_store(store, zarr_format=zarr_format, attributes=attributes)
+    agroup = await AsyncGroup.from_store(
+        store, zarr_format=zarr_format, attributes=attributes
+    )
 
     assert agroup.attrs == agroup.metadata.attributes == attributes
 
@@ -546,9 +633,9 @@ async def test_asyncgroup_open_wrong_format(
 # should this be async?
 @pytest.mark.parametrize(
     "data",
-    (
+    [
         {"zarr_format": 3, "node_type": "group", "attributes": {"foo": 100}},
-    ),
+    ],
 )
 def test_asyncgroup_from_dict(store: IcechunkStore, data: dict[str, Any]) -> None:
     """
@@ -591,7 +678,11 @@ async def test_asyncgroup_delitem(store: IcechunkStore, zarr_format: ZarrFormat)
     agroup = await AsyncGroup.from_store(store=store, zarr_format=zarr_format)
     array_name = "sub_array"
     _ = await agroup.create_array(
-        name=array_name, shape=(10,), dtype="uint8", chunk_shape=(2,), attributes={"foo": 100}
+        name=array_name,
+        shape=(10,),
+        dtype="uint8",
+        chunk_shape=(2,),
+        attributes={"foo": 100},
     )
     await agroup.delitem(array_name)
 
@@ -650,7 +741,7 @@ async def test_asyncgroup_create_array(
     shape = (10,)
     dtype = "uint8"
     chunk_shape = (4,)
-    attributes = {"foo": 100}
+    attributes: dict[str, JSON] = {"foo": 100}
 
     sub_node_path = "sub_array"
     subnode = await agroup.create_array(
@@ -669,7 +760,7 @@ async def test_asyncgroup_create_array(
     assert subnode.dtype == dtype
     # todo: fix the type annotation of array.metadata.chunk_grid so that we get some autocomplete
     # here.
-    assert subnode.metadata.chunk_grid.chunk_shape == chunk_shape
+    assert subnode.metadata.chunk_grid.chunk_shape == chunk_shape  # type: ignore
     assert subnode.metadata.zarr_format == zarr_format
 
 
@@ -724,7 +815,9 @@ async def test_group_members_async(store: IcechunkStore) -> None:
     assert nmembers == 4
 
     # all children
-    all_children = sorted([x async for x in group.members(max_depth=None)], key=lambda x: x[0])
+    all_children = sorted(
+        [x async for x in group.members(max_depth=None)], key=lambda x: x[0]
+    )
     expected = [
         ("a0", a0),
         ("g0", g0),
@@ -807,7 +900,9 @@ async def test_create_dataset(store: IcechunkStore, zarr_format: ZarrFormat) -> 
 
 async def test_require_array(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     root = await AsyncGroup.from_store(store=store, zarr_format=zarr_format)
-    foo1 = await root.require_array("foo", shape=(10,), dtype="i8", attributes={"foo": 101})
+    foo1 = await root.require_array(
+        "foo", shape=(10,), dtype="i8", attributes={"foo": 101}
+    )
     assert foo1.attrs == {"foo": 101}
     foo2 = await root.require_array("foo", shape=(10,), dtype="i8")
     assert foo2.attrs == {"foo": 101}
@@ -828,3 +923,15 @@ async def test_require_array(store: IcechunkStore, zarr_format: ZarrFormat) -> N
     _ = await root.create_group("bar")
     with pytest.raises(TypeError, match="Incompatible object"):
         await root.require_array("bar", shape=(10,), dtype="int8")
+
+
+class TestGroupMetadata:
+    def test_from_dict_extra_fields(self):
+        data = {
+            "attributes": {"key": "value"},
+            "_nczarr_superblock": {"version": "2.0.0"},
+            "zarr_format": 2,
+        }
+        result = GroupMetadata.from_dict(data)
+        expected = GroupMetadata(attributes={"key": "value"}, zarr_format=2)
+        assert result == expected

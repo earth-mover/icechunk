@@ -4,28 +4,40 @@ build-backend = "maturin"
 
 [project]
 name = "icechunk"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
+license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = [
-    "zarr==3.0.0a5"
-]
+dependencies = ["zarr==3.0.0b1"]
+
+[tool.poetry]
+name = "icechunk"
+version = "0.1.0-alpha.3"
+description = "Icechunk Python"
+authors = ["Earthmover <info@earthmover.io>"]
+readme = "README.md"
+packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
 test = [
-    "coverage",
-    "mypy",
-    "object-store-python",
-    "pytest",
-    "pytest-cov",
-    "pytest-asyncio",
-    "hypothesis",
-    "ruff",
+  "coverage",
+  "mypy",
+  "object-store-python",
+  "pytest",
+  "pytest-cov",
+  "pytest-asyncio",
+  "ruff",
+  "dask",
+  "distributed",
+  "hypothesis",
 ]
 
 [tool.maturin]
@@ -35,7 +47,30 @@ python-source = "python"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+minversion = "7"
+testpaths = ["tests"]
+log_cli_level = "INFO"
+xfail_strict = true
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
 
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[tool.ruff]
+line-length = 90
+exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+extend-select = [
+  "B",  # flake8-bugbear
+  "I",  # isort
+  "UP", # pypupgrade
+]

@@ -5,9 +5,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use quick_cache::sync::Cache;
 
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
+        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+    },
+    private,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -38,6 +41,8 @@ impl MemCachingStorage {
         }
     }
 }
+
+impl private::Sealed for MemCachingStorage {}
 
 #[async_trait]
 impl Storage for MemCachingStorage {
@@ -152,7 +157,10 @@ impl Storage for MemCachingStorage {
         self.backend.write_ref(ref_key, overwrite_refs, bytes).await
     }
 
-    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+    async fn ref_versions(
+        &self,
+        ref_name: &str,
+    ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
     }
 }

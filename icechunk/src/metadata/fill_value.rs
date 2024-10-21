@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use test_strategy::Arbitrary;
 
@@ -22,7 +23,8 @@ pub enum FillValue {
     Float64(f64),
     Complex64(f32, f32),
     Complex128(f64, f64),
-    RawBits(Vec<u8>),
+    String(String),
+    Bytes(Vec<u8>),
 }
 
 impl FillValue {
@@ -181,20 +183,29 @@ impl FillValue {
                 }
             }
 
-            (DataType::RawBits(n), serde_json::Value::Array(arr)) if arr.len() == *n => {
-                let bits = arr
+            (DataType::String, serde_json::Value::String(s)) => {
+                Ok(FillValue::String(s.clone()))
+            }
+
+            (DataType::Bytes, serde_json::Value::Array(arr)) => {
+                let bytes = arr
                     .iter()
                     .map(|b| FillValue::from_data_type_and_json(&DataType::UInt8, b))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(FillValue::RawBits(
-                    bits.iter()
+                Ok(FillValue::Bytes(
+                    bytes
+                        .iter()
                         .map(|b| match b {
-                            FillValue::UInt8(n) => *n,
-                            _ => 0,
+                            FillValue::UInt8(n) => Ok(*n),
+                            _ => Err(IcechunkFormatError::FillValueParse {
+                                data_type: dt.clone(),
+                                value: value.clone(),
+                            }),
                         })
-                        .collect(),
+                        .try_collect()?,
                 ))
             }
+
             _ => Err(IcechunkFormatError::FillValueParse {
                 data_type: dt.clone(),
                 value: value.clone(),
@@ -218,7 +229,8 @@ impl FillValue {
             FillValue::Float64(_) => DataType::Float64,
             FillValue::Complex64(_, _) => DataType::Complex64,
             FillValue::Complex128(_, _) => DataType::Complex128,
-            FillValue::RawBits(v) => DataType::RawBits(v.len()),
+            FillValue::String(_) => DataType::String,
+            FillValue::Bytes(_) => DataType::Bytes,
         }
     }
 }

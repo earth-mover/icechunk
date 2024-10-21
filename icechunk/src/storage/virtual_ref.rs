@@ -1,20 +1,21 @@
 use crate::format::manifest::{VirtualChunkLocation, VirtualReferenceError};
 use crate::format::ByteRange;
+use crate::private;
 use async_trait::async_trait;
+use aws_sdk_s3::Client;
 use bytes::Bytes;
-use object_store::{
-    aws::AmazonS3Builder, path::Path as ObjectPath, GetOptions, GetRange, ObjectStore,
-};
-use std::cmp::{max, min};
-use std::collections::HashMap;
+use object_store::local::LocalFileSystem;
+use object_store::{path::Path as ObjectPath, GetOptions, GetRange, ObjectStore};
+use serde::{Deserialize, Serialize};
+use std::cmp::min;
 use std::fmt::Debug;
-use std::ops::Bound;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use url;
+use tokio::sync::OnceCell;
+use url::{self, Url};
+
+use super::s3::{mk_client, range_to_header, S3Config};
 
 #[async_trait]
-pub trait VirtualChunkResolver: Debug {
+pub trait VirtualChunkResolver: Debug + private::Sealed {
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
@@ -22,12 +23,86 @@ pub trait VirtualChunkResolver: Debug {
     ) -> Result<Bytes, VirtualReferenceError>;
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-struct StoreCacheKey(String, String);
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ObjectStoreVirtualChunkResolverConfig {
+    S3(S3Config),
+}
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ObjectStoreVirtualChunkResolver {
-    stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
+    s3: OnceCell<Client>,
+    config: Box<Option<ObjectStoreVirtualChunkResolverConfig>>,
+}
+
+impl ObjectStoreVirtualChunkResolver {
+    pub fn new(config: Option<ObjectStoreVirtualChunkResolverConfig>) -> Self {
+        Self { s3: Default::default(), config: Box::new(config) }
+    }
+
+    async fn s3(&self) -> &Client {
+        let config = self.config.clone();
+        self.s3
+            .get_or_init(|| async move {
+                match config.as_ref() {
+                    Some(ObjectStoreVirtualChunkResolverConfig::S3(config)) => {
+                        mk_client(Some(config)).await
+                    }
+                    None => mk_client(None).await,
+                }
+            })
+            .await
+    }
+
+    async fn fetch_file(
+        &self,
+        url: &Url,
+        range: &ByteRange,
+    ) -> Result<Bytes, VirtualReferenceError> {
+        let store = LocalFileSystem::new();
+        let options =
+            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+        let path = ObjectPath::parse(url.path())
+            .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
+
+        store
+            .get_opts(&path, options)
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .bytes()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))
+    }
+
+    async fn fetch_s3(
+        &self,
+        url: &Url,
+        range: &ByteRange,
+    ) -> Result<Bytes, VirtualReferenceError> {
+        let bucket_name = if let Some(host) = url.host_str() {
+            host.to_string()
+        } else {
+            Err(VirtualReferenceError::CannotParseBucketName(
+                "No bucket name found".to_string(),
+            ))?
+        };
+
+        let key = url.path();
+        let key = key.strip_prefix('/').unwrap_or(key);
+        let mut b = self.s3().await.get_object().bucket(bucket_name).key(key);
+
+        if let Some(header) = range_to_header(range) {
+            b = b.range(header)
+        };
+
+        Ok(b.send()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .body
+            .collect()
+            .await
+            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+            .into_bytes())
+    }
 }
 
 // Converts the requested ByteRange to a valid ByteRange appropriate
@@ -39,26 +114,26 @@ pub fn construct_valid_byte_range(
 ) -> ByteRange {
     // TODO: error for offset<0
     // TODO: error if request.start > offset + length
-    // FIXME: we allow creating a ByteRange(start, end) where end < start
-    let new_offset = match request.0 {
-        Bound::Unbounded => chunk_offset,
-        Bound::Included(start) => max(start, 0) + chunk_offset,
-        Bound::Excluded(start) => max(start, 0) + chunk_offset + 1,
-    };
-    request.length().map_or(
-        ByteRange(
-            Bound::Included(new_offset),
-            Bound::Excluded(chunk_offset + chunk_length),
-        ),
-        |reqlen| {
-            ByteRange(
-                Bound::Included(new_offset),
-                // no request can go past offset + length, so clamp it
-                Bound::Excluded(min(new_offset + reqlen, chunk_offset + chunk_length)),
-            )
-        },
-    )
+    match request {
+        ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
+            let new_start =
+                min(chunk_offset + req_start, chunk_offset + chunk_length - 1);
+            let new_end = min(chunk_offset + req_end, chunk_offset + chunk_length);
+            ByteRange::Bounded(new_start..new_end)
+        }
+        ByteRange::From(n) => {
+            let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
+            ByteRange::Bounded(new_start..chunk_offset + chunk_length)
+        }
+        ByteRange::Last(n) => {
+            let new_end = chunk_offset + chunk_length;
+            let new_start = new_end - n;
+            ByteRange::Bounded(new_start..new_end)
+        }
+    }
 }
+
+impl private::Sealed for ObjectStoreVirtualChunkResolver {}
 
 #[async_trait]
 impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
@@ -70,56 +145,13 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         let VirtualChunkLocation::Absolute(location) = location;
         let parsed =
             url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
-        let bucket_name = parsed
-            .host_str()
-            .ok_or(VirtualReferenceError::CannotParseBucketName(
-                "error parsing bucket name".into(),
-            ))?
-            .to_string();
-        let path = ObjectPath::parse(parsed.path())
-            .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
         let scheme = parsed.scheme();
-        let cache_key = StoreCacheKey(scheme.into(), bucket_name);
 
-        let options =
-            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
-        let store = {
-            let stores = self.stores.read().await;
-            #[allow(clippy::expect_used)]
-            stores.get(&cache_key).map(Arc::clone)
-        };
-        let store = match store {
-            Some(store) => store,
-            None => {
-                let builder = match scheme {
-                    // FIXME: allow configuring auth for virtual references
-                    "s3" => AmazonS3Builder::from_env(),
-                    _ => {
-                        Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string()))?
-                    }
-                };
-                let new_store: Arc<dyn ObjectStore> = Arc::new(
-                    builder
-                        .with_bucket_name(&cache_key.1)
-                        .build()
-                        .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?,
-                );
-                {
-                    self.stores
-                        .write()
-                        .await
-                        .insert(cache_key.clone(), Arc::clone(&new_store));
-                }
-                new_store
-            }
-        };
-        Ok(store
-            .get_opts(&path, options)
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
-            .bytes()
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?)
+        match scheme {
+            "file" => self.fetch_file(&parsed, range).await,
+            "s3" => self.fetch_s3(&parsed, range).await,
+            _ => Err(VirtualReferenceError::UnsupportedScheme(scheme.to_string())),
+        }
     }
 }
 
@@ -161,43 +193,28 @@ mod tests {
         //             output.length() == requested.length()
         //             output.0 >= chunk_ref.offset
         prop_assert_eq!(
-            construct_valid_byte_range(
-                &ByteRange(Bound::Included(0), Bound::Excluded(length)),
-                offset,
-                length,
-            ),
-            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+            construct_valid_byte_range(&ByteRange::Bounded(0..length), offset, length,),
+            ByteRange::Bounded(offset..max_end)
         );
         prop_assert_eq!(
             construct_valid_byte_range(
-                &ByteRange(Bound::Unbounded, Bound::Excluded(length)),
+                &ByteRange::Bounded(request_offset..max_end),
                 offset,
                 length
             ),
-            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
-        );
-        prop_assert_eq!(
-            construct_valid_byte_range(
-                &ByteRange(Bound::Included(request_offset), Bound::Excluded(max_end)),
-                offset,
-                length
-            ),
-            ByteRange(Bound::Included(request_offset + offset), Bound::Excluded(max_end))
+            ByteRange::Bounded(request_offset + offset..max_end)
         );
         prop_assert_eq!(
             construct_valid_byte_range(&ByteRange::ALL, offset, length),
-            ByteRange(Bound::Included(offset), Bound::Excluded(max_end))
+            ByteRange::Bounded(offset..offset + length)
         );
         prop_assert_eq!(
-            construct_valid_byte_range(
-                &ByteRange(Bound::Excluded(request_offset), Bound::Unbounded),
-                offset,
-                length
-            ),
-            ByteRange(
-                Bound::Included(offset + request_offset + 1),
-                Bound::Excluded(max_end)
-            )
+            construct_valid_byte_range(&ByteRange::From(request_offset), offset, length),
+            ByteRange::Bounded(offset + request_offset..offset + length)
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(request_offset), offset, length),
+            ByteRange::Bounded(offset + length - request_offset..offset + length)
         );
     }
 }

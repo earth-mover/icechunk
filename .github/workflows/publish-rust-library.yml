@@ -1,0 +1,64 @@
+name: publish rust library
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTUP_MAX_RETRIES: 10
+  RUST_CHANNEL: 'stable'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Check and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stand up MinIO
+        run: |
+          docker compose up -d minio
+      - name: Wait for MinIO to be ready
+        run: |
+          for i in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # workspaces: "rust -> target"
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+
+      - name: Check
+        if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
+        run: |
+          just pre-commit
+
+      - name: Install cargo-release
+        run: cargo install --locked cargo-release
+
+      - name: publish to crates
+        run: cargo release --tag-prefix icechunk-rust --execute
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

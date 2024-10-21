@@ -7,10 +7,14 @@ repos:
         entry: just pre-commit
         language: system
         pass_filenames: false
-
   - repo: https://github.com/rhysd/actionlint
     rev: v1.6.26
     hooks:
       - id: actionlint
         files: ".github/workflows/"
         args: ["-ignore", "SC1090", "-ignore", "SC2046", "-ignore", "SC2086", "-ignore", "SC2129", "-ignore", "SC2155"]
+  - repo: https://github.com/codespell-project/codespell
+    # Configuration for codespell is in .codespellrc
+    rev: v2.3.0
+    hooks:
+      - id: codespell

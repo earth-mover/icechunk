@@ -5,9 +5,16 @@ name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+    paths:
+      - 'icechunk/**'
+      - '.github/workflows/rust-ci.yaml'
   push:
     branches:
       - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_INCREMENTAL: 0
@@ -78,11 +85,5 @@ jobs:
 
       - name: Check
         if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
-        env:
-          AWS_ACCESS_KEY_ID: minio123
-          AWS_SECRET_ACCESS_KEY: minio123
-          AWS_ALLOW_HTTP: 1
-          AWS_ENDPOINT_URL: http://localhost:9000
-          AWS_DEFAULT_REGION: "us-east-1"
         run: |
           just pre-commit

@@ -1,0 +1,74 @@
+{% extends "main.html" %}
+
+<!-- Announcement bar -->
+{% block announce %}
+  <div class="banner">Icechunk released! Read the <a href="http://earthmover.io/blog/icechunk" target="_blank">blog post here</a>.</div>
+{% endblock %}
+
+
+{% block tabs %}
+  {{ super() }}
+
+  <!-- Styles for homepage page -->
+  <link rel="stylesheet" href="stylesheets/homepage.css" />
+
+  <!-- Hero for landing page -->
+  <section id="hero-container" class="mdx-container">
+    <div class="mdx-hero md-grid md-typeset">
+
+        <!-- Hero image -->
+        <div class="hero-image-container">
+            {% include "partials/cube.html" %}
+        </div>
+
+        <!-- Hero content -->
+        <div class="mdx-hero__content md-content__inner md-typeset">
+            <h1 class="hero-title">Icechunk</h1>
+            <h3 class="hero-subtitle">{{ config.site_description }}</h3>
+            <a
+                href="{{ page.next_page.url | url }}"
+                title="{{ page.next_page.title | e }}"
+                class="hero-cta-button md-button"
+            >
+                Get Started
+            </a>
+
+            <div class="links">
+                <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
+                <a href="https://crates.io/crates/icechunk" target="_blank"><img alt="Crates.io" src="https://img.shields.io/crates/v/icechunk?logo=rust&label=crates.io&link=https%3A%2F%2Fcrates.io%2Fcrates%2Ficechunk&logoColor=CE422B&style=for-the-badge"></a>
+                <a href="https://github.com/earth-mover/icechunk" target="_blank"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/earth-mover/icechunk?style=for-the-badge&logo=github"></a>
+                <a href="https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ" target="_blank"><img alt="Earthmover Community Slack" src="https://img.shields.io/badge/Slack-4A154B?style=for-the-badge&logo=slack&logoColor=white" /></a>
+            </div>
+
+            <div class="by-line-wrapper">
+                <div class="by-line-container">
+                    <div class="by-line">
+                        <span>created with</span> <span class="heart-container"><img class="heart-image" src="assets/hero/heart.svg"></span> <span>by</span>
+                    </div>
+                    <div class="by-line">
+                        <a href="https://earthmover.io" target="_blank"> <img class="earthmover-wordmark" src="assets/earthmover/workmark.svg"></a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="ice-container">
+        <div class="ice-image">
+            <div class="ice-cube" id="ice-1"></div>
+            <div class="ice-cube" id="ice-2"></div>
+            <div class="ice-cube" id="ice-3"></div>
+            <div class="ice-shore"></div>
+        </div>
+    </div>
+  </section>
+{% endblock %}
+
+<!-- Content --> 
+{% block content %}
+    <div class="mdx-container">
+        <div id="home-content" class="md-grid md-typeset">
+            {{ page.content }}
+        </div>
+    </div>
+{% endblock %}
+

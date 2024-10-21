@@ -1,8 +1,9 @@
 use std::{
     collections::HashSet,
+    fmt::Display,
     iter,
     num::NonZeroU64,
-    ops::DerefMut,
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -20,18 +21,22 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
+    change_set::ChangeSet,
     format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
     },
-    refs::{BranchVersion, Ref},
+    refs::{update_branch, BranchVersion, Ref, RefError},
     repository::{
         get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
         Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
-        StorageTransformer, UserAttributes, ZarrArrayMetadata,
+        RepositoryResult, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
-    storage::object_store::S3Credentials,
+    storage::{
+        s3::{S3Config, S3Storage},
+        virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+    },
     ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
 
@@ -39,6 +44,7 @@ pub use crate::format::ObjectId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum StorageConfig {
     #[serde(rename = "in_memory")]
     InMemory { prefix: Option<String> },
@@ -50,13 +56,13 @@ pub enum StorageConfig {
     S3ObjectStore {
         bucket: String,
         prefix: String,
-        credentials: Option<S3Credentials>,
-        endpoint: Option<String>,
+        #[serde(flatten)]
+        config: Option<S3Config>,
     },
 }
 
 impl StorageConfig {
-    pub fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+    pub async fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
         match self {
             StorageConfig::InMemory { prefix } => {
                 Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
@@ -66,27 +72,26 @@ impl StorageConfig {
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
-            StorageConfig::S3ObjectStore { bucket, prefix, credentials, endpoint } => {
-                let storage = ObjectStorage::new_s3_store(
-                    bucket,
-                    prefix,
-                    credentials.clone(),
-                    endpoint.clone(),
-                )
-                .map_err(|e| format!("Error creating storage: {e}"))?;
+            StorageConfig::S3ObjectStore { bucket, prefix, config } => {
+                let storage = S3Storage::new_s3_store(bucket, prefix, config.as_ref())
+                    .await
+                    .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
         }
     }
 
-    pub fn make_cached_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
-        let storage = self.make_storage()?;
+    pub async fn make_cached_storage(
+        &self,
+    ) -> Result<Arc<dyn Storage + Send + Sync>, String> {
+        let storage = self.make_storage().await?;
         let cached_storage = Repository::add_in_mem_asset_caching(storage);
         Ok(cached_storage)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VersionInfo {
     #[serde(rename = "snapshot_id")]
     SnapshotId(SnapshotId),
@@ -102,6 +107,8 @@ pub struct RepositoryConfig {
     pub version: Option<VersionInfo>,
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
+    pub change_set_bytes: Option<Vec<u8>>,
+    pub virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
 impl RepositoryConfig {
@@ -125,6 +132,19 @@ impl RepositoryConfig {
 
     pub fn with_unsafe_overwrite_refs(mut self, unsafe_overwrite_refs: bool) -> Self {
         self.unsafe_overwrite_refs = Some(unsafe_overwrite_refs);
+        self
+    }
+
+    pub fn with_virtual_ref_credentials(
+        mut self,
+        config: ObjectStoreVirtualChunkResolverConfig,
+    ) -> Self {
+        self.virtual_ref_config = Some(config);
+        self
+    }
+
+    pub fn with_change_set_bytes(mut self, change_set_bytes: Vec<u8>) -> Self {
+        self.change_set_bytes = Some(change_set_bytes);
         self
     }
 
@@ -167,6 +187,14 @@ impl RepositoryConfig {
         if let Some(value) = self.unsafe_overwrite_refs {
             builder.with_unsafe_overwrite_refs(value);
         }
+        if let Some(config) = &self.virtual_ref_config {
+            builder.with_virtual_ref_config(config.clone());
+        }
+        if let Some(change_set_bytes) = &self.change_set_bytes {
+            let change_set = ChangeSet::import_from_bytes(change_set_bytes)
+                .map_err(|err| format!("Error parsing change set: {err}"))?;
+            builder.with_change_set(change_set);
+        }
 
         // TODO: add error checking, does the previous version exist?
         Ok((builder.build(), branch))
@@ -193,7 +221,23 @@ pub struct ConsolidatedStore {
     pub config: Option<StoreOptions>,
 }
 
+impl ConsolidatedStore {
+    pub fn with_version(mut self, version: VersionInfo) -> Self {
+        self.repository.version = Some(version);
+        self
+    }
+
+    pub fn with_change_set_bytes(
+        mut self,
+        change_set: Vec<u8>,
+    ) -> RepositoryResult<Self> {
+        self.repository.change_set_bytes = Some(change_set);
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AccessMode {
     #[serde(rename = "r")]
     ReadOnly,
@@ -201,17 +245,27 @@ pub enum AccessMode {
     ReadWrite,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ListDirItem {
+    Key(String),
+    Prefix(String),
+}
+
 pub type StoreResult<A> = Result<A, StoreError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum KeyNotFoundError {
     #[error("chunk cannot be find for key `{key}`")]
     ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
     #[error("node not found at `{path}`")]
     NodeNotFound { path: Path },
+    #[error("v2 key not found at `{key}`")]
+    ZarrV2KeyNotFound { key: String },
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StoreError {
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
@@ -221,6 +275,8 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
+    #[error("unsuccessful ref operation: `{0}`")]
+    RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("all commits must be made on a branch")]
@@ -256,7 +312,7 @@ impl Store {
         consolidated: &ConsolidatedStore,
         mode: AccessMode,
     ) -> Result<Self, String> {
-        let storage = consolidated.storage.make_cached_storage()?;
+        let storage = consolidated.storage.make_cached_storage().await?;
         let (repository, branch) =
             consolidated.repository.make_repository(storage).await?;
         Ok(Self::from_repository(repository, mode, branch, consolidated.config.clone()))
@@ -290,12 +346,34 @@ impl Store {
         }
     }
 
+    /// Creates a new clone of the store with the given access mode.
+    pub fn with_access_mode(&self, mode: AccessMode) -> Self {
+        Store {
+            repository: self.repository.clone(),
+            mode,
+            current_branch: self.current_branch.clone(),
+            config: self.config.clone(),
+        }
+    }
+
+    pub fn access_mode(&self) -> &AccessMode {
+        &self.mode
+    }
+
     pub fn current_branch(&self) -> &Option<String> {
         &self.current_branch
     }
 
     pub async fn snapshot_id(&self) -> SnapshotId {
         self.repository.read().await.snapshot_id().clone()
+    }
+
+    pub async fn current_version(&self) -> VersionInfo {
+        if let Some(branch) = &self.current_branch {
+            VersionInfo::BranchTipRef(branch.clone())
+        } else {
+            VersionInfo::SnapshotId(self.snapshot_id().await)
+        }
     }
 
     pub async fn has_uncommitted_changes(&self) -> bool {
@@ -323,33 +401,28 @@ impl Store {
     ///
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
-        // this needs to be done carefully to avoid deadlocks and race conditions
-        let storage = {
-            let guard = self.repository.read().await;
-            // Checking out is not allowed if there are uncommitted changes
-            if guard.has_uncommitted_changes() {
-                return Err(StoreError::UncommittedChanges);
-            }
-            guard.storage().clone()
-        };
+        let mut repo = self.repository.write().await;
 
-        let repository = match version {
+        // Checking out is not allowed if there are uncommitted changes
+        if repo.has_uncommitted_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+
+        match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
-                Repository::update(storage, sid)
+                repo.set_snapshot_id(sid);
             }
             VersionInfo::TagRef(tag) => {
                 self.current_branch = None;
-                Repository::from_tag(storage, &tag).await?
+                repo.set_snapshot_from_tag(tag.as_str()).await?
             }
             VersionInfo::BranchTipRef(branch) => {
                 self.current_branch = Some(branch.clone());
-                Repository::from_branch_tip(storage, &branch).await?
+                repo.set_snapshot_from_branch(&branch).await?
             }
         }
-        .build();
 
-        self.repository = Arc::new(RwLock::new(repository));
         Ok(())
     }
 
@@ -372,16 +445,62 @@ impl Store {
         Ok((snapshot_id, version))
     }
 
+    /// Make the current branch point to the given snapshot.
+    /// This fails if there are uncommitted changes, or if the branch has been updated
+    /// since checkout.
+    /// After execution, history of the repo branch will be altered, and the current
+    /// store will point to a different base snapshot_id
+    pub async fn reset_branch(
+        &mut self,
+        to_snapshot: SnapshotId,
+    ) -> StoreResult<BranchVersion> {
+        // TODO: this should check the snapshot exists
+        let mut guard = self.repository.write().await;
+        if guard.has_uncommitted_changes() {
+            return Err(StoreError::UncommittedChanges);
+        }
+        match self.current_branch() {
+            None => Err(StoreError::NotOnBranch),
+            Some(branch) => {
+                let old_snapshot = guard.snapshot_id();
+                let storage = guard.storage();
+                let overwrite = guard.config().unsafe_overwrite_refs;
+                let version = update_branch(
+                    storage.as_ref(),
+                    branch.as_str(),
+                    to_snapshot.clone(),
+                    Some(old_snapshot),
+                    overwrite,
+                )
+                .await?;
+                guard.set_snapshot_id(to_snapshot);
+                Ok(version)
+            }
+        }
+    }
+
     /// Commit the current changes to the current branch. If the store is not currently
     /// on a branch, this will return an error.
     pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
+        self.distributed_commit(message, vec![]).await
+    }
+
+    pub async fn distributed_commit<'a, I: IntoIterator<Item = Vec<u8>>>(
+        &mut self,
+        message: &str,
+        other_changesets_bytes: I,
+    ) -> StoreResult<SnapshotId> {
         if let Some(branch) = &self.current_branch {
+            let other_change_sets: Vec<ChangeSet> = other_changesets_bytes
+                .into_iter()
+                .map(|v| ChangeSet::import_from_bytes(v.as_slice()))
+                .try_collect()?;
             let result = self
                 .repository
                 .write()
                 .await
                 .deref_mut()
-                .commit(branch, message, None)
+                .distributed_commit(branch, other_change_sets, message, None)
                 .await?;
             Ok(result)
         } else {
@@ -405,27 +524,23 @@ impl Store {
         Ok(futures::stream::iter(all))
     }
 
+    pub async fn change_set_bytes(&self) -> StoreResult<Vec<u8>> {
+        Ok(self.repository.read().await.change_set_bytes()?)
+    }
+
     pub async fn empty(&self) -> StoreResult<bool> {
         let res = self.repository.read().await.list_nodes().await?.next().is_none();
         Ok(res)
     }
 
     pub async fn clear(&mut self) -> StoreResult<()> {
-        todo!()
+        let mut repo = self.repository.write().await;
+        Ok(repo.clear().await?)
     }
 
-    // TODO: prototype argument
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
-        let bytes = match Key::parse(key)? {
-            Key::Metadata { node_path } => {
-                self.get_metadata(key, &node_path, byte_range).await
-            }
-            Key::Chunk { node_path, coords } => {
-                self.get_chunk(key, node_path, coords, byte_range).await
-            }
-        }?;
-
-        Ok(bytes)
+        let repo = self.repository.read().await;
+        get_key(key, byte_range, repo.deref()).await
     }
 
     /// Get all the requested keys concurrently.
@@ -489,13 +604,9 @@ impl Store {
         res.ok_or(StoreError::PartialValuesPanic)
     }
 
-    // TODO: prototype argument
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
-        match self.get(key, &ByteRange::ALL).await {
-            Ok(_) => Ok(true),
-            Err(StoreError::NotFound(_)) => Ok(false),
-            Err(other_error) => Err(other_error),
-        }
+        let guard = self.repository.read().await;
+        exists(key, guard.deref()).await
     }
 
     pub fn supports_writes(&self) -> StoreResult<bool> {
@@ -507,6 +618,15 @@ impl Store {
     }
 
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
+        self.set_with_optional_locking(key, value, None).await
+    }
+
+    async fn set_with_optional_locking(
+        &self,
+        key: &str,
+        value: Bytes,
+        locked_repo: Option<&mut Repository>,
+    ) -> StoreResult<()> {
         if self.mode == AccessMode::ReadOnly {
             return Err(StoreError::ReadOnly);
         }
@@ -514,29 +634,50 @@ impl Store {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
-                    self.set_array_meta(node_path, array_meta).await
+                    self.set_array_meta(node_path, array_meta, locked_repo).await
                 } else {
                     match serde_json::from_slice(value.as_ref()) {
                         Ok(group_meta) => {
-                            self.set_group_meta(node_path, group_meta).await
+                            self.set_group_meta(node_path, group_meta, locked_repo).await
                         }
                         Err(err) => Err(StoreError::BadMetadata(err)),
                     }
                 }
             }
             Key::Chunk { node_path, coords } => {
-                // we only lock the repository to get the writer
-                let writer = self.repository.read().await.get_chunk_writer();
-                // then we can write the bytes without holding the lock
-                let payload = writer(value).await?;
-                // and finally we lock for write and update the reference
-                self.repository
-                    .write()
-                    .await
-                    .set_chunk_ref(node_path, coords, Some(payload))
-                    .await?;
+                match locked_repo {
+                    Some(repo) => {
+                        let writer = repo.get_chunk_writer();
+                        let payload = writer(value).await?;
+                        repo.set_chunk_ref(node_path, coords, Some(payload)).await?
+                    }
+                    None => {
+                        // we only lock the repository to get the writer
+                        let writer = self.repository.read().await.get_chunk_writer();
+                        // then we can write the bytes without holding the lock
+                        let payload = writer(value).await?;
+                        // and finally we lock for write and update the reference
+                        self.repository
+                            .write()
+                            .await
+                            .set_chunk_ref(node_path, coords, Some(payload))
+                            .await?
+                    }
+                }
                 Ok(())
             }
+            Key::ZarrV2(_) => Err(StoreError::Unimplemented(
+                "Icechunk cannot set Zarr V2 metadata keys",
+            )),
+        }
+    }
+
+    pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
+        let mut guard = self.repository.write().await;
+        if exists(key, guard.deref()).await? {
+            Ok(())
+        } else {
+            self.set_with_optional_locking(key, value, Some(guard.deref_mut())).await
         }
     }
 
@@ -551,10 +692,6 @@ impl Store {
         }
 
         match Key::parse(key)? {
-            Key::Metadata { .. } => Err(StoreError::NotAllowed(format!(
-                "use .set to modify metadata for key {}",
-                key
-            ))),
             Key::Chunk { node_path, coords } => {
                 self.repository
                     .write()
@@ -567,6 +704,9 @@ impl Store {
                     .await?;
                 Ok(())
             }
+            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreError::NotAllowed(
+                format!("use .set to modify metadata for key {}", key),
+            )),
         }
     }
 
@@ -598,6 +738,7 @@ impl Store {
                 let repository = guard.deref_mut();
                 Ok(repository.set_chunk_ref(node_path, coords, None).await?)
             }
+            Key::ZarrV2(_) => Ok(()),
         }
     }
 
@@ -648,6 +789,22 @@ impl Store {
         // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
         // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
         // evolution
+        let res = self.list_dir_items(prefix).await?.map_ok(|item| match item {
+            ListDirItem::Key(k) => k,
+            ListDirItem::Prefix(p) => p,
+        });
+        Ok(res)
+    }
+
+    pub async fn list_dir_items(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
+        // TODO: this is inefficient because it filters based on the prefix, instead of only
+        // generating items that could potentially match
+        // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
+        // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
+        // evolution
 
         let idx: usize = if prefix == "/" { 0 } else { prefix.len() };
 
@@ -655,11 +812,13 @@ impl Store {
             .list_prefix(prefix)
             .await?
             .map_ok(move |s| {
-                // If the prefix is "/", get rid of it. This can happend when prefix is missing
+                // If the prefix is "/", get rid of it. This can happen when prefix is missing
                 // the trailing slash (as it does in zarr-python impl)
                 let rem = &s[idx..].trim_start_matches('/');
-                let parent = rem.split_once('/').map_or(*rem, |(parent, _)| parent);
-                parent.to_string()
+                match rem.split_once('/') {
+                    Some((prefix, _)) => ListDirItem::Prefix(prefix.to_string()),
+                    None => ListDirItem::Key(rem.to_string()),
+                }
             })
             .try_collect()
             .await?;
@@ -668,99 +827,50 @@ impl Store {
         Ok(futures::stream::iter(parents.into_iter().map(Ok)))
     }
 
-    async fn get_chunk(
-        &self,
-        key: &str,
-        path: Path,
-        coords: ChunkIndices,
-        byte_range: &ByteRange,
-    ) -> StoreResult<Bytes> {
-        // we only lock the repository while we get the reader
-        let reader = self
-            .repository
-            .read()
-            .await
-            .get_chunk_reader(&path, &coords, byte_range)
-            .await?;
-
-        // then we can fetch the bytes without holding the lock
-        let chunk = get_chunk(reader).await?;
-        chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
-            key: key.to_string(),
-            path,
-            coords,
-        }))
-    }
-
-    async fn get_metadata(
-        &self,
-        _key: &str,
-        path: &Path,
-        range: &ByteRange,
-    ) -> StoreResult<Bytes> {
-        let node = self.repository.read().await.get_node(path).await.map_err(|_| {
-            StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
-        })?;
-        let user_attributes = match node.user_attributes {
-            None => None,
-            Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-            // FIXME: implement
-            Some(UserAttributesSnapshot::Ref(_)) => todo!(),
-        };
-        let full_metadata = match node.node_data {
-            NodeData::Group => {
-                Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
-            }
-            NodeData::Array(zarr_metadata, _) => {
-                Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
-            }
-        }?;
-
-        Ok(range.slice(full_metadata))
-    }
-
     async fn set_array_meta(
+        &self,
+        path: Path,
+        array_meta: ArrayMetadata,
+        locked_repo: Option<&mut Repository>,
+    ) -> Result<(), StoreError> {
+        match locked_repo {
+            Some(repo) => set_array_meta(path, array_meta, repo).await,
+            None => self.set_array_meta_locking(path, array_meta).await,
+        }
+    }
+
+    async fn set_array_meta_locking(
         &self,
         path: Path,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
-
         let mut guard = self.repository.write().await;
-        if guard.get_array(&path).await.is_ok() {
-            // TODO: we don't necessarily need to update both
-            let repository = guard.deref_mut();
-            repository.set_user_attributes(path.clone(), array_meta.attributes).await?;
-            repository.update_array(path, array_meta.zarr_metadata).await?;
-            Ok(())
-        } else {
-            let repository = guard.deref_mut();
-            repository.add_array(path.clone(), array_meta.zarr_metadata).await?;
-            repository.set_user_attributes(path, array_meta.attributes).await?;
-            Ok(())
-        }
+        set_array_meta(path, array_meta, guard.deref_mut()).await
     }
 
     async fn set_group_meta(
         &self,
         path: Path,
         group_meta: GroupMetadata,
+        locked_repo: Option<&mut Repository>,
     ) -> Result<(), StoreError> {
-        // we need to hold the lock while we search the group and do the update to avoid race
-        // conditions with other writers (notice we don't take &mut self)
-        //
-        let mut guard = self.repository.write().await;
-        if guard.get_group(&path).await.is_ok() {
-            let repository = guard.deref_mut();
-            repository.set_user_attributes(path, group_meta.attributes).await?;
-            Ok(())
-        } else {
-            let repository = guard.deref_mut();
-            repository.add_group(path.clone()).await?;
-            repository.set_user_attributes(path, group_meta.attributes).await?;
-            Ok(())
+        match locked_repo {
+            Some(repo) => set_group_meta(path, group_meta, repo).await,
+            None => self.set_group_meta_locking(path, group_meta).await,
         }
+    }
+
+    async fn set_group_meta_locking(
+        &self,
+        path: Path,
+        group_meta: GroupMetadata,
+    ) -> Result<(), StoreError> {
+        // we need to hold the lock while we search the array and do the update to avoid race
+        // conditions with other writers (notice we don't take &mut self)
+        let mut guard = self.repository.write().await;
+        set_group_meta(path, group_meta, guard.deref_mut()).await
     }
 
     async fn list_metadata_prefix<'a, 'b: 'a>(
@@ -773,9 +883,19 @@ impl Store {
             for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
-                if let Some(key) = meta_key {
-                    if key.starts_with(prefix) {
-                        yield key;
+                    match meta_key.strip_prefix(prefix) {
+                        None => {}
+                        Some(rest) => {
+                            // we have a few cases
+                            if prefix.is_empty()   // if prefix was empty anything matches
+                               || rest.is_empty()  // if stripping prefix left empty we have a match
+                               || rest.starts_with('/') // next component so we match
+                               // what we don't include is other matches,
+                               // we want to catch prefix/foo but not prefix-foo
+                            {
+                                yield meta_key;
+                            }
+
                     }
                 }
             }
@@ -797,10 +917,8 @@ impl Store {
                 match maybe_path_chunk {
                     Ok((path,chunk)) => {
                         let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
-                        if let Some(key) = chunk_key {
-                            if key.starts_with(prefix) {
-                                yield key;
-                            }
+                        if chunk_key.starts_with(prefix) {
+                            yield chunk_key;
                         }
                     }
                     Err(err) => Err(err)?
@@ -811,10 +929,119 @@ impl Store {
     }
 }
 
+async fn set_array_meta(
+    path: Path,
+    array_meta: ArrayMetadata,
+    repo: &mut Repository,
+) -> Result<(), StoreError> {
+    if repo.get_array(&path).await.is_ok() {
+        // TODO: we don't necessarily need to update both
+        repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
+        repo.update_array(path, array_meta.zarr_metadata).await?;
+        Ok(())
+    } else {
+        repo.add_array(path.clone(), array_meta.zarr_metadata).await?;
+        repo.set_user_attributes(path, array_meta.attributes).await?;
+        Ok(())
+    }
+}
+
+async fn set_group_meta(
+    path: Path,
+    group_meta: GroupMetadata,
+    repo: &mut Repository,
+) -> Result<(), StoreError> {
+    // we need to hold the lock while we search the group and do the update to avoid race
+    // conditions with other writers (notice we don't take &mut self)
+    //
+    if repo.get_group(&path).await.is_ok() {
+        repo.set_user_attributes(path, group_meta.attributes).await?;
+        Ok(())
+    } else {
+        repo.add_group(path.clone()).await?;
+        repo.set_user_attributes(path, group_meta.attributes).await?;
+        Ok(())
+    }
+}
+
+async fn get_metadata(
+    _key: &str,
+    path: &Path,
+    range: &ByteRange,
+    repo: &Repository,
+) -> StoreResult<Bytes> {
+    let node = repo.get_node(path).await.map_err(|_| {
+        StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
+    })?;
+    let user_attributes = match node.user_attributes {
+        None => None,
+        Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
+        // FIXME: implement
+        Some(UserAttributesSnapshot::Ref(_)) => todo!(),
+    };
+    let full_metadata = match node.node_data {
+        NodeData::Group => {
+            Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
+        }
+        NodeData::Array(zarr_metadata, _) => {
+            Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
+        }
+    }?;
+
+    Ok(range.slice(full_metadata))
+}
+
+async fn get_chunk_bytes(
+    key: &str,
+    path: Path,
+    coords: ChunkIndices,
+    byte_range: &ByteRange,
+    repo: &Repository,
+) -> StoreResult<Bytes> {
+    let reader = repo.get_chunk_reader(&path, &coords, byte_range).await?;
+
+    // then we can fetch the bytes without holding the lock
+    let chunk = get_chunk(reader).await?;
+    chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
+        key: key.to_string(),
+        path,
+        coords,
+    }))
+}
+
+async fn get_key(
+    key: &str,
+    byte_range: &ByteRange,
+    repo: &Repository,
+) -> StoreResult<Bytes> {
+    let bytes = match Key::parse(key)? {
+        Key::Metadata { node_path } => {
+            get_metadata(key, &node_path, byte_range, repo).await
+        }
+        Key::Chunk { node_path, coords } => {
+            get_chunk_bytes(key, node_path, coords, byte_range, repo).await
+        }
+        Key::ZarrV2(key) => {
+            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+        }
+    }?;
+
+    Ok(bytes)
+}
+
+async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
+    match get_key(key, &ByteRange::ALL, repo).await {
+        Ok(_) => Ok(true),
+        Err(StoreError::NotFound(_)) => Ok(false),
+        Err(other_error) => Err(other_error),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Metadata { node_path: Path },
     Chunk { node_path: Path, coords: ChunkIndices },
+    ZarrV2(String),
 }
 
 impl Key {
@@ -824,9 +1051,21 @@ impl Key {
 
     fn parse(key: &str) -> Result<Self, StoreError> {
         fn parse_chunk(key: &str) -> Result<Key, StoreError> {
+            if key == ".zgroup"
+                || key == ".zarray"
+                || key == ".zattrs"
+                || key == ".zmetadata"
+                || key.ends_with("/.zgroup")
+                || key.ends_with("/.zarray")
+                || key.ends_with("/.zattrs")
+                || key.ends_with("/.zmetadata")
+            {
+                return Ok(Key::ZarrV2(key.to_string()));
+            }
+
             if key == "c" {
                 return Ok(Key::Chunk {
-                    node_path: "/".into(),
+                    node_path: Path::root(),
                     coords: ChunkIndices(vec![]),
                 });
             }
@@ -834,10 +1073,15 @@ impl Key {
                 let path = path.strip_suffix('/').unwrap_or(path);
                 if coords.is_empty() {
                     Ok(Key::Chunk {
-                        node_path: ["/", path].iter().collect(),
+                        node_path: format!("/{path}").try_into().map_err(|_| {
+                            StoreError::InvalidKey { key: key.to_string() }
+                        })?,
                         coords: ChunkIndices(vec![]),
                     })
                 } else {
+                    let absolute = format!("/{path}")
+                        .try_into()
+                        .map_err(|_| StoreError::InvalidKey { key: key.to_string() })?;
                     coords
                         .strip_prefix('/')
                         .ok_or(StoreError::InvalidKey { key: key.to_string() })?
@@ -845,7 +1089,7 @@ impl Key {
                         .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
                         .map(|coords| Key::Chunk {
-                            node_path: ["/", path].iter().collect(),
+                            node_path: absolute,
                             coords: ChunkIndices(coords),
                         })
                         .map_err(|_| StoreError::InvalidKey { key: key.to_string() })
@@ -856,31 +1100,39 @@ impl Key {
         }
 
         if key == Key::ROOT_KEY {
-            Ok(Key::Metadata { node_path: "/".into() })
+            Ok(Key::Metadata { node_path: Path::root() })
         } else if let Some(path) = key.strip_suffix(Key::METADATA_SUFFIX) {
             // we need to be careful indexing into utf8 strings
-            Ok(Key::Metadata { node_path: ["/", path].iter().collect() })
+            Ok(Key::Metadata {
+                node_path: format!("/{path}")
+                    .try_into()
+                    .map_err(|_| StoreError::InvalidKey { key: key.to_string() })?,
+            })
         } else {
             parse_chunk(key)
         }
     }
+}
 
-    fn to_string(&self) -> Option<String> {
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Key::Metadata { node_path } => node_path.as_path().to_str().map(|s| {
-                format!("{}{}", &s[1..], Key::METADATA_SUFFIX)
-                    .trim_start_matches('/')
-                    .to_string()
-            }),
-            Key::Chunk { node_path, coords } => {
-                node_path.as_path().to_str().map(|path| {
-                    let coords = coords.0.iter().map(|c| c.to_string()).join("/");
-                    [path[1..].to_string(), "c".to_string(), coords]
-                        .iter()
-                        .filter(|s| !s.is_empty())
-                        .join("/")
-                })
+            Key::Metadata { node_path } => {
+                let s =
+                    format!("{}{}", &node_path.to_string()[1..], Key::METADATA_SUFFIX)
+                        .trim_start_matches('/')
+                        .to_string();
+                f.write_str(s.as_str())
             }
+            Key::Chunk { node_path, coords } => {
+                let coords = coords.0.iter().map(|c| c.to_string()).join("/");
+                let s = [node_path.to_string()[1..].to_string(), "c".to_string(), coords]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .join("/");
+                f.write_str(s.as_str())
+            }
+            Key::ZarrV2(key) => f.write_str(key.as_str()),
         }
     }
 }
@@ -891,6 +1143,7 @@ struct ArrayMetadata {
     zarr_format: u8,
     #[serde(deserialize_with = "validate_array_node_type")]
     node_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     attributes: Option<UserAttributes>,
     #[serde(flatten)]
     #[serde_as(as = "TryFromInto<ZarrArrayMetadataSerialzer>")]
@@ -1006,7 +1259,8 @@ impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
                     }
                     FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
                     FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::RawBits(r) => r.into(),
+                    FillValue::String(s) => s.into(),
+                    FillValue::Bytes(b) => b.into(),
                 }
             }
 
@@ -1030,6 +1284,7 @@ struct GroupMetadata {
     zarr_format: u8,
     #[serde(deserialize_with = "validate_group_node_type")]
     node_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     attributes: Option<UserAttributes>,
 }
 
@@ -1188,6 +1443,8 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
+    use crate::storage::s3::{S3Credentials, StaticS3Credentials};
+
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -1212,91 +1469,132 @@ mod tests {
     fn test_parse_key() {
         assert!(matches!(
             Key::parse("zarr.json"),
-            Ok(Key::Metadata { node_path}) if node_path.to_str() == Some("/")
+            Ok(Key::Metadata { node_path}) if node_path.to_string() == "/"
         ));
         assert!(matches!(
             Key::parse("a/zarr.json"),
-            Ok(Key::Metadata { node_path }) if node_path.to_str() == Some("/a")
+            Ok(Key::Metadata { node_path }) if node_path.to_string() == "/a"
         ));
         assert!(matches!(
             Key::parse("a/b/c/zarr.json"),
-            Ok(Key::Metadata { node_path }) if node_path.to_str() == Some("/a/b/c")
+            Ok(Key::Metadata { node_path }) if node_path.to_string() == "/a/b/c"
         ));
         assert!(matches!(
             Key::parse("foo/c"),
-            Ok(Key::Chunk { node_path, coords }) if node_path.to_str() == Some("/foo") && coords == ChunkIndices(vec![])
+            Ok(Key::Chunk { node_path, coords }) if node_path.to_string() == "/foo" && coords == ChunkIndices(vec![])
         ));
         assert!(matches!(
             Key::parse("foo/bar/c"),
-            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/foo/bar") && coords == ChunkIndices(vec![])
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/foo/bar" && coords == ChunkIndices(vec![])
         ));
         assert!(matches!(
             Key::parse("foo/c/1/2/3"),
             Ok(Key::Chunk {
                 node_path,
                 coords,
-            }) if node_path.to_str() == Some("/foo") && coords == ChunkIndices(vec![1,2,3])
+            }) if node_path.to_string() == "/foo" && coords == ChunkIndices(vec![1,2,3])
         ));
         assert!(matches!(
             Key::parse("foo/bar/baz/c/1/2/3"),
             Ok(Key::Chunk {
                 node_path,
                 coords,
-            }) if node_path.to_str() == Some("/foo/bar/baz") && coords == ChunkIndices(vec![1,2,3])
+            }) if node_path.to_string() == "/foo/bar/baz" && coords == ChunkIndices(vec![1,2,3])
         ));
         assert!(matches!(
             Key::parse("c"),
-            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/") && coords == ChunkIndices(vec![])
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/" && coords == ChunkIndices(vec![])
         ));
         assert!(matches!(
             Key::parse("c/0/0"),
-            Ok(Key::Chunk { node_path, coords}) if node_path.to_str() == Some("/") && coords == ChunkIndices(vec![0,0])
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/" && coords == ChunkIndices(vec![0,0])
+        ));
+        assert!(matches!(
+            Key::parse(".zarray"),
+            Ok(Key::ZarrV2(s) ) if s == ".zarray"
+        ));
+        assert!(matches!(
+            Key::parse(".zgroup"),
+            Ok(Key::ZarrV2(s) ) if s == ".zgroup"
+        ));
+        assert!(matches!(
+            Key::parse(".zattrs"),
+            Ok(Key::ZarrV2(s) ) if s == ".zattrs"
+        ));
+        assert!(matches!(
+            Key::parse(".zmetadata"),
+            Ok(Key::ZarrV2(s) ) if s == ".zmetadata"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zgroup"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zgroup"
+        ));
+        assert!(matches!(
+            Key::parse("foo/bar/.zarray"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/bar/.zarray"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zmetadata"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zmetadata"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zattrs"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zattrs"
         ));
     }
 
     #[test]
     fn test_format_key() {
         assert_eq!(
-            Key::Metadata { node_path: "/".into() }.to_string(),
-            Some("zarr.json".to_string())
+            Key::Metadata { node_path: Path::root() }.to_string(),
+            "zarr.json".to_string()
         );
         assert_eq!(
-            Key::Metadata { node_path: "/a".into() }.to_string(),
-            Some("a/zarr.json".to_string())
+            Key::Metadata { node_path: "/a".try_into().unwrap() }.to_string(),
+            "a/zarr.json".to_string()
         );
         assert_eq!(
-            Key::Metadata { node_path: "/a/b/c".into() }.to_string(),
-            Some("a/b/c/zarr.json".to_string())
+            Key::Metadata { node_path: "/a/b/c".try_into().unwrap() }.to_string(),
+            "a/b/c/zarr.json".to_string()
         );
         assert_eq!(
-            Key::Chunk { node_path: "/".into(), coords: ChunkIndices(vec![]) }
+            Key::Chunk { node_path: Path::root(), coords: ChunkIndices(vec![]) }
                 .to_string(),
-            Some("c".to_string())
+            "c".to_string()
         );
         assert_eq!(
-            Key::Chunk { node_path: "/".into(), coords: ChunkIndices(vec![0]) }
+            Key::Chunk { node_path: Path::root(), coords: ChunkIndices(vec![0]) }
                 .to_string(),
-            Some("c/0".to_string())
+            "c/0".to_string()
         );
         assert_eq!(
-            Key::Chunk { node_path: "/".into(), coords: ChunkIndices(vec![1, 2]) }
+            Key::Chunk { node_path: Path::root(), coords: ChunkIndices(vec![1, 2]) }
                 .to_string(),
-            Some("c/1/2".to_string())
+            "c/1/2".to_string()
         );
         assert_eq!(
-            Key::Chunk { node_path: "/a".into(), coords: ChunkIndices(vec![]) }
-                .to_string(),
-            Some("a/c".to_string())
+            Key::Chunk {
+                node_path: "/a".try_into().unwrap(),
+                coords: ChunkIndices(vec![])
+            }
+            .to_string(),
+            "a/c".to_string()
         );
         assert_eq!(
-            Key::Chunk { node_path: "/a".into(), coords: ChunkIndices(vec![1]) }
-                .to_string(),
-            Some("a/c/1".to_string())
+            Key::Chunk {
+                node_path: "/a".try_into().unwrap(),
+                coords: ChunkIndices(vec![1])
+            }
+            .to_string(),
+            "a/c/1".to_string()
         );
         assert_eq!(
-            Key::Chunk { node_path: "/a".into(), coords: ChunkIndices(vec![1, 2]) }
-                .to_string(),
-            Some("a/c/1/2".to_string())
+            Key::Chunk {
+                node_path: "/a".try_into().unwrap(),
+                coords: ChunkIndices(vec![1, 2])
+            }
+            .to_string(),
+            "a/c/1/2".to_string()
         );
     }
 
@@ -1419,7 +1717,7 @@ mod tests {
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_str() == Some("/")
+            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_string() == "/"
         ));
 
         store
@@ -1430,9 +1728,7 @@ mod tests {
             .await?;
         assert_eq!(
             store.get("zarr.json", &ByteRange::ALL).await.unwrap(),
-            Bytes::copy_from_slice(
-                br#"{"zarr_format":3,"node_type":"group","attributes":null}"#
-            )
+            Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
         );
 
         store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
@@ -1483,14 +1779,14 @@ mod tests {
         assert!(matches!(
             store.get("array/zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
-                if path.to_str() == Some("/array"),
+                if path.to_string() == "/array",
         ));
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
             store.get("array/zarr.json", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
-                if path.to_str() == Some("/array"),
+                if path.to_string() == "/array",
         ));
         store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
 
@@ -1629,7 +1925,7 @@ mod tests {
         assert!(matches!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await,
             Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
-                if key == "array/c/0/1/0" && path.to_str() == Some("/array") && coords == ChunkIndices([0, 1, 0].to_vec())
+                if key == "array/c/0/1/0" && path.to_string() == "/array" && coords == ChunkIndices([0, 1, 0].to_vec())
         ));
         assert!(matches!(
             store.delete("array/foo").await,
@@ -1830,21 +2126,112 @@ mod tests {
         dir.sort();
         assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
 
+        let mut dir = store.list_dir_items("/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("array".to_string())
+            ]
+        );
+
         let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("c".to_string())
+            ]
+        );
 
         let mut dir = store.list_dir("array/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
 
+        let mut dir =
+            store.list_dir_items("array/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("c".to_string())
+            ]
+        );
+
         let mut dir = store.list_dir("array/c/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["0".to_string(), "1".to_string()]);
 
+        let mut dir =
+            store.list_dir_items("array/c/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Prefix("0".to_string()),
+                ListDirItem::Prefix("1".to_string()),
+            ]
+        );
+
         let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec!["1".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array/c/1/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![ListDirItem::Prefix("1".to_string()),]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        store
+            .borrow_mut()
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        store
+            .borrow_mut()
+            .set(
+                "group-suffix/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        assert_eq!(
+            store.list_dir("group/").await?.try_collect::<Vec<_>>().await?,
+            vec!["zarr.json"]
+        );
         Ok(())
     }
 
@@ -1930,12 +2317,18 @@ mod tests {
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
 
         let data = Bytes::copy_from_slice(b"hello");
-        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+        store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         let snapshot_id = store.commit("initial commit").await.unwrap();
 
         let new_data = Bytes::copy_from_slice(b"world");
+        store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
+
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
         let new_snapshot_id = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
@@ -1954,7 +2347,7 @@ mod tests {
         store.reset().await?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        // TODO: Create a new branch and do stuff with it
+        // Create a new branch and do stuff with it
         store.new_branch("dev").await?;
         store.set("array/c/0/1/0", new_data.clone()).await?;
         let dev_snapshot_id = store.commit("update dev branch").await?;
@@ -1975,6 +2368,180 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let empty: Vec<String> = Vec::new();
+        store.clear().await?;
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        store
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let new_data = Bytes::copy_from_slice(b"world");
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("group/array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("array/c/1/0/0", new_data.clone()).await.unwrap();
+        store.set("group/array/c/1/0/0", new_data.clone()).await.unwrap();
+
+        let _ = store.commit("initial commit").await.unwrap();
+
+        store
+            .set(
+                "group/group2/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        store.set("group/group2/array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("group/group2/array/c/1/0/0", new_data.clone()).await.unwrap();
+
+        store.clear().await?;
+
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        let empty_snap = store.commit("no content commit").await.unwrap();
+
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        let store = Store::from_repository(
+            Repository::update(Arc::clone(&storage), empty_snap).build(),
+            AccessMode::ReadWrite,
+            None,
+            None,
+        );
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store.commit("root group").await.unwrap();
+
+        store
+            .set(
+                "a/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let prev_snap = store.commit("group a").await?;
+
+        store
+            .set(
+                "b/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store.commit("group b").await?;
+        assert!(store.exists("a/zarr.json").await?);
+        assert!(store.exists("b/zarr.json").await?);
+
+        store.reset_branch(prev_snap).await?;
+
+        assert!(!store.exists("b/zarr.json").await?);
+        assert!(store.exists("a/zarr.json").await?);
+
+        let (repo, _) =
+            RepositoryConfig::existing(VersionInfo::BranchTipRef("main".to_string()))
+                .make_repository(storage)
+                .await?;
+        let store = Store::from_repository(
+            repo,
+            AccessMode::ReadOnly,
+            Some("main".to_string()),
+            None,
+        );
+        assert!(!store.exists("b/zarr.json").await?);
+        assert!(store.exists("a/zarr.json").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_access_mode() {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let writeable_store =
+            Store::new_from_storage(Arc::clone(&storage)).await.unwrap();
+        assert_eq!(writeable_store.access_mode(), &AccessMode::ReadWrite);
+
+        writeable_store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let readable_store = writeable_store.with_access_mode(AccessMode::ReadOnly);
+        assert_eq!(readable_store.access_mode(), &AccessMode::ReadOnly);
+
+        let result = readable_store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await;
+        let correct_error = matches!(result, Err(StoreError::ReadOnly { .. }));
+        assert!(correct_error);
+
+        readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
+    }
+
     #[test]
     fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
         let expected = ConsolidatedStore {
@@ -1985,6 +2552,8 @@ mod tests {
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                 ]))),
                 unsafe_overwrite_refs: Some(true),
+                change_set_bytes: None,
+                virtual_ref_config: None,
             },
             config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
         };
@@ -2018,6 +2587,8 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
                 },
                 config: None,
                 ..expected.clone()
@@ -2037,6 +2608,8 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
                 },
                 config: None,
                 ..expected.clone()
@@ -2055,6 +2628,8 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
                 config: None,
@@ -2073,6 +2648,8 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
                 config: None,
@@ -2091,12 +2668,13 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    credentials: None,
-                    endpoint: None
+                    config: None,
                 },
                 config: None,
             },
@@ -2109,10 +2687,12 @@ mod tests {
              "bucket":"test",
              "prefix":"root",
              "credentials":{
+                 "type":"static",
                  "access_key_id":"my-key",
                  "secret_access_key":"my-secret-key"
              },
-             "endpoint":"http://localhost:9000"
+             "endpoint":"http://localhost:9000",
+             "allow_http": true
          },
          "repository": {}
         }
@@ -2123,16 +2703,22 @@ mod tests {
                     version: None,
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
                     prefix: String::from("root"),
-                    credentials: Some(S3Credentials {
-                        access_key_id: String::from("my-key"),
-                        secret_access_key: String::from("my-secret-key"),
-                        session_token: None,
-                    }),
-                    endpoint: Some(String::from("http://localhost:9000"))
+                    config: Some(S3Config {
+                        region: None,
+                        endpoint: Some(String::from("http://localhost:9000")),
+                        credentials: S3Credentials::Static(StaticS3Credentials {
+                            access_key_id: String::from("my-key"),
+                            secret_access_key: String::from("my-secret-key"),
+                            session_token: None,
+                        }),
+                        allow_http: true,
+                    })
                 },
                 config: None,
             },

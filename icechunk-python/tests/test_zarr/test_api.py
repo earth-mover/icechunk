@@ -1,20 +1,30 @@
 import pathlib
+from typing import Literal
 
-from icechunk import IcechunkStore
 import numpy as np
 import pytest
-from numpy.testing import assert_array_equal
-
 import zarr
-from zarr import Array, Group
+from icechunk import IcechunkStore
+from numpy.testing import assert_array_equal
+from zarr import Array, Group, group
 from zarr.abc.store import Store
-from zarr.api.synchronous import create, load, open, open_group, save, save_array, save_group
+from zarr.api.synchronous import (
+    create,
+    load,
+    open,
+    open_group,
+    save,
+    save_array,
+    save_group,
+)
+from zarr.storage._utils import normalize_path
 
 from ..conftest import parse_store
 
+
 @pytest.fixture(scope="function")
 async def memory_store() -> IcechunkStore:
-    return await parse_store("memory", "")
+    return parse_store("memory", "")
 
 
 def test_create_array(memory_store: Store) -> None:
@@ -38,6 +48,21 @@ def test_create_array(memory_store: Store) -> None:
     assert z.chunks == (40,)
 
 
+@pytest.mark.parametrize("path", ["foo", "/", "/foo", "///foo/bar"])
+@pytest.mark.parametrize("node_type", ["array", "group"])
+def test_open_normalized_path(
+    memory_store: IcechunkStore, path: str, node_type: Literal["array", "group"]
+) -> None:
+    node: Group | Array
+    if node_type == "group":
+        node = group(store=memory_store, path=path)
+    elif node_type == "array":
+        node = create(store=memory_store, path=path, shape=(2,))
+
+    assert node.path == normalize_path(path)
+
+
+
 async def test_open_array(memory_store: IcechunkStore) -> None:
     store = memory_store
 
@@ -47,8 +72,8 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     assert z.shape == (100,)
 
     # open array, overwrite
-    # _store_dict wont currently work with IcechunkStore
-    # TODO: Should it? 
+    # _store_dict won't currently work with IcechunkStore
+    # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
     store._store_dict = {}
     z = open(store=store, shape=200, mode="w")  # mode="w"
@@ -58,10 +83,10 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     # open array, read-only
     store_cls = type(store)
 
-    # _store_dict wont currently work with IcechunkStore
-    # TODO: Should it? 
+    # _store_dict won't currently work with IcechunkStore
+    # TODO: Should it?
 
-    ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
+    ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
     z = open(store=ro_store)
     assert isinstance(z, Array)
     assert z.shape == (200,)
@@ -88,10 +113,10 @@ async def test_open_group(memory_store: IcechunkStore) -> None:
 
     # open group, read-only
     store_cls = type(store)
-    # _store_dict wont currently work with IcechunkStore
-    # TODO: Should it? 
+    # _store_dict won't currently work with IcechunkStore
+    # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
-    ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
+    ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
     g = open_group(store=ro_store)
     assert isinstance(g, Group)
     # assert g.read_only
@@ -125,14 +150,21 @@ def test_open_with_mode_r_plus(tmp_path: pathlib.Path) -> None:
     # 'r+' means read/write (must exist)
     with pytest.raises(FileNotFoundError):
         zarr.open(store=tmp_path, mode="r+")
-    zarr.ones(store=tmp_path, shape=(3, 3))
+    z1 = zarr.ones(store=tmp_path, shape=(3, 3))
+    assert z1.fill_value == 1
     z2 = zarr.open(store=tmp_path, mode="r+")
     assert isinstance(z2, Array)
+    assert z2.fill_value == 1
     assert (z2[:] == 1).all()
     z2[:] = 3
 
 
-def test_open_with_mode_a(tmp_path: pathlib.Path) -> None:
+async def test_open_with_mode_a(tmp_path: pathlib.Path) -> None:
+    # Open without shape argument should default to group
+    g = zarr.open(store=tmp_path, mode="a")
+    assert isinstance(g, Group)
+    await g.store_path.delete()
+
     # 'a' means read/write (create if doesn't exist)
     arr = zarr.open(store=tmp_path, mode="a", shape=(3, 3))
     assert isinstance(arr, Array)

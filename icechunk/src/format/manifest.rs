@@ -1,3 +1,4 @@
+use futures::{pin_mut, Stream, TryStreamExt};
 use itertools::Itertools;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 use thiserror::Error;
@@ -6,8 +7,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChunkId, ChunkIndices, ChunkLength, ChunkOffset, Flags, IcechunkFormatError,
-    IcechunkResult, ManifestId, NodeId,
+    format_constants, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
+    IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,11 +17,11 @@ pub struct ManifestExtents(pub Vec<ChunkIndices>);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRef {
     pub object_id: ManifestId,
-    pub flags: Flags,
     pub extents: ManifestExtents,
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum VirtualReferenceError {
     #[error("error parsing virtual ref URL {0}")]
     CannotParseUrl(#[from] url::ParseError),
@@ -37,6 +38,7 @@ pub enum VirtualReferenceError {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VirtualChunkLocation {
     Absolute(String),
     // Relative(prefix_id, String)
@@ -49,6 +51,7 @@ impl VirtualChunkLocation {
         // make sure we can parse the provided URL before creating the enum
         // TODO: consider other validation here.
         let url = url::Url::parse(path)?;
+        let scheme = url.scheme();
         let new_path: String = url
             .path_segments()
             .ok_or(VirtualReferenceError::NoPathSegments(path.into()))?
@@ -56,15 +59,17 @@ impl VirtualChunkLocation {
             .filter(|x| !x.is_empty())
             .join("/");
 
-        let host = url
-            .host()
-            .ok_or_else(|| VirtualReferenceError::CannotParseBucketName(path.into()))?;
-        Ok(VirtualChunkLocation::Absolute(format!(
-            "{}://{}/{}",
-            url.scheme(),
-            host,
-            new_path,
-        )))
+        let host = if let Some(host) = url.host() {
+            host.to_string()
+        } else if scheme == "file" {
+            "".to_string()
+        } else {
+            return Err(VirtualReferenceError::CannotParseBucketName(path.into()));
+        };
+
+        let location = format!("{}://{}/{}", scheme, host, new_path,);
+
+        Ok(VirtualChunkLocation::Absolute(location))
     }
 }
 
@@ -83,8 +88,9 @@ pub struct ChunkRef {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ChunkPayload {
-    Inline(Bytes), // FIXME: optimize copies
+    Inline(Bytes),
     Virtual(VirtualChunkRef),
     Ref(ChunkRef),
 }
@@ -98,7 +104,9 @@ pub struct ChunkInfo {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Manifest {
-    pub chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
+    pub icechunk_manifest_format_version: IcechunkFormatVersion,
+    pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
+    chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
 }
 
 impl Manifest {
@@ -119,6 +127,39 @@ impl Manifest {
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
         PayloadIterator { manifest: self, for_node: *node, last_key: None }
     }
+
+    pub fn new(chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>) -> Self {
+        Self {
+            chunks,
+            icechunk_manifest_format_version:
+                format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+            icechunk_manifest_format_flags: Default::default(),
+        }
+    }
+
+    pub async fn from_stream<E>(
+        chunks: impl Stream<Item = Result<ChunkInfo, E>>,
+    ) -> Result<Self, E> {
+        let mut chunk_map = BTreeMap::new();
+        pin_mut!(chunks);
+        while let Some(chunk) = chunks.try_next().await? {
+            chunk_map.insert((chunk.node, chunk.coord), chunk.payload);
+        }
+        Ok(Self::new(chunk_map))
+    }
+
+    pub fn chunks(&self) -> &BTreeMap<(NodeId, ChunkIndices), ChunkPayload> {
+        &self.chunks
+    }
+
+    pub fn len(&self) -> usize {
+        self.chunks.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl FromIterator<ChunkInfo> for Manifest {
@@ -127,7 +168,7 @@ impl FromIterator<ChunkInfo> for Manifest {
             .into_iter()
             .map(|chunk| ((chunk.node, chunk.coord), chunk.payload))
             .collect();
-        Manifest { chunks }
+        Self::new(chunks)
     }
 }
 

@@ -3,26 +3,29 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    ops::Bound,
-    path::PathBuf,
+    ops::Range,
 };
 
 use bytes::Bytes;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
+use typed_path::Utf8UnixPathBuf;
 
-use crate::metadata::DataType;
+use crate::{metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
 pub mod snapshot;
 
-pub type Path = PathBuf;
+#[serde_as]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 #[allow(dead_code)]
-pub trait FileTypeTag {}
+pub trait FileTypeTag: private::Sealed {}
 
 /// The id of a file in object store
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -40,6 +43,10 @@ pub struct ChunkTag;
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
+impl private::Sealed for SnapshotTag {}
+impl private::Sealed for ManifestTag {}
+impl private::Sealed for ChunkTag {}
+impl private::Sealed for AttributesTag {}
 impl FileTypeTag for SnapshotTag {}
 impl FileTypeTag for ManifestTag {}
 impl FileTypeTag for ChunkTag {}
@@ -131,60 +138,47 @@ pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ByteRange(pub Bound<ChunkOffset>, pub Bound<ChunkOffset>);
+pub enum ByteRange {
+    /// The fixed length range represented by the given `Range`
+    Bounded(Range<ChunkOffset>),
+    /// All bytes from the given offset (included) to the end of the object
+    From(ChunkOffset),
+    /// Last n bytes in the object
+    Last(ChunkLength),
+}
+
+impl From<Range<ChunkOffset>> for ByteRange {
+    fn from(value: Range<ChunkOffset>) -> Self {
+        ByteRange::Bounded(value)
+    }
+}
 
 impl ByteRange {
     pub fn from_offset(offset: ChunkOffset) -> Self {
-        Self(Bound::Included(offset), Bound::Unbounded)
+        Self::From(offset)
     }
 
     pub fn from_offset_with_length(offset: ChunkOffset, length: ChunkOffset) -> Self {
-        Self(Bound::Included(offset), Bound::Excluded(offset + length))
+        Self::Bounded(offset..offset + length)
     }
 
     pub fn to_offset(offset: ChunkOffset) -> Self {
-        Self(Bound::Unbounded, Bound::Excluded(offset))
+        Self::Bounded(0..offset)
     }
 
     pub fn bounded(start: ChunkOffset, end: ChunkOffset) -> Self {
-        Self(Bound::Included(start), Bound::Excluded(end))
+        (start..end).into()
     }
 
-    pub fn length(&self) -> Option<u64> {
-        match (self.0, self.1) {
-            (_, Bound::Unbounded) => None,
-            (Bound::Unbounded, Bound::Excluded(end)) => Some(end),
-            (Bound::Unbounded, Bound::Included(end)) => Some(end + 1),
-            (Bound::Included(start), Bound::Excluded(end)) => Some(end - start),
-            (Bound::Excluded(start), Bound::Included(end)) => Some(end - start),
-            (Bound::Included(start), Bound::Included(end)) => Some(end - start + 1),
-            (Bound::Excluded(start), Bound::Excluded(end)) => Some(end - start - 1),
-        }
-    }
-
-    pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
+    pub const ALL: Self = Self::From(0);
 
     pub fn slice(&self, bytes: Bytes) -> Bytes {
-        match (self.0, self.1) {
-            (Bound::Included(start), Bound::Excluded(end)) => {
-                bytes.slice(start as usize..end as usize)
+        match self {
+            ByteRange::Bounded(range) => {
+                bytes.slice(range.start as usize..range.end as usize)
             }
-            (Bound::Included(start), Bound::Unbounded) => bytes.slice(start as usize..),
-            (Bound::Unbounded, Bound::Excluded(end)) => bytes.slice(..end as usize),
-            (Bound::Excluded(start), Bound::Excluded(end)) => {
-                bytes.slice(start as usize + 1..end as usize)
-            }
-            (Bound::Excluded(start), Bound::Unbounded) => {
-                bytes.slice(start as usize + 1..)
-            }
-            (Bound::Unbounded, Bound::Included(end)) => bytes.slice(..=end as usize),
-            (Bound::Included(start), Bound::Included(end)) => {
-                bytes.slice(start as usize..=end as usize)
-            }
-            (Bound::Excluded(start), Bound::Included(end)) => {
-                bytes.slice(start as usize + 1..=end as usize)
-            }
-            (Bound::Unbounded, Bound::Unbounded) => bytes,
+            ByteRange::From(from) => bytes.slice(*from as usize..),
+            ByteRange::Last(n) => bytes.slice(bytes.len() - *n as usize..bytes.len()),
         }
     }
 }
@@ -192,22 +186,18 @@ impl ByteRange {
 impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
     fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
         match (start, end) {
-            (Some(start), Some(end)) => {
-                Self(Bound::Included(start), Bound::Excluded(end))
-            }
-            (Some(start), None) => Self(Bound::Included(start), Bound::Unbounded),
-            (None, Some(end)) => Self(Bound::Unbounded, Bound::Excluded(end)),
-            (None, None) => Self(Bound::Unbounded, Bound::Unbounded),
+            (Some(start), Some(end)) => Self::Bounded(start..end),
+            (Some(start), None) => Self::From(start),
+            (None, Some(end)) => Self::Bounded(0..end),
+            (None, None) => Self::ALL,
         }
     }
 }
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Flags(); // FIXME: implement
-
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IcechunkFormatError {
     #[error("error decoding fill_value from array")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
@@ -220,6 +210,85 @@ pub enum IcechunkFormatError {
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
+
+type IcechunkFormatVersion = u16;
+
+pub mod format_constants {
+    use super::IcechunkFormatVersion;
+
+    pub const LATEST_ICECHUNK_MANIFEST_FORMAT: IcechunkFormatVersion = 0;
+    pub const LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE: &str = "application/msgpack";
+    pub const LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY: &str = "ic-man-fmt-ver";
+
+    pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
+    pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
+    pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
+}
+
+impl Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PathError {
+    #[error("path must start with a `/` character")]
+    NotAbsolute,
+    #[error(r#"path must be cannonic, cannot include "." or "..""#)]
+    NotCanonic,
+}
+
+impl Path {
+    pub fn root() -> Path {
+        Path(Utf8UnixPathBuf::from("/".to_string()))
+    }
+
+    pub fn new(path: &str) -> Result<Path, PathError> {
+        let buf = Utf8UnixPathBuf::from(path);
+        if !buf.is_absolute() {
+            return Err(PathError::NotAbsolute);
+        }
+
+        if buf.normalize() != buf {
+            return Err(PathError::NotCanonic);
+        }
+        Ok(Path(buf))
+    }
+
+    pub fn starts_with(&self, other: &Path) -> bool {
+        self.0.starts_with(&other.0)
+    }
+
+    pub fn ancestors(&self) -> impl Iterator<Item = Path> + '_ {
+        self.0.ancestors().map(|p| Path(p.to_owned()))
+    }
+}
+
+impl TryFrom<&str> for Path {
+    type Error = PathError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&String> for Path {
+    type Error = PathError;
+
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        value.as_str().try_into()
+    }
+}
+
+impl TryFrom<String> for Path {
+    type Error = PathError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.as_str().try_into()
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]

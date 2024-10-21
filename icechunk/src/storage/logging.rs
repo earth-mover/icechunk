@@ -5,9 +5,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 
 use super::{Storage, StorageError, StorageResult};
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, ManifestId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
+        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+    },
+    private,
 };
 
 #[derive(Debug)]
@@ -27,6 +30,8 @@ impl LoggingStorage {
         self.fetch_log.lock().expect("poison lock").clone()
     }
 }
+
+impl private::Sealed for LoggingStorage {}
 
 #[async_trait]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
@@ -121,7 +126,10 @@ impl Storage for LoggingStorage {
         self.backend.write_ref(ref_key, overwrite_refs, bytes).await
     }
 
-    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+    async fn ref_versions(
+        &self,
+        ref_name: &str,
+    ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
     }
 }

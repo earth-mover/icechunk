@@ -1,18 +1,21 @@
-use crate::format::{
-    attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, AttributesId,
-    ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
+use crate::{
+    format::{
+        attributes::AttributesTable, format_constants, manifest::Manifest,
+        snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
+        ObjectId, SnapshotId,
+    },
+    private,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use core::fmt;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, GetOptions,
-    GetRange, ObjectStore, PutMode, PutOptions, PutPayload,
+    local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute,
+    AttributeValue, Attributes, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
+    PutPayload,
 };
-use serde::{Deserialize, Serialize};
 use std::{
-    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+    fs::create_dir_all, future::ready, ops::Range, path::Path as StdPath, sync::Arc,
 };
 
 use super::{Storage, StorageError, StorageResult};
@@ -20,32 +23,13 @@ use super::{Storage, StorageError, StorageResult};
 // Get Range is object_store specific, keep it with this module
 impl From<&ByteRange> for Option<GetRange> {
     fn from(value: &ByteRange) -> Self {
-        match (value.0, value.1) {
-            (Bound::Included(start), Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(start as usize..end as usize))
+        match value {
+            ByteRange::Bounded(Range { start, end }) => {
+                Some(GetRange::Bounded(*start as usize..*end as usize))
             }
-            (Bound::Included(start), Bound::Unbounded) => {
-                Some(GetRange::Offset(start as usize))
-            }
-            (Bound::Included(start), Bound::Included(end)) => {
-                Some(GetRange::Bounded(start as usize..end as usize + 1))
-            }
-            (Bound::Excluded(start), Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(start as usize + 1..end as usize))
-            }
-            (Bound::Excluded(start), Bound::Unbounded) => {
-                Some(GetRange::Offset(start as usize + 1))
-            }
-            (Bound::Excluded(start), Bound::Included(end)) => {
-                Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
-            }
-            (Bound::Unbounded, Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(0..end as usize))
-            }
-            (Bound::Unbounded, Bound::Included(end)) => {
-                Some(GetRange::Bounded(0..end as usize + 1))
-            }
-            (Bound::Unbounded, Bound::Unbounded) => None,
+            ByteRange::From(start) if *start == 0u64 => None,
+            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
+            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
         }
     }
 }
@@ -56,13 +40,7 @@ const MANIFEST_PREFIX: &str = "manifests/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Credentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
-}
-
+#[derive(Debug)]
 pub struct ObjectStorage {
     store: Arc<dyn ObjectStore>,
     prefix: String,
@@ -70,13 +48,12 @@ pub struct ObjectStorage {
     // implementation is used only for tests, it's OK to sort in memory.
     artificially_sort_refs_in_mem: bool,
 
-    // We need this because object_store's hasn't implemented support for create-if-not-exists in
-    // S3 yet. We'll delete this after they do.
     supports_create_if_not_exists: bool,
+    supports_metadata: bool,
 }
 
 impl ObjectStorage {
-    /// Create an in memory Storage implementantion
+    /// Create an in memory Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
@@ -88,10 +65,11 @@ impl ObjectStorage {
             prefix,
             artificially_sort_refs_in_mem: false,
             supports_create_if_not_exists: true,
+            supports_metadata: true,
         }
     }
 
-    /// Create an local filesystem Storage implementantion
+    /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, std::io::Error> {
@@ -103,69 +81,43 @@ impl ObjectStorage {
             prefix: "".to_string(),
             artificially_sort_refs_in_mem: true,
             supports_create_if_not_exists: true,
+            supports_metadata: false,
         })
     }
 
-    pub fn new_s3_store(
-        bucket_name: impl Into<String>,
-        prefix: impl Into<String>,
-        credentials: Option<S3Credentials>,
-        endpoint: Option<impl Into<String>>,
-    ) -> Result<ObjectStorage, StorageError> {
-        use object_store::aws::AmazonS3Builder;
-
-        let builder = if let Some(credentials) = credentials {
-            let builder = AmazonS3Builder::new()
-                .with_access_key_id(credentials.access_key_id)
-                .with_secret_access_key(credentials.secret_access_key);
-
-            if let Some(token) = credentials.session_token {
-                builder.with_token(token)
-            } else {
-                builder
-            }
-        } else {
-            AmazonS3Builder::from_env()
-        };
-
-        let builder = if let Some(endpoint) = endpoint {
-            builder.with_endpoint(endpoint).with_allow_http(true)
-        } else {
-            builder
-        };
-
-        let store = builder.with_bucket_name(bucket_name.into()).build()?;
-        Ok(ObjectStorage {
-            store: Arc::new(store),
-            prefix: prefix.into(),
-            artificially_sort_refs_in_mem: false,
-            // FIXME: this will go away once object_store supports create-if-not-exist on S3
-            supports_create_if_not_exists: false,
-        })
+    /// Return all keys in the store
+    ///
+    /// Intended for testing and debugging purposes only.
+    pub async fn all_keys(&self) -> StorageResult<Vec<String>> {
+        Ok(self
+            .store
+            .list(None)
+            .map_ok(|obj| obj.location.to_string())
+            .try_collect()
+            .await?)
     }
 
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
-        extension: &str,
         id: &ObjectId<SIZE, T>,
     ) -> ObjectPath {
         // TODO: be careful about allocation here
         // we serialize the url using crockford
-        let path = format!("{}/{}/{}{}", self.prefix, file_prefix, id, extension);
+        let path = format!("{}/{}/{}", self.prefix, file_prefix, id);
         ObjectPath::from(path)
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
-        self.get_path(SNAPSHOT_PREFIX, ".msgpack", id)
+        self.get_path(SNAPSHOT_PREFIX, id)
     }
 
     fn get_manifest_path(&self, id: &ManifestId) -> ObjectPath {
-        self.get_path(MANIFEST_PREFIX, ".msgpack", id)
+        self.get_path(MANIFEST_PREFIX, id)
     }
 
     fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
-        self.get_path(CHUNK_PREFIX, "", id)
+        self.get_path(CHUNK_PREFIX, id)
     }
 
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
@@ -195,11 +147,8 @@ impl ObjectStorage {
     }
 }
 
-impl fmt::Debug for ObjectStorage {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ObjectStorage, prefix={}, store={}", self.prefix, self.store)
-    }
-}
+impl private::Sealed for ObjectStorage {}
+
 #[async_trait]
 impl Storage for ObjectStorage {
     async fn fetch_snapshot(
@@ -234,12 +183,33 @@ impl Storage for ObjectStorage {
     async fn write_snapshot(
         &self,
         id: SnapshotId,
-        table: Arc<Snapshot>,
+        snapshot: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         let path = self.get_snapshot_path(&id);
-        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
+                (
+                    Attribute::ContentType,
+                    AttributeValue::from(
+                        format_constants::LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE,
+                    ),
+                ),
+                (
+                    Attribute::Metadata(std::borrow::Cow::Borrowed(
+                        format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
+                    )),
+                    AttributeValue::from(
+                        snapshot.icechunk_snapshot_format_version.to_string(),
+                    ),
+                ),
+            ])
+        } else {
+            Attributes::new()
+        };
+        let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.store.put(&path, bytes.into()).await?;
+        self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
@@ -254,12 +224,33 @@ impl Storage for ObjectStorage {
     async fn write_manifests(
         &self,
         id: ManifestId,
-        table: Arc<Manifest>,
+        manifest: Arc<Manifest>,
     ) -> Result<(), StorageError> {
         let path = self.get_manifest_path(&id);
-        let bytes = rmp_serde::to_vec(table.as_ref())?;
+        let bytes = rmp_serde::to_vec(manifest.as_ref())?;
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
+                (
+                    Attribute::ContentType,
+                    AttributeValue::from(
+                        format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE,
+                    ),
+                ),
+                (
+                    Attribute::Metadata(std::borrow::Cow::Borrowed(
+                        format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
+                    )),
+                    AttributeValue::from(
+                        manifest.icechunk_manifest_format_version.to_string(),
+                    ),
+                ),
+            ])
+        } else {
+            Attributes::new()
+        };
+        let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.store.put(&path, bytes.into()).await?;
+        self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
@@ -319,7 +310,10 @@ impl Storage for ObjectStorage {
             .collect())
     }
 
-    async fn ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
+    async fn ref_versions(
+        &self,
+        ref_name: &str,
+    ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let res = self.do_ref_versions(ref_name).await;
         if self.artificially_sort_refs_in_mem {
             #[allow(clippy::expect_used)]
@@ -329,9 +323,9 @@ impl Storage for ObjectStorage {
             let mut all =
                 res.try_collect::<Vec<_>>().await.expect("Error fetching ref versions");
             all.sort();
-            futures::stream::iter(all.into_iter().map(Ok)).boxed()
+            Ok(futures::stream::iter(all.into_iter().map(Ok)).boxed())
         } else {
-            res
+            Ok(res)
         }
     }
 

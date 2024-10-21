@@ -4,7 +4,7 @@ volumes:
 services:
   minio:
     container_name: icechunk_minio
-    image: quay.io/minio/minio
+    image: minio/minio
     entrypoint: |
         /bin/sh -c '
         for bucket in testbucket externalbucket arraylake-repo-bucket
