@@ -19,6 +19,7 @@ use crate::{metadata::DataType, private};
 pub mod attributes;
 pub mod manifest;
 pub mod snapshot;
+pub mod transaction_log;
 
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
@@ -217,7 +218,7 @@ pub enum IcechunkFormatError {
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
-type IcechunkFormatVersion = u16;
+pub type IcechunkFormatVersion = u16;
 
 pub mod format_constants {
     use super::IcechunkFormatVersion;
@@ -229,6 +230,11 @@ pub mod format_constants {
     pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
     pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
     pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
+
+    pub const LATEST_ICECHUNK_TRANSACTION_LOG_FORMAT: IcechunkFormatVersion = 0;
+    pub const LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE: &str = "application/msgpack";
+    pub const LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY: &str =
+        "ic-tx-fmt-ver";
 }
 
 impl Display for Path {

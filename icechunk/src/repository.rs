@@ -18,9 +18,10 @@ pub use crate::{
     },
 };
 use crate::{
+    conflicts::{Conflict, ConflictResolution, ConflictSolver},
     format::{
-        manifest::VirtualReferenceError, snapshot::ManifestFileInfo, ManifestId,
-        SnapshotId,
+        manifest::VirtualReferenceError, snapshot::ManifestFileInfo,
+        transaction_log::TransactionLog, ManifestId, SnapshotId,
     },
     storage::virtual_ref::{
         construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
@@ -164,6 +165,8 @@ pub enum RepositoryError {
     Tag(String),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+    #[error("cannot rebase snapshot {snapshot} on top of the branch")]
+    RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
     #[error("the repository has been initialized already (default branch exists)")]
     AlreadyInitialized,
     #[error("error when handling virtual reference {0}")]
@@ -244,7 +247,7 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> Arc<dyn Storage + Send + Sync> {
         // TODO: allow tuning once we experiment with different configurations
-        Arc::new(MemCachingStorage::new(storage, 2, 2, 2, 0))
+        Arc::new(MemCachingStorage::new(storage, 2, 2, 0, 2, 0))
     }
 
     fn new(
@@ -725,12 +728,72 @@ impl Repository {
         }
     }
 
+    pub async fn rebase(
+        &mut self,
+        solver: &dyn ConflictSolver,
+        update_branch_name: &str,
+    ) -> RepositoryResult<()> {
+        let ref_data =
+            fetch_branch_tip(self.storage.as_ref(), update_branch_name).await?;
+
+        if ref_data.snapshot != self.snapshot_id {
+            let current_snapshot =
+                self.storage.fetch_snapshot(&ref_data.snapshot).await?;
+            // FIXME: this should be the whole ancestry not local
+            let anc = current_snapshot.local_ancestry().map(|meta| meta.id);
+            let new_commits = iter::once(ref_data.snapshot.clone())
+                .chain(anc.take_while(|snap_id| snap_id != &self.snapshot_id))
+                .collect::<Vec<_>>();
+
+            // TODO: this clone is expensive
+            // we currently need it to be able to process commits one by one without modifying the
+            // changeset in case of failure
+            let mut changeset = self.change_set.clone();
+
+            // we need to reverse the iterator to process them in order of oldest first
+            for snap_id in new_commits.into_iter().rev() {
+                let tx_log = self.storage.fetch_transaction_log(&snap_id).await?;
+                let repo = Repository {
+                    config: self.config().clone(),
+                    storage: self.storage.clone(),
+                    snapshot_id: snap_id.clone(),
+                    change_set: ChangeSet::default(),
+                    virtual_resolver: self.virtual_resolver.clone(),
+                };
+
+                // TODO: this should probably execute in a worker thread
+                match solver.solve(&tx_log, &repo, changeset, self).await? {
+                    ConflictResolution::Patched(patched_changeset) => {
+                        changeset = patched_changeset;
+                    }
+                    ConflictResolution::Unsolvable { reason, .. } => {
+                        return Err(RepositoryError::RebaseFailed {
+                            snapshot: snap_id,
+                            conflicts: reason,
+                        });
+                    }
+                }
+            }
+
+            self.change_set = changeset;
+            self.snapshot_id = ref_data.snapshot;
+            Ok(())
+        } else {
+            //FIXME:
+            todo!()
+        }
+    }
+
     pub fn changes(&self) -> &ChangeSet {
         &self.change_set
     }
 
     pub fn change_set_bytes(&self) -> RepositoryResult<Vec<u8>> {
         self.change_set.export_to_bytes()
+    }
+
+    pub fn change_set(&self) -> &ChangeSet {
+        &self.change_set
     }
 
     pub async fn new_branch(&self, branch_name: &str) -> RepositoryResult<BranchVersion> {
@@ -948,8 +1011,12 @@ async fn flush(
     new_snapshot.metadata.written_at = Utc::now();
 
     let new_snapshot = Arc::new(new_snapshot);
+    // FIXME: this should execute in a non-blocking context
+    let tx_log =
+        TransactionLog::new(change_set, old_snapshot.iter(), new_snapshot.iter());
     let new_snapshot_id = &new_snapshot.metadata.id;
     storage.write_snapshot(new_snapshot_id.clone(), Arc::clone(&new_snapshot)).await?;
+    storage.write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log)).await?;
 
     Ok(new_snapshot_id.clone())
 }
@@ -1095,6 +1162,10 @@ mod tests {
     use std::{error::Error, num::NonZeroU64};
 
     use crate::{
+        conflicts::{
+            basic_solver::{BasicConflictSolver, VersionSelection},
+            detector::ConflictDetector,
+        },
         format::manifest::ChunkInfo,
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
@@ -2156,6 +2227,282 @@ mod tests {
         assert!(msg == "from 1" || msg == "from 2");
 
         assert_eq!(parents[1].message.as_str(), Snapshot::INITIAL_COMMIT_MESSAGE);
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut repo = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        repo.add_group("/".try_into().unwrap()).await?;
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![5],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let new_array_path: Path = "/array".try_into().unwrap();
+        repo.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        repo.commit(Ref::DEFAULT_BRANCH, "create array", None).await?;
+
+        let mut repo1 =
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+        let mut repo2 =
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+
+        repo1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        repo1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        let conflicting_snap =
+            repo1.commit("main", "write two chunks with repo 1", None).await?;
+
+        repo2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        if let Err(RepositoryError::Conflict { .. }) =
+            repo2.commit("main", "write one chunk with repo2", None).await
+        {
+            let result = repo2.rebase(&ConflictDetector, "main").await;
+            assert!(matches!(
+            result,
+            Err(RepositoryError::RebaseFailed { snapshot, conflicts, })
+                if snapshot == conflicting_snap &&
+                conflicts.len() == 1 &&
+                matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+                            if path == &new_array_path && chunk_coordinates == &[ChunkIndices(vec![0])].into())
+                ));
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_rebase_fast_forwarding_over_chunk_writes() -> Result<(), Box<dyn Error>>
+    {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut repo = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        repo.add_group("/".try_into().unwrap()).await?;
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![5],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let new_array_path: Path = "/array".try_into().unwrap();
+        repo.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        let array_created_snap =
+            repo.commit(Ref::DEFAULT_BRANCH, "create array", None).await?;
+
+        let mut repo1 =
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+
+        repo1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        repo1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        let conflicting_snap =
+            repo1.commit("main", "write two chunks with repo 1", None).await?;
+
+        // let's try to create a new commit, that conflicts with the previous one but writes to
+        // different chunks
+        let mut repo2 =
+            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        repo2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![2]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        if let Err(RepositoryError::Conflict { .. }) =
+            repo2.commit("main", "write one chunk with repo2", None).await
+        {
+            let solver = BasicConflictSolver::default();
+            // different chunks were written so this should fast forward
+            repo2.rebase(&solver, "main").await?;
+            repo2.commit("main", "after conflict", None).await?;
+            let data =
+                repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello".into())));
+            let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+            assert_eq!(commits[0].message, "after conflict");
+            assert_eq!(commits[1].message, "write two chunks with repo 1");
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
+        // reset the branch to what repo1 wrote
+        let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+        update_branch(
+            storage.as_ref(),
+            "main",
+            conflicting_snap.clone(),
+            Some(&current_snap),
+            false,
+        )
+        .await?;
+
+        // let's try to create a new commit, that conflicts with the previous one and writes
+        // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
+        let mut repo2 =
+            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        repo2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("overridden".into())),
+            )
+            .await?;
+
+        if let Err(RepositoryError::Conflict { .. }) =
+            repo2.commit("main", "write one chunk with repo2", None).await
+        {
+            let solver = BasicConflictSolver {
+                on_chunk_conflict: VersionSelection::Fail,
+                ..BasicConflictSolver::default()
+            };
+
+            let res = repo2.rebase(&solver, "main").await;
+            //let expected_conflicts =
+            //[(new_array_path.clone(), 1_usize)].into_iter().collect();
+            dbg!(&res);
+            assert!(matches!(
+            res,
+            Err(RepositoryError::RebaseFailed { snapshot, conflicts, })
+                if snapshot == conflicting_snap &&
+                conflicts.len() == 1 &&
+                matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+                            if path == &new_array_path && chunk_coordinates == &[ChunkIndices(vec![1])].into())
+                ));
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
+        // reset the branch to what repo1 wrote
+        let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+        update_branch(
+            storage.as_ref(),
+            "main",
+            conflicting_snap.clone(),
+            Some(&current_snap),
+            false,
+        )
+        .await?;
+
+        // let's try to create a new commit, that conflicts with the previous one and writes
+        // to the same chunk, recovering with "UseOurs" policy
+        let mut repo2 =
+            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        repo2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("overridden".into())),
+            )
+            .await?;
+        if let Err(RepositoryError::Conflict { .. }) =
+            repo2.commit("main", "write one chunk with repo2", None).await
+        {
+            let solver = BasicConflictSolver {
+                on_chunk_conflict: VersionSelection::UseOurs,
+                ..Default::default()
+            };
+
+            repo2.rebase(&solver, "main").await?;
+            repo2.commit("main", "after conflict", None).await?;
+            let data =
+                repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("overridden".into())));
+            let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+            assert_eq!(commits[0].message, "after conflict");
+            assert_eq!(commits[1].message, "write two chunks with repo 1");
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
+        // reset the branch to what repo1 wrote
+        let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+        update_branch(
+            storage.as_ref(),
+            "main",
+            conflicting_snap.clone(),
+            Some(&current_snap),
+            false,
+        )
+        .await?;
+
+        // let's try to create a new commit, that conflicts with the previous one and writes
+        // to the same chunk, recovering with "UseTheirs" policy
+        let mut repo2 =
+            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        repo2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("overridden".into())),
+            )
+            .await?;
+        if let Err(RepositoryError::Conflict { .. }) =
+            repo2.commit("main", "write one chunk with repo2", None).await
+        {
+            let solver = BasicConflictSolver {
+                on_chunk_conflict: VersionSelection::UseTheirs,
+                ..Default::default()
+            };
+
+            repo2.rebase(&solver, "main").await?;
+            repo2.commit("main", "after conflict", None).await?;
+            let data =
+                repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello".into())));
+            let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+            assert_eq!(commits[0].message, "after conflict");
+            assert_eq!(commits[1].message, "write two chunks with repo 1");
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
         Ok(())
     }
 
