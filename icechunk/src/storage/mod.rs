@@ -31,7 +31,8 @@ pub use object_store::ObjectStorage;
 use crate::{
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
-        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+        transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
+        SnapshotId,
     },
     private,
 };
@@ -76,6 +77,7 @@ const MANIFEST_PREFIX: &str = "manifests/";
 // const ATTRIBUTES_PREFIX: &str = "attributes/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
+const TRANSACTION_PREFIX: &str = "transactions/";
 
 /// Fetch and write the parquet files that represent the repository in object store
 ///
@@ -90,6 +92,10 @@ pub trait Storage: fmt::Debug + private::Sealed {
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
     async fn fetch_manifests(&self, id: &ManifestId) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
     async fn fetch_chunk(&self, id: &ChunkId, range: &ByteRange) -> StorageResult<Bytes>; // FIXME: format flags
+    async fn fetch_transaction_log(
+        &self,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<TransactionLog>>; // FIXME: format flags
 
     async fn write_snapshot(
         &self,
@@ -107,6 +113,11 @@ pub trait Storage: fmt::Debug + private::Sealed {
         table: Arc<Manifest>,
     ) -> StorageResult<()>;
     async fn write_chunk(&self, id: ChunkId, bytes: Bytes) -> StorageResult<()>;
+    async fn write_transaction_log(
+        &self,
+        id: SnapshotId,
+        log: Arc<TransactionLog>,
+    ) -> StorageResult<()>;
 
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;
     async fn ref_names(&self) -> StorageResult<Vec<String>>;
