@@ -2348,7 +2348,7 @@ mod tests {
         store.checkout(VersionInfo::SnapshotId(new_snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        store.tag("tag_0",  &new_snapshot_id).await.unwrap();
+        store.tag("tag_0", &new_snapshot_id).await.unwrap();
         store.checkout(VersionInfo::TagRef("tag_0".to_string())).await.unwrap();
         assert_eq!(store.mode, AccessMode::ReadOnly);
 
