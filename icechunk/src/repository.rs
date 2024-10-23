@@ -143,6 +143,8 @@ impl RepositoryBuilder {
 pub enum RepositoryError {
     #[error("error contacting storage {0}")]
     StorageError(#[from] StorageError),
+    #[error("invalid snapshot ID: `{id}`")]
+    InvalidSnapshotId { id: SnapshotId },
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
     #[error("node not found at `{path}`: {message}")]
@@ -267,6 +269,16 @@ impl Repository {
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    pub(crate) async fn raise_if_invalid_snapshot_id(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<()> {
+        self.storage.fetch_snapshot(snapshot_id).await.map_err(|_| {
+            RepositoryError::InvalidSnapshotId { id: snapshot_id.clone() }
+        })?;
+        Ok(())
     }
 
     pub(crate) fn set_snapshot_id(&mut self, snapshot_id: SnapshotId) {

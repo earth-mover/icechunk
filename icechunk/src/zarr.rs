@@ -419,6 +419,7 @@ impl Store {
         match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
+                repo.raise_if_invalid_snapshot_id(&sid).await?;
                 repo.set_snapshot_id(sid);
                 self.mode = AccessMode::ReadOnly;
             }
@@ -472,6 +473,7 @@ impl Store {
         match self.current_branch() {
             None => Err(StoreError::NotOnBranch),
             Some(branch) => {
+                guard.raise_if_invalid_snapshot_id(&to_snapshot).await?;
                 let old_snapshot = guard.snapshot_id();
                 let storage = guard.storage();
                 let overwrite = guard.config().unsafe_overwrite_refs;
@@ -2340,6 +2342,13 @@ mod tests {
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_snapshot_id = store.commit("update").await.unwrap();
+
+        let random_id = SnapshotId::random();
+        let res = store.checkout(VersionInfo::SnapshotId(random_id.clone())).await;
+        assert!(matches!(
+            res,
+            Err(StoreError::RepositoryError(RepositoryError::InvalidSnapshotId { .. }))
+        ));
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.mode, AccessMode::ReadOnly);
