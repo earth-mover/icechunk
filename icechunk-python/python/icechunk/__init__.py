@@ -159,6 +159,24 @@ class IcechunkStore(Store, SyncMixin):
         store = pyicechunk_store_create(storage, config=config)
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
+    def set_mode(self, mode: AccessModeLiteral) -> None:
+        """
+        Set the mode on this Store.
+
+        Parameters
+        ----------
+        mode: AccessModeLiteral
+            The new mode to use.
+
+        Returns
+        -------
+        None
+
+        """
+        read_only = mode == "r"
+        self._store.set_mode(read_only)
+
+
     def with_mode(self, mode: AccessModeLiteral) -> Self:
         """
         Return a new store of the same type pointing to the same location with a new mode.

@@ -329,6 +329,18 @@ impl PyIcechunkStore {
         Ok(Cow::Owned(serialized))
     }
 
+    fn set_mode(&self, read_only: bool) -> PyResult<()> {
+        let access_mode = if read_only {
+            icechunk::zarr::AccessMode::ReadOnly
+        } else {
+            icechunk::zarr::AccessMode::ReadWrite
+        };
+
+        let mut writeable_store = self.store.blocking_write();
+        writeable_store.set_mode(access_mode);
+        Ok(())
+    }
+
     fn with_mode(&self, read_only: bool) -> PyResult<PyIcechunkStore> {
         let access_mode = if read_only {
             icechunk::zarr::AccessMode::ReadOnly

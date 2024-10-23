@@ -346,6 +346,10 @@ impl Store {
         }
     }
 
+    pub fn set_mode(&mut self, mode: AccessMode) {
+        self.mode = mode;
+    }
+
     /// Creates a new clone of the store with the given access mode.
     pub fn with_access_mode(&self, mode: AccessMode) -> Self {
         Store {
@@ -396,8 +400,12 @@ impl Store {
 
     /// Checkout a specific version of the repository. This can be a snapshot id, a tag, or a branch tip.
     ///
-    /// If the version is a branch tip, the branch will be set as the current branch. If the version
-    /// is a tag or snapshot id, the current branch will be unset and the store will be in detached state.
+    /// If the version is a branch tip, the branch will be set as the current branch.
+    /// The current [`AccessMode`] will be unchanged.
+    ///
+    /// If the version is a tag or snapshot id, the current branch will be unset and the store
+    /// will be in detached state. No commits are allowed in this state. Further the store will
+    /// be set to [`AccessMode::ReadOnly`] mode so that any attempts to modify the store will fail.
     ///
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
@@ -412,10 +420,12 @@ impl Store {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
                 repo.set_snapshot_id(sid);
+                self.mode = AccessMode::ReadOnly;
             }
             VersionInfo::TagRef(tag) => {
                 self.current_branch = None;
-                repo.set_snapshot_from_tag(tag.as_str()).await?
+                repo.set_snapshot_from_tag(tag.as_str()).await?;
+                self.mode = AccessMode::ReadOnly;
             }
             VersionInfo::BranchTipRef(branch) => {
                 self.current_branch = Some(branch.clone());
@@ -2332,11 +2342,18 @@ mod tests {
         let new_snapshot_id = store.commit("update").await.unwrap();
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
+        assert_eq!(store.mode, AccessMode::ReadOnly);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
+        store.checkout(VersionInfo::SnapshotId(new_snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
+        store.tag("tag_0", &new_snapshot_id).await.unwrap();
+        store.checkout(VersionInfo::TagRef("tag_0".to_string())).await.unwrap();
+        assert_eq!(store.mode, AccessMode::ReadOnly);
+
+        store.checkout(VersionInfo::BranchTipRef("main".to_string())).await.unwrap();
+        store.set_mode(AccessMode::ReadWrite);
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(store.has_uncommitted_changes().await, true);
