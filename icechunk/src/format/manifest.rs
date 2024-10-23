@@ -112,10 +112,10 @@ pub struct Manifest {
 impl Manifest {
     pub fn get_chunk_payload(
         &self,
-        node: NodeId,
+        node: &NodeId,
         coord: ChunkIndices,
     ) -> IcechunkResult<&ChunkPayload> {
-        self.chunks.get(&(node, coord)).ok_or_else(|| {
+        self.chunks.get(&(node.clone(), coord)).ok_or_else(|| {
             // FIXME: error
             IcechunkFormatError::ChunkCoordinatesNotFound { coords: ChunkIndices(vec![]) }
         })
@@ -123,9 +123,9 @@ impl Manifest {
 
     pub fn iter(
         self: Arc<Self>,
-        node: &NodeId,
+        node: NodeId,
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
-        PayloadIterator { manifest: self, for_node: *node, last_key: None }
+        PayloadIterator { manifest: self, for_node: node, last_key: None }
     }
 
     pub fn new(chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>) -> Self {
@@ -188,7 +188,7 @@ impl Iterator for PayloadIterator {
                     .manifest
                     .chunks
                     .range((
-                        Bound::Included((self.for_node, ChunkIndices(vec![]))),
+                        Bound::Included((self.for_node.clone(), ChunkIndices(vec![]))),
                         Bound::Unbounded,
                     ))
                     .next()

@@ -74,7 +74,6 @@ pub struct Repository {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
-    last_node_id: Option<NodeId>,
     change_set: ChangeSet,
     virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
 }
@@ -257,7 +256,6 @@ impl Repository {
             snapshot_id,
             config,
             storage,
-            last_node_id: None,
             change_set: change_set.unwrap_or_default(),
             virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::new(
                 virtual_ref_config,
@@ -329,7 +327,7 @@ impl Repository {
     pub async fn add_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_node(&path).await {
             Err(RepositoryError::NodeNotFound { .. }) => {
-                let id = self.reserve_node_id().await?;
+                let id = NodeId::random();
                 self.change_set.add_group(path.clone(), id);
                 Ok(())
             }
@@ -347,7 +345,7 @@ impl Repository {
     pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_group(&path).await {
             Ok(node) => {
-                self.change_set.delete_group(node.path, node.id);
+                self.change_set.delete_group(node.path, &node.id);
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -365,7 +363,7 @@ impl Repository {
     ) -> RepositoryResult<()> {
         match self.get_node(&path).await {
             Err(RepositoryError::NodeNotFound { .. }) => {
-                let id = self.reserve_node_id().await?;
+                let id = NodeId::random();
                 self.change_set.add_array(path, id, metadata);
                 Ok(())
             }
@@ -396,7 +394,7 @@ impl Repository {
     pub async fn delete_array(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_array(&path).await {
             Ok(node) => {
-                self.change_set.delete_array(node.path, node.id);
+                self.change_set.delete_array(node.path, &node.id);
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -427,24 +425,6 @@ impl Repository {
         self.get_array(&path)
             .await
             .map(|node| self.change_set.set_chunk_ref(node.id, coord, data))
-    }
-
-    async fn compute_last_node_id(&self) -> RepositoryResult<NodeId> {
-        let node_id = self
-            .storage
-            .fetch_snapshot(&self.snapshot_id)
-            .await?
-            .iter()
-            .max_by_key(|n| n.id)
-            .map_or(0, |n| n.id);
-        Ok(node_id)
-    }
-
-    async fn reserve_node_id(&mut self) -> RepositoryResult<NodeId> {
-        let last = self.last_node_id.unwrap_or(self.compute_last_node_id().await?);
-        let new = last + 1;
-        self.last_node_id = Some(new);
-        Ok(new)
     }
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
@@ -490,7 +470,7 @@ impl Repository {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
-                    self.change_set.get_chunk_ref(node.id, coords).cloned();
+                    self.change_set.get_chunk_ref(&node.id, coords).cloned();
 
                 // If session_chunk is not None we have to return it, because is the update the
                 // user made in the current session
@@ -628,7 +608,7 @@ impl Repository {
         for manifest in manifests {
             let manifest_structure =
                 self.storage.fetch_manifests(&manifest.object_id).await?;
-            match manifest_structure.get_chunk_payload(node, coords.clone()) {
+            match manifest_structure.get_chunk_payload(&node, coords.clone()) {
                 Ok(payload) => {
                     return Ok(Some(payload.clone()));
                 }
@@ -919,14 +899,14 @@ async fn get_existing_node<'a>(
         err => RepositoryError::FormatError(err),
     })?;
     let session_atts = change_set
-        .get_user_attributes(node.id)
+        .get_user_attributes(&node.id)
         .cloned()
         .map(|a| a.map(UserAttributesSnapshot::Inline));
     let res = NodeSnapshot {
         user_attributes: session_atts.unwrap_or_else(|| node.user_attributes.clone()),
         ..node.clone()
     };
-    if let Some(session_meta) = change_set.get_updated_zarr_metadata(node.id).cloned() {
+    if let Some(session_meta) = change_set.get_updated_zarr_metadata(&node.id).cloned() {
         if let NodeData::Array(_, manifests) = res.node_data {
             Ok(NodeSnapshot {
                 node_data: NodeData::Array(session_meta, manifests),
@@ -1038,17 +1018,18 @@ async fn verified_node_chunk_iterator<'a>(
         NodeData::Array(_, manifests) => {
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
-                    .array_chunks_iterator(node.id, &node.path)
+                    .array_chunks_iterator(&node.id, &node.path)
                     .map(|(idx, _)| idx)
                     .collect(),
             );
 
+            let node_id_c = node.id.clone();
             let new_chunks = change_set
-                .array_chunks_iterator(node.id, &node.path)
+                .array_chunks_iterator(&node.id, &node.path)
                 .filter_map(move |(idx, payload)| {
                     payload.as_ref().map(|payload| {
                         Ok(ChunkInfo {
-                            node: node.id,
+                            node: node_id_c.clone(),
                             coord: idx.clone(),
                             payload: payload.clone(),
                         })
@@ -1060,6 +1041,9 @@ async fn verified_node_chunk_iterator<'a>(
                     futures::stream::iter(manifests)
                         .then(move |manifest_ref| {
                             let new_chunk_indices = new_chunk_indices.clone();
+                            let node_id_c = node.id.clone();
+                            let node_id_c2 = node.id.clone();
+                            let node_id_c3 = node.id.clone();
                             async move {
                                 let manifest = storage
                                     .fetch_manifests(&manifest_ref.object_id)
@@ -1067,18 +1051,20 @@ async fn verified_node_chunk_iterator<'a>(
                                 match manifest {
                                     Ok(manifest) => {
                                         let old_chunks = manifest
-                                            .iter(&node.id)
+                                            .iter(node_id_c.clone())
                                             .filter(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
                                             .map(move |(coord, payload)| ChunkInfo {
-                                                node: node.id,
+                                                node: node_id_c2.clone(),
                                                 coord,
                                                 payload,
                                             });
 
                                         let old_chunks = change_set
-                                            .update_existing_chunks(node.id, old_chunks);
+                                            .update_existing_chunks(
+                                                node_id_c3, old_chunks,
+                                            );
                                         futures::future::Either::Left(
                                             futures::stream::iter(old_chunks.map(Ok)),
                                         )
@@ -1241,9 +1227,9 @@ mod tests {
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
 
-        let array_id = 2;
+        let array_id = NodeId::random();
         let chunk1 = ChunkInfo {
-            node: array_id,
+            node: array_id.clone(),
             coord: ChunkIndices(vec![0, 0, 0]),
             payload: ChunkPayload::Ref(ChunkRef {
                 id: ObjectId::random(),
@@ -1253,7 +1239,7 @@ mod tests {
         };
 
         let chunk2 = ChunkInfo {
-            node: array_id,
+            node: array_id.clone(),
             coord: ChunkIndices(vec![0, 0, 1]),
             payload: ChunkPayload::Inline("hello".into()),
         };
@@ -1289,16 +1275,17 @@ mod tests {
             extents: ManifestExtents(vec![]),
         };
         let array1_path: Path = "/array1".try_into().unwrap();
+        let node_id = NodeId::random();
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
-                id: 1,
+                id: node_id,
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: array1_path.clone(),
-                id: array_id,
+                id: array_id.clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
                 )),
@@ -1363,15 +1350,11 @@ mod tests {
         ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
 
         let node = ds.get_node(&new_array_path).await;
-        assert_eq!(
+        assert!(matches!(
             node.ok(),
-            Some(NodeSnapshot {
-                path: new_array_path.clone(),
-                id: 6,
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            }),
-        );
+            Some(NodeSnapshot {path, user_attributes, node_data,..})
+                if path== new_array_path.clone() && user_attributes.is_none() && node_data == NodeData::Array(zarr_meta2.clone(), vec![])
+        ));
 
         // set user attributes for the new array and retrieve them
         ds.set_user_attributes(
@@ -1380,17 +1363,15 @@ mod tests {
         )
         .await?;
         let node = ds.get_node(&new_array_path).await;
-        assert_eq!(
+        assert!(matches!(
             node.ok(),
-            Some(NodeSnapshot {
-                path: "/group/array2".try_into().unwrap(),
-                id: 6,
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"n":42}"#).unwrap()
-                )),
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            }),
-        );
+            Some(NodeSnapshot {path, user_attributes, node_data, ..})
+                if path == "/group/array2".try_into().unwrap() &&
+                    user_attributes ==  Some(UserAttributesSnapshot::Inline(
+                        UserAttributes::try_new(br#"{"n":42}"#).unwrap()
+                    )) &&
+                    node_data == NodeData::Array(zarr_meta2.clone(), vec![])
+        ));
 
         let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
@@ -1485,30 +1466,36 @@ mod tests {
             ]),
         };
 
-        change_set.add_array("/foo/bar".try_into().unwrap(), 1, zarr_meta.clone());
-        change_set.add_array("/foo/baz".try_into().unwrap(), 2, zarr_meta);
+        let node_id1 = NodeId::random();
+        let node_id2 = NodeId::random();
+        change_set.add_array(
+            "/foo/bar".try_into().unwrap(),
+            node_id1.clone(),
+            zarr_meta.clone(),
+        );
+        change_set.add_array("/foo/baz".try_into().unwrap(), node_id2.clone(), zarr_meta);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk_ref(1, ChunkIndices(vec![0, 1]), None);
+        change_set.set_chunk_ref(node_id1.clone(), ChunkIndices(vec![0, 1]), None);
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
-            1,
+            node_id1.clone(),
             ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
         );
         change_set.set_chunk_ref(
-            1,
+            node_id1.clone(),
             ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
         );
         change_set.set_chunk_ref(
-            2,
+            node_id2.clone(),
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
         );
         change_set.set_chunk_ref(
-            2,
+            node_id2.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
         );
@@ -1522,7 +1509,7 @@ mod tests {
                 (
                     "/foo/baz".try_into().unwrap(),
                     ChunkInfo {
-                        node: 2,
+                        node: node_id2.clone(),
                         coord: ChunkIndices(vec![0]),
                         payload: ChunkPayload::Inline("baz1".into()),
                     },
@@ -1530,7 +1517,7 @@ mod tests {
                 (
                     "/foo/baz".try_into().unwrap(),
                     ChunkInfo {
-                        node: 2,
+                        node: node_id2.clone(),
                         coord: ChunkIndices(vec![1]),
                         payload: ChunkPayload::Inline("baz2".into()),
                     },
@@ -1538,7 +1525,7 @@ mod tests {
                 (
                     "/foo/bar".try_into().unwrap(),
                     ChunkInfo {
-                        node: 1,
+                        node: node_id1.clone(),
                         coord: ChunkIndices(vec![1, 0]),
                         payload: ChunkPayload::Inline("bar1".into()),
                     },
@@ -1546,7 +1533,7 @@ mod tests {
                 (
                     "/foo/bar".try_into().unwrap(),
                     ChunkInfo {
-                        node: 1,
+                        node: node_id1.clone(),
                         coord: ChunkIndices(vec![1, 1]),
                         payload: ChunkPayload::Inline("bar2".into()),
                     },
@@ -1572,36 +1559,28 @@ mod tests {
         ds.add_group(Path::root()).await?;
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
 
+        //let node_id3 = NodeId::random();
         assert_eq!(snapshot_id, ds.snapshot_id);
-        assert_eq!(
+        assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: Path::root(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+            Some(NodeSnapshot { path, user_attributes, node_data, .. })
+              if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
+
         ds.add_group("/group".try_into().unwrap()).await?;
         let _snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
-        assert_eq!(
+        assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: Path::root(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        assert_eq!(
+            Some(NodeSnapshot { path, user_attributes, node_data, .. })
+              if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
+
+        assert!(matches!(
             ds.get_node(&"/group".try_into().unwrap()).await.ok(),
-            Some(NodeSnapshot {
-                id: 2,
-                path: "/group".try_into().unwrap(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+            Some(NodeSnapshot { path, user_attributes, node_data, .. })
+              if path == "/group".try_into().unwrap() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
+
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Float16,
@@ -1631,31 +1610,23 @@ mod tests {
         .await?;
 
         let _snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
-        assert_eq!(
+        assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: Path::root(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
-        assert_eq!(
+            Some(NodeSnapshot { path, user_attributes, node_data, .. })
+              if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
+        assert!(matches!(
             ds.get_node(&"/group".try_into().unwrap()).await.ok(),
-            Some(NodeSnapshot {
-                id: 2,
-                path: "/group".try_into().unwrap(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+            Some(NodeSnapshot { path, user_attributes, node_data, .. })
+              if path == "/group".try_into().unwrap() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
-                id: 3,
                 path,
                 user_attributes: None,
-                node_data: NodeData::Array(meta, manifests)
+                node_data: NodeData::Array(meta, manifests),
+                ..
             }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
         ));
         assert_eq!(
@@ -1719,10 +1690,10 @@ mod tests {
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
-                id: 3,
                 path,
                 user_attributes: Some(atts),
-                node_data: NodeData::Array(meta, manifests)
+                node_data: NodeData::Array(meta, manifests),
+                ..
             }) if path == new_array_path && meta == new_meta.clone() &&
                     manifests.len() == 1 &&
                     atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
@@ -2082,27 +2053,19 @@ mod tests {
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
-        assert_eq!(
-            ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: Path::root(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+        assert!(matches!(
+                ds.get_node(&Path::root()).await.ok(),
+                Some(NodeSnapshot { path, user_attributes, node_data, ..})
+                    if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
 
         let mut ds =
             Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
-        assert_eq!(
-            ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot {
-                id: 1,
-                path: Path::root(),
-                user_attributes: None,
-                node_data: NodeData::Group
-            })
-        );
+        assert!(matches!(
+                ds.get_node(&Path::root()).await.ok(),
+                Some(NodeSnapshot { path, user_attributes, node_data, ..})
+                        if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
