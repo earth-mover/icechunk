@@ -27,7 +27,7 @@ use crate::{
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
     },
-    refs::{update_branch, BranchVersion, Ref, RefError},
+    refs::{list_refs, update_branch, BranchVersion, Ref, RefError},
     repository::{
         get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
         Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
@@ -522,6 +522,13 @@ impl Store {
     pub async fn tag(&mut self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
         self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
+    }
+
+    /// Lists all references namely branch and tag names.
+    pub async fn list_refs(&self) -> StoreResult<Vec<Ref>> {
+        let guard = self.repository.read().await;
+        let storage = guard.storage().as_ref();
+        Ok(list_refs(storage).await?)
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
