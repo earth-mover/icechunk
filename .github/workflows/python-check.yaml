@@ -32,7 +32,7 @@ jobs:
           docker compose up -d minio
       - name: Wait for MinIO to be ready
         run: |
-          for i in {1..10}; do
+          for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
               break
               fi
@@ -68,6 +68,14 @@ jobs:
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
           ruff check
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
       - name: pytest
         shell: bash
         working-directory: icechunk-python
@@ -77,3 +85,11 @@ jobs:
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
           pytest
+      # explicitly save the cache so it gets updated, also do this even if it fails.
+      - name: Save cached hypothesis directory
+        id: save-hypothesis-cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}

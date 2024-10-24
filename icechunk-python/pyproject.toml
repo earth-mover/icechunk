@@ -37,6 +37,7 @@ test = [
   "ruff",
   "dask",
   "distributed",
+  "hypothesis",
 ]
 
 [tool.maturin]
