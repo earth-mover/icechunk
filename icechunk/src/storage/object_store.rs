@@ -1,8 +1,8 @@
 use crate::{
     format::{
         attributes::AttributesTable, format_constants, manifest::Manifest,
-        snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
-        ObjectId, SnapshotId,
+        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
+        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
     },
     private,
 };
@@ -37,6 +37,7 @@ impl From<&ByteRange> for Option<GetRange> {
 const SNAPSHOT_PREFIX: &str = "snapshots/";
 const MANIFEST_PREFIX: &str = "manifests/";
 // const ATTRIBUTES_PREFIX: &str = "attributes/";
+const TRANSACTION_PREFIX: &str = "transactions/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 
@@ -116,6 +117,10 @@ impl ObjectStorage {
         self.get_path(MANIFEST_PREFIX, id)
     }
 
+    fn get_transaction_path(&self, id: &SnapshotId) -> ObjectPath {
+        self.get_path(TRANSACTION_PREFIX, id)
+    }
+
     fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
         self.get_path(CHUNK_PREFIX, id)
     }
@@ -174,6 +179,17 @@ impl Storage for ObjectStorage {
         id: &ManifestId,
     ) -> Result<Arc<Manifest>, StorageError> {
         let path = self.get_manifest_path(id);
+        let bytes = self.store.get(&path).await?.bytes().await?;
+        // TODO: optimize using from_read
+        let res = rmp_serde::from_slice(bytes.as_ref())?;
+        Ok(Arc::new(res))
+    }
+
+    async fn fetch_transaction_log(
+        &self,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<TransactionLog>> {
+        let path = self.get_transaction_path(id);
         let bytes = self.store.get(&path).await?.bytes().await?;
         // TODO: optimize using from_read
         let res = rmp_serde::from_slice(bytes.as_ref())?;
@@ -242,6 +258,39 @@ impl Storage for ObjectStorage {
                     )),
                     AttributeValue::from(
                         manifest.icechunk_manifest_format_version.to_string(),
+                    ),
+                ),
+            ])
+        } else {
+            Attributes::new()
+        };
+        let options = PutOptions { attributes, ..PutOptions::default() };
+        // FIXME: use multipart
+        self.store.put_opts(&path, bytes.into(), options).await?;
+        Ok(())
+    }
+
+    async fn write_transaction_log(
+        &self,
+        id: SnapshotId,
+        log: Arc<TransactionLog>,
+    ) -> StorageResult<()> {
+        let path = self.get_transaction_path(&id);
+        let bytes = rmp_serde::to_vec(log.as_ref())?;
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![
+                (
+                    Attribute::ContentType,
+                    AttributeValue::from(
+                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE,
+                    ),
+                ),
+                (
+                    Attribute::Metadata(std::borrow::Cow::Borrowed(
+                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
+                    )),
+                    AttributeValue::from(
+                        log.icechunk_transaction_log_format_version.to_string(),
                     ),
                 ),
             ])

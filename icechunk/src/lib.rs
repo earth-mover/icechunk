@@ -18,6 +18,7 @@
 //! - The datastructures are represented by concrete types in the [`mod@format`] modules.
 //!   These datastructures use Arrow RecordBatches for representation.
 pub mod change_set;
+pub mod conflict;
 pub mod format;
 pub mod metadata;
 pub mod refs;

@@ -19,19 +19,23 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
-    new_groups: HashMap<Path, NodeId>,
-    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
-    updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
+    pub(crate) new_groups: HashMap<Path, NodeId>,
+    pub(crate) new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
+    pub(crate) updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
     // These paths may point to Arrays or Groups,
     // since both Groups and Arrays support UserAttributes
-    updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
+    pub(crate) updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
-    deleted_groups: HashSet<Path>,
-    deleted_arrays: HashSet<Path>,
+    pub(crate) set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    pub(crate) deleted_groups: HashSet<Path>,
+    pub(crate) deleted_arrays: HashSet<Path>,
 }
 
 impl ChangeSet {
+    pub fn written_arrays(&self) -> impl Iterator<Item = &NodeId> {
+        self.set_chunks.keys()
+    }
+
     pub fn is_empty(&self) -> bool {
         self == &ChangeSet::default()
     }
@@ -174,6 +178,12 @@ impl ChangeSet {
         self.set_chunks.get(node_id).and_then(|h| h.get(coords))
     }
 
+    pub fn unset_chunk_ref(&mut self, node_id: NodeId, coord: &ChunkIndices) {
+        self.set_chunks.entry(node_id).and_modify(|h| {
+            h.remove(coord);
+        });
+    }
+
     pub fn array_chunks_iterator(
         &self,
         node_id: &NodeId,
@@ -207,8 +217,22 @@ impl ChangeSet {
         })
     }
 
+    pub fn all_modified_chunks_iterator(
+        &self,
+    ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> + '_ {
+        self.set_chunks.iter().map(|(node, changes)| (node, changes.keys()))
+    }
+
     pub fn new_nodes(&self) -> impl Iterator<Item = &Path> {
-        self.new_groups.keys().chain(self.new_arrays.keys())
+        self.new_groups().chain(self.new_arrays())
+    }
+
+    pub fn new_groups(&self) -> impl Iterator<Item = &Path> {
+        self.new_groups.keys()
+    }
+
+    pub fn new_arrays(&self) -> impl Iterator<Item = &Path> {
+        self.new_arrays.keys()
     }
 
     pub fn take_chunks(

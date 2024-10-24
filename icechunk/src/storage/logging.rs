@@ -47,6 +47,17 @@ impl Storage for LoggingStorage {
         self.backend.fetch_snapshot(id).await
     }
 
+    async fn fetch_transaction_log(
+        &self,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<crate::format::transaction_log::TransactionLog>> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_transaction_log".to_string(), id.0.to_vec()));
+        self.backend.fetch_transaction_log(id).await
+    }
+
     async fn fetch_attributes(
         &self,
         id: &AttributesId,
@@ -87,6 +98,14 @@ impl Storage for LoggingStorage {
         table: Arc<Snapshot>,
     ) -> Result<(), StorageError> {
         self.backend.write_snapshot(id, table).await
+    }
+
+    async fn write_transaction_log(
+        &self,
+        id: SnapshotId,
+        log: Arc<crate::format::transaction_log::TransactionLog>,
+    ) -> StorageResult<()> {
+        self.backend.write_transaction_log(id, log).await
     }
 
     async fn write_attributes(
