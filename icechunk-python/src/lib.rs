@@ -40,6 +40,38 @@ struct PyIcechunkStore {
     store: Arc<RwLock<Store>>,
 }
 
+#[pyclass(name = "Ref")]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum PyRef {
+    Tag { name: String },
+    Branch { name: String },
+}
+
+impl From<Ref> for PyRef {
+    fn from(reference: Ref) -> Self {
+        match reference {
+            Ref::Tag(name) => Self::Tag { name },
+            Ref::Branch(name) => Self::Branch { name },
+        }
+    }
+}
+
+#[pymethods]
+impl PyRef {
+    fn __repr__(&self) -> PyResult<String> {
+        match self {
+            PyRef::Branch { name } => Ok(format!("Branch('{}')", name)),
+            PyRef::Tag { name } => Ok(format!("Tag('{}')", name)),
+        }
+    }
+    fn __str__(&self) -> PyResult<String> {
+        match self {
+            PyRef::Branch { name } => Ok(name.to_owned()),
+            PyRef::Tag { name } => Ok(name.to_owned()),
+        }
+    }
+}
+
 #[pyclass(name = "StoreConfig")]
 #[derive(Clone, Debug, Default)]
 struct PyStoreConfig {
@@ -430,6 +462,25 @@ impl PyIcechunkStore {
         let snapshot_id =
             pyo3_asyncio_0_21::tokio::get_runtime().block_on(store.snapshot_id());
         Ok(snapshot_id.to_string())
+    }
+
+    fn list_refs<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyIcechunkStoreResult<Bound<'py, PyList>> {
+        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+            let store = self.store.read().await;
+            let list = store
+                .list_refs()
+                .await?
+                .into_iter()
+                .map(|parent| {
+                    let parent = Into::<PyRef>::into(parent);
+                    Python::with_gil(|py| parent.into_py(py))
+                })
+                .collect::<Vec<_>>();
+            Ok(PyList::new_bound(py, list))
+        })
     }
 
     fn async_commit<'py>(
@@ -1044,6 +1095,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStoreConfig>()?;
     m.add_class::<PySnapshotMetadata>()?;
     m.add_class::<PyVirtualRefConfig>()?;
+    m.add_class::<PyRef>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(async_pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;
