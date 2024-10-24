@@ -29,9 +29,10 @@ use crate::{
     },
     refs::{update_branch, BranchVersion, Ref, RefError},
     repository::{
-        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
-        Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
-        RepositoryResult, StorageTransformer, UserAttributes, ZarrArrayMetadata,
+        get_chunk, raise_if_invalid_snapshot_id, ArrayShape, ChunkIndices,
+        ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, DimensionNames,
+        FillValue, Path, RepositoryError, RepositoryResult, StorageTransformer,
+        UserAttributes, ZarrArrayMetadata,
     },
     storage::{
         s3::{S3Config, S3Storage},
@@ -419,6 +420,7 @@ impl Store {
         match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
+                raise_if_invalid_snapshot_id(repo.storage().as_ref(), &sid).await?;
                 repo.set_snapshot_id(sid);
                 self.mode = AccessMode::ReadOnly;
             }
@@ -472,8 +474,9 @@ impl Store {
         match self.current_branch() {
             None => Err(StoreError::NotOnBranch),
             Some(branch) => {
-                let old_snapshot = guard.snapshot_id();
                 let storage = guard.storage();
+                raise_if_invalid_snapshot_id(storage.as_ref(), &to_snapshot).await?;
+                let old_snapshot = guard.snapshot_id();
                 let overwrite = guard.config().unsafe_overwrite_refs;
                 let version = update_branch(
                     storage.as_ref(),
@@ -2340,6 +2343,13 @@ mod tests {
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_snapshot_id = store.commit("update").await.unwrap();
+
+        let random_id = SnapshotId::random();
+        let res = store.checkout(VersionInfo::SnapshotId(random_id.clone())).await;
+        assert!(matches!(
+            res,
+            Err(StoreError::RepositoryError(RepositoryError::SnapshotNotFound { .. }))
+        ));
 
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
         assert_eq!(store.mode, AccessMode::ReadOnly);

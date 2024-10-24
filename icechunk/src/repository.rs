@@ -142,6 +142,8 @@ impl RepositoryBuilder {
 pub enum RepositoryError {
     #[error("error contacting storage {0}")]
     StorageError(#[from] StorageError),
+    #[error("snapshot not found: `{id}`")]
+    SnapshotNotFound { id: SnapshotId },
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
     #[error("node not found at `{path}`: {message}")]
@@ -1096,6 +1098,17 @@ async fn all_chunks<'a>(
     let new_array_chunks =
         futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
     Ok(existing_array_chunks.chain(new_array_chunks))
+}
+
+pub async fn raise_if_invalid_snapshot_id(
+    storage: &(dyn Storage + Send + Sync),
+    snapshot_id: &SnapshotId,
+) -> RepositoryResult<()> {
+    storage
+        .fetch_snapshot(snapshot_id)
+        .await
+        .map_err(|_| RepositoryError::SnapshotNotFound { id: snapshot_id.clone() })?;
+    Ok(())
 }
 
 #[cfg(test)]
