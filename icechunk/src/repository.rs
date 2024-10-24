@@ -1115,7 +1115,7 @@ async fn all_chunks<'a>(
 }
 
 pub async fn raise_if_invalid_snapshot_id(
-    storage: &(dyn Storage + Send + Sync),
+    storage: &(dyn Storage),
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
     storage
