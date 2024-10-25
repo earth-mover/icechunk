@@ -27,10 +27,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         pass
 
-    @pytest.mark.xfail(reason="not implemented", strict=False)
-    async def test_serizalizable_store(self, store) -> None:
-        pass
-
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
 
@@ -61,10 +57,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
         super().test_store_repr(store)
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_serializable_store(self, store: IcechunkStore) -> None:
-        super().test_serializable_store(store)
 
     def test_store_mode(self, store, store_kwargs: dict[str, Any]) -> None:
         assert store.mode == AccessMode.from_literal("w")
