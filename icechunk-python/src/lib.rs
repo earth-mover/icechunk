@@ -230,7 +230,7 @@ fn async_pyicechunk_store_open_existing<'py>(
     let storage = storage.into();
     let repository_config = (&config).into();
     let store_config = (&config).into();
-    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
         PyIcechunkStore::open_existing(
             storage,
             read_only,
@@ -248,7 +248,7 @@ fn async_pyicechunk_store_exists<'py>(
     storage: &'py PyStorageConfig,
 ) -> PyResult<Bound<'py, PyAny>> {
     let storage = storage.into();
-    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
         PyIcechunkStore::store_exists(storage).await.map_err(PyErr::from)
     })
 }
@@ -271,7 +271,7 @@ fn async_pyicechunk_store_create<'py>(
     let storage = storage.into();
     let repository_config = (&config).into();
     let store_config = (&config).into();
-    pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
         PyIcechunkStore::create(storage, repository_config, store_config)
             .await
             .map_err(PyValueError::new_err)
@@ -321,7 +321,7 @@ impl PyIcechunkStore {
 
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         let consolidated =
-            pyo3_asyncio_0_21::tokio::get_runtime().block_on(self.as_consolidated())?;
+            pyo3_async_runtimes::tokio::get_runtime().block_on(self.as_consolidated())?;
 
         // FIXME: Use rmp_serde instead of serde_json to optimize performance
         let serialized = serde_json::to_vec(&consolidated)
@@ -350,7 +350,7 @@ impl PyIcechunkStore {
 
         let readable_store = self.store.blocking_read();
         let consolidated =
-            pyo3_asyncio_0_21::tokio::get_runtime().block_on(self.as_consolidated())?;
+            pyo3_async_runtimes::tokio::get_runtime().block_on(self.as_consolidated())?;
         let store = Arc::new(RwLock::new(readable_store.with_access_mode(access_mode)));
         Ok(PyIcechunkStore { consolidated, store })
     }
@@ -361,7 +361,7 @@ impl PyIcechunkStore {
         snapshot_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_checkout_snapshot(store, snapshot_id).await
         })
     }
@@ -372,7 +372,7 @@ impl PyIcechunkStore {
         snapshot_id: String,
     ) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_checkout_snapshot(store, snapshot_id).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -384,7 +384,7 @@ impl PyIcechunkStore {
         branch: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_checkout_branch(store, branch).await
         })
     }
@@ -395,7 +395,7 @@ impl PyIcechunkStore {
         branch: String,
     ) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_checkout_branch(store, branch).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -407,7 +407,7 @@ impl PyIcechunkStore {
         tag: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_checkout_tag(store, tag).await
         })
     }
@@ -418,7 +418,7 @@ impl PyIcechunkStore {
         tag: String,
     ) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_checkout_tag(store, tag).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -428,7 +428,7 @@ impl PyIcechunkStore {
     fn snapshot_id(&self) -> PyIcechunkStoreResult<String> {
         let store = self.store.blocking_read();
         let snapshot_id =
-            pyo3_asyncio_0_21::tokio::get_runtime().block_on(store.snapshot_id());
+            pyo3_async_runtimes::tokio::get_runtime().block_on(store.snapshot_id());
         Ok(snapshot_id.to_string())
     }
 
@@ -439,7 +439,7 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_commit(store, message).await
         })
     }
@@ -451,7 +451,7 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyString>> {
         let store = Arc::clone(&self.store);
 
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = do_commit(store, message).await?;
             Ok(PyString::new_bound(py, res.as_str()))
         })
@@ -464,7 +464,7 @@ impl PyIcechunkStore {
         other_change_set_bytes: Vec<Vec<u8>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_distributed_commit(store, message, other_change_set_bytes).await
         })
     }
@@ -476,7 +476,7 @@ impl PyIcechunkStore {
         other_change_set_bytes: Vec<Vec<u8>>,
     ) -> PyResult<Bound<'py, PyString>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res =
                 do_distributed_commit(store, message, other_change_set_bytes).await?;
             Ok(PyString::new_bound(py, res.as_str()))
@@ -485,7 +485,7 @@ impl PyIcechunkStore {
 
     fn change_set_bytes(&self) -> PyIcechunkStoreResult<Vec<u8>> {
         let store = self.store.blocking_read();
-        let res = pyo3_asyncio_0_21::tokio::get_runtime()
+        let res = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(store.change_set_bytes())
             .map_err(PyIcechunkStoreError::from)?;
         Ok(res)
@@ -501,19 +501,19 @@ impl PyIcechunkStore {
     #[getter]
     fn has_uncommitted_changes(&self) -> PyIcechunkStoreResult<bool> {
         let store = self.store.blocking_read();
-        let has_uncommitted_changes = pyo3_asyncio_0_21::tokio::get_runtime()
+        let has_uncommitted_changes = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(store.has_uncommitted_changes());
         Ok(has_uncommitted_changes)
     }
 
     fn async_reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move { do_reset(store).await })
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { do_reset(store).await })
     }
 
     fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_reset(store).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -525,7 +525,7 @@ impl PyIcechunkStore {
         branch_name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_new_branch(store, branch_name).await
         })
     }
@@ -536,7 +536,7 @@ impl PyIcechunkStore {
         branch_name: String,
     ) -> PyResult<Bound<'py, PyString>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = do_new_branch(store, branch_name).await?;
             Ok(PyString::new_bound(py, res.as_str()))
         })
@@ -548,7 +548,7 @@ impl PyIcechunkStore {
         to_snapshot: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_reset_branch(store, to_snapshot).await
         })
     }
@@ -559,7 +559,7 @@ impl PyIcechunkStore {
         to_snapshot: String,
     ) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_reset_branch(store, to_snapshot).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -574,8 +574,8 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
 
         // The commit mechanism is async and calls tokio::spawn so we need to use the
-        // pyo3_asyncio_0_21::tokio helper to run the async function in the tokio runtime
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        // pyo3_async_runtimes::tokio helper to run the async function in the tokio runtime
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_tag(store, tag, snapshot_id).await
         })
     }
@@ -587,7 +587,7 @@ impl PyIcechunkStore {
         snapshot_id: String,
     ) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_tag(store, tag, snapshot_id).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -598,7 +598,7 @@ impl PyIcechunkStore {
         py: Python<'py>,
     ) -> PyIcechunkStoreResult<Bound<'py, PyList>> {
         // TODO: this holds everything in memory
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let store = self.store.read().await;
             let list = store
                 .ancestry()
@@ -614,7 +614,7 @@ impl PyIcechunkStore {
     }
 
     fn async_ancestry(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
-        let list = pyo3_asyncio_0_21::tokio::get_runtime()
+        let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
                 store.ancestry().await
@@ -629,7 +629,7 @@ impl PyIcechunkStore {
 
     fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let is_empty =
                 store.read().await.empty().await.map_err(PyIcechunkStoreError::from)?;
             Ok(is_empty)
@@ -638,7 +638,7 @@ impl PyIcechunkStore {
 
     fn clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
@@ -647,7 +647,7 @@ impl PyIcechunkStore {
     fn sync_clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
 
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -660,7 +660,7 @@ impl PyIcechunkStore {
         byte_range: Option<(Option<ChunkOffset>, Option<ChunkOffset>)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let byte_range = byte_range.unwrap_or((None, None)).into();
             let data = store.read().await.get(&key, &byte_range).await;
             // We need to distinguish the "safe" case of trying to fetch an uninitialized key
@@ -686,7 +686,7 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let iter = key_ranges.into_iter().map(|r| (r.0, r.1.into()));
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let readable_store = store.read().await;
             let partial_values_stream = readable_store
                 .get_partial_values(iter)
@@ -719,7 +719,7 @@ impl PyIcechunkStore {
         key: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let exists = store
                 .read()
                 .await
@@ -753,10 +753,10 @@ impl PyIcechunkStore {
         // Most of our async functions use structured coroutines so they can be called directly from
         // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
         // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
-        // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
+        // tokio runtime so we use the pyo3_async_runtimes::tokio helper to do this
         // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let store = store.read().await;
             store
                 .set(&key, Bytes::from(value))
@@ -774,7 +774,7 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let store = store.read().await;
             store
                 .set_if_not_exists(&key, Bytes::from(value))
@@ -793,7 +793,7 @@ impl PyIcechunkStore {
         length: ChunkLength,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             do_set_virtual_ref(store, key, location, offset, length).await
         })
     }
@@ -807,7 +807,7 @@ impl PyIcechunkStore {
         length: ChunkLength,
     ) -> PyResult<Bound<'py, PyNone>> {
         let store = Arc::clone(&self.store);
-        pyo3_asyncio_0_21::tokio::get_runtime().block_on(async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_set_virtual_ref(store, key, location, offset, length).await?;
             Ok(PyNone::get_bound(py).to_owned())
         })
@@ -820,7 +820,7 @@ impl PyIcechunkStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
 
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             store
                 .read()
                 .await
@@ -857,10 +857,10 @@ impl PyIcechunkStore {
         // Most of our async functions use structured coroutines so they can be called directly from
         // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
         // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
-        // tokio runtime so we use the pyo3_asyncio_0_21::tokio helper to do this
+        // tokio runtime so we use the pyo3_async_runtimes::tokio helper to do this
         // In the future this will hopefully not be necessary,
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let store = store.read().await;
 
             let mapped_to_bytes = key_start_values.into_iter().enumerate().map(
@@ -884,7 +884,7 @@ impl PyIcechunkStore {
     }
 
     fn list(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
-        let list = pyo3_asyncio_0_21::tokio::get_runtime()
+        let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
                 store.list().await
@@ -896,7 +896,7 @@ impl PyIcechunkStore {
     }
 
     fn list_prefix(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
-        let list = pyo3_asyncio_0_21::tokio::get_runtime()
+        let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
                 store.list_prefix(prefix.as_str()).await
@@ -907,7 +907,7 @@ impl PyIcechunkStore {
     }
 
     fn list_dir(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
-        let list = pyo3_asyncio_0_21::tokio::get_runtime()
+        let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
                 store.list_dir(prefix.as_str()).await

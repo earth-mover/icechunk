@@ -27,7 +27,7 @@ pyo3 = { version = "0.21", features = [
   "extension-module",
   "experimental-async",
 ] }
-pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.21.0", features = ["tokio-runtime"] }
 async-stream = "0.3.5"
 thiserror = "1.0.64"
 tokio = "1.40"
