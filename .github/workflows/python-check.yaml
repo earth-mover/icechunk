@@ -26,10 +26,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
       - uses: actions/checkout@v4
       - name: Stand up MinIO
         run: |
           docker compose up -d minio
+
       - name: Wait for MinIO to be ready
         run: |
           for i in {1..10}; do
@@ -42,6 +46,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -50,11 +55,13 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+
       - name: Cargo lint + format
         shell: bash
         working-directory: icechunk
         run: |
           just pre-commit
+
       - name: mypy
         shell: bash
         working-directory: icechunk-python
@@ -64,6 +71,7 @@ jobs:
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
           mypy python
+
       - name: ruff
         shell: bash
         working-directory: icechunk-python
@@ -73,6 +81,7 @@ jobs:
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
           ruff check
+
       - name: pytest
         shell: bash
         working-directory: icechunk-python
