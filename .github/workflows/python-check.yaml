@@ -59,7 +59,7 @@ jobs:
         shell: bash
         working-directory: icechunk
         run: |
-          just pre-commit
+          just pre-commit-python
 
       - name: mypy
         shell: bash
