@@ -23,8 +23,8 @@ storage = icechunk.StorageConfig.s3_anonymous(
     region='us-east-1',
 )
 
-store = IcechunkStore.open_existing(storage=storage, mode="r", config=StoreConfig(
-    virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
+store = icechunk.IcechunkStore.open_existing(storage=storage, mode="r", config=icechunk.StoreConfig(
+    virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
 ))
 ```
 
