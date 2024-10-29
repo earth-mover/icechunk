@@ -42,10 +42,10 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
         return self.buffer_cls.from_bytes(result)
 
-    @pytest.fixture(scope="function", params=[None, True])
-    def store_kwargs(self) -> dict[str, Any]:
+    @pytest.fixture
+    def store_kwargs(self, tmpdir) -> dict[str, Any]:
         kwargs = {
-            "storage": StorageConfig.memory("store_test"),
+            "storage": StorageConfig.filesystem(f"{tmpdir}/store_test"),
             "mode": "w",
         }
         return kwargs
