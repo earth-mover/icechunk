@@ -1234,7 +1234,7 @@ dependencies = [
  "futures",
  "icechunk",
  "pyo3",
- "pyo3-asyncio-0-21",
+ "pyo3-async-runtimes",
  "serde_json",
  "thiserror",
  "tokio",
@@ -1633,10 +1633,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyo3-asyncio-0-21"
+name = "pyo3-async-runtimes"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fde289486f7d5cee0ac7c20b2637a0657654681079cc5eedc90d9a2a79af1e5"
+checksum = "96fe0b015461c5136532f42908d6bf4b079da1aedfbffa8b0b5d4cbc59c2fdf8"
 dependencies = [
  "futures",
  "once_cell",
