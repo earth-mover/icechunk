@@ -508,7 +508,10 @@ impl PyIcechunkStore {
 
     fn async_reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move { do_reset(store).await })
+        pyo3_async_runtimes::tokio::future_into_py(
+            py,
+            async move { do_reset(store).await },
+        )
     }
 
     fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyNone>> {
