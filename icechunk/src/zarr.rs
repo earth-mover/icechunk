@@ -387,15 +387,10 @@ impl Store {
         self.repository.read().await.has_uncommitted_changes()
     }
 
-    pub async fn discard_changes(&mut self) -> StoreResult<ChangeSet> {
-        Ok(self.repository.write().await.discard_changes())
-    }
-
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
-    pub async fn reset(&mut self) -> StoreResult<()> {
-        let _changes = self.repository.write().await.discard_changes();
-        Ok(())
+    pub async fn reset(&mut self) -> StoreResult<ChangeSet> {
+        Ok(self.repository.write().await.discard_changes())
     }
 
     /// Checkout a specific version of the repository. This can be a snapshot id, a tag, or a branch tip.

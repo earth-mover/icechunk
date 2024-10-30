@@ -502,17 +502,17 @@ impl PyIcechunkStore {
 
     fn async_reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
-        pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move { do_reset(store).await },
-        )
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let changes = do_reset(store).await?;
+            Ok(changes)
+        })
     }
 
-    fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyNone>> {
+    fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            do_reset(store).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            let changes = do_reset(store).await?;
+            Ok(PyBytes::new_bound(py, &changes))
         })
     }
 
@@ -969,9 +969,12 @@ async fn do_merge(
     Ok(())
 }
 
-async fn do_reset<'py>(store: Arc<RwLock<Store>>) -> PyResult<()> {
-    store.write().await.reset().await.map_err(PyIcechunkStoreError::StoreError)?;
-    Ok(())
+async fn do_reset<'py>(store: Arc<RwLock<Store>>) -> PyResult<Vec<u8>> {
+    let changes =
+        store.write().await.reset().await.map_err(PyIcechunkStoreError::StoreError)?;
+    let serialized_changes =
+        changes.export_to_bytes().map_err(PyIcechunkStoreError::RepositoryError)?;
+    Ok(serialized_changes)
 }
 
 async fn do_new_branch<'py>(
