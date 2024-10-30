@@ -343,7 +343,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.merge(changes)
     
-    async def async_merge(self, changes: bytes):
+    async def async_merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
         This will create a new snapshot on the current branch and return
