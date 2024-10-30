@@ -57,7 +57,7 @@ def generate_task_array(task: Task, shape: tuple[int,...]) -> np.typing.ArrayLik
     return np.random.rand(*shape)
 
 
-def execute_write_task(task: Task) -> icechunk.IcechunkStore:
+def execute_write_task(task: Task) -> bytes:
     """Execute task as a write task.
 
     This will read the time coordinade from `task` and write a "pancake" in that position,
@@ -78,7 +78,7 @@ def execute_write_task(task: Task) -> icechunk.IcechunkStore:
     data = generate_task_array(task, array.shape[0:2])
     array[:, :, task.time] = data
     dprint(f"Writing at t={task.time} done")
-    return store
+    return store.change_set_bytes()
 
 
 def execute_read_task(task: Task) -> None:
@@ -188,13 +188,15 @@ def update(args: argparse.Namespace) -> None:
     client = Client(n_workers=args.workers, threads_per_worker=1)
 
     map_result = client.map(execute_write_task, tasks)
-    worker_stores = client.gather(map_result)
+    worker_changes = client.gather(map_result)
 
     print("Starting distributed commit")
     # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    commit_res = store.distributed_commit("distributed commit", [ws.change_set_bytes() for ws in worker_stores])
+    for changes in worker_changes:
+        store.merge(changes)
+    commit_res = store.commit("distributed commit")
     assert commit_res
     print("Distributed commit done")
 

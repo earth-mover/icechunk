@@ -54,7 +54,7 @@ def generate_task_array(task: Task):
     return np.random.rand(nx, ny)
 
 
-async def execute_task(task: Task):
+async def execute_task(task: Task) -> bytes:
     store = mk_store("w", task)
 
     group = zarr.group(store=store, overwrite=False)
@@ -134,12 +134,14 @@ async def test_distributed_writers():
     _first_snap = store.commit("array created")
 
     map_result = client.map(run_task, tasks)
-    change_sets_bytes = client.gather(map_result)
+    changes = client.gather(map_result)
 
     # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    commit_res = store.distributed_commit("distributed commit", change_sets_bytes)
+    for change in changes:
+        store.merge(change)
+    commit_res = store.commit("distributed commit")
     assert commit_res
 
     # Lets open a new store to verify the results
