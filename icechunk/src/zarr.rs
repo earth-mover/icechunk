@@ -1806,7 +1806,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),

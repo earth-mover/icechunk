@@ -641,10 +641,7 @@ impl Repository {
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    pub async fn merge(
-        &mut self,
-        changes: ChangeSet,
-    ) -> RepositoryResult<()> {
+    pub async fn merge(&mut self, changes: ChangeSet) -> RepositoryResult<()> {
         self.change_set.merge(changes);
         Ok(())
     }
@@ -921,7 +918,7 @@ async fn flush(
         return Err(RepositoryError::NoChangesToCommit);
     }
 
-    let chunks = all_chunks(storage, &change_set, parent_id)
+    let chunks = all_chunks(storage, change_set, parent_id)
         .await?
         .map_ok(|(_path, chunk_info)| chunk_info);
 
@@ -935,7 +932,7 @@ async fn flush(
     };
 
     let all_nodes =
-        updated_nodes(storage, &change_set, parent_id, new_manifest_id.as_ref()).await?;
+        updated_nodes(storage, change_set, parent_id, new_manifest_id.as_ref()).await?;
 
     let old_snapshot = storage.fetch_snapshot(parent_id).await?;
     let mut new_snapshot = Snapshot::from_iter(
