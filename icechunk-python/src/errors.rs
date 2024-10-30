@@ -15,16 +15,12 @@ use thiserror::Error;
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub(crate) enum PyIcechunkStoreError {
-    #[error("key not found error: {0}")]
-    KeyNotFound(#[from] KeyNotFound),
     #[error("store error: {0}")]
     StoreError(#[from] StoreError),
     #[error("repository Error: {0}")]
     RepositoryError(#[from] RepositoryError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
-    #[error("value error: {0}")]
-    PyValueError(#[from] PyValueError),
     #[error("error: {0}")]
     PyError(#[from] PyErr),
     #[error("{0}")]
@@ -33,7 +29,10 @@ pub(crate) enum PyIcechunkStoreError {
 
 impl From<PyIcechunkStoreError> for PyErr {
     fn from(error: PyIcechunkStoreError) -> Self {
-        PyValueError::new_err(error.to_string())
+        match error {
+            PyIcechunkStoreError::PyError(err) => err,
+            _ => PyValueError::new_err(error.to_string()),
+        }
     }
 }
 

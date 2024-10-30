@@ -36,6 +36,11 @@ impl From<&PyS3Credentials> for StaticS3Credentials {
 #[pymethods]
 impl PyS3Credentials {
     #[new]
+    #[pyo3(signature = (
+        access_key_id,
+        secret_access_key,
+        session_token = None,
+    ))]
     fn new(
         access_key_id: String,
         secret_access_key: String,
@@ -67,6 +72,7 @@ pub enum PyStorageConfig {
 #[pymethods]
 impl PyStorageConfig {
     #[classmethod]
+    #[pyo3(signature = (prefix = None))]
     fn memory(_cls: &Bound<'_, PyType>, prefix: Option<String>) -> Self {
         PyStorageConfig::Memory { prefix }
     }
@@ -77,6 +83,13 @@ impl PyStorageConfig {
     }
 
     #[classmethod]
+    #[pyo3(signature = (
+        bucket,
+        prefix,
+        endpoint_url = None,
+        allow_http = None,
+        region = None,
+    ))]
     fn s3_from_env(
         _cls: &Bound<'_, PyType>,
         bucket: String,
@@ -97,6 +110,14 @@ impl PyStorageConfig {
     }
 
     #[classmethod]
+    #[pyo3(signature = (
+        bucket,
+        prefix,
+        credentials,
+        endpoint_url = None,
+        allow_http = None,
+        region = None,
+    ))]
     fn s3_from_config(
         _cls: &Bound<'_, PyType>,
         bucket: String,
@@ -118,6 +139,13 @@ impl PyStorageConfig {
     }
 
     #[classmethod]
+    #[pyo3(signature = (
+        bucket,
+        prefix,
+        endpoint_url = None,
+        allow_http = None,
+        region = None,
+    ))]
     fn s3_anonymous(
         _cls: &Bound<'_, PyType>,
         bucket: String,
@@ -210,6 +238,13 @@ impl PyVirtualRefConfig {
     }
 
     #[classmethod]
+    #[pyo3(signature = (
+        credentials,
+        endpoint_url = None,
+        allow_http = None,
+        region = None,
+        anon = None,
+    ))]
     fn s3_from_config(
         _cls: &Bound<'_, PyType>,
         credentials: PyS3Credentials,
@@ -228,6 +263,11 @@ impl PyVirtualRefConfig {
     }
 
     #[classmethod]
+    #[pyo3(signature = (
+        endpoint_url = None,
+        allow_http = None,
+        region = None,
+    ))]
     fn s3_anonymous(
         _cls: &Bound<'_, PyType>,
         endpoint_url: Option<String>,
