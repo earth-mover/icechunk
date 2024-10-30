@@ -12,7 +12,7 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     format::{manifest::VirtualChunkRef, ChunkLength},
     refs::Ref,
-    repository::VirtualChunkLocation,
+    repository::{ChangeSet, VirtualChunkLocation},
     storage::virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     zarr::{
         ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreError,
@@ -457,29 +457,23 @@ impl PyIcechunkStore {
         })
     }
 
-    fn async_distributed_commit<'py>(
-        &'py self,
+    fn async_merge<'py>(
+        &self,
         py: Python<'py>,
-        message: String,
-        other_change_set_bytes: Vec<Vec<u8>>,
+        change_set_bytes: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            do_distributed_commit(store, message, other_change_set_bytes).await
+            do_merge(store, change_set_bytes).await
         })
     }
 
-    fn distributed_commit<'py>(
-        &'py self,
-        py: Python<'py>,
-        message: String,
-        other_change_set_bytes: Vec<Vec<u8>>,
-    ) -> PyResult<Bound<'py, PyString>> {
+    fn merge(&self, change_set_bytes: Vec<u8>) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
+
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let res =
-                do_distributed_commit(store, message, other_change_set_bytes).await?;
-            Ok(PyString::new_bound(py, res.as_str()))
+            do_merge(store, change_set_bytes).await?;
+            Ok(())
         })
     }
 
@@ -922,7 +916,7 @@ impl PyIcechunkStore {
 }
 
 async fn do_commit(store: Arc<RwLock<Store>>, message: String) -> PyResult<String> {
-    let mut store = store.write().await;
+    let store = store.write().await;
     let oid = store.commit(&message).await.map_err(PyIcechunkStoreError::from)?;
     Ok(String::from(&oid))
 }
@@ -963,17 +957,16 @@ async fn do_checkout_tag(store: Arc<RwLock<Store>>, tag: String) -> PyResult<()>
     Ok(())
 }
 
-async fn do_distributed_commit(
+async fn do_merge(
     store: Arc<RwLock<Store>>,
-    message: String,
-    other_change_set_bytes: Vec<Vec<u8>>,
-) -> PyResult<String> {
-    let mut writeable_store = store.write().await;
-    let oid = writeable_store
-        .distributed_commit(&message, other_change_set_bytes)
-        .await
-        .map_err(PyIcechunkStoreError::from)?;
-    Ok(String::from(&oid))
+    other_change_set_bytes: Vec<u8>,
+) -> PyResult<()> {
+    let change_set = ChangeSet::import_from_bytes(&other_change_set_bytes)
+        .map_err(PyIcechunkStoreError::RepositoryError)?;
+
+    let store = store.write().await;
+    store.merge(change_set).await.map_err(PyIcechunkStoreError::StoreError)?;
+    Ok(())
 }
 
 async fn do_reset<'py>(store: Arc<RwLock<Store>>) -> PyResult<()> {
@@ -1012,10 +1005,10 @@ async fn do_tag<'py>(
     tag: String,
     snapshot_id: String,
 ) -> PyResult<()> {
-    let mut writeable_store = store.write().await;
+    let store = store.read().await;
     let oid = ObjectId::try_from(snapshot_id.as_str())
         .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
-    writeable_store.tag(&tag, &oid).await.map_err(PyIcechunkStoreError::from)?;
+    store.tag(&tag, &oid).await.map_err(PyIcechunkStoreError::from)?;
     Ok(())
 }
 
