@@ -276,6 +276,8 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
+    #[error("error merging stores: `{0}`")]
+    MergeError(String),
     #[error("unsuccessful ref operation: `{0}`")]
     RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
@@ -385,17 +387,14 @@ impl Store {
         self.repository.read().await.has_uncommitted_changes()
     }
 
+    pub async fn discard_changes(&mut self) -> StoreResult<ChangeSet> {
+        Ok(self.repository.write().await.discard_changes())
+    }
+
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
     pub async fn reset(&mut self) -> StoreResult<()> {
-        let guard = self.repository.read().await;
-        // carefully avoid the deadlock if we were to call self.snapshot_id()
-        let head_snapshot = guard.snapshot_id().clone();
-        let storage = Arc::clone(guard.storage());
-        let new_repository = Repository::update(storage, head_snapshot).build();
-        drop(guard);
-        self.repository = Arc::new(RwLock::new(new_repository));
-
+        let _changes = self.repository.write().await.discard_changes();
         Ok(())
     }
 
@@ -492,37 +491,30 @@ impl Store {
         }
     }
 
-    /// Commit the current changes to the current branch. If the store is not currently
-    /// on a branch, this will return an error.
-    pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
-        self.distributed_commit(message, vec![]).await
+    pub async fn merge(&self, changes: ChangeSet) -> StoreResult<()> {
+        self.repository.write().await.merge(changes).await?;
+        Ok(())
     }
 
-    pub async fn distributed_commit<'a, I: IntoIterator<Item = Vec<u8>>>(
-        &mut self,
-        message: &str,
-        other_changesets_bytes: I,
-    ) -> StoreResult<SnapshotId> {
-        if let Some(branch) = &self.current_branch {
-            let other_change_sets: Vec<ChangeSet> = other_changesets_bytes
-                .into_iter()
-                .map(|v| ChangeSet::import_from_bytes(v.as_slice()))
-                .try_collect()?;
-            let result = self
-                .repository
-                .write()
-                .await
-                .deref_mut()
-                .distributed_commit(branch, other_change_sets, message, None)
-                .await?;
-            Ok(result)
-        } else {
-            Err(StoreError::NotOnBranch)
-        }
+    /// Commit the current changes to the current branch. If the store is not currently
+    /// on a branch, this will return an error.
+    pub async fn commit(&self, message: &str) -> StoreResult<SnapshotId> {
+        let Some(branch) = &self.current_branch else {
+            return Err(StoreError::NotOnBranch);
+        };
+
+        let result = self
+            .repository
+            .write()
+            .await
+            .deref_mut()
+            .commit(branch, message, None)
+            .await?;
+        Ok(result)
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(&mut self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
+    pub async fn tag(&self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
         self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
