@@ -38,7 +38,7 @@ def stateful_store_reduce(
     compute: bool = True,
     **kwargs,
 ):
-    split_every = split_every or config.get("split_every", 4)
+    split_every = split_every or config.get("split_every", 8)
 
     layers = {}
     dependencies = {}
