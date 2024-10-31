@@ -2,7 +2,7 @@ use icechunk::{
     format::IcechunkFormatError, repository::RepositoryError, zarr::StoreError,
 };
 use pyo3::{
-    exceptions::{PyException, PyValueError},
+    exceptions::{PyKeyError, PyValueError},
     PyErr,
 };
 use thiserror::Error;
@@ -16,17 +16,17 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub(crate) enum PyIcechunkStoreError {
-    #[error("key not found error: {0}")]
-    KeyNotFound(String),
     #[error("store error: {0}")]
     StoreError(#[from] StoreError),
-    #[error("repository Error: {0}")]
+    #[error("repository error: {0}")]
     RepositoryError(#[from] RepositoryError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
-    #[error("value error: {0}")]
+    #[error("{0}")]
+    PyKeyError(String),
+    #[error("{0}")]
     PyValueError(String),
-    #[error("error: {0}")]
+    #[error("{0}")]
     PyError(#[from] PyErr),
     #[error("{0}")]
     UnkownError(String),
@@ -35,9 +35,8 @@ pub(crate) enum PyIcechunkStoreError {
 impl From<PyIcechunkStoreError> for PyErr {
     fn from(error: PyIcechunkStoreError) -> Self {
         match error {
-            PyIcechunkStoreError::KeyNotFound(_) => {
-                KeyNotFound::new_err(error.to_string())
-            }
+            PyIcechunkStoreError::PyKeyError(e) => PyKeyError::new_err(e),
+            PyIcechunkStoreError::PyValueError(e) => PyValueError::new_err(e),
             PyIcechunkStoreError::PyError(err) => err,
             _ => PyValueError::new_err(error.to_string()),
         }
@@ -45,10 +44,3 @@ impl From<PyIcechunkStoreError> for PyErr {
 }
 
 pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
-
-pyo3::create_exception!(
-    _icechunk_python,
-    KeyNotFound,
-    PyException,
-    "The key is not present in the repository"
-);
