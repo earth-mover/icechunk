@@ -21,7 +21,7 @@ use icechunk::{
     Repository, SnapshotMetadata,
 };
 use pyo3::{
-    exceptions::PyValueError,
+    exceptions::{PyKeyError, PyValueError},
     prelude::*,
     types::{PyBytes, PyList, PyNone, PyString},
 };
@@ -31,8 +31,6 @@ use tokio::{
     runtime::Runtime,
     sync::{Mutex, RwLock},
 };
-
-pub use errors::KeyNotFound;
 
 #[pyclass]
 struct PyIcechunkStore {
@@ -674,7 +672,7 @@ impl PyIcechunkStore {
             let byte_range = byte_range.unwrap_or((None, None)).into();
             let data = store.read().await.get(&key, &byte_range).await;
             // We need to distinguish the "safe" case of trying to fetch an uninitialized key
-            // from other types of errors, we use KeyNotFound exception for that
+            // from other types of errors, we use PyKeyError exception for that
             match data {
                 Ok(data) => {
                     let pybytes = Python::with_gil(|py| {
@@ -683,7 +681,7 @@ impl PyIcechunkStore {
                     });
                     Ok(pybytes)
                 }
-                Err(StoreError::NotFound(_)) => Err(KeyNotFound::new_err(key)),
+                Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
                 Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
             }
         })
@@ -1045,9 +1043,8 @@ async fn do_set_virtual_ref(
 
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
-fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _icechunk_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("KeyNotFound", py.get_type_bound::<KeyNotFound>())?;
     m.add_class::<PyStorageConfig>()?;
     m.add_class::<PyIcechunkStore>()?;
     m.add_class::<PyS3Credentials>()?;

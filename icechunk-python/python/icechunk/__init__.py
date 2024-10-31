@@ -8,7 +8,6 @@ from zarr.core.common import AccessModeLiteral, BytesLike
 from zarr.core.sync import SyncMixin
 
 from ._icechunk_python import (
-    KeyNotFound,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
@@ -485,7 +484,7 @@ class IcechunkStore(Store, SyncMixin):
 
         try:
             result = await self._store.get(key, byte_range)
-        except KeyNotFound as _e:
+        except KeyError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
             return None
