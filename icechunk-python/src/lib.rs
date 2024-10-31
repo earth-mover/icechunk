@@ -83,6 +83,12 @@ impl From<&PyStoreConfig> for StoreOptions {
 #[pymethods]
 impl PyStoreConfig {
     #[new]
+    #[pyo3(signature = (
+        get_partial_values_concurrency = None,
+        inline_chunk_threshold_bytes = None,
+        unsafe_overwrite_refs = None,
+        virtual_ref_config = None,
+    ))]
     fn new(
         get_partial_values_concurrency: Option<u16>,
         inline_chunk_threshold_bytes: Option<u16>,
@@ -656,6 +662,7 @@ impl PyIcechunkStore {
         })
     }
 
+    #[pyo3(signature = (key, byte_range = None))]
     fn get<'py>(
         &'py self,
         py: Python<'py>,
