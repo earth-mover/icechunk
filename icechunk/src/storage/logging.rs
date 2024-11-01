@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 
-use super::{Storage, StorageError, StorageResult};
+use super::{ListInfo, Storage, StorageError, StorageResult};
 use crate::{
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
@@ -131,5 +131,41 @@ impl Storage for LoggingStorage {
         ref_name: &str,
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
+    }
+
+    async fn list_chunks(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
+        self.backend.list_chunks().await
+    }
+
+    async fn list_manifests(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
+        self.backend.list_manifests().await
+    }
+
+    async fn list_snapshots(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
+        self.backend.list_snapshots().await
+    }
+
+    async fn delete_chunks(&self, ids: BoxStream<'_, ChunkId>) -> StorageResult<usize> {
+        self.backend.delete_chunks(ids).await
+    }
+
+    async fn delete_manifests(
+        &self,
+        ids: BoxStream<'_, ManifestId>,
+    ) -> StorageResult<usize> {
+        self.backend.delete_manifests(ids).await
+    }
+
+    async fn delete_snapshots(
+        &self,
+        ids: BoxStream<'_, SnapshotId>,
+    ) -> StorageResult<usize> {
+        self.backend.delete_snapshots(ids).await
     }
 }

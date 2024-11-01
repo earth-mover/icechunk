@@ -1,4 +1,12 @@
-use std::{ops::Range, path::PathBuf, sync::Arc};
+use std::{
+    future::ready,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -8,10 +16,15 @@ use aws_sdk_s3::{
     config::{Builder, Region},
     error::ProvideErrorMetadata,
     primitives::ByteStream,
+    types::{Delete, Object, ObjectIdentifier},
     Client,
 };
+use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{
+    stream::{self, BoxStream},
+    StreamExt, TryStreamExt,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -25,7 +38,7 @@ use crate::{
     Storage, StorageError,
 };
 
-use super::StorageResult;
+use super::{ListInfo, StorageResult};
 
 #[derive(Debug)]
 pub struct S3Storage {
@@ -203,6 +216,86 @@ impl S3Storage {
         b.body(bytes.into()).send().await?;
         Ok(())
     }
+
+    fn list_objects<'a, Id>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<Id>>>>
+    where
+        Id: for<'b> TryFrom<&'b str> + Send + 'a,
+    {
+        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
+            .into_os_string()
+            .into_string()
+            .map_err(StorageError::BadPrefix)?;
+        let stream = self
+            .client
+            .list_objects_v2()
+            .bucket(self.bucket.clone())
+            .prefix(prefix)
+            .into_paginator()
+            .send()
+            .into_stream_03x()
+            .try_filter_map(|page| {
+                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
+                ready(Ok(contents))
+            })
+            .try_flatten()
+            // TODO: we should signal error instead of filtering
+            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))));
+        Ok(stream.boxed())
+    }
+
+    async fn delete_batch<const SIZE: usize, T: FileTypeTag>(
+        &self,
+        prefix: &str,
+        batch: Vec<ObjectId<SIZE, T>>,
+    ) -> StorageResult<usize> {
+        let keys = batch
+            .iter()
+            // FIXME: flag errors instead of skipping them
+            .filter_map(|id| {
+                let key = self.get_path(prefix, id).ok()?;
+                let ident = ObjectIdentifier::builder().key(key).build().ok()?;
+                Some(ident)
+            })
+            .collect();
+
+        let delete = Delete::builder()
+            .set_objects(Some(keys))
+            .build()
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+
+        let res = self
+            .client
+            .delete_objects()
+            .bucket(self.bucket.clone())
+            .delete(delete)
+            .send()
+            .await?;
+
+        Ok(res.deleted().len())
+    }
+
+    async fn delete_objects<const SIZE: usize, T: FileTypeTag>(
+        &self,
+        prefix: &str,
+        ids: BoxStream<'_, ObjectId<SIZE, T>>,
+    ) -> StorageResult<usize> {
+        let deleted = AtomicUsize::new(0);
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let deleted = &deleted;
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
+                    deleted.fetch_add(new_deletes, Ordering::Release);
+                }
+            })
+            .await;
+        Ok(deleted.into_inner())
+    }
 }
 
 pub fn range_to_header(range: &ByteRange) -> Option<String> {
@@ -364,7 +457,7 @@ impl Storage for S3Storage {
     async fn ref_versions(
         &self,
         ref_name: &str,
-    ) -> StorageResult<futures::stream::BoxStream<StorageResult<String>>> {
+    ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let prefix = self.ref_key(ref_name)?;
         let mut paginator = self
             .client
@@ -417,4 +510,55 @@ impl Storage for S3Storage {
             }
         }
     }
+
+    async fn list_chunks(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
+        self.list_objects(CHUNK_PREFIX)
+    }
+
+    async fn list_manifests(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
+        self.list_objects(MANIFEST_PREFIX)
+    }
+
+    async fn list_snapshots(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
+        self.list_objects(SNAPSHOT_PREFIX)
+    }
+
+    async fn delete_chunks(
+        &self,
+        chunks: BoxStream<'_, ChunkId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(CHUNK_PREFIX, chunks).await
+    }
+
+    async fn delete_manifests(
+        &self,
+        chunks: BoxStream<'_, ManifestId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(MANIFEST_PREFIX, chunks).await
+    }
+
+    async fn delete_snapshots(
+        &self,
+        chunks: BoxStream<'_, SnapshotId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(SNAPSHOT_PREFIX, chunks).await
+    }
+}
+
+fn object_to_list_info<'a, Id>(object: &Object) -> Option<ListInfo<Id>>
+where
+    Id: for<'b> TryFrom<&'b str> + Send + 'a,
+{
+    let key = object.key()?;
+    let last_modified = object.last_modified()?;
+    let created_at = last_modified.to_chrono_utc().ok()?;
+    let id_str = Path::new(key).file_name().and_then(|s| s.to_str())?;
+    let id = Id::try_from(id_str).ok()?;
+    Some(ListInfo { id, created_at })
 }

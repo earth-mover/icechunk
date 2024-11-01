@@ -2,11 +2,12 @@ use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
     operation::{
-        get_object::GetObjectError, list_objects_v2::ListObjectsV2Error,
-        put_object::PutObjectError,
+        delete_objects::DeleteObjectsError, get_object::GetObjectError,
+        list_objects_v2::ListObjectsV2Error, put_object::PutObjectError,
     },
     primitives::ByteStreamError,
 };
+use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::stream::BoxStream;
 use std::{ffi::OsString, sync::Arc};
@@ -47,6 +48,8 @@ pub enum StorageError {
     S3PutObjectError(#[from] SdkError<PutObjectError, HttpResponse>),
     #[error("error listing objects in object store {0}")]
     S3ListObjectError(#[from] SdkError<ListObjectsV2Error, HttpResponse>),
+    #[error("error deleting objects in object store {0}")]
+    S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] ByteStreamError),
     #[error("messagepack decode error: {0}")]
@@ -62,6 +65,11 @@ pub enum StorageError {
 }
 
 pub type StorageResult<A> = Result<A, StorageError>;
+
+pub struct ListInfo<Id> {
+    pub id: Id,
+    pub created_at: DateTime<Utc>,
+}
 
 /// Fetch and write the parquet files that represent the repository in object store
 ///
@@ -106,4 +114,24 @@ pub trait Storage: fmt::Debug + private::Sealed {
         overwrite_refs: bool,
         bytes: Bytes,
     ) -> StorageResult<()>;
+
+    async fn list_chunks(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>>;
+    async fn list_manifests(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>>;
+    async fn list_snapshots(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>>;
+
+    async fn delete_chunks(&self, ids: BoxStream<'_, ChunkId>) -> StorageResult<usize>;
+    async fn delete_manifests(
+        &self,
+        ids: BoxStream<'_, ManifestId>,
+    ) -> StorageResult<usize>;
+    async fn delete_snapshots(
+        &self,
+        ids: BoxStream<'_, SnapshotId>,
+    ) -> StorageResult<usize>;
 }

@@ -8,17 +8,27 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{
+    stream::{self, BoxStream},
+    StreamExt, TryStreamExt,
+};
 use object_store::{
     local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute,
-    AttributeValue, Attributes, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
-    PutPayload,
+    AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
+    PutOptions, PutPayload,
 };
 use std::{
-    fs::create_dir_all, future::ready, ops::Range, path::Path as StdPath, sync::Arc,
+    fs::create_dir_all,
+    future::ready,
+    ops::Range,
+    path::Path as StdPath,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
-use super::{Storage, StorageError, StorageResult};
+use super::{ListInfo, Storage, StorageError, StorageResult};
 
 // Get Range is object_store specific, keep it with this module
 impl From<&ByteRange> for Option<GetRange> {
@@ -144,6 +154,54 @@ impl ObjectStorage {
                 )
             })
             .boxed()
+    }
+
+    fn list_objects<'a, Id>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<Id>>>>
+    where
+        Id: for<'b> TryFrom<&'b str> + Send + 'a,
+    {
+        let prefix = ObjectPath::from(format!("{}/{}", self.prefix.as_str(), prefix));
+        let stream = self
+            .store
+            .list(Some(&prefix))
+            // TODO: we should signal error instead of filtering
+            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))))
+            .err_into();
+        Ok(stream.boxed())
+    }
+
+    async fn delete_batch<const SIZE: usize, T: FileTypeTag + Sync>(
+        &self,
+        prefix: &str,
+        batch: Vec<ObjectId<SIZE, T>>,
+    ) -> StorageResult<usize> {
+        let keys = batch.iter().map(|id| Ok(self.get_path(prefix, id)));
+        let results = self.store.delete_stream(stream::iter(keys).boxed());
+        // FIXME: flag errors instead of skipping them
+        Ok(results.filter(|res| ready(res.is_ok())).count().await)
+    }
+
+    async fn delete_objects<const SIZE: usize, T: FileTypeTag + Sync>(
+        &self,
+        prefix: &str,
+        ids: BoxStream<'_, ObjectId<SIZE, T>>,
+    ) -> StorageResult<usize> {
+        let deleted = AtomicUsize::new(0);
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let deleted = &deleted;
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
+                    deleted.fetch_add(new_deletes, Ordering::Release);
+                }
+            })
+            .await;
+        Ok(deleted.into_inner())
     }
 }
 
@@ -354,4 +412,53 @@ impl Storage for ObjectStorage {
             })
             .map(|_| ())
     }
+
+    async fn list_chunks(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
+        self.list_objects(CHUNK_PREFIX)
+    }
+
+    async fn list_manifests(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
+        self.list_objects(MANIFEST_PREFIX)
+    }
+
+    async fn list_snapshots(
+        &self,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
+        self.list_objects(SNAPSHOT_PREFIX)
+    }
+
+    async fn delete_chunks(
+        &self,
+        chunks: BoxStream<'_, ChunkId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(CHUNK_PREFIX, chunks).await
+    }
+
+    async fn delete_manifests(
+        &self,
+        chunks: BoxStream<'_, ManifestId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(MANIFEST_PREFIX, chunks).await
+    }
+
+    async fn delete_snapshots(
+        &self,
+        chunks: BoxStream<'_, SnapshotId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(SNAPSHOT_PREFIX, chunks).await
+    }
+}
+
+fn object_to_list_info<'a, Id>(object: &ObjectMeta) -> Option<ListInfo<Id>>
+where
+    Id: for<'b> TryFrom<&'b str> + Send + 'a,
+{
+    let created_at = object.last_modified;
+    let id_str = object.location.filename()?;
+    let id = Id::try_from(id_str).ok()?;
+    Some(ListInfo { id, created_at })
 }
