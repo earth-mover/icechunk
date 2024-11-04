@@ -135,18 +135,18 @@ impl S3Storage {
         Ok(S3Storage { client, prefix: prefix.into(), bucket: bucket_name.into() })
     }
 
+    fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
+        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
+        path.into_os_string().into_string().map_err(StorageError::BadPrefix)
+    }
+
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
         id: &ObjectId<SIZE, T>,
     ) -> StorageResult<String> {
         // we serialize the url using crockford
-        let path = PathBuf::from_iter([
-            self.prefix.as_str(),
-            file_prefix,
-            id.to_string().as_str(),
-        ]);
-        path.into_os_string().into_string().map_err(StorageError::BadPrefix)
+        self.get_path_str(file_prefix, id.to_string().as_str())
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> StorageResult<String> {
@@ -217,45 +217,16 @@ impl S3Storage {
         Ok(())
     }
 
-    fn list_objects<'a, Id>(
-        &'a self,
-        prefix: &str,
-    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<Id>>>>
-    where
-        Id: for<'b> TryFrom<&'b str> + Send + 'a,
-    {
-        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
-            .into_os_string()
-            .into_string()
-            .map_err(StorageError::BadPrefix)?;
-        let stream = self
-            .client
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix)
-            .into_paginator()
-            .send()
-            .into_stream_03x()
-            .try_filter_map(|page| {
-                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
-                ready(Ok(contents))
-            })
-            .try_flatten()
-            // TODO: we should signal error instead of filtering
-            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))));
-        Ok(stream.boxed())
-    }
-
-    async fn delete_batch<const SIZE: usize, T: FileTypeTag>(
+    async fn delete_batch(
         &self,
         prefix: &str,
-        batch: Vec<ObjectId<SIZE, T>>,
+        batch: Vec<String>,
     ) -> StorageResult<usize> {
         let keys = batch
             .iter()
             // FIXME: flag errors instead of skipping them
             .filter_map(|id| {
-                let key = self.get_path(prefix, id).ok()?;
+                let key = self.get_path_str(prefix, id).ok()?;
                 let ident = ObjectIdentifier::builder().key(key).build().ok()?;
                 Some(ident)
             })
@@ -275,26 +246,6 @@ impl S3Storage {
             .await?;
 
         Ok(res.deleted().len())
-    }
-
-    async fn delete_objects<const SIZE: usize, T: FileTypeTag>(
-        &self,
-        prefix: &str,
-        ids: BoxStream<'_, ObjectId<SIZE, T>>,
-    ) -> StorageResult<usize> {
-        let deleted = AtomicUsize::new(0);
-        ids.chunks(1_000)
-            // FIXME: configurable concurrency
-            .for_each_concurrent(10, |batch| {
-                let deleted = &deleted;
-                async move {
-                    // FIXME: handle error instead of skipping
-                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
-                    deleted.fetch_add(new_deletes, Ordering::Release);
-                }
-            })
-            .await;
-        Ok(deleted.into_inner())
     }
 }
 
@@ -511,54 +462,57 @@ impl Storage for S3Storage {
         }
     }
 
-    async fn list_chunks(
-        &self,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
-        self.list_objects(CHUNK_PREFIX)
+    async fn list_objects<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
+            .into_os_string()
+            .into_string()
+            .map_err(StorageError::BadPrefix)?;
+        let stream = self
+            .client
+            .list_objects_v2()
+            .bucket(self.bucket.clone())
+            .prefix(prefix)
+            .into_paginator()
+            .send()
+            .into_stream_03x()
+            .try_filter_map(|page| {
+                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
+                ready(Ok(contents))
+            })
+            .try_flatten()
+            // TODO: we should signal error instead of filtering
+            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))));
+        Ok(stream.boxed())
     }
 
-    async fn list_manifests(
+    async fn delete_objects(
         &self,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
-        self.list_objects(MANIFEST_PREFIX)
-    }
-
-    async fn list_snapshots(
-        &self,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        self.list_objects(SNAPSHOT_PREFIX)
-    }
-
-    async fn delete_chunks(
-        &self,
-        chunks: BoxStream<'_, ChunkId>,
+        prefix: &str,
+        ids: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
-        self.delete_objects(CHUNK_PREFIX, chunks).await
-    }
-
-    async fn delete_manifests(
-        &self,
-        chunks: BoxStream<'_, ManifestId>,
-    ) -> StorageResult<usize> {
-        self.delete_objects(MANIFEST_PREFIX, chunks).await
-    }
-
-    async fn delete_snapshots(
-        &self,
-        chunks: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
-        self.delete_objects(SNAPSHOT_PREFIX, chunks).await
+        let deleted = AtomicUsize::new(0);
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let deleted = &deleted;
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
+                    deleted.fetch_add(new_deletes, Ordering::Release);
+                }
+            })
+            .await;
+        Ok(deleted.into_inner())
     }
 }
 
-fn object_to_list_info<'a, Id>(object: &Object) -> Option<ListInfo<Id>>
-where
-    Id: for<'b> TryFrom<&'b str> + Send + 'a,
-{
+fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
     let key = object.key()?;
     let last_modified = object.last_modified()?;
     let created_at = last_modified.to_chrono_utc().ok()?;
-    let id_str = Path::new(key).file_name().and_then(|s| s.to_str())?;
-    let id = Id::try_from(id_str).ok()?;
+    let id = Path::new(key).file_name().and_then(|s| s.to_str())?.to_string();
     Some(ListInfo { id, created_at })
 }

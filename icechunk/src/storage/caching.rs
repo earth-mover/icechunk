@@ -164,40 +164,19 @@ impl Storage for MemCachingStorage {
         self.backend.ref_versions(ref_name).await
     }
 
-    async fn list_chunks(
-        &self,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
-        self.backend.list_chunks().await
+    async fn list_objects<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend.list_objects(prefix).await
     }
 
-    async fn list_manifests(
+    async fn delete_objects(
         &self,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
-        self.backend.list_manifests().await
-    }
-
-    async fn list_snapshots(
-        &self,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        self.backend.list_snapshots().await
-    }
-
-    async fn delete_chunks(&self, ids: BoxStream<'_, ChunkId>) -> StorageResult<usize> {
-        self.backend.delete_chunks(ids).await
-    }
-
-    async fn delete_manifests(
-        &self,
-        ids: BoxStream<'_, ManifestId>,
+        prefix: &str,
+        ids: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
-        self.backend.delete_manifests(ids).await
-    }
-
-    async fn delete_snapshots(
-        &self,
-        ids: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
-        self.backend.delete_snapshots(ids).await
+        self.backend.delete_objects(prefix, ids).await
     }
 }
 
