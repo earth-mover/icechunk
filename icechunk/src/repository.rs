@@ -214,7 +214,7 @@ impl Repository {
             return Err(RepositoryError::AlreadyInitialized);
         }
         let new_snapshot = Snapshot::empty();
-        let new_snapshot_id = ObjectId::random();
+        let new_snapshot_id = new_snapshot.metadata.id.clone();
         storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
         update_branch(
             storage.as_ref(),
@@ -314,7 +314,7 @@ impl Repository {
         let parent = self.storage.fetch_snapshot(self.snapshot_id()).await?;
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
-            // TODO: implement splitting of snapshot history
+            // FIXME: implement splitting of snapshot history
             Either::Left(parent.local_ancestry().chain(iter::once_with(|| todo!())))
         } else {
             Either::Right(parent.local_ancestry())

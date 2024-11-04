@@ -66,6 +66,16 @@ impl Ref {
             },
         }
     }
+
+    pub async fn fetch(
+        &self,
+        storage: &(dyn Storage + Send + Sync),
+    ) -> RefResult<RefData> {
+        match self {
+            Ref::Tag(name) => fetch_tag(storage, name).await,
+            Ref::Branch(name) => fetch_branch_tip(storage, name).await,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

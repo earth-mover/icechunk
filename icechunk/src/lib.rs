@@ -20,6 +20,7 @@
 pub mod change_set;
 pub mod format;
 pub mod metadata;
+pub mod ops;
 pub mod refs;
 pub mod repository;
 pub mod storage;

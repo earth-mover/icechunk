@@ -454,6 +454,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-smithy-types-convert"
+version = "0.60.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f280f434214856abace637b1f944d50ccca216814813acd195cdd7f206ce17f"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-types",
+ "chrono",
+ "futures-core",
+]
+
+[[package]]
 name = "aws-smithy-xml"
 version = "0.60.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1193,6 +1205,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-s3",
+ "aws-smithy-types-convert",
  "base32",
  "base64 0.22.1",
  "bytes",
