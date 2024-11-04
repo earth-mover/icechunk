@@ -1,6 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-// TODO: we only need that allow for PyStorageConfig, but i don't know how to set it
-
 use std::path::PathBuf;
 
 use icechunk::{
@@ -33,6 +30,22 @@ impl From<&PyS3Credentials> for StaticS3Credentials {
     }
 }
 
+impl From<PyS3Credentials> for StaticS3Credentials {
+    fn from(credentials: PyS3Credentials) -> Self {
+        StaticS3Credentials {
+            access_key_id: credentials.access_key_id,
+            secret_access_key: credentials.secret_access_key,
+            session_token: credentials.session_token,
+        }
+    }
+}
+
+impl From<PyS3Credentials> for S3Credentials {
+    fn from(value: PyS3Credentials) -> Self {
+        S3Credentials::Static(value.into())
+    }
+}
+
 #[pymethods]
 impl PyS3Credentials {
     #[new]
@@ -51,35 +64,19 @@ impl PyS3Credentials {
 }
 
 #[pyclass(name = "StorageConfig")]
-pub enum PyStorageConfig {
-    Memory {
-        prefix: Option<String>,
-    },
-    Filesystem {
-        root: String,
-    },
-    S3 {
-        bucket: String,
-        prefix: String,
-        anon: bool,
-        credentials: Option<PyS3Credentials>,
-        endpoint_url: Option<String>,
-        allow_http: Option<bool>,
-        region: Option<String>,
-    },
-}
+pub struct PyStorageConfig(StorageConfig);
 
 #[pymethods]
 impl PyStorageConfig {
     #[classmethod]
     #[pyo3(signature = (prefix = None))]
     fn memory(_cls: &Bound<'_, PyType>, prefix: Option<String>) -> Self {
-        PyStorageConfig::Memory { prefix }
+        Self(StorageConfig::InMemory { prefix })
     }
 
     #[classmethod]
-    fn filesystem(_cls: &Bound<'_, PyType>, root: String) -> Self {
-        PyStorageConfig::Filesystem { root }
+    fn filesystem(_cls: &Bound<'_, PyType>, root: PathBuf) -> Self {
+        Self(StorageConfig::LocalFileSystem { root })
     }
 
     #[classmethod]
@@ -87,7 +84,7 @@ impl PyStorageConfig {
         bucket,
         prefix,
         endpoint_url = None,
-        allow_http = None,
+        allow_http = false,
         region = None,
     ))]
     fn s3_from_env(
@@ -95,18 +92,16 @@ impl PyStorageConfig {
         bucket: String,
         prefix: String,
         endpoint_url: Option<String>,
-        allow_http: Option<bool>,
+        allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        PyStorageConfig::S3 {
-            bucket,
-            prefix,
-            anon: false,
-            credentials: None,
-            endpoint_url,
-            allow_http,
+        let config = S3Config {
             region,
-        }
+            endpoint: endpoint_url,
+            allow_http,
+            credentials: mk_credentials(None, false),
+        };
+        Self(StorageConfig::S3ObjectStore { bucket, prefix, config: Some(config) })
     }
 
     #[classmethod]
@@ -115,7 +110,7 @@ impl PyStorageConfig {
         prefix,
         credentials,
         endpoint_url = None,
-        allow_http = None,
+        allow_http = false,
         region = None,
     ))]
     fn s3_from_config(
@@ -124,18 +119,16 @@ impl PyStorageConfig {
         prefix: String,
         credentials: PyS3Credentials,
         endpoint_url: Option<String>,
-        allow_http: Option<bool>,
+        allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        PyStorageConfig::S3 {
-            bucket,
-            prefix,
-            anon: false,
-            credentials: Some(credentials),
-            endpoint_url,
-            allow_http,
+        let config = S3Config {
             region,
-        }
+            endpoint: endpoint_url,
+            allow_http,
+            credentials: credentials.into(),
+        };
+        Self(StorageConfig::S3ObjectStore { bucket, prefix, config: Some(config) })
     }
 
     #[classmethod]
@@ -143,7 +136,7 @@ impl PyStorageConfig {
         bucket,
         prefix,
         endpoint_url = None,
-        allow_http = None,
+        allow_http = false,
         region = None,
     ))]
     fn s3_anonymous(
@@ -151,18 +144,16 @@ impl PyStorageConfig {
         bucket: String,
         prefix: String,
         endpoint_url: Option<String>,
-        allow_http: Option<bool>,
+        allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        PyStorageConfig::S3 {
-            bucket,
-            prefix,
-            anon: true,
-            credentials: None,
-            endpoint_url,
-            allow_http,
+        let config = S3Config {
             region,
-        }
+            endpoint: endpoint_url,
+            allow_http,
+            credentials: mk_credentials(None, true),
+        };
+        Self(StorageConfig::S3ObjectStore { bucket, prefix, config: Some(config) })
     }
 }
 
@@ -177,38 +168,21 @@ fn mk_credentials(config: Option<&PyS3Credentials>, anon: bool) -> S3Credentials
     }
 }
 
+impl From<PyStorageConfig> for StorageConfig {
+    fn from(storage: PyStorageConfig) -> Self {
+        storage.0
+    }
+}
+
 impl From<&PyStorageConfig> for StorageConfig {
     fn from(storage: &PyStorageConfig) -> Self {
-        match storage {
-            PyStorageConfig::Memory { prefix } => {
-                StorageConfig::InMemory { prefix: prefix.clone() }
-            }
-            PyStorageConfig::Filesystem { root } => {
-                StorageConfig::LocalFileSystem { root: PathBuf::from(root.clone()) }
-            }
-            PyStorageConfig::S3 {
-                bucket,
-                prefix,
-                anon,
-                credentials,
-                endpoint_url,
-                allow_http,
-                region,
-            } => {
-                let s3_config = S3Config {
-                    region: region.clone(),
-                    credentials: mk_credentials(credentials.as_ref(), *anon),
-                    endpoint: endpoint_url.clone(),
-                    allow_http: allow_http.unwrap_or(false),
-                };
+        storage.0.clone()
+    }
+}
 
-                StorageConfig::S3ObjectStore {
-                    bucket: bucket.clone(),
-                    prefix: prefix.clone(),
-                    config: Some(s3_config),
-                }
-            }
-        }
+impl AsRef<StorageConfig> for PyStorageConfig {
+    fn as_ref(&self) -> &StorageConfig {
+        &self.0
     }
 }
 
