@@ -245,12 +245,6 @@ class VirtualRefConfig:
         """
         ...
 
-class KeyNotFound(Exception):
-    def __init__(
-        self,
-        info: Any
-    ): ...
-
 class StoreConfig:
     """Configuration for an IcechunkStore"""
 

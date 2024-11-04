@@ -1,5 +1,7 @@
 import icechunk
 import zarr
+import zarr.core
+import zarr.core.buffer
 
 
 def test_timetravel():
@@ -83,3 +85,6 @@ async def test_branch_reset():
     assert "a/zarr.json" in keys
     assert "b/zarr.json" not in keys
 
+    assert (
+        await store.get("b/zarr.json", zarr.core.buffer.default_buffer_prototype())
+    ) is None
