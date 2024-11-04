@@ -88,7 +88,7 @@ class XarrayDatasetWriter:
     def __post_init__(self) -> None:
         if not isinstance(self.store, IcechunkStore):
             raise ValueError(
-                f"Please pass in an IcechunkStore. Recevied {type(self.store)!r} instead."
+                f"Please pass in an IcechunkStore. Received {type(self.store)!r} instead."
             )
 
     def write_metadata(
