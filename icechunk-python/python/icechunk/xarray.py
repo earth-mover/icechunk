@@ -9,11 +9,7 @@ from .dask import stateful_store_reduce
 
 from xarray import Dataset
 from xarray.core.types import ZarrWriteModes  # TODO: delete this
-from xarray.backends.api import (
-    _validate_dataset_names,
-    dump_to_store,
-)
-from xarray.backends.zarr import ZarrStore, _choose_default_mode
+from xarray.backends.zarr import ZarrStore
 from xarray.backends.common import ArrayWriter
 from dataclasses import dataclass, field
 
@@ -146,17 +142,6 @@ class XarrayDatasetWriter:
             written to the region ``0:1000`` along ``x`` and ``10000:11000`` along
             ``y``.
 
-            Two restrictions apply to the use of ``region``:
-
-            - If ``region`` is set, _all_ variables in a dataset must have at
-              least one dimension in common with the region. Other variables
-              should be written in a separate single call to ``to_zarr()``.
-            - Dimensions cannot be included in both ``region`` and
-              ``append_dim`` at the same time. To create empty arrays to fill
-              in with ``region``, use a separate call to ``to_zarr()`` with
-              ``compute=False``. See "Appending to existing Zarr stores" in
-              the reference documentation for full details.
-
             Users are expected to ensure that the specified region aligns with
             Zarr chunk boundaries, and that dask chunks are also aligned.
             Xarray makes limited checks that these multiple chunk boundaries line up.
@@ -166,17 +151,14 @@ class XarrayDatasetWriter:
             If True, only allow writes to when there is a many-to-one relationship
             between Zarr chunks (specified in encoding) and Dask chunks.
             Set False to override this restriction; however, data may become corrupted
-            if Zarr arrays are written in parallel. This option may be useful in combination
-            with ``compute=False`` to initialize a Zarr from an existing
-            Dataset with arbitrary chunk structure.
+            if Zarr arrays are written in parallel.
             In addition to the many-to-one relationship validation, it also detects partial
-            chunks writes when using the region parameter,
+            chunks writes when using the ``region`` parameter,
             these partial chunks are considered unsafe in the mode "r+" but safe in
             the mode "a".
             Note: Even with these validations it can still be unsafe to write
             two or more chunked arrays in the same location in parallel if they are
-            not writing in independent regions, for those cases it is better to use
-            a synchronizer.
+            not writing in independent regions.
         write_empty_chunks : bool or None, optional
             If True, all chunks will be stored regardless of their
             contents. If False, each chunk is compared to the array's fill value
@@ -192,6 +174,17 @@ class XarrayDatasetWriter:
         Returns
         -------
         None
+
+        Notes
+        -----
+        Two restrictions apply to the use of ``region``:
+
+          - If ``region`` is set, _all_ variables in a dataset must have at
+            least one dimension in common with the region. Other variables
+            should be written in a separate single call to ``to_zarr()``.
+          - Dimensions cannot be included in both ``region`` and
+            ``append_dim`` at the same time. To create empty arrays to fill
+            in with ``region``, use the `XarrayDatasetWriter` directly.
         """
         from xarray.backends.zarr import _choose_default_mode
         from xarray.backends.api import _validate_dataset_names, dump_to_store
@@ -227,7 +220,6 @@ class XarrayDatasetWriter:
         dump_to_store(dataset, self.xarray_store, self.writer, encoding=encoding)
 
         self._initialized = True
-
 
     def write_eager(self):
         """
@@ -334,17 +326,6 @@ def to_icechunk(
         written to the region ``0:1000`` along ``x`` and ``10000:11000`` along
         ``y``.
 
-        Two restrictions apply to the use of ``region``:
-
-        - If ``region`` is set, _all_ variables in a dataset must have at
-          least one dimension in common with the region. Other variables
-          should be written in a separate single call to ``to_zarr()``.
-        - Dimensions cannot be included in both ``region`` and
-          ``append_dim`` at the same time. To create empty arrays to fill
-          in with ``region``, use a separate call to ``to_zarr()`` with
-          ``compute=False``. See "Appending to existing Zarr stores" in
-          the reference documentation for full details.
-
         Users are expected to ensure that the specified region aligns with
         Zarr chunk boundaries, and that dask chunks are also aligned.
         Xarray makes limited checks that these multiple chunk boundaries line up.
@@ -354,17 +335,14 @@ def to_icechunk(
         If True, only allow writes to when there is a many-to-one relationship
         between Zarr chunks (specified in encoding) and Dask chunks.
         Set False to override this restriction; however, data may become corrupted
-        if Zarr arrays are written in parallel. This option may be useful in combination
-        with ``compute=False`` to initialize a Zarr from an existing
-        Dataset with arbitrary chunk structure.
+        if Zarr arrays are written in parallel.
         In addition to the many-to-one relationship validation, it also detects partial
         chunks writes when using the region parameter,
         these partial chunks are considered unsafe in the mode "r+" but safe in
         the mode "a".
         Note: Even with these validations it can still be unsafe to write
         two or more chunked arrays in the same location in parallel if they are
-        not writing in independent regions, for those cases it is better to use
-        a synchronizer.
+        not writing in independent regions.
     write_empty_chunks : bool or None, optional
         If True, all chunks will be stored regardless of their
         contents. If False, each chunk is compared to the array's fill value
@@ -379,11 +357,22 @@ def to_icechunk(
     chunkmanager_store_kwargs : dict, optional
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
-        :py:func:`dask.array.store()`. Experimental API that should not be relied upon.
+        `dask.array.store()`. Experimental API that should not be relied upon.
 
     Returns
     -------
     None
+
+    Notes
+    -----
+    Two restrictions apply to the use of ``region``:
+
+      - If ``region`` is set, _all_ variables in a dataset must have at
+        least one dimension in common with the region. Other variables
+        should be written in a separate single call to ``to_zarr()``.
+      - Dimensions cannot be included in both ``region`` and
+        ``append_dim`` at the same time. To create empty arrays to fill
+        in with ``region``, use the `XarrayDatasetWriter` directly.
     """
     writer = XarrayDatasetWriter(dataset, store=store)
     # write metadata
