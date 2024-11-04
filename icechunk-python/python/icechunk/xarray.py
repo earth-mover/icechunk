@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 from collections.abc import Hashable, Mapping, MutableMapping
-from typing import Any, Literal, Union
+from typing import Any, Literal, cast
 
+
+import numpy as np
 import zarr
 
 from icechunk import IcechunkStore
 from .dask import stateful_store_reduce
 
 from xarray import Dataset
-from xarray.core.types import ZarrWriteModes  # TODO: delete this
 from xarray.backends.zarr import ZarrStore
 from xarray.backends.common import ArrayWriter
 from dataclasses import dataclass, field
+
+ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 # TODO: import-time check on Xarray version
 #
@@ -24,7 +27,7 @@ except ImportError:
 
 
 def extract_stores(zarray: zarr.Array) -> IcechunkStore:
-    return zarray.store
+    return cast(zarray.store, "IcechunkStore")
 
 
 def merge_stores(*stores: IcechunkStore) -> IcechunkStore:
@@ -45,13 +48,13 @@ def is_chunked_array(x: Any) -> bool:
 
 class LazyArrayWriter(ArrayWriter):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__()  # type: ignore[no-untyped-call]
 
-        self.eager_sources = []
-        self.eager_targets = []
-        self.eager_regions = []
+        self.eager_sources: list[np.ndarray[Any, Any]] = []
+        self.eager_targets: list[zarr.Array] = []
+        self.eager_regions: list[tuple[slice, ...]] = []
 
-    def add(self, source, target, region=None):
+    def add(self, source: Any, target: Any, region: Any = None) -> Any:
         if is_chunked_array(source):
             self.sources.append(source)
             self.targets.append(target)
@@ -96,7 +99,7 @@ class XarrayDatasetWriter:
         *,
         group: str | None = None,
         mode: ZarrWriteModes | None = None,
-        encoding: Mapping | None = None,
+        encoding: Mapping[Any, Any] | None = None,
         append_dim: Hashable | None = None,
         region: Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None = None,
         write_empty_chunks: bool | None = None,
@@ -192,12 +195,14 @@ class XarrayDatasetWriter:
         # validate Dataset keys, DataArray names
         _validate_dataset_names(self.dataset)
 
-        self.mode = _choose_default_mode(mode=mode, append_dim=append_dim, region=region)
+        concrete_mode: ZarrWriteModes = _choose_default_mode(
+            mode=mode, append_dim=append_dim, region=region
+        )
 
         self.xarray_store = ZarrStore.open_group(
             store=self.store,
             group=group,
-            mode=mode,
+            mode=concrete_mode,
             zarr_format=3,
             append_dim=append_dim,
             write_region=region,
@@ -217,11 +222,11 @@ class XarrayDatasetWriter:
 
         # This writes the metadata (zarr.json) for all arrays
         self.writer = LazyArrayWriter()
-        dump_to_store(dataset, self.xarray_store, self.writer, encoding=encoding)
+        dump_to_store(dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
 
         self._initialized = True
 
-    def write_eager(self):
+    def write_eager(self) -> None:
         """
         Write in-memory variables to store.
 
@@ -235,7 +240,7 @@ class XarrayDatasetWriter:
 
     def write_lazy(
         self,
-        chunkmanager_store_kwargs: MutableMapping | None = None,
+        chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
         split_every: int | None = None,
     ) -> None:
         """
@@ -255,7 +260,7 @@ class XarrayDatasetWriter:
         # each of those zarr.Array.store contains the changesets we need
         stored_arrays = self.writer.sync(
             compute=False, chunkmanager_store_kwargs=chunkmanager_store_kwargs
-        )
+        )  # type: ignore[no-untyped-call]
 
         # Now we tree-reduce all changesets
         merged_store = stateful_store_reduce(
@@ -280,10 +285,10 @@ def to_icechunk(
     safe_chunks: bool = True,
     append_dim: Hashable | None = None,
     region: Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None = None,
-    encoding: Mapping | None = None,
-    chunkmanager_store_kwargs: MutableMapping | None = None,
+    encoding: Mapping[Any, Any] | None = None,
+    chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> None:
     """
     Write an Xarray Dataset to a group of an icechunk store.
@@ -358,6 +363,8 @@ def to_icechunk(
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
         `dask.array.store()`. Experimental API that should not be relied upon.
+    split_every: int, optional
+        Number of tasks to merge at every level of the tree reduction.
 
     Returns
     -------
