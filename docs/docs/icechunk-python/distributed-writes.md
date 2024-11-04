@@ -37,6 +37,11 @@ roundtripped = xr.open_zarr(store, consolidated=False)
 dataset.identical(roundtripped)
 ```
 
+Finally commit your changes!
+```python
+icechunk_store.commit("wrote an Xarray dataset!")
+```
+
 ## More control
 
 Sometimes we need more control over these writes. For example, you may want to write the metadata for all arrays first, then write any in-memory variables
@@ -64,4 +69,9 @@ and any in-memory arrays with the desired values.
 Finally execute a write of all lazy arrays.
 ```python
 writer.write_lazy() # eagerly write dask arrays
+```
+
+Finally commit your changes!
+```python
+icechunk_store.commit("wrote an Xarray dataset!")
 ```
