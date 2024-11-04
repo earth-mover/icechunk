@@ -38,7 +38,9 @@ use crate::{
     Storage, StorageError,
 };
 
-use super::{ListInfo, StorageResult};
+use super::{
+    ListInfo, StorageResult, CHUNK_PREFIX, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
+};
 
 #[derive(Debug)]
 pub struct S3Storage {
@@ -118,12 +120,6 @@ pub async fn mk_client(config: Option<&S3Config>) -> Client {
 
     Client::from_conf(config)
 }
-
-const SNAPSHOT_PREFIX: &str = "snapshots/";
-const MANIFEST_PREFIX: &str = "manifests/";
-// const ATTRIBUTES_PREFIX: &str = "attributes/";
-const CHUNK_PREFIX: &str = "chunks/";
-const REF_PREFIX: &str = "refs";
 
 impl S3Storage {
     pub async fn new_s3_store(
