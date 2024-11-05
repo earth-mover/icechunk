@@ -101,27 +101,7 @@ class StorageConfig:
     storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
     ```
     """
-    class Memory:
-        """Config for an in-memory storage backend"""
 
-        prefix: str
-
-    class Filesystem:
-        """Config for a local filesystem storage backend"""
-
-        root: str
-
-    class S3:
-        """Config for an S3 Object Storage compatible storage backend"""
-
-        bucket: str
-        prefix: str
-        credentials: S3Credentials | None
-        endpoint_url: str | None
-        allow_http: bool | None
-        region: str | None
-
-    def __init__(self, storage: Memory | Filesystem | S3): ...
     @classmethod
     def memory(cls, prefix: str) -> StorageConfig:
         """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
@@ -133,7 +113,14 @@ class StorageConfig:
         ...
 
     @classmethod
-    def s3_from_env(cls, bucket: str, prefix: str) -> StorageConfig:
+    def s3_from_env(
+        cls,
+        bucket: str,
+        prefix: str,
+        endpoint_url: str | None,
+        allow_http: bool = False,
+        region: str | None = None,
+    ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage backend
         with the given bucket and prefix
 
@@ -154,7 +141,7 @@ class StorageConfig:
         prefix: str,
         credentials: S3Credentials,
         endpoint_url: str | None,
-        allow_http: bool | None = None,
+        allow_http: bool = False,
         region: str | None = None,
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
@@ -171,7 +158,7 @@ class StorageConfig:
         bucket: str,
         prefix: str,
         endpoint_url: str | None,
-        allow_http: bool | None = None,
+        allow_http: bool = False,
         region: str | None = None,
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
@@ -265,7 +252,7 @@ class StoreConfig:
         inline_chunk_threshold_bytes: int | None = None,
         unsafe_overwrite_refs: bool | None = None,
         virtual_ref_config: VirtualRefConfig | None = None,
-    ): 
+    ):
         """Create a StoreConfig object with the given configuration options
 
         Parameters
@@ -280,24 +267,22 @@ class StoreConfig:
             Whether to allow overwriting refs in the store. Default is False. Experimental.
         virtual_ref_config: VirtualRefConfig | None
             Configurations for virtual references such as credentials and endpoints
-        
+
         Returns
         -------
         StoreConfig
             A StoreConfig object with the given configuration options
-        """    
+        """
         ...
 
 async def async_pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
 def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
-
 async def async_pyicechunk_store_create(
     storage: StorageConfig, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
 def pyicechunk_store_create(
     storage: StorageConfig, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
-
 async def async_pyicechunk_store_open_existing(
     storage: StorageConfig, read_only: bool, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
