@@ -641,7 +641,7 @@ impl Repository {
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    pub async fn merge(&mut self, changes: ChangeSet) -> () {
+    pub async fn merge(&mut self, changes: ChangeSet) {
         self.change_set.merge(changes);
     }
 
@@ -657,14 +657,9 @@ impl Repository {
         message: &str,
         properties: SnapshotProperties,
     ) -> RepositoryResult<SnapshotId> {
-        // TODO: can this clone can be avoided? its difficult because
-        // self is borrows for flush and the change set should only
-        // be cleared after the flush is successful.
-        let mut change_set = self.change_set.clone();
-
         let new_snapshot_id = flush(
             self.storage.as_ref(),
-            &mut change_set,
+            &self.change_set,
             self.snapshot_id(),
             message,
             properties,
@@ -908,7 +903,7 @@ async fn get_existing_node<'a>(
 
 async fn flush(
     storage: &(dyn Storage + Send + Sync),
-    change_set: &mut ChangeSet,
+    change_set: &ChangeSet,
     parent_id: &SnapshotId,
     message: &str,
     properties: SnapshotProperties,

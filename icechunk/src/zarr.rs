@@ -486,7 +486,7 @@ impl Store {
         }
     }
 
-    pub async fn merge(&self, changes: ChangeSet) -> () {
+    pub async fn merge(&self, changes: ChangeSet) {
         self.repository.write().await.merge(changes).await;
     }
 
