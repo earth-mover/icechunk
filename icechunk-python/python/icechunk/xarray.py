@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
+import importlib
 from collections.abc import Hashable, Mapping, MutableMapping
+from dataclasses import dataclass, field
 from typing import Any, Literal
-
 
 import numpy as np
 import zarr
 
 from icechunk import IcechunkStore
-from .dask import stateful_store_reduce
-
-from xarray import Dataset
-from xarray.backends.zarr import ZarrStore
-from xarray.backends.common import ArrayWriter
-from dataclasses import dataclass, field
 from icechunk.distributed import extract_store, merge_stores
+from xarray import Dataset
+from xarray.backends.common import ArrayWriter
+from xarray.backends.zarr import ZarrStore
+
+from icechunk.dask import stateful_store_reduce
 
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 # TODO: import-time check on Xarray version
 #
 try:
-    import dask
-
-    has_dask = True
+    has_dask = importlib.util.find_spec("dask") is not None
 except ImportError:
     has_dask = False
 
@@ -179,8 +177,8 @@ class XarrayDatasetWriter:
             ``append_dim`` at the same time. To create empty arrays to fill
             in with ``region``, use the `XarrayDatasetWriter` directly.
         """
-        from xarray.backends.zarr import _choose_default_mode
         from xarray.backends.api import _validate_dataset_names, dump_to_store
+        from xarray.backends.zarr import _choose_default_mode
 
         # validate Dataset keys, DataArray names
         _validate_dataset_names(self.dataset)

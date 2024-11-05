@@ -77,8 +77,7 @@ async def test_distributed_writers():
     )
     _first_snap = store.commit("array created")
 
-    with dask.config.set(scheduler=client):
-        store_dask(store, sources=[dask_array], targets=[zarray])
+    store_dask(store, sources=[dask_array], targets=[zarray])
     commit_res = store.commit("distributed commit")
     assert commit_res
 
