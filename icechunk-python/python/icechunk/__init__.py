@@ -326,11 +326,9 @@ class IcechunkStore(Store, SyncMixin):
         * some other writer updated the current branch since the repository was checked out
         """
         return await self._store.async_commit(message)
-
-    def distributed_commit(
-        self, message: str, other_change_set_bytes: list[bytes]
-    ) -> str:
-        """Commit any uncommitted changes to the store with a set of distributed changes.
+    
+    def merge(self, changes: bytes) -> None:
+        """Merge the changes from another store into this store.
 
         This will create a new snapshot on the current branch and return
         the new snapshot id.
@@ -340,17 +338,12 @@ class IcechunkStore(Store, SyncMixin):
         * there is no currently checked out branch
         * some other writer updated the current branch since the repository was checked out
 
-        other_change_set_bytes must be generated as the output of calling `change_set_bytes`
-        on other stores. The resulting commit will include changes from all stores.
-
         The behavior is undefined if the stores applied conflicting changes.
         """
-        return self._store.distributed_commit(message, other_change_set_bytes)
-
-    async def async_distributed_commit(
-        self, message: str, other_change_set_bytes: list[bytes]
-    ) -> str:
-        """Commit any uncommitted changes to the store with a set of distributed changes.
+        return self._store.merge(changes)
+    
+    async def async_merge(self, changes: bytes) -> None:
+        """Merge the changes from another store into this store.
 
         This will create a new snapshot on the current branch and return
         the new snapshot id.
@@ -360,24 +353,31 @@ class IcechunkStore(Store, SyncMixin):
         * there is no currently checked out branch
         * some other writer updated the current branch since the repository was checked out
 
-        other_change_set_bytes must be generated as the output of calling `change_set_bytes`
-        on other stores. The resulting commit will include changes from all stores.
-
         The behavior is undefined if the stores applied conflicting changes.
         """
-        return await self._store.async_distributed_commit(message, other_change_set_bytes)
+        return await self._store.async_merge(changes)
 
     @property
     def has_uncommitted_changes(self) -> bool:
         """Return True if there are uncommitted changes to the store"""
         return self._store.has_uncommitted_changes
 
-    async def async_reset(self) -> None:
-        """Discard any uncommitted changes and reset to the previous snapshot state."""
+    async def async_reset(self) -> bytes:
+        """Pop any uncommitted changes and reset to the previous snapshot state.
+        
+        Returns
+        -------
+        bytes : The changes that were taken from the working set
+        """
         return await self._store.async_reset()
 
-    def reset(self) -> None:
-        """Discard any uncommitted changes and reset to the previous snapshot state."""
+    def reset(self) -> bytes:
+        """Pop any uncommitted changes and reset to the previous snapshot state.
+        
+        Returns
+        -------
+        bytes : The changes that were taken from the working set
+        """
         return self._store.reset()
 
     async def async_new_branch(self, branch_name: str) -> str:
