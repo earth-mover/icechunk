@@ -180,7 +180,7 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
 
     // Merge the changesets into the first repo
     for change_set in change_sets {
-        repo1.merge(change_set).await?;
+        repo1.merge(change_set).await;
     }
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra

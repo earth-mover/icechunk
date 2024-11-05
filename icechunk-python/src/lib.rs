@@ -970,7 +970,7 @@ async fn do_merge(
         .map_err(PyIcechunkStoreError::RepositoryError)?;
 
     let store = store.write().await;
-    store.merge(change_set).await.map_err(PyIcechunkStoreError::StoreError)?;
+    store.merge(change_set).await;
     Ok(())
 }
 

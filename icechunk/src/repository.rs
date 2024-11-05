@@ -641,9 +641,8 @@ impl Repository {
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    pub async fn merge(&mut self, changes: ChangeSet) -> RepositoryResult<()> {
+    pub async fn merge(&mut self, changes: ChangeSet) -> () {
         self.change_set.merge(changes);
-        Ok(())
     }
 
     /// After changes to the repository have been made, this generates and writes to `Storage` the updated datastructures.

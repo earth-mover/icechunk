@@ -486,9 +486,8 @@ impl Store {
         }
     }
 
-    pub async fn merge(&self, changes: ChangeSet) -> StoreResult<()> {
-        self.repository.write().await.merge(changes).await?;
-        Ok(())
+    pub async fn merge(&self, changes: ChangeSet) -> () {
+        self.repository.write().await.merge(changes).await;
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
