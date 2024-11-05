@@ -13,6 +13,7 @@ from xarray import Dataset
 from xarray.backends.zarr import ZarrStore
 from xarray.backends.common import ArrayWriter
 from dataclasses import dataclass, field
+from icechunk.distributed import extract_store, merge_stores
 
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
@@ -24,17 +25,6 @@ try:
     has_dask = True
 except ImportError:
     has_dask = False
-
-
-def extract_stores(zarray: zarr.Array) -> IcechunkStore:
-    return cast(zarray.store, "IcechunkStore")
-
-
-def merge_stores(*stores: IcechunkStore) -> IcechunkStore:
-    store, *rest = stores
-    for other in rest:
-        store.merge(other.change_set_bytes())
-    return store
 
 
 def is_chunked_array(x: Any) -> bool:

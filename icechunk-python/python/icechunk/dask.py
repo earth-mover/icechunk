@@ -1,28 +1,62 @@
 import itertools
 from collections.abc import MutableMapping
-from icechunk import IcechunkStore
-
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
-    Literal,
     Iterable,
+    Literal,
     Mapping,
     Sequence,
-    Sized,
-    TYPE_CHECKING,
-    overload,
     TypeAlias,
+    overload,
 )
-from dask.typing import Graph
+
+import dask.array
+import zarr
 from dask import config
 from dask.array.core import Array
 from dask.base import compute_as_if_collection, tokenize
 from dask.core import flatten
 from dask.delayed import Delayed
 from dask.highlevelgraph import HighLevelGraph
+from icechunk.distributed import extract_stores, merge_stores
+
+from icechunk import IcechunkStore
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
+
+
+def store_dask(
+    store: IcechunkStore,
+    *,
+    sources: list[Array],
+    targets: list[zarr.Array],
+    regions: list[tuple[slice, ...]] | None = None,
+    split_every: int | None = None,
+    **store_kwargs: Any,
+) -> None:
+    stored_arrays = dask.array.store(
+        sources=sources,
+        targets=targets,
+        regions=regions,
+        compute=False,
+        return_stored=True,
+        load_stored=False,
+        lock=False,
+        **store_kwargs,
+    )
+    # Now we tree-reduce all changesets
+    merged_store = stateful_store_reduce(
+        stored_arrays,
+        prefix="ice-changeset",
+        chunk=extract_stores,
+        aggregate=merge_stores,
+        split_every=split_every,
+        compute=True,
+        **store_kwargs,
+    )
+    store.merge(merged_store.change_set_bytes())
 
 
 # tree-reduce all changesets, regardless of array
