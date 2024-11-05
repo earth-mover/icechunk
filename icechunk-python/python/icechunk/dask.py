@@ -20,7 +20,7 @@ from dask.base import compute_as_if_collection, tokenize
 from dask.core import flatten
 from dask.delayed import Delayed
 from dask.highlevelgraph import HighLevelGraph
-from icechunk.distributed import extract_stores, merge_stores
+from icechunk.distributed import extract_store, merge_stores
 
 from icechunk import IcechunkStore
 
@@ -50,7 +50,7 @@ def store_dask(
     merged_store = stateful_store_reduce(
         stored_arrays,
         prefix="ice-changeset",
-        chunk=extract_stores,
+        chunk=extract_store,
         aggregate=merge_stores,
         split_every=split_every,
         compute=True,

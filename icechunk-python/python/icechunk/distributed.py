@@ -1,5 +1,4 @@
 # distributed utility functions
-
 from typing import cast
 
 import zarr
@@ -7,8 +6,8 @@ import zarr
 from icechunk import IcechunkStore
 
 
-def extract_stores(zarray: zarr.Array) -> IcechunkStore:
-    return zarray.store  # type: ignore
+def extract_store(zarray: zarr.Array) -> IcechunkStore:
+    return cast(IcechunkStore, zarray.store)
 
 
 def merge_stores(*stores: IcechunkStore) -> IcechunkStore:

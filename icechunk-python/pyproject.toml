@@ -37,6 +37,7 @@ test = [
   "ruff",
   "dask",
   "distributed",
+  "xarray",
 ]
 
 [tool.maturin]

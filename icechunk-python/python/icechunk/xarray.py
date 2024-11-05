@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from collections.abc import Hashable, Mapping, MutableMapping
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 
 import numpy as np
@@ -31,7 +31,7 @@ def is_chunked_array(x: Any) -> bool:
     if has_dask:
         import dask
 
-        return dask.base.is_dask_collection(x)
+        return dask.base.is_dask_collection(x)  # type: ignore[return-type]
     else:
         return False
 
@@ -256,7 +256,7 @@ class XarrayDatasetWriter:
         merged_store = stateful_store_reduce(
             stored_arrays,
             prefix="ice-changeset",
-            chunk=extract_stores,
+            chunk=extract_store,
             aggregate=merge_stores,
             split_every=split_every,
             compute=True,
