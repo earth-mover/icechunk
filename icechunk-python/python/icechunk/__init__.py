@@ -14,6 +14,7 @@ from ._icechunk_python import (
     StorageConfig,
     StoreConfig,
     VirtualRefConfig,
+    Ref,
     __version__,
     pyicechunk_store_create,
     pyicechunk_store_exists,
@@ -29,8 +30,8 @@ __all__ = [
     "SnapshotMetadata",
     "StoreConfig",
     "VirtualRefConfig",
+    "Ref",
 ]
-
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
@@ -625,6 +626,9 @@ class IcechunkStore(Store, SyncMixin):
     @property
     def supports_deletes(self) -> bool:
         return self._store.supports_deletes
+
+    def list_refs(self) -> list[Ref]:
+        return self._store.list_refs()
 
     def list(self) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store.
