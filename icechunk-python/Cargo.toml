@@ -18,9 +18,9 @@ name = "_icechunk_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-bytes = "1.7.2"
+bytes = "1.8.0"
 chrono = { version = "0.4.38" }
-futures = "0.3.30"
+futures = "0.3.31"
 icechunk = { path = "../icechunk", version = "0.1.0-alpha.4" }
 pyo3 = { version = "0.22", features = [
   "chrono",
@@ -28,10 +28,10 @@ pyo3 = { version = "0.22", features = [
   "experimental-async",
 ] }
 pyo3-async-runtimes = { version = "0.22.0", features = ["tokio-runtime"] }
-async-stream = "0.3.5"
-thiserror = "1.0.64"
-tokio = "1.40"
-serde_json = "1.0.128"
+async-stream = "0.3.6"
+thiserror = "2.0.3"
+tokio = "1.41"
+serde_json = "1.0.132"
 
 [lints]
 workspace = true
