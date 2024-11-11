@@ -71,6 +71,9 @@ class XarrayDatasetWriter:
     dataset: Dataset = field(repr=False)
     store: IcechunkStore = field(kw_only=True)
 
+    safe_chunks: bool = field(kw_only=True, default=True)
+    write_empty_chunks: bool = field(kw_only=True, default=True)
+
     _initialized: bool = field(default=False, repr=False)
 
     xarray_store: ZarrStore = field(init=False, repr=False)
@@ -81,6 +84,33 @@ class XarrayDatasetWriter:
             raise ValueError(
                 f"Please pass in an IcechunkStore. Received {type(self.store)!r} instead."
             )
+
+    def _open_group(self, *, group, mode: ZarrWriteModes, append_dim: Hashable | None, region, encoding) -> None:
+        # from xarray.backends.zarr import _choose_default_mode
+
+        # concrete_mode: ZarrWriteModes = _choose_default_mode(
+        #     mode=mode, append_dim=append_dim, region=region
+        # )
+
+        self.xarray_store = ZarrStore.open_group(
+            store=self.store,
+            group=group,
+            mode=mode,
+            zarr_format=3,
+            append_dim=append_dim,
+            write_region=region,
+            safe_chunks=self.safe_chunks,
+            write_empty=self.write_empty_chunks,
+            synchronizer=None,
+            consolidated=False,
+            consolidate_on_close=False,
+            zarr_version=None,
+        )
+
+        if encoding is None:
+            encoding = {}
+        self.xarray_store._validate_encoding(encoding)
+
 
     def write_metadata(
         self,
@@ -178,41 +208,56 @@ class XarrayDatasetWriter:
             in with ``region``, use the `XarrayDatasetWriter` directly.
         """
         from xarray.backends.api import _validate_dataset_names, dump_to_store
-        from xarray.backends.zarr import _choose_default_mode
 
         # validate Dataset keys, DataArray names
         _validate_dataset_names(self.dataset)
 
-        concrete_mode: ZarrWriteModes = _choose_default_mode(
-            mode=mode, append_dim=append_dim, region=region
-        )
-
-        self.xarray_store = ZarrStore.open_group(
-            store=self.store,
-            group=group,
-            mode=concrete_mode,
-            zarr_format=3,
-            append_dim=append_dim,
-            write_region=region,
-            safe_chunks=safe_chunks,
-            write_empty=write_empty_chunks,
-            synchronizer=None,
-            consolidated=False,
-            consolidate_on_close=False,
-            zarr_version=None,
-        )
-
-        if encoding is None:
-            encoding = {}
-        self.xarray_store._validate_encoding(encoding)
-
-        dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
-
         # This writes the metadata (zarr.json) for all arrays
+        # This also will resize arrays for any appends
         self.writer = LazyArrayWriter()
-        dump_to_store(dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
+        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
 
         self._initialized = True
+
+    def for_write(self, *, group, mode="w-"):
+        self._open_group(
+            group=group,
+            mode=mode,
+            zarr_format=3,
+            append_dim=None,
+            write_region=None,
+        )
+
+    def for_region(self, *, group, region) -> None:
+        self._open_group(
+            group=group,
+            mode="r+",
+            zarr_format=3,
+            append_dim=None,
+            write_region=region,
+        )
+        # Xarray today raises an error if there are variables whose dimensions
+        # do not overlap with the region's dimensions
+        self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
+
+    def for_append(self, *, group, append_dim) -> None:
+        self._open_group(
+            group=group,
+            mode="r+",
+            zarr_format=3,
+            append_dim=append_dim,
+            write_region=None,
+        )
+        # TODO: raise if dataset has vars do not have the append_dim.
+
+
+    def describe_change(self):
+        """
+        This method will describe a list of changes.
+        1. Arrays that will be appended to
+        1. New arrays to be written.
+        """
+        pass
 
     def write_eager(self) -> None:
         """

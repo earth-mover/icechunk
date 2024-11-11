@@ -2,7 +2,7 @@
 
 !!! warning
 
-    Using Xarray, Dask, and Icechunk requires `icechunk>=FOO`, `dask>=FOO`, and `xarray>=2024.11.0`. 
+    Using Xarray, Dask, and Icechunk requires `icechunk>=FOO`, `dask>=2024.11.0`, and `xarray>=2024.11.0`. 
 
 
 First let's start a distributed Client and create an IcechunkStore.
@@ -103,7 +103,8 @@ writer = XarrayDatasetWriter(ds, store=icechunk_store)
 
 Write metadata for arrays in one step. This "initializes" the store but has not written an real values yet.
 ```python
-writer.write_metadata(group="new2", mode="w")
+writer.for_create_or_overwrite(group="new2", mode="w") # default mode="w-"?
+writer.write_metadata()
 ```
 Write an in-memory arrays to the store:
 ```python
@@ -114,10 +115,90 @@ and any in-memory arrays with the desired values.
 
 Finally execute a write of all lazy arrays.
 ```python
-writer.write_lazy() # eagerly write dask arrays
+writer.write_lazy()
 ```
 
 Finally commit your changes!
 ```python
 icechunk_store.commit("wrote an Xarray dataset!")
+```
+
+## Modifying existing stores
+
+Confusions re: appends and region writes:
+1. Do existing coordinate variables get overwritten?
+2. Do existing attributes get overwritten?
+3. Can I write new variables?
+4. With appends, can I update only a subset of arrays in the group with `append_dim`?
+
+Proposal:
+1. Appends along a dimensions, and region writes are conceptually similar and never allow changing existing array metadata.
+2. To add a new variable to the store, or modify existing metadata, use a different entrypoint; `writer.for_modifying`.
+
+API Qs:
+1. `write_metadata`: Is it clear that this *creates* new Zarr arrays, and will *resize* any array
+   that is being appended to?
+2. Do people like writing new variables AND appending along a dimension at the same time?
+
+### Overwriting the _whole_ store
+
+```python
+writer = XarrayDatasetWriter(ds, store=icechunk_store)
+writer.for_create_or_overwrite(
+    group="new2", # will set mode="w"
+)
+```
+
+### Overwrite, or add new variables
+```python
+writer = XarrayDatasetWriter(ds, store=icechunk_store)
+writer = writer.for_modify(  
+     group="new2", # will set mode="a"
+)
+# allows writing new vars, updating attributes for existing arrays
+writer.write_metadata()
+# will overwrite any pre-existing variables
+writer.write_eager()
+# will overwrite any pre-existing variables
+writer.write_lazy()
+```
+
+### Adding new variables only
+```python
+writer = XarrayDatasetWriter(ds, store=icechunk_store)
+writer = writer.for_modify(  
+     group="new2", # will set mode="a"
+)
+# modifies the dataset to be written, by dropping any pre-existing vars
+writer = writer.drop_existing_vars()
+writer.write_metadata()
+writer.write_eager()
+writer.write_lazy()
+```
+
+
+### Appending along a dimension
+
+```python
+writer = XarrayDatasetWriter(ds, store=icechunk_store)
+writer = writer.for_append(  
+     group="new2", append_dim="time" # will set mode="a"
+)
+# this will resize the appropriate arrays.
+# should it overwrite existing metadata?
+writer.write_metadata()
+# This will write the updated coordinate value for `append_dim` (if any)
+writer.write_eager()
+# now effectively execute a region write for the appended piece
+writer.write_lazy()
+```
+
+### Writing to a region of existing arrays
+```python
+writer = XarrayDatasetWriter(ds, store=icechunk_store)
+# will raise for any variables not overlapping with region.
+writer.for_region(region="auto")
+writer.write_metadata()
+writer.write_eager()
+writer.write_lazy()
 ```
