@@ -35,9 +35,9 @@ test = [
   "pytest-cov",
   "pytest-asyncio",
   "ruff",
-  "dask",
-  "distributed",
-  "xarray",
+  "dask>=2024.11.0",
+  "distributed>=2024.11.0",
+  "xarray>=2024.10.0",
 ]
 
 [tool.maturin]
