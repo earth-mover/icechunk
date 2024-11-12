@@ -2,6 +2,7 @@ use std::{collections::HashMap, num::NonZeroU64};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+
 use test_strategy::Arbitrary;
 
 pub mod data_type;
@@ -31,6 +32,12 @@ pub struct StorageTransformer {
 
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ChunkShape(pub Vec<NonZeroU64>);
+
+impl ChunkShape {
+    pub fn get(&self, index: usize) -> Option<&NonZeroU64> {
+        self.0.get(index)
+    }
+}
 
 #[derive(Arbitrary, Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ChunkKeyEncoding {
