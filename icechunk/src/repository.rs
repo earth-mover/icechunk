@@ -510,7 +510,18 @@ impl Repository {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> RepositoryResult<()> {
-        self.get_array(&path)
+
+         let zarr_array = match self.get_array(&path).await {
+            res @ Ok(NodeSnapshot {node_data: NodeData::Array(zarr_metadata, _), ..}) => {
+                if !zarr_metadata.chunk_indicies_valid(&coord) {
+                    // error!
+                } else {
+                    // no error!
+                }
+            },
+
+        };
+        zarr_array
             .await
             .map(|node: NodeSnapshot| self.change_set.set_chunk_ref(node.id, coord, data))
     }

@@ -14,9 +14,10 @@ use crate::metadata::{
 };
 
 use super::{
-    format_constants, manifest::ManifestRef, AttributesId, IcechunkFormatError,
-    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
-    SnapshotId, TableOffset,
+    format_constants, manifest::ManifestRef, AttributesId, 
+    ChunkIndices, IcechunkFormatError, IcechunkFormatVersion, 
+    IcechunkResult, ManifestId, NodeId, ObjectId, Path, SnapshotId,
+    TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +48,42 @@ pub struct ZarrArrayMetadata {
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     pub dimension_names: Option<DimensionNames>,
+}
+
+impl ZarrArrayMetadata {
+    pub fn chunk_indicies_valid(&self, chunk_indices: &ChunkIndices) -> bool {
+
+        // Check if provided chunk indices are valid for array
+        // For example, given an array with shape (10000, 10000) 
+        // and chunk shape (1000, 1000) there will be 100 chunks 
+        // laid out in a 10 by 10 grid. The chunk with indices (0, 0) 
+        // provides data for rows 0-999 and columns 0-999 and is stored 
+        // under the key “0.0”; the chunk with indices (2, 4) provides data 
+        // for rows 2000-2999 and columns 4000-4999 and is stored under the 
+        //key “2.4”; etc.
+
+        assert_eq!(self.shape.len(), self.chunk_shape.len());
+
+        let mut num_chunks: u64;
+        let mut max_chunk_index: u64;
+        let mut requested_chunk_index: &u32;
+        let mut chunk_shape: &NonZeroU64;
+        for i in 0..self.shape.len() {
+            chunk_shape = self.chunk_shape.get(i).unwrap();
+            num_chunks = (self.shape[i] +  chunk_shape - 1) / chunk_shape;
+            max_chunk_index = num_chunks - 1;
+            requested_chunk_index = chunk_indices.get(i).unwrap();
+            if max_chunk_index > *requested_chunk_index as u64 {
+                continue;
+            } else {
+                return false;
+            }
+
+        }
+        return true;
+
+
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

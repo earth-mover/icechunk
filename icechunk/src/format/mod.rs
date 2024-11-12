@@ -141,6 +141,12 @@ impl<'de, const SIZE: usize, T: FileTypeTag> Deserialize<'de> for ObjectId<SIZE,
 /// An ND index to an element in a chunk grid.
 pub struct ChunkIndices(pub Vec<u32>);
 
+impl ChunkIndices {
+    pub fn get(&self, index: usize) -> Option<&u32> {
+        self.0.get(index)
+    }
+}
+
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
@@ -259,11 +265,11 @@ impl Path {
 
     pub fn new(path: &str) -> Result<Path, PathError> {
         let buf = Utf8UnixPathBuf::from(path);
-        if !buf.is_absolute() {
+        if (!buf.is_absolute()) {
             return Err(PathError::NotAbsolute);
         }
 
-        if buf.normalize() != buf {
+        if (buf.normalize() != buf) {
             return Err(PathError::NotCanonic);
         }
         Ok(Path(buf))
