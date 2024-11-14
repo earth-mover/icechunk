@@ -72,6 +72,8 @@ class LazyArrayWriter(ArrayWriter):
 class XarrayDatasetWriter:
     """
     Write Xarray Datasets to a group in an Icechunk store.
+
+    This class is private API. Please do not use it.
     """
 
     dataset: Dataset = field(repr=False)
