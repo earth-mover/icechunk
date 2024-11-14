@@ -8,6 +8,7 @@ def test_timetravel():
     store = icechunk.IcechunkStore.create(
         storage=icechunk.StorageConfig.memory("test"),
         config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
+        read_only=False,
     )
 
     group = zarr.group(store=store, overwrite=True)
@@ -32,7 +33,7 @@ def test_timetravel():
     assert air_temp[200, 6] == 54
 
     store.checkout(branch="main")
-    store.set_mode("w-")
+    store.set_writeable()
     air_temp[:, :] = 76
     assert store.has_uncommitted_changes
     assert store.branch == "main"

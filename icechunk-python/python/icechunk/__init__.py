@@ -66,7 +66,7 @@ class IcechunkStore(Store, SyncMixin):
             else:
                 store = cls.create(storage, read_only, *args, **kwargs)
 
-        assert(store)
+        assert store
         # We dont want to call _open() because icechunk handles the opening, etc.
         # if we have gotten this far we can mark it as open
         store._is_open = True
@@ -84,7 +84,7 @@ class IcechunkStore(Store, SyncMixin):
 
         This should not be called directly, instead use the `create`, `open_existing` or `open_or_create` class methods.
         """
-        super().__init__(*args, read_only=read_only, **kwargs)
+        super().__init__(read_only=read_only)
         if store is None:
             raise ValueError(
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
@@ -122,7 +122,9 @@ class IcechunkStore(Store, SyncMixin):
                 raise e
             else:
                 # if the repo doesn't exists, we want to point users to that issue instead
-                raise ValueError("No Icechunk repository at the provided location, try opening in create mode or changing the location") from None
+                raise ValueError(
+                    "No Icechunk repository at the provided location, try opening in create mode or changing the location"
+                ) from None
         return cls(store=store, read_only=read_only, args=args, kwargs=kwargs)
 
     @classmethod
@@ -159,6 +161,24 @@ class IcechunkStore(Store, SyncMixin):
         store_repr = state["_store"]
         state["_store"] = pyicechunk_store_from_bytes(store_repr, read_only)
         self.__dict__ = state
+
+    def as_read_only(self) -> Self:
+        """Return a read-only version of this store."""
+        new_store = self._store.with_mode(read_only=True)
+        return self.__class__(store=new_store, read_only=True)
+    
+    def as_writeable(self) -> Self:
+        """Return a writeable version of this store."""
+        new_store = self._store.with_mode(read_only=False)
+        return self.__class__(store=new_store, read_only=False)
+    
+    def set_read_only(self) -> None:
+        """Set the store to read-only mode."""
+        self._store.set_mode(read_only=True)
+
+    def set_writeable(self) -> None:
+        """Set the store to writeable mode."""
+        self._store.set_mode(read_only=False)
 
     @property
     def snapshot_id(self) -> str:
@@ -269,7 +289,7 @@ class IcechunkStore(Store, SyncMixin):
         * some other writer updated the current branch since the repository was checked out
         """
         return await self._store.async_commit(message)
-    
+
     def merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
@@ -284,7 +304,7 @@ class IcechunkStore(Store, SyncMixin):
         The behavior is undefined if the stores applied conflicting changes.
         """
         return self._store.merge(changes)
-    
+
     async def async_merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
@@ -307,7 +327,7 @@ class IcechunkStore(Store, SyncMixin):
 
     async def async_reset(self) -> bytes:
         """Pop any uncommitted changes and reset to the previous snapshot state.
-        
+
         Returns
         -------
         bytes : The changes that were taken from the working set
@@ -316,7 +336,7 @@ class IcechunkStore(Store, SyncMixin):
 
     def reset(self) -> bytes:
         """Pop any uncommitted changes and reset to the previous snapshot state.
-        
+
         Returns
         -------
         bytes : The changes that were taken from the working set
@@ -374,8 +394,7 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.async_tag(tag_name, snapshot_id=snapshot_id)
 
     def ancestry(self) -> list[SnapshotMetadata]:
-        """Get the list of parents of the current version.
-        """
+        """Get the list of parents of the current version."""
         return self._store.ancestry()
 
     def async_ancestry(self) -> AsyncGenerator[SnapshotMetadata, None]:
@@ -582,7 +601,7 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.list()
 
     def list_prefix(self, prefix: str) -> AsyncIterator[str]:
-        """ Retrieve all keys in the store that begin with a given prefix. Keys are returned relative
+        """Retrieve all keys in the store that begin with a given prefix. Keys are returned relative
         to the root of the store.
 
         Parameters
