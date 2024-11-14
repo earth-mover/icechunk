@@ -1,17 +1,16 @@
 import pytest
 
 pytest.importorskip("distributed")
-from .test_xarray import create_test_data, roundtrip
 from distributed import Client
-from distributed.utils_test import (  # noqa
-    # need to import all these fixtures
+from distributed.utils_test import (  # noqa: F401
+    cleanup,
     cluster,
     loop,
     loop_in_thread,
-    cleanup,
 )
-
 from xarray.testing import assert_identical
+
+from .test_xarray import create_test_data, roundtrip
 
 
 def test_xarray_to_icechunk_distributed(loop):

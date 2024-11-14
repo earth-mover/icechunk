@@ -2,15 +2,16 @@ import pytest
 
 pytest.importorskip("xarray")
 
-import xarray as xr
-import numpy as np
-import string
-import pandas as pd
-from xarray.testing import assert_identical
-from icechunk.xarray import to_icechunk
 import contextlib
+import string
 import tempfile
+
+import numpy as np
+import pandas as pd
+import xarray as xr
 from icechunk import IcechunkStore, StorageConfig
+from icechunk.xarray import to_icechunk
+from xarray.testing import assert_identical
 
 
 def create_test_data(
