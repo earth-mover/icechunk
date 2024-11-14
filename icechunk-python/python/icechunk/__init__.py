@@ -74,17 +74,18 @@ class IcechunkStore(Store, SyncMixin):
                     store = cls.create(storage, mode, *args, **kwargs)
             case "w-":
                 if pyicechunk_store_exists(storage):
-                    raise ValueError("""Zarr store already exists, open using mode "w" or "r+""""")
+                    raise ValueError(
+                        """Zarr store already exists, open using mode "w" or "r+""" ""
+                    )
                 else:
                     store = cls.create(storage, mode, *args, **kwargs)
 
-        assert(store)
+        assert store
         # We dont want to call _open() because icechunk handles the opening, etc.
         # if we have gotten this far we can mark it as open
         store._is_open = True
 
         return store
-
 
     def __init__(
         self,
@@ -138,7 +139,9 @@ class IcechunkStore(Store, SyncMixin):
                 raise e
             else:
                 # if the repo doesn't exists, we want to point users to that issue instead
-                raise ValueError("No Icechunk repository at the provided location, try opening in create mode or changing the location") from None
+                raise ValueError(
+                    "No Icechunk repository at the provided location, try opening in create mode or changing the location"
+                ) from None
         return cls(store=store, mode=mode, args=args, kwargs=kwargs)
 
     @classmethod
@@ -174,7 +177,6 @@ class IcechunkStore(Store, SyncMixin):
         """
         read_only = mode == "r"
         self._store.set_mode(read_only)
-
 
     def with_mode(self, mode: AccessModeLiteral) -> Self:
         """
@@ -326,7 +328,7 @@ class IcechunkStore(Store, SyncMixin):
         * some other writer updated the current branch since the repository was checked out
         """
         return await self._store.async_commit(message)
-    
+
     def merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
@@ -341,7 +343,7 @@ class IcechunkStore(Store, SyncMixin):
         The behavior is undefined if the stores applied conflicting changes.
         """
         return self._store.merge(changes)
-    
+
     async def async_merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
@@ -364,7 +366,7 @@ class IcechunkStore(Store, SyncMixin):
 
     async def async_reset(self) -> bytes:
         """Pop any uncommitted changes and reset to the previous snapshot state.
-        
+
         Returns
         -------
         bytes : The changes that were taken from the working set
@@ -373,7 +375,7 @@ class IcechunkStore(Store, SyncMixin):
 
     def reset(self) -> bytes:
         """Pop any uncommitted changes and reset to the previous snapshot state.
-        
+
         Returns
         -------
         bytes : The changes that were taken from the working set
@@ -431,8 +433,7 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.async_tag(tag_name, snapshot_id=snapshot_id)
 
     def ancestry(self) -> list[SnapshotMetadata]:
-        """Get the list of parents of the current version.
-        """
+        """Get the list of parents of the current version."""
         return self._store.ancestry()
 
     def async_ancestry(self) -> AsyncGenerator[SnapshotMetadata, None]:

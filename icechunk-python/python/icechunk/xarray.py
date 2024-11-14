@@ -7,8 +7,10 @@ from typing import Any, Literal
 import numpy as np
 import zarr
 
+from packaging.version import Version
 from icechunk import IcechunkStore
 from icechunk.distributed import extract_store, merge_stores
+import xarray as xr
 from xarray import Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
@@ -17,12 +19,16 @@ from icechunk.dask import stateful_store_reduce
 
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
-# TODO: import-time check on Xarray version
-#
+
 try:
     has_dask = importlib.util.find_spec("dask") is not None
 except ImportError:
     has_dask = False
+
+if Version(xr.__version__) < Version("2024.10.0"):
+    raise ValueError(
+        f"Writing to icechunk requires Xarray>=2024.10.0 but you have {xr.__version__}. Please upgrade."
+    )
 
 
 def is_chunked_array(x: Any) -> bool:
@@ -72,7 +78,8 @@ class XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
-    write_empty_chunks: bool = field(kw_only=True, default=True)
+    # TODO: uncomment when Zarr has support
+    # write_empty_chunks: bool = field(kw_only=True, default=True)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -85,132 +92,45 @@ class XarrayDatasetWriter:
                 f"Please pass in an IcechunkStore. Received {type(self.store)!r} instead."
             )
 
-    def _open_group(self, *, group, mode: ZarrWriteModes, append_dim: Hashable | None, region, encoding) -> None:
-        # from xarray.backends.zarr import _choose_default_mode
+    def _open_group(
+        self, *, group, mode: ZarrWriteModes | None, append_dim: Hashable | None, region
+    ) -> None:
+        from xarray.backends.zarr import _choose_default_mode
 
-        # concrete_mode: ZarrWriteModes = _choose_default_mode(
-        #     mode=mode, append_dim=append_dim, region=region
-        # )
+        # TODO: move this in to open_group upstream
+        concrete_mode: ZarrWriteModes = _choose_default_mode(
+            mode=mode, append_dim=append_dim, region=region
+        )
 
         self.xarray_store = ZarrStore.open_group(
             store=self.store,
             group=group,
-            mode=mode,
+            mode=concrete_mode,
             zarr_format=3,
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
-            write_empty=self.write_empty_chunks,
+            # TODO: uncomment when Zarr has support
+            # write_empty=self.write_empty_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
             zarr_version=None,
         )
 
-        if encoding is None:
-            encoding = {}
-        self.xarray_store._validate_encoding(encoding)
-
-
-    def write_metadata(
-        self,
-        *,
-        group: str | None = None,
-        mode: ZarrWriteModes | None = None,
-        encoding: Mapping[Any, Any] | None = None,
-        append_dim: Hashable | None = None,
-        region: Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None = None,
-        write_empty_chunks: bool | None = None,
-        safe_chunks: bool = True,
-    ) -> None:
+    def write_metadata(self, encoding: Mapping[Any, Any] | None = None) -> None:
         """
         This method creates new Zarr arrays when necessary, writes attributes,
         and any in-memory arrays.
-
-        Parameters
-        ----------
-        group : str, optional
-            Group path. (a.k.a. `path` in zarr terminology.)
-        mode : {"w", "w-", "a", "a-", r+", None}, optional
-            Persistence mode: "w" means create (overwrite if exists);
-            "w-" means create (fail if exists);
-            "a" means override all existing variables including dimension coordinates (create if does not exist);
-            "a-" means only append those variables that have ``append_dim``.
-            "r+" means modify existing array *values* only (raise an error if
-            any metadata or shapes would change).
-            The default mode is "a" if ``append_dim`` is set. Otherwise, it is
-            "r+" if ``region`` is set and ``w-`` otherwise.
-        encoding : dict, optional
-            Nested dictionary with variable names as keys and dictionaries of
-            variable specific encodings as values, e.g.,
-            ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
-        append_dim : hashable, optional
-            If set, the dimension along which the data will be appended. All
-            other dimensions on overridden variables must remain the same size.
-        region : dict or "auto", optional
-            Optional mapping from dimension names to either a) ``"auto"``, or b) integer
-            slices, indicating the region of existing zarr array(s) in which to write
-            this dataset's data.
-
-            If ``"auto"`` is provided the existing store will be opened and the region
-            inferred by matching indexes. ``"auto"`` can be used as a single string,
-            which will automatically infer the region for all dimensions, or as
-            dictionary values for specific dimensions mixed together with explicit
-            slices for other dimensions.
-
-            Alternatively integer slices can be provided; for example, ``{'x': slice(0,
-            1000), 'y': slice(10000, 11000)}`` would indicate that values should be
-            written to the region ``0:1000`` along ``x`` and ``10000:11000`` along
-            ``y``.
-
-            Users are expected to ensure that the specified region aligns with
-            Zarr chunk boundaries, and that dask chunks are also aligned.
-            Xarray makes limited checks that these multiple chunk boundaries line up.
-            It is possible to write incomplete chunks and corrupt the data with this
-            option if you are not careful.
-        safe_chunks : bool, default: True
-            If True, only allow writes to when there is a many-to-one relationship
-            between Zarr chunks (specified in encoding) and Dask chunks.
-            Set False to override this restriction; however, data may become corrupted
-            if Zarr arrays are written in parallel.
-            In addition to the many-to-one relationship validation, it also detects partial
-            chunks writes when using the ``region`` parameter,
-            these partial chunks are considered unsafe in the mode "r+" but safe in
-            the mode "a".
-            Note: Even with these validations it can still be unsafe to write
-            two or more chunked arrays in the same location in parallel if they are
-            not writing in independent regions.
-        write_empty_chunks : bool or None, optional
-            If True, all chunks will be stored regardless of their
-            contents. If False, each chunk is compared to the array's fill value
-            prior to storing. If a chunk is uniformly equal to the fill value, then
-            that chunk is not be stored, and the store entry for that chunk's key
-            is deleted. This setting enables sparser storage, as only chunks with
-            non-fill-value data are stored, at the expense of overhead associated
-            with checking the data of each chunk. If None (default) fall back to
-            specification(s) in ``encoding`` or Zarr defaults. A ``ValueError``
-            will be raised if the value of this (if not None) differs with
-            ``encoding``.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        Two restrictions apply to the use of ``region``:
-
-          - If ``region`` is set, _all_ variables in a dataset must have at
-            least one dimension in common with the region. Other variables
-            should be written in a separate single call to ``to_zarr()``.
-          - Dimensions cannot be included in both ``region`` and
-            ``append_dim`` at the same time. To create empty arrays to fill
-            in with ``region``, use the `XarrayDatasetWriter` directly.
         """
         from xarray.backends.api import _validate_dataset_names, dump_to_store
 
         # validate Dataset keys, DataArray names
         _validate_dataset_names(self.dataset)
+
+        if encoding is None:
+            encoding = {}
+        self.xarray_store._validate_encoding(encoding)
 
         # This writes the metadata (zarr.json) for all arrays
         # This also will resize arrays for any appends
@@ -250,13 +170,13 @@ class XarrayDatasetWriter:
         )
         # TODO: raise if dataset has vars do not have the append_dim.
 
-
     def describe_change(self):
         """
         This method will describe a list of changes.
         1. Arrays that will be appended to
         1. New arrays to be written.
         """
+        # TODO:
         pass
 
     def write_eager(self) -> None:
@@ -314,7 +234,8 @@ def to_icechunk(
     *,
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
-    write_empty_chunks: bool | None = None,
+    # TODO: uncomment when Zarr has support
+    # write_empty_chunks: bool | None = None,
     safe_chunks: bool = True,
     append_dim: Hashable | None = None,
     region: Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None = None,
@@ -381,17 +302,6 @@ def to_icechunk(
         Note: Even with these validations it can still be unsafe to write
         two or more chunked arrays in the same location in parallel if they are
         not writing in independent regions.
-    write_empty_chunks : bool or None, optional
-        If True, all chunks will be stored regardless of their
-        contents. If False, each chunk is compared to the array's fill value
-        prior to storing. If a chunk is uniformly equal to the fill value, then
-        that chunk is not be stored, and the store entry for that chunk's key
-        is deleted. This setting enables sparser storage, as only chunks with
-        non-fill-value data are stored, at the expense of overhead associated
-        with checking the data of each chunk. If None (default) fall back to
-        specification(s) in ``encoding`` or Zarr defaults. A ``ValueError``
-        will be raised if the value of this (if not None) differs with
-        ``encoding``.
     chunkmanager_store_kwargs : dict, optional
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
@@ -415,16 +325,11 @@ def to_icechunk(
         in with ``region``, use the `XarrayDatasetWriter` directly.
     """
     writer = XarrayDatasetWriter(dataset, store=store)
+
+    writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+
     # write metadata
-    writer.write_metadata(
-        group=group,
-        mode=mode,
-        encoding=encoding,
-        append_dim=append_dim,
-        region=region,
-        write_empty_chunks=write_empty_chunks,
-        safe_chunks=safe_chunks,
-    )
+    writer.write_metadata(encoding)
     # write in-memory arrays
     writer.write_eager()
     # eagerly write dask arrays

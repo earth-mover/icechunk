@@ -22,14 +22,18 @@ from dask.core import flatten
 from dask.delayed import Delayed
 from dask.highlevelgraph import HighLevelGraph
 from icechunk.distributed import extract_store, merge_stores
-from packaging import Version
+from packaging.version import Version
 from icechunk import IcechunkStore
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
+
 def _assert_correct_dask_version() -> None:
     if Version(dask.__version__) < Version("2024.11.0"):
-        raise ValueError(f"This requires dask>=2024.11.0 but you have {dask.__version__}. Please upgrade.")
+        raise ValueError(
+            f"Writing to icechunk requires dask>=2024.11.0 but you have {dask.__version__}. Please upgrade."
+        )
+
 
 def store_dask(
     store: IcechunkStore,
