@@ -90,8 +90,11 @@ icechunk_store.commit("wrote an Xarray dataset!")
 
 ### More control
 
-Sometimes we need more control over these writes. For example, you may want to write the metadata for all arrays first, then write any in-memory variables
-(e.g. coordinate arrays), and verifying the contents of the store *before* issuing a large distributed write.
+Sometimes we need more control over these writes. For example, you may want to
+1. write the metadata for all arrays first, 
+2. then write any in-memory variables (e.g. coordinate arrays), 
+3. verify the contents of the store *before* issuing a large distributed write.
+4. Execute the large distributed write.
 
 Begin by creating a new [`XarrayDatasetWriter`](./reference.md#icechunk.xarray.XarrayDatasetWriter)
 
@@ -133,6 +136,9 @@ Confusions re: appends and region writes:
 
 Proposal:
 1. Appends along a dimensions, and region writes are conceptually similar and never allow changing existing array metadata.
+2. For both appends and region writes, you are only allowed to write existing vars that have domains that overlap with the region.
+   i.e. no new variables can be added, no attributes can be modified?
+   - attribute modification seems excessive. What if we wanted to add a "history" attribute for appends?
 2. To add a new variable to the store, or modify existing metadata, use a different entrypoint; `writer.for_modifying`.
 
 API Qs:
@@ -141,12 +147,18 @@ API Qs:
 2. Do people like writing new variables AND appending along a dimension at the same time?
 
 ### Overwriting the _whole_ store
-
+1. Does this delete existing variables?
 ```python
 writer = XarrayDatasetWriter(ds, store=icechunk_store)
 writer.for_create_or_overwrite(
     group="new2", # will set mode="w"
 )
+# overwrites any pre-existing variable metadata
+writer.write_metadata()
+# will overwrite any pre-existing variables
+writer.write_eager()
+# will overwrite any pre-existing variables
+writer.write_lazy()
 ```
 
 ### Overwrite, or add new variables
