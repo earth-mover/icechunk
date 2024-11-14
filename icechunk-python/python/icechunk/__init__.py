@@ -1,10 +1,10 @@
 # module
 from collections.abc import AsyncGenerator, Iterable
-from typing import Any, Self
+from typing import Any, AsyncIterator, Self
 
 from zarr.abc.store import ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, BufferPrototype
-from zarr.core.common import AccessModeLiteral, BytesLike
+from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
 
 from ._icechunk_python import (
@@ -45,10 +45,10 @@ class IcechunkStore(Store, SyncMixin):
 
     @classmethod
     def open_or_create(cls, *args: Any, **kwargs: Any) -> Self:
-        if "mode" in kwargs:
-            mode = kwargs.pop("mode")
+        if "read_only" in kwargs:
+            read_only = kwargs.pop("read_only")
         else:
-            mode = "r"
+            read_only = False
 
         if "storage" in kwargs:
             storage = kwargs.pop("storage")
@@ -58,25 +58,13 @@ class IcechunkStore(Store, SyncMixin):
             )
 
         store = None
-        match mode:
-            case "r" | "r+":
-                store = cls.open_existing(storage, mode, *args, **kwargs)
-            case "a":
-                if pyicechunk_store_exists(storage):
-                    store = cls.open_existing(storage, mode, *args, **kwargs)
-                else:
-                    store = cls.create(storage, mode, *args, **kwargs)
-            case "w":
-                if pyicechunk_store_exists(storage):
-                    store = cls.open_existing(storage, mode, *args, **kwargs)
-                    store.sync_clear()
-                else:
-                    store = cls.create(storage, mode, *args, **kwargs)
-            case "w-":
-                if pyicechunk_store_exists(storage):
-                    raise ValueError("""Zarr store already exists, open using mode "w" or "r+""""")
-                else:
-                    store = cls.create(storage, mode, *args, **kwargs)
+        if read_only:
+            store = cls.open_existing(storage, read_only, *args, **kwargs)
+        else:
+            if pyicechunk_store_exists(storage):
+                store = cls.open_existing(storage, read_only, *args, **kwargs)
+            else:
+                store = cls.create(storage, read_only, *args, **kwargs)
 
         assert(store)
         # We dont want to call _open() because icechunk handles the opening, etc.
@@ -85,11 +73,10 @@ class IcechunkStore(Store, SyncMixin):
 
         return store
 
-
     def __init__(
         self,
         store: PyIcechunkStore,
-        mode: AccessModeLiteral = "r",
+        read_only: bool = False,
         *args: Any,
         **kwargs: Any,
     ):
@@ -97,7 +84,7 @@ class IcechunkStore(Store, SyncMixin):
 
         This should not be called directly, instead use the `create`, `open_existing` or `open_or_create` class methods.
         """
-        super().__init__(*args, mode=mode, **kwargs)
+        super().__init__(*args, read_only=read_only, **kwargs)
         if store is None:
             raise ValueError(
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
@@ -108,7 +95,7 @@ class IcechunkStore(Store, SyncMixin):
     def open_existing(
         cls,
         storage: StorageConfig,
-        mode: AccessModeLiteral = "r",
+        read_only: bool = False,
         config: StoreConfig | None = None,
         *args: Any,
         **kwargs: Any,
@@ -120,11 +107,8 @@ class IcechunkStore(Store, SyncMixin):
         It is recommended to use the cached storage option for better performance. If cached=True,
         this will be configured automatically with the provided storage_config as the underlying
         storage backend.
-
-        If opened with AccessModeLiteral "r", the store will be read-only. Otherwise the store will be writable.
         """
         config = config or StoreConfig()
-        read_only = mode == "r"
         # We have delayed checking if the repository exists, to avoid the delay in the happy case
         # So we need to check now if open fails, to provide a nice error message
         try:
@@ -139,13 +123,13 @@ class IcechunkStore(Store, SyncMixin):
             else:
                 # if the repo doesn't exists, we want to point users to that issue instead
                 raise ValueError("No Icechunk repository at the provided location, try opening in create mode or changing the location") from None
-        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
+        return cls(store=store, read_only=read_only, args=args, kwargs=kwargs)
 
     @classmethod
     def create(
         cls,
         storage: StorageConfig,
-        mode: AccessModeLiteral = "w",
+        read_only: bool = False,
         config: StoreConfig | None = None,
         *args: Any,
         **kwargs: Any,
@@ -156,47 +140,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         config = config or StoreConfig()
         store = pyicechunk_store_create(storage, config=config)
-        return cls(store=store, mode=mode, args=args, kwargs=kwargs)
-
-    def set_mode(self, mode: AccessModeLiteral) -> None:
-        """
-        Set the mode on this Store.
-
-        Parameters
-        ----------
-        mode: AccessModeLiteral
-            The new mode to use.
-
-        Returns
-        -------
-        None
-
-        """
-        read_only = mode == "r"
-        self._store.set_mode(read_only)
-
-
-    def with_mode(self, mode: AccessModeLiteral) -> Self:
-        """
-        Return a new store of the same type pointing to the same location with a new mode.
-
-        The returned Store is not automatically opened. Call :meth:`Store.open` before
-        using.
-
-        Parameters
-        ----------
-        mode: AccessModeLiteral
-            The new mode to use.
-
-        Returns
-        -------
-        store:
-            A new store of the same type with the new mode.
-
-        """
-        read_only = mode == "r"
-        new_store = self._store.with_mode(read_only)
-        return self.__class__(new_store, mode=mode)
+        return cls(store=store, read_only=read_only, args=args, kwargs=kwargs)
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, self.__class__):
@@ -211,10 +155,9 @@ class IcechunkStore(Store, SyncMixin):
 
     def __setstate__(self, state: Any) -> None:
         # we have to deserialize the bytes of the Rust store
-        mode = state["_mode"]
-        is_read_only = mode.readonly
+        read_only = state["_read_only"]
         store_repr = state["_store"]
-        state["_store"] = pyicechunk_store_from_bytes(store_repr, is_read_only)
+        state["_store"] = pyicechunk_store_from_bytes(store_repr, read_only)
         self.__dict__ = state
 
     @property
@@ -444,10 +387,6 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.async_ancestry()
 
-    async def empty(self) -> bool:
-        """Check if the store is empty."""
-        return await self._store.empty()
-
     async def clear(self) -> None:
         """Clear the store.
 
@@ -626,20 +565,25 @@ class IcechunkStore(Store, SyncMixin):
     def supports_deletes(self) -> bool:
         return self._store.supports_deletes
 
-    def list(self) -> AsyncGenerator[str, None]:
+    def list(self) -> AsyncIterator[str]:
         """Retrieve all keys in the store.
 
         Returns
         -------
-        AsyncGenerator[str, None]
+        AsyncIterator[str, None]
         """
+        # This method should be async, like overridden methods in child classes.
+        # However, that's not straightforward:
+        # https://stackoverflow.com/questions/68905848
+
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list()
 
-    def list_prefix(self, prefix: str) -> AsyncGenerator[str, None]:
-        """Retrieve all keys in the store with a given prefix.
+    def list_prefix(self, prefix: str) -> AsyncIterator[str]:
+        """ Retrieve all keys in the store that begin with a given prefix. Keys are returned relative
+        to the root of the store.
 
         Parameters
         ----------
@@ -647,14 +591,14 @@ class IcechunkStore(Store, SyncMixin):
 
         Returns
         -------
-        AsyncGenerator[str, None]
+        AsyncIterator[str, None]
         """
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_prefix(prefix)
 
-    def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
+    def list_dir(self, prefix: str) -> AsyncIterator[str]:
         """
         Retrieve all keys and prefixes with a given prefix and which do not contain the character
         “/” after the given prefix.
@@ -665,7 +609,7 @@ class IcechunkStore(Store, SyncMixin):
 
         Returns
         -------
-        AsyncGenerator[str, None]
+        AsyncIterator[str, None]
         """
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
