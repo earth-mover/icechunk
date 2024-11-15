@@ -11,6 +11,7 @@ categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
 edition = "2021"
 publish = true
+build = "../build/build.rs"
 
 [dependencies]
 async-trait = "0.1.83"
@@ -40,6 +41,7 @@ aws-config = "1.5.7"
 aws-credential-types = "1.2.1"
 typed-path = "0.9.2"
 aws-smithy-types-convert = { version = "0.60.8", features = ["convert-chrono", "convert-streams"] }
+libc = "*"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
@@ -48,3 +50,10 @@ tempfile = "3.13.0"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+cbindgen = "0.27.0"
+
+[lib]
+name = "icechunk"
+crate-type = ["dylib", "lib","staticlib"]
