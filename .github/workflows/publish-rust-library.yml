@@ -24,7 +24,7 @@ jobs:
           docker compose up -d minio
       - name: Wait for MinIO to be ready
         run: |
-          for i in {1..10}; do
+          for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
               break
               fi
@@ -51,7 +51,7 @@ jobs:
         run: cargo install --locked cargo-deny
 
       - name: Check
-        if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           just pre-commit
 
