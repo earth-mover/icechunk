@@ -823,12 +823,7 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            store
-                .read()
-                .await
-                .delete(&key)
-                .await
-                .map_err(PyIcechunkStoreError::StoreError)?;
+            store.read().await.delete(&key).await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
