@@ -1,4 +1,4 @@
-/* Colors 
+/* Colors
     @see https://m2.material.io/design/color/the-color-system.html#tools-for-picking-colors
     @see https://github.com/squidfunk/mkdocs-material/blob/master/src/templates/assets/stylesheets/main/_colors.scss
 */
@@ -8,7 +8,7 @@
    --md-primary-fg-color:               #5ea0d1;
    --md-primary-fg-color--light:        #e4f1f8;
    --md-primary-fg-color--dark:         #1d467f;
-   
+
    --md-primary-bg-color:               hsla(0, 0%, 100%, 1);
    --md-primary-bg-color--light:        hsla(0, 0%, 100%, 0.7);
 

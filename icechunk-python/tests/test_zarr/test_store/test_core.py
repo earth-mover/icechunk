@@ -1,7 +1,6 @@
 from icechunk import IcechunkStore
+from tests.conftest import parse_store
 from zarr.storage import make_store_path
-
-from ...conftest import parse_store
 
 
 async def test_make_store_path() -> None:

@@ -11,10 +11,11 @@ intentionally changed, the repository files must be regenerated. For that, run t
 file as a python script: `python ./tests/test_can_read_old.py`.
 """
 
-import icechunk as ic
-import zarr
 from numpy.testing import assert_array_equal
 from object_store import ClientOptions, ObjectStore
+
+import icechunk as ic
+import zarr
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):

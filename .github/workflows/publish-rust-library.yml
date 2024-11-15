@@ -62,7 +62,7 @@ jobs:
         run: |
           git config --global user.email "joe@earthmover.io"
           git config --global user.name "Joe Hamman"
-          
+
       - name: publish to crates
         run: cargo release --no-confirm --tag-prefix icechunk-rust --execute
         env:

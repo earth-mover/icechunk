@@ -3,8 +3,9 @@ import time
 from dataclasses import dataclass
 from typing import cast
 
-import icechunk
 import numpy as np
+
+import icechunk
 import zarr
 from dask.distributed import Client
 

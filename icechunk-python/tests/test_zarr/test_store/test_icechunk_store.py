@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from icechunk import IcechunkStore, StorageConfig
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
@@ -47,7 +48,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.fixture
     async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
         return IcechunkStore.open_or_create(**store_kwargs)
-    
+
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
         assert store == store
@@ -70,7 +71,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert store._is_open
         assert store.read_only == read_only
 
-    async def test_read_only_store_raises(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
+    async def test_read_only_store_raises(
+        self, store: IcechunkStore, store_kwargs: dict[str, Any]
+    ) -> None:
         kwargs = {**store_kwargs, "read_only": True}
         store = await self.store_cls.open(**kwargs)
         assert store.read_only
@@ -274,7 +277,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             store, "foo/bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
         assert not await store.is_empty("")
-        assert await store.is_empty("fo") # codespell:ignore
+        assert await store.is_empty("fo")  # codespell:ignore
         assert not await store.is_empty("foo/")
         assert not await store.is_empty("foo")
         assert await store.is_empty("spam/")
@@ -283,7 +286,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         if not store.supports_deletes:
             pytest.skip("store does not support deletes")
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
-        await store.set("foo-bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        await store.set(
+            "foo-bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
         await store.set("foo/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
         await store.set("foo/c/0", self.buffer_cls.from_bytes(b"chun"))
         await store.delete_dir("foo")
