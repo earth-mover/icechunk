@@ -17,9 +17,9 @@ use thiserror::Error;
 #[allow(dead_code)]
 pub(crate) enum PyIcechunkStoreError {
     #[error("store error: {0}")]
-    StoreError(#[from] StoreError),
+    StoreError(StoreError),
     #[error("repository error: {0}")]
-    RepositoryError(#[from] RepositoryError),
+    RepositoryError(RepositoryError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
     #[error("{0}")]
@@ -30,6 +30,30 @@ pub(crate) enum PyIcechunkStoreError {
     PyError(#[from] PyErr),
     #[error("{0}")]
     UnkownError(String),
+}
+
+impl From<StoreError> for PyIcechunkStoreError {
+    fn from(error: StoreError) -> Self {
+        match error {
+            StoreError::NotFound(e) => PyIcechunkStoreError::PyKeyError(e.to_string()),
+            StoreError::RepositoryError(RepositoryError::NodeNotFound {
+                path,
+                message: _,
+            }) => PyIcechunkStoreError::PyKeyError(format!("{}", path)),
+            _ => PyIcechunkStoreError::StoreError(error),
+        }
+    }
+}
+
+impl From<RepositoryError> for PyIcechunkStoreError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::NodeNotFound { path, message: _ } => {
+                PyIcechunkStoreError::PyKeyError(format!("{}", path))
+            }
+            _ => PyIcechunkStoreError::RepositoryError(error),
+        }
+    }
 }
 
 impl From<PyIcechunkStoreError> for PyErr {

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from icechunk import IcechunkStore, StorageConfig
-from zarr.abc.store import AccessMode
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
-from zarr.core.common import AccessModeLiteral
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
 
@@ -22,10 +20,6 @@ ARRAY_METADATA = (
 class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     store_cls = IcechunkStore
     buffer_cls = cpu.Buffer
-
-    @pytest.mark.xfail(reason="not implemented", strict=False)
-    def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
-        pass
 
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
@@ -46,47 +40,48 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     def store_kwargs(self, tmpdir) -> dict[str, Any]:
         kwargs = {
             "storage": StorageConfig.filesystem(f"{tmpdir}/store_test"),
-            "mode": "w",
+            "read_only": False,
         }
         return kwargs
 
-    @pytest.fixture(scope="function")
+    @pytest.fixture
     async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
         return IcechunkStore.open_or_create(**store_kwargs)
+    
+    def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
+        # check self equality
+        assert store == store
+
+        # check store equality with same inputs
+        # asserting this is important for being able to compare (de)serialized stores
+        store2 = self.store_cls.open_existing(**store_kwargs)
+        assert store == store2
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
         super().test_store_repr(store)
 
-    def test_store_mode(self, store, store_kwargs: dict[str, Any]) -> None:
-        assert store.mode == AccessMode.from_literal("w")
-        assert not store.mode.readonly
-
-    @pytest.mark.parametrize("mode", ["r", "r+", "a", "w", "w-"])
-    def test_store_open_mode(
-        self, store_kwargs: dict[str, Any], mode: AccessModeLiteral
+    @pytest.mark.parametrize("read_only", [True, False])
+    async def test_store_open_read_only(
+        self, store: IcechunkStore, store_kwargs: dict[str, Any], read_only: bool
     ) -> None:
-        store_kwargs["mode"] = mode
-        try:
-            store = self.store_cls.open_or_create(**store_kwargs)
-            assert store._is_open
-            assert store.mode == AccessMode.from_literal(mode)
-        except Exception:
-            assert 'r' in mode
+        store_kwargs["read_only"] = read_only
+        store = await self.store_cls.open(**store_kwargs)
+        assert store._is_open
+        assert store.read_only == read_only
 
-    async def test_not_writable_store_raises(self, store_kwargs: dict[str, Any]) -> None:
-        create_kwargs = {**store_kwargs, "mode": "r"}
-        with pytest.raises(ValueError):
-            _store = self.store_cls.open_or_create(**create_kwargs)
+    async def test_read_only_store_raises(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
+        kwargs = {**store_kwargs, "read_only": True}
+        store = await self.store_cls.open(**kwargs)
+        assert store.read_only
 
-        # TODO
         # set
-        # with pytest.raises(ValueError):
-        #     await store.set("foo", self.buffer_cls.from_bytes(b"bar"))
+        with pytest.raises(ValueError):
+            await store.set("foo", self.buffer_cls.from_bytes(b"bar"))
 
-        # # delete
-        # with pytest.raises(ValueError):
-        #     await store.delete("foo")
+        # delete
+        with pytest.raises(ValueError):
+            await store.delete("foo")
 
     async def test_set_many(self, store: IcechunkStore) -> None:
         """
@@ -151,15 +146,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA),
         )
         assert await store.exists("foo/zarr.json")
-
-    async def test_empty(self, store: IcechunkStore) -> None:
-        assert await store.empty()
-
-        await store.set(
-            "foo/zarr.json",
-            self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA),
-        )
-        assert not await store.empty()
 
     async def test_list(self, store: IcechunkStore) -> None:
         assert [k async for k in store.list()] == []
@@ -264,42 +250,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         expected_kvs = sorted(((k, b) for k, b in zip(keys, values, strict=False)))
         assert observed_kvs == expected_kvs
 
-    async def test_with_mode(self, store: IcechunkStore) -> None:
-        data = b"0000"
-        await self.set(store, "zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
-        await self.set(store, "c/0/0/0", self.buffer_cls.from_bytes(data))
-        assert (await self.get(store, "c/0/0/0")).to_bytes() == data
-
-        for mode in ["r", "a"]:
-            mode = cast(AccessModeLiteral, mode)
-            clone = store.with_mode(mode)
-            # await store.close()
-            await clone._ensure_open()
-            assert clone.mode == AccessMode.from_literal(mode)
-            assert isinstance(clone, type(store))
-
-            # earlier writes are visible
-            result = await clone.get("c/0/0/0", default_buffer_prototype())
-            assert result is not None
-            assert result.to_bytes() == data
-
-            # writes to original after with_mode is visible
-            await self.set(store, "c/0/0/1", self.buffer_cls.from_bytes(data))
-            result = await clone.get("c/0/0/1", default_buffer_prototype())
-            assert result is not None
-            assert result.to_bytes() == data
-
-            if mode == "a":
-                # writes to clone is visible in the original
-                await clone.set("c/0/1/0", self.buffer_cls.from_bytes(data))
-                result = await clone.get("c/0/1/0", default_buffer_prototype())
-                assert result is not None
-                assert result.to_bytes() == data
-
-            else:
-                with pytest.raises(ValueError, match="store error: cannot write"):
-                    await clone.set("c/0/1/0", self.buffer_cls.from_bytes(data))
-
     async def test_set_if_not_exists(self, store: IcechunkStore) -> None:
         key = "zarr.json"
         data_buf = self.buffer_cls.from_bytes(ARRAY_METADATA)
@@ -317,3 +267,62 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
         result = await store.get("c/0/0/0", default_buffer_prototype())
         assert result == new
+
+    async def test_is_empty(self, store: IcechunkStore) -> None:
+        assert await store.is_empty("")
+        await self.set(
+            store, "foo/bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        assert not await store.is_empty("")
+        assert await store.is_empty("fo") # codespell:ignore
+        assert not await store.is_empty("foo/")
+        assert not await store.is_empty("foo")
+        assert await store.is_empty("spam/")
+
+    async def test_delete_dir(self, store: IcechunkStore) -> None:
+        if not store.supports_deletes:
+            pytest.skip("store does not support deletes")
+        await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        await store.set("foo-bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+        await store.set("foo/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+        await store.set("foo/c/0", self.buffer_cls.from_bytes(b"chun"))
+        await store.delete_dir("foo")
+        assert await store.exists("zarr.json")
+        assert await store.exists("foo-bar/zarr.json")
+        assert not await store.exists("foo/zarr.json")
+        assert not await store.exists("foo/c/0")
+
+    async def test_getsize(self, store: IcechunkStore) -> None:
+        key = "k/zarr.json"
+        data = self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        await self.set(store, key, data)
+
+        result = await store.getsize(key)
+        assert isinstance(result, int)
+        assert result == len(DEFAULT_GROUP_METADATA)
+
+    async def test_getsize_prefix(self, store: IcechunkStore) -> None:
+        prefix = "array"
+        await store.set(f"{prefix}/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        keys = [
+            f"{prefix}/c/0/0/0",
+            f"{prefix}/c/0/0/1",
+            f"{prefix}/c/0/1/0",
+            f"{prefix}/c/0/1/1",
+            f"{prefix}/c/1/0/0",
+            f"{prefix}/c/1/0/1",
+            f"{prefix}/c/1/1/0",
+            f"{prefix}/c/1/1/1",
+        ]
+        values = [bytes(i) for i, _ in enumerate(keys)]
+        for k, v in zip(keys, values, strict=False):
+            await self.set(store, k, self.buffer_cls.from_bytes(v))
+
+        result = await store.getsize_prefix(prefix)
+        assert isinstance(result, int)
+        assert result == sum(len(v) for v in values) + len(ARRAY_METADATA)
+
+    async def test_getsize_raises(self, store: IcechunkStore) -> None:
+        with pytest.raises(ValueError):
+            await store.getsize("not-a-real-key")
