@@ -10,8 +10,8 @@
 ---
 
 Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
-Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features 
-that enhance performance, collaboration, and safety in a cloud-computing context. 
+Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features
+that enhance performance, collaboration, and safety in a cloud-computing context.
 
 ## Documentation and Resources
 
@@ -40,7 +40,7 @@ Let's break down what "transactional storage engine for Zarr" actually means:
   This allows Zarr to be used more like a database.
 
 The core entity in Icechunk is a repository or **repo**.
-A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as 
+A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as
 self-contained _Zarr Store_.
 The most common scenario is for an Icechunk repo to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
 However, formally a repo can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.

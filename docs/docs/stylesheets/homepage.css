@@ -20,14 +20,14 @@
   /* Hide table of contents for desktop */
   @media screen and (min-width: 60em) {
     .md-sidebar--secondary {
-      display: none !important; 
+      display: none !important;
     }
   }
 
   /* Hide navigation for desktop */
   @media screen and (min-width: 76.25em) {
     .md-sidebar--primary {
-      display: none;  
+      display: none;
     }
   }
 
@@ -90,11 +90,11 @@ h3.hero-subtitle {
 .by-line-wrapper {
   margin: 60px auto;
   width: 50%;
-  
+
 }
 
 .by-line-container {
-  
+
   border-radius: 20px;
   padding: 10px;
   color: var(--md-primary-fg-color--light);
@@ -182,7 +182,7 @@ h3.hero-subtitle {
   background-repeat: no-repeat;
   background-position: top left;
   position: absolute;
- 
+
   z-index:0;
 
   animation-name: ice-parallax;
@@ -280,7 +280,7 @@ h3.hero-subtitle {
   .by-line span {
     font-size: 0.85rem;
   }
-  
+
   .earthmover-wordmark {
     width: 200px;
   }
@@ -296,7 +296,7 @@ h3.hero-subtitle {
   to {
     transform: translate3d(0, -2%, 0);
   }
-} 
+}
 
 @keyframes ripple {
   0% {
@@ -310,7 +310,7 @@ h3.hero-subtitle {
     transform: scale(1.5);
     opacity: 0;
   }
-} 
+}
 
 #cube-logo {
   width: 30vh;

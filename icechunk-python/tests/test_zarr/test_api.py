@@ -3,9 +3,11 @@ from typing import Literal
 
 import numpy as np
 import pytest
+from numpy.testing import assert_array_equal
+
 import zarr
 from icechunk import IcechunkStore
-from numpy.testing import assert_array_equal
+from tests.conftest import parse_store
 from zarr import Array, Group, group
 from zarr.abc.store import Store
 from zarr.api.synchronous import (
@@ -19,8 +21,6 @@ from zarr.api.synchronous import (
 )
 from zarr.core.common import MemoryOrder, ZarrFormat
 from zarr.storage._utils import normalize_path
-
-from ..conftest import parse_store
 
 
 @pytest.fixture(scope="function")
@@ -61,7 +61,6 @@ def test_open_normalized_path(
         node = create(store=memory_store, path=path, shape=(2,))
 
     assert node.path == normalize_path(path)
-
 
 
 async def test_open_array(memory_store: IcechunkStore) -> None:

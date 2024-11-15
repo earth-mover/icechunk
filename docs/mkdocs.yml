@@ -19,7 +19,7 @@ theme:
   custom_dir: overrides
   logo: assets/logo-wire.svg
   favicon: assets/favicon/favicon-96x96.png
-  palette: 
+  palette:
 
     # Palette toggle for automatic mode
     #- media: "(prefers-color-scheme)"
@@ -57,7 +57,7 @@ theme:
     - content.code.copy
     - content.code.annotate
   icon:
-    repo: fontawesome/brands/github 
+    repo: fontawesome/brands/github
   font:
     text: Roboto
     code: Roboto Mono
@@ -78,7 +78,7 @@ extra:
   status:
     new: Recently Added
     deprecated: Deprecated
-  analytics: 
+  analytics:
     provider: google
     property: G-TNHH1RF342
     feedback:
@@ -92,12 +92,12 @@ extra:
         - icon: material/emoticon-sad-outline
           name: This page could be improved
           data: 0
-          note: >- 
+          note: >-
             Thanks for your feedback! Help us improve this page by
             using our <a href="https://share.hsforms.com/10yWXT95yS6mWXg3bc1e4PQdl5u6" target="_blank" rel="noopener">feedback form</a>.
   consent:
     title: Cookie consent
-    description: >- 
+    description: >-
       We use cookies to recognize your repeated visits and preferences, as well
       as to measure the effectiveness of our documentation and whether users
       find what they're searching for. With your consent, you're helping us to
@@ -138,10 +138,10 @@ plugins:
       handlers:
         python:
           paths: [../icechunk-python/python]
-      
+
   - mkdocs-jupyter:
       include_source: True
-      #include: 
+      #include:
       #  - "icechunk-python/notebooks/*.ipynb"
       #  - "icechunk-python/examples/*.py"
 
@@ -172,8 +172,8 @@ nav:
   - Home: index.md
   - Overview: overview.md
   - FAQ: faq.md
-  - Icechunk Python: 
-    - icechunk-python/quickstart.md 
+  - Icechunk Python:
+    - icechunk-python/quickstart.md
     - icechunk-python/configuration.md
     - icechunk-python/xarray.md
     - icechunk-python/version-control.md
@@ -181,10 +181,9 @@ nav:
     - API Reference: icechunk-python/reference.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
-#    - Notebooks: 
+#    - Notebooks:
 #      - ... | flat | icechunk-python/notebooks/*.ipynb
   - Icechunk Rust: icechunk-rust.md
   - contributing.md
   - Sample Datasets: sample-datasets.md
   - Spec: spec.md
-

@@ -1,12 +1,12 @@
 # Icechunk + Xarray
 
-Icechunk was designed to work seamlessly with Xarray. Xarray users can read and 
+Icechunk was designed to work seamlessly with Xarray. Xarray users can read and
 write data to Icechunk using [`xarray.open_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.open_zarr.html#xarray.open_zarr)
 and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr).
 
 !!! warning
 
-    Using Xarray and Icechunk together currently requires installing Xarray from source. 
+    Using Xarray and Icechunk together currently requires installing Xarray from source.
 
     ```shell
     pip install git+https://github.com/pydata/xarray
@@ -20,8 +20,8 @@ to it, and append data a second block of data using Icechunk's version control f
 ## Create a new store
 
 Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll create an
-Icechunk store in S3 or a local file system. You will need to replace the `StorageConfig` 
-with a bucket or file path that you have access to. 
+Icechunk store in S3 or a local file system. You will need to replace the `StorageConfig`
+with a bucket or file path that you have access to.
 
 ```python
 import xarray as xr
@@ -54,11 +54,11 @@ We'll write the two blocks to Icechunk in separate transactions later in the thi
 !!! note
 
     Downloading xarray tutorial data requires pooch and netCDF4. These can be installed with
-    
+
     ```shell
     pip install pooch netCDF4
     ```
-    
+
 ```python
 ds = xr.tutorial.open_dataset('rasm')
 
@@ -164,7 +164,7 @@ xr.open_zarr(store, consolidated=False)
 ```
 
 Notice that this second `xarray.Dataset` has a time dimension of length 18 whereas the
-first has a time dimension of length 36. 
+first has a time dimension of length 36.
 
 ## Next steps
 

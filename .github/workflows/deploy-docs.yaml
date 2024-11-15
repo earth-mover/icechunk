@@ -1,4 +1,4 @@
-name: deploy-docs 
+name: deploy-docs
 on:
   workflow_dispatch:
   push:
@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
-    
+
       - name: Load cached Poetry installation
         id: cached-poetry
         uses: actions/cache@v4
@@ -38,14 +38,14 @@ jobs:
           virtualenvs-in-project: true
           virtualenvs-path: .venv
           installer-parallel: true
-      
+
       - name: Load cached venv
         id: cached-poetry-dependencies
         uses: actions/cache@v4
         with:
           path: .venv
           key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-      
+
       - name: Install dependencies (with cache)
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --no-root
@@ -53,7 +53,7 @@ jobs:
       - name: Install project
         run: poetry install --no-interaction
 
-      - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV 
+      - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV
 
       - name: Setup Cache for MkDocs
         uses: actions/cache@v4
@@ -62,6 +62,6 @@ jobs:
           path: .cache
           restore-keys: |
             mkdocs-material-
-      
+
       - name: Deploy to gh-pages
         run: poetry run mkdocs gh-deploy --force

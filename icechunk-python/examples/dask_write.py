@@ -36,8 +36,9 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
-import icechunk
 import numpy as np
+
+import icechunk
 import zarr
 from dask.distributed import Client
 from dask.distributed import print as dprint
@@ -46,12 +47,17 @@ from dask.distributed import print as dprint
 @dataclass
 class Task:
     """A task distributed to Dask workers"""
-    store: icechunk.IcechunkStore   # The worker will use this Icechunk store to read/write to the dataset
-    time: int                       # The position in the coordinate dimension where the read/write should happen
-    seed: int                       # An RNG seed used to generate or recreate random data for the array
+
+    store: (
+        icechunk.IcechunkStore
+    )  # The worker will use this Icechunk store to read/write to the dataset
+    time: (
+        int  # The position in the coordinate dimension where the read/write should happen
+    )
+    seed: int  # An RNG seed used to generate or recreate random data for the array
 
 
-def generate_task_array(task: Task, shape: tuple[int,...]) -> np.typing.ArrayLike:
+def generate_task_array(task: Task, shape: tuple[int, ...]) -> np.typing.ArrayLike:
     """Generates a randm array with the given shape and using the seed in the Task"""
     np.random.seed(task.seed)
     return np.random.rand(*shape)
@@ -247,7 +253,12 @@ def main() -> None:
     """
 
     global_parser = argparse.ArgumentParser(prog="dask_write")
-    global_parser.add_argument("--url", type=str, help="url for the repository: s3://bucket/optional-prefix/repository-name", required=True)
+    global_parser.add_argument(
+        "--url",
+        type=str,
+        help="url for the repository: s3://bucket/optional-prefix/repository-name",
+        required=True,
+    )
     subparsers = global_parser.add_subparsers(title="subcommands", required=True)
 
     create_parser = subparsers.add_parser("create", help="create repo and array")
@@ -312,7 +323,14 @@ def main() -> None:
 
     args = global_parser.parse_args()
     url = urlparse(args.url, "s3")
-    if url.scheme != "s3" or url.netloc == '' or url.path == '' or url.params != '' or url.query != '' or url.fragment != '':
+    if (
+        url.scheme != "s3"
+        or url.netloc == ""
+        or url.path == ""
+        or url.params != ""
+        or url.query != ""
+        or url.fragment != ""
+    ):
         raise ValueError(f"Invalid url {args.url}")
 
     args.url = url

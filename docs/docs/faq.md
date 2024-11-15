@@ -1,5 +1,5 @@
 ---
-title: Frequently Asked Questions 
+title: Frequently Asked Questions
 ---
 
 # FAQ
@@ -48,7 +48,7 @@ As with all things in technology, the benefits of Icechunk come with some tradeo
 - The on-disk format is less transparent than regular Zarr.
 - The process for distributed writes is more complex to coordinate.
 
-!!! warning 
+!!! warning
     Another downside of Icechunk in its current state is its immaturity.
     The library is very new, likely contains bugs, and is not recommended
     for production usage at this point in time.
@@ -91,7 +91,7 @@ Icechunk figures out how to materialize these keys based on its [storage schema]
     ---
 
     With Icechunk, the Icechunk library intercepts the Zarr keys and translates them to the
-    Icechunk schema, storing data in object storage using its own format. 
+    Icechunk schema, storing data in object storage using its own format.
 
     ```mermaid
     flowchart TD
@@ -110,7 +110,7 @@ maintaining interoperability while enabling rapid iteration and promoting innova
 No. At the moment, the Icechunk spec is completely independent of the Zarr spec.
 
 In the future, we may choose to propose Icechunk as a Zarr extension.
-However, because it sits _below_ Zarr in the stack, it's not immediately clear how to do that. 
+However, because it sits _below_ Zarr in the stack, it's not immediately clear how to do that.
 
 ## Should I implement Icechunk on my own based on the spec?
 
@@ -159,23 +159,23 @@ HDF is widely used in high-performance computing.
 <div class="grid cards" markdown>
 
 -   __Similarities__
-    
+
     ---
-    
+
     Icechunk and HDF5 share the same data model: multidimensional arrays and metadata organized into a hierarchical tree structure.
     This data model can accommodate a wide range of different use cases and workflows.
 
     Both Icechunk and HDF5 use the concept of "chunking" to split large arrays into smaller storage units.
 
 -   __Differences__
-    
+
     ---
-  
+
     HDF5 is a monolithic file format designed first and foremost for POSIX filesystems.
     All of the chunks in an HDF5 dataset live within a single file.
     The size of an HDF5 dataset is limited to the size of a single file.
     HDF5 relies on the filesystem for consistency and is not designed for multiple concurrent yet uncoordinated readers and writers.
-    
+
     Icechunk spreads chunks over many files and is designed first and foremost for cloud object storage.
     Icechunk can accommodate datasets of arbitrary size.
     Icechunk's optimistic concurrency design allows for safe concurrent access for uncoordinated readers and writers.
@@ -258,12 +258,12 @@ Zarr and Icechunk instead allow for flexible chunking and compression to optimiz
 ### Tabular Formats
 
 Tabular formats are for storing tabular data.
-Tabular formats are extremely prevalent in general-purpose data analytics but are less widely used in scientific domains. 
+Tabular formats are extremely prevalent in general-purpose data analytics but are less widely used in scientific domains.
 The tabular data model is different from Icechunk's multidimensional array data model, and so a direct comparison is not always apt.
 However, Icechunk is inspired by many tabular file formats, and there are some notable similarities.
 
 #### [Apache Parquet](https://parquet.apache.org/)
-  
+
 > Apache Parquet is an open source, column-oriented data file format designed for efficient data storage and retrieval.
 > It provides high performance compression and encoding schemes to handle complex data in bulk and is supported in many programming language and analytics tools.
 
@@ -339,7 +339,7 @@ Kerchunk and Icechunk are highly complimentary.
 > VirtualiZarr creates virtual Zarr stores for cloud-friendly access to archival data, using familiar Xarray syntax.
 
 VirtualiZarr provides another way of generating and manipulating Kerchunk-style references.
-VirtualiZarr first uses Kerchunk to generate virtual references, but then provides a simple Xarray-based interface for manipulating those references. 
+VirtualiZarr first uses Kerchunk to generate virtual references, but then provides a simple Xarray-based interface for manipulating those references.
 As VirtualiZarr can also write virtual references into an Icechunk Store directly, together they form a complete pipeline for generating and storing references to multiple pre-existing files.
 
 #### [LakeFS](https://lakefs.io/)
@@ -370,5 +370,3 @@ TensorStore implements an [ocdbt](https://google.github.io/tensorstore/kvstore/o
 
 Ocdbt implements a transactional, versioned key-value store suitable for storing Zarr data, thereby supporting some of the same features as Icechunk.
 Unlike Icechunk, the ocdbt key-value store is not specialized to Zarr, does not differentiate between chunk or metadata keys, and does not store any metadata about chunks.
-
-
