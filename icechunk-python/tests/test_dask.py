@@ -1,19 +1,15 @@
 import pytest
 
 pytest.importorskip("distributed")
-from distributed.utils_test import (  # noqa: F401
-    client,
-    loop,
-    loop_in_thread,
-    cleanup,
-    cluster_fixture,
-)
+from distributed.utils_test import gen_cluster
+
 from xarray.testing import assert_identical
 
 from .test_xarray import create_test_data, roundtrip
 
 
-def test_xarray_to_icechunk_distributed(client):
+@gen_cluster(client=True)
+async def test_something(c, s, *ws):
     ds = create_test_data().chunk(dim1=3, dim2=4)
     with roundtrip(ds) as actual:
         assert_identical(actual, ds)
