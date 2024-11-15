@@ -1,7 +1,6 @@
 import pytest
 
 pytest.importorskip("distributed")
-from distributed import Client
 from distributed.utils_test import (  # noqa: F401
     client,
     loop,
