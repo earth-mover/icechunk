@@ -31,7 +31,7 @@ icechunk_stores = st.builds(
 )
 
 
-@settings(report_multiple_bugs=False, deadline=None)
+@settings(report_multiple_bugs=True, deadline=None)
 @given(data=st.data(), nparray=numpy_arrays(zarr_formats=st.just(3)))
 def test_roundtrip(data: st.DataObject, nparray) -> None:
     # TODO: support size-0 arrays GH392
