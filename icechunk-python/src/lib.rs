@@ -333,7 +333,7 @@ impl PyIcechunkStore {
         Ok(Cow::Owned(serialized))
     }
 
-    fn set_mode(&self, read_only: bool) -> PyResult<()> {
+    fn set_read_only(&self, read_only: bool) -> PyResult<()> {
         let access_mode = if read_only {
             icechunk::zarr::AccessMode::ReadOnly
         } else {
@@ -345,7 +345,7 @@ impl PyIcechunkStore {
         Ok(())
     }
 
-    fn with_mode(&self, read_only: bool) -> PyResult<PyIcechunkStore> {
+    fn with_read_only(&self, read_only: bool) -> PyResult<PyIcechunkStore> {
         let access_mode = if read_only {
             icechunk::zarr::AccessMode::ReadOnly
         } else {

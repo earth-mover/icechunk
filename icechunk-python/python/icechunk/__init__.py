@@ -164,21 +164,23 @@ class IcechunkStore(Store, SyncMixin):
 
     def as_read_only(self) -> Self:
         """Return a read-only version of this store."""
-        new_store = self._store.with_mode(read_only=True)
+        new_store = self._store.with_read_only(read_only=True)
         return self.__class__(store=new_store, read_only=True)
     
     def as_writeable(self) -> Self:
         """Return a writeable version of this store."""
-        new_store = self._store.with_mode(read_only=False)
+        new_store = self._store.with_read_only(read_only=False)
         return self.__class__(store=new_store, read_only=False)
     
     def set_read_only(self) -> None:
         """Set the store to read-only mode."""
-        self._store.set_mode(read_only=True)
+        self._store.set_read_only(read_only=True)
+        self._read_only = True
 
     def set_writeable(self) -> None:
         """Set the store to writeable mode."""
-        self._store.set_mode(read_only=False)
+        self._store.set_read_only(read_only=False)
+        self._read_only = False
 
     @property
     def snapshot_id(self) -> str:
@@ -223,15 +225,21 @@ class IcechunkStore(Store, SyncMixin):
                 raise ValueError(
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
-            return self._store.checkout_snapshot(snapshot_id)
+            self._store.checkout_snapshot(snapshot_id)
+            self._read_only = True
+            return
         if branch is not None:
             if tag is not None:
                 raise ValueError(
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
-            return self._store.checkout_branch(branch)
+            self._store.checkout_branch(branch)
+            self._read_only = True
+            return
         if tag is not None:
-            return self._store.checkout_tag(tag)
+            self._store.checkout_tag(tag)
+            self._read_only = True
+            return
 
         raise ValueError("a snapshot_id, branch, or tag must be specified")
 
@@ -252,15 +260,21 @@ class IcechunkStore(Store, SyncMixin):
                 raise ValueError(
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
-            return await self._store.async_checkout_snapshot(snapshot_id)
+            await self._store.async_checkout_snapshot(snapshot_id)
+            self._read_only = True
+            return
         if branch is not None:
             if tag is not None:
                 raise ValueError(
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
-            return await self._store.async_checkout_branch(branch)
+            await self._store.async_checkout_branch(branch)
+            self._read_only = True
+            return
         if tag is not None:
-            return await self._store.async_checkout_tag(tag)
+            await self._store.async_checkout_tag(tag)
+            self._read_only = True
+            return
 
         raise ValueError("a snapshot_id, branch, or tag must be specified")
 

@@ -194,7 +194,7 @@ async def test_icechunk_can_read_old_repo():
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
     ) == ["c", "zarr.json"]
 
-    root = zarr.group(store=store)
+    root = zarr.group(store=store.as_writeable())
     # inner is not initialized, so it's all fill values
     inner = root["group2/group3/group4/group5/inner"]
     assert_array_equal(inner[:], float("nan"))

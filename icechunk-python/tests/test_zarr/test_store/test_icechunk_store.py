@@ -274,7 +274,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             store, "foo/bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
         assert not await store.is_empty("")
-        assert await store.is_empty("fo")
+        assert await store.is_empty("fo") # codespell:ignore
         assert not await store.is_empty("foo/")
         assert not await store.is_empty("foo")
         assert await store.is_empty("spam/")
