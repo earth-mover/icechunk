@@ -628,11 +628,19 @@ impl PyIcechunkStore {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    fn empty<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn is_empty<'py>(
+        &'py self,
+        py: Python<'py>,
+        prefix: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let is_empty =
-                store.read().await.empty().await.map_err(PyIcechunkStoreError::from)?;
+            let is_empty = store
+                .read()
+                .await
+                .is_empty(&prefix)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
             Ok(is_empty)
         })
     }

@@ -435,6 +435,22 @@ class IcechunkStore(Store, SyncMixin):
         including all groups and all arrays. But it will not modify the repository history.
         """
         return self._store.sync_clear()
+    
+    async def is_empty(self, prefix: str) -> bool:
+        """
+        Check if the directory is empty.
+
+        Parameters
+        ----------
+        prefix : str
+            Prefix of keys to check.
+
+        Returns
+        -------
+        bool
+            True if the store is empty, False otherwise.
+        """
+        return await self._store.is_empty(prefix)
 
     async def get(
         self,
