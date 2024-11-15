@@ -17,6 +17,7 @@ from zarr.api.synchronous import (
     save_array,
     save_group,
 )
+from zarr.core.common import MemoryOrder, ZarrFormat
 from zarr.storage._utils import normalize_path
 
 from ..conftest import parse_store
@@ -122,6 +123,33 @@ async def test_open_group(memory_store: IcechunkStore) -> None:
     # assert g.read_only
 
 
+@pytest.mark.parametrize("n_args", [10, 1, 0])
+@pytest.mark.parametrize("n_kwargs", [10, 1, 0])
+def test_save(memory_store: IcechunkStore, n_args: int, n_kwargs: int) -> None:
+    store = memory_store
+    data = np.arange(10)
+    args = [np.arange(10) for _ in range(n_args)]
+    kwargs = {f"arg_{i}": data for i in range(n_kwargs)}
+
+    if n_kwargs == 0 and n_args == 0:
+        with pytest.raises(ValueError):
+            save(store)
+    elif n_args == 1 and n_kwargs == 0:
+        save(store, *args)
+        array = open(store)
+        assert isinstance(array, Array)
+        assert_array_equal(array[:], data)
+    else:
+        save(store, *args, **kwargs)  # type: ignore[arg-type]
+        group = open(store)
+        assert isinstance(group, Group)
+        for array in group.array_values():
+            assert_array_equal(array[:], data)
+        for k in kwargs:
+            assert k in group
+        assert group.nmembers() == n_args + n_kwargs
+
+
 def test_save_errors() -> None:
     with pytest.raises(ValueError):
         # no arrays provided
@@ -132,6 +160,10 @@ def test_save_errors() -> None:
     with pytest.raises(ValueError):
         # no arrays provided
         save("data/group.zarr")
+    with pytest.raises(TypeError):
+        # mode is no valid argument and would get handled as an array
+        a = np.arange(10)
+        zarr.save("data/example.zarr", a, mode="w")
 
 
 def test_open_with_mode_r(tmp_path: pathlib.Path) -> None:
@@ -210,6 +242,22 @@ def test_open_with_mode_w_minus(tmp_path: pathlib.Path) -> None:
 #     assert_array_equal(foo, loader["foo"])
 #     assert_array_equal(bar, loader["bar"])
 #     assert "LazyLoader: " in repr(loader)
+
+
+@pytest.mark.parametrize("order", ["C", "F", None])
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_array_order(order: MemoryOrder | None, zarr_format: ZarrFormat) -> None:
+    arr = zarr.ones(shape=(2, 2), order=order, zarr_format=zarr_format)
+    expected = order or zarr.config.get("array.order")
+    assert arr.order == expected
+
+    vals = np.asarray(arr)
+    if expected == "C":
+        assert vals.flags.c_contiguous
+    elif expected == "F":
+        assert vals.flags.f_contiguous
+    else:
+        raise AssertionError
 
 
 def test_load_array(memory_store: Store) -> None:
