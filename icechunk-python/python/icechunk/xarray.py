@@ -5,17 +5,16 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
-import zarr
-
 from packaging.version import Version
-from icechunk import IcechunkStore
-from icechunk.distributed import extract_store, merge_stores
+
 import xarray as xr
+import zarr
+from icechunk import IcechunkStore
+from icechunk.dask import stateful_store_reduce
+from icechunk.distributed import extract_store, merge_stores
 from xarray import Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
-
-from icechunk.dask import stateful_store_reduce
 
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 

@@ -1,16 +1,14 @@
 import itertools
-from collections.abc import MutableMapping
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Iterable,
     Literal,
-    Mapping,
-    Sequence,
     TypeAlias,
     overload,
 )
+
+from packaging.version import Version
 
 import dask
 import dask.array
@@ -21,9 +19,8 @@ from dask.base import compute_as_if_collection, tokenize
 from dask.core import flatten
 from dask.delayed import Delayed
 from dask.highlevelgraph import HighLevelGraph
-from icechunk.distributed import extract_store, merge_stores
-from packaging.version import Version
 from icechunk import IcechunkStore
+from icechunk.distributed import extract_store, merge_stores
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 

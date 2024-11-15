@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import pytest
+
 import zarr
 import zarr.api
 import zarr.api.asynchronous
 from icechunk import IcechunkStore
+from tests.conftest import parse_store
 from zarr import Array, AsyncArray, AsyncGroup, Group
 from zarr.core._info import GroupInfo
 from zarr.core.buffer import default_buffer_prototype
@@ -17,8 +19,6 @@ from zarr.core.group import GroupMetadata
 from zarr.core.sync import sync
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.storage import StorePath, make_store_path
-
-from ..conftest import parse_store
 
 if TYPE_CHECKING:
     from _pytest.compat import LEGACY_PATH
@@ -817,7 +817,9 @@ async def test_group_members_async(store: IcechunkStore) -> None:
     assert nmembers == 2
 
     # partial
-    children = sorted([x async for x in group.members(max_depth=1)], key=operator.itemgetter(0))
+    children = sorted(
+        [x async for x in group.members(max_depth=1)], key=operator.itemgetter(0)
+    )
     expected = [
         ("a0", a0),
         ("g0", g0),
@@ -983,7 +985,9 @@ class TestInfo:
         assert result == expected
 
 
-async def test_delitem_removes_children(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
+async def test_delitem_removes_children(
+    store: IcechunkStore, zarr_format: ZarrFormat
+) -> None:
     # https://github.com/zarr-developers/zarr-python/issues/2191
     g1 = zarr.group(store=store, zarr_format=zarr_format)
     g1.create_group("0")

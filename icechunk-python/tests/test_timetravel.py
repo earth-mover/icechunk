@@ -58,7 +58,7 @@ def test_timetravel():
     assert store.branch is None
     assert air_temp[200, 6] == 90
 
-    parents = [p for p in store.ancestry()]
+    parents = list(store.ancestry())
     assert [snap.message for snap in parents] == [
         "commit 3",
         "commit 2",

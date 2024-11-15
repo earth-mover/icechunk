@@ -1,7 +1,8 @@
 import pickle
 
-import icechunk
 import pytest
+
+import icechunk
 import zarr
 from zarr.storage import LocalStore
 

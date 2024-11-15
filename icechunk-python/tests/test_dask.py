@@ -4,9 +4,8 @@ pytest.importorskip("distributed")
 
 
 import distributed
+from tests.test_xarray import create_test_data, roundtrip
 from xarray.testing import assert_identical
-
-from .test_xarray import create_test_data, roundtrip
 
 
 def test_something():

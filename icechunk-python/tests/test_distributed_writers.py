@@ -3,13 +3,12 @@ import warnings
 from typing import Any
 
 import dask.array
+import icechunk
 import zarr
 from dask.array.utils import assert_eq
 from dask.distributed import Client
-from icechunk.dask import store_dask
-
-import icechunk
 from icechunk import IcechunkStore
+from icechunk.dask import store_dask
 
 # We create a 2-d array with this many chunks along each direction
 CHUNKS_PER_DIM = 10
@@ -52,7 +51,6 @@ async def test_distributed_writers():
     we can write everything we have written.
     """
 
-    client = Client(n_workers=8)
     storage_config = {
         "bucket": "testbucket",
         "prefix": "python-distributed-writers-test__" + str(time.time()),
@@ -79,22 +77,23 @@ async def test_distributed_writers():
     )
     _first_snap = store.commit("array created")
 
-    store_dask(store, sources=[dask_array], targets=[zarray])
-    commit_res = store.commit("distributed commit")
-    assert commit_res
+    with Client(n_workers=8):
+        store_dask(store, sources=[dask_array], targets=[zarray])
+        commit_res = store.commit("distributed commit")
+        assert commit_res
 
-    # Lets open a new store to verify the results
-    store = mk_store(
-        read_only=True, storage_config=storage_config, store_config=store_config
-    )
-    all_keys = [key async for key in store.list_prefix("/")]
-    assert (
-        len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
-    )  # group meta + array meta + each chunk
+        # Lets open a new store to verify the results
+        store = mk_store(
+            read_only=True, storage_config=storage_config, store_config=store_config
+        )
+        all_keys = [key async for key in store.list_prefix("/")]
+        assert (
+            len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
+        )  # group meta + array meta + each chunk
 
-    group = zarr.open_group(store=store, mode="r")
+        group = zarr.open_group(store=store, mode="r")
 
-    roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=UserWarning)
-        assert_eq(roundtripped, dask_array)
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            assert_eq(roundtripped, dask_array)

@@ -2,7 +2,6 @@
 from typing import cast
 
 import zarr
-
 from icechunk import IcechunkStore
 
 
