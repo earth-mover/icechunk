@@ -1032,6 +1032,10 @@ async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
     match get_key(key, &ByteRange::ALL, repo).await {
         Ok(_) => Ok(true),
         Err(StoreError::NotFound(_)) => Ok(false),
+        Err(StoreError::RepositoryError(RepositoryError::NodeNotFound {
+            path: _,
+            message: _,
+        })) => Ok(false),
         Err(other_error) => Err(other_error),
     }
 }

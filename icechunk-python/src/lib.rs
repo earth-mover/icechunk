@@ -727,7 +727,8 @@ impl PyIcechunkStore {
                 .await
                 .exists(&key)
                 .await
-                .map_err(PyIcechunkStoreError::StoreError)?;
+                .map_err(PyIcechunkStoreError::from)?;
+
             Ok(exists)
         })
     }
@@ -935,7 +936,7 @@ async fn do_checkout_snapshot(
     store
         .checkout(VersionInfo::SnapshotId(snapshot_id))
         .await
-        .map_err(PyIcechunkStoreError::StoreError)?;
+        .map_err(PyIcechunkStoreError::from)?;
     Ok(())
 }
 
@@ -944,16 +945,13 @@ async fn do_checkout_branch(store: Arc<RwLock<Store>>, branch: String) -> PyResu
     store
         .checkout(VersionInfo::BranchTipRef(branch))
         .await
-        .map_err(PyIcechunkStoreError::StoreError)?;
+        .map_err(PyIcechunkStoreError::from)?;
     Ok(())
 }
 
 async fn do_checkout_tag(store: Arc<RwLock<Store>>, tag: String) -> PyResult<()> {
     let mut store = store.write().await;
-    store
-        .checkout(VersionInfo::TagRef(tag))
-        .await
-        .map_err(PyIcechunkStoreError::StoreError)?;
+    store.checkout(VersionInfo::TagRef(tag)).await.map_err(PyIcechunkStoreError::from)?;
     Ok(())
 }
 
@@ -962,7 +960,7 @@ async fn do_merge(
     other_change_set_bytes: Vec<u8>,
 ) -> PyResult<()> {
     let change_set = ChangeSet::import_from_bytes(&other_change_set_bytes)
-        .map_err(PyIcechunkStoreError::RepositoryError)?;
+        .map_err(PyIcechunkStoreError::from)?;
 
     let store = store.write().await;
     store.merge(change_set).await;
@@ -973,7 +971,7 @@ async fn do_reset<'py>(store: Arc<RwLock<Store>>) -> PyResult<Vec<u8>> {
     let changes =
         store.write().await.reset().await.map_err(PyIcechunkStoreError::StoreError)?;
     let serialized_changes =
-        changes.export_to_bytes().map_err(PyIcechunkStoreError::RepositoryError)?;
+        changes.export_to_bytes().map_err(PyIcechunkStoreError::from)?;
     Ok(serialized_changes)
 }
 

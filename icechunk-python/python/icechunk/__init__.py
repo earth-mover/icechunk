@@ -1,6 +1,6 @@
 # module
-from collections.abc import AsyncGenerator, Iterable
-from typing import Any, AsyncIterator, Self
+from collections.abc import AsyncGenerator, AsyncIterator, Iterable
+from typing import Any, Self
 
 from zarr.abc.store import ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, BufferPrototype

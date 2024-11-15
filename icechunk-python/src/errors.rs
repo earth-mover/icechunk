@@ -19,7 +19,7 @@ pub(crate) enum PyIcechunkStoreError {
     #[error("store error: {0}")]
     StoreError(StoreError),
     #[error("repository error: {0}")]
-    RepositoryError(#[from] RepositoryError),
+    RepositoryError(RepositoryError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
     #[error("{0}")]
@@ -41,6 +41,17 @@ impl From<StoreError> for PyIcechunkStoreError {
                 message: _,
             }) => PyIcechunkStoreError::PyKeyError(format!("{}", path)),
             _ => PyIcechunkStoreError::StoreError(error),
+        }
+    }
+}
+
+impl From<RepositoryError> for PyIcechunkStoreError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::NodeNotFound { path, message: _ } => {
+                PyIcechunkStoreError::PyKeyError(format!("{}", path))
+            }
+            _ => PyIcechunkStoreError::RepositoryError(error),
         }
     }
 }

@@ -12,12 +12,10 @@ import zarr.api.asynchronous
 from icechunk import IcechunkStore
 from zarr import Array, AsyncArray, AsyncGroup, Group
 from zarr.codecs import BytesCodec, VLenBytesCodec
-from zarr.core._info import ArrayInfo
 from zarr.core.array import chunks_initialized
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import JSON, MemoryOrder, ZarrFormat
 from zarr.core.indexing import ceildiv
-from zarr.core.metadata.v3 import DataType
 from zarr.core.sync import sync
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.storage import StorePath
