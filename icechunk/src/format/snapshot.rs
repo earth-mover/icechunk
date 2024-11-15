@@ -208,8 +208,13 @@ impl Snapshot {
             .map(move |ix| self.short_term_history[ix].clone())
     }
 
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -315,28 +320,29 @@ mod tests {
         };
 
         let oid = ObjectId::random();
+        let node_ids = iter::repeat_with(NodeId::random).take(7).collect::<Vec<_>>();
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
-                id: 1,
+                id: node_ids[0].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/a".try_into().unwrap(),
-                id: 2,
+                id: node_ids[1].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/b".try_into().unwrap(),
-                id: 3,
+                id: node_ids[2].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
-                id: 4,
+                id: node_ids[3].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
@@ -344,7 +350,7 @@ mod tests {
             },
             NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
-                id: 5,
+                id: node_ids[4].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid.clone(),
                     location: 42,
@@ -356,13 +362,13 @@ mod tests {
             },
             NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
-                id: 6,
+                id: node_ids[5].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             },
             NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
-                id: 7,
+                id: node_ids[6].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
@@ -392,7 +398,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
-                id: 4,
+                id: node_ids[3].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
@@ -404,7 +410,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: Path::root(),
-                id: 1,
+                id: node_ids[0].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             }),
@@ -414,7 +420,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
-                id: 5,
+                id: node_ids[4].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid,
                     location: 42,
@@ -427,7 +433,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
-                id: 6,
+                id: node_ids[5].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             }),
@@ -437,7 +443,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
-                id: 7,
+                id: node_ids[6].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),

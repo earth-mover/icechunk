@@ -84,7 +84,7 @@ let zarr_meta1 = ZarrArrayMetadata {{
     chunk_key_encoding: ChunkKeyEncoding::Slash,
     fill_value: FillValue::Int32(0),
     codecs: Codecs("codec".to_string()),
-    storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+    storage_transformers: Some(StorageTransformers("transformers".to_string())),
     dimension_names: Some(vec![
         Some("x".to_string()),
         Some("y".to_string()),

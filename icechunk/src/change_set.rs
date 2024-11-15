@@ -48,13 +48,13 @@ impl ChangeSet {
         self.new_arrays.get(path)
     }
 
-    pub fn delete_group(&mut self, path: Path, node_id: NodeId) {
-        self.updated_attributes.remove(&node_id);
+    pub fn delete_group(&mut self, path: Path, node_id: &NodeId) {
+        self.updated_attributes.remove(node_id);
         match self.new_groups.remove(&path) {
             Some(deleted_node_id) => {
                 // the group was created in this session
                 // so we delete it directly, no need to flag as deleted
-                debug_assert!(deleted_node_id == node_id);
+                debug_assert!(&deleted_node_id == node_id);
                 self.delete_children(&path);
             }
             None => {
@@ -69,22 +69,22 @@ impl ChangeSet {
             .new_groups
             .iter()
             .filter(|(child_path, _)| child_path.starts_with(path))
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
         for (path, node) in groups_to_delete {
-            self.delete_group(path, node);
+            self.delete_group(path, &node);
         }
 
         let arrays_to_delete: Vec<_> = self
             .new_arrays
             .iter()
             .filter(|(child_path, _)| child_path.starts_with(path))
-            .map(|(k, (node, _))| (k.clone(), *node))
+            .map(|(k, (node, _))| (k.clone(), node.clone()))
             .collect();
 
         for (path, node) in arrays_to_delete {
-            self.delete_array(path, node);
+            self.delete_array(path, &node);
         }
     }
 
@@ -101,16 +101,18 @@ impl ChangeSet {
         self.updated_arrays.insert(node_id, metadata);
     }
 
-    pub fn delete_array(&mut self, path: Path, node_id: NodeId) {
+    pub fn delete_array(&mut self, path: Path, node_id: &NodeId) {
         // if deleting a new array created in this session, just remove the entry
         // from new_arrays
         let node_and_meta = self.new_arrays.remove(&path);
         let is_new_array = node_and_meta.is_some();
-        debug_assert!(!is_new_array || node_and_meta.map(|n| n.0) == Some(node_id));
+        debug_assert!(
+            !is_new_array || node_and_meta.map(|n| n.0).as_ref() == Some(node_id)
+        );
 
-        self.updated_arrays.remove(&node_id);
-        self.updated_attributes.remove(&node_id);
-        self.set_chunks.remove(&node_id);
+        self.updated_arrays.remove(node_id);
+        self.updated_attributes.remove(node_id);
+        self.set_chunks.remove(node_id);
         if !is_new_array {
             self.deleted_arrays.insert(path);
         }
@@ -128,9 +130,9 @@ impl ChangeSet {
 
     pub fn get_updated_zarr_metadata(
         &self,
-        node_id: NodeId,
+        node_id: &NodeId,
     ) -> Option<&ZarrArrayMetadata> {
-        self.updated_arrays.get(&node_id)
+        self.updated_arrays.get(node_id)
     }
 
     pub fn update_user_attributes(
@@ -143,9 +145,9 @@ impl ChangeSet {
 
     pub fn get_user_attributes(
         &self,
-        node_id: NodeId,
+        node_id: &NodeId,
     ) -> Option<&Option<UserAttributes>> {
-        self.updated_attributes.get(&node_id)
+        self.updated_attributes.get(node_id)
     }
 
     pub fn set_chunk_ref(
@@ -166,21 +168,21 @@ impl ChangeSet {
 
     pub fn get_chunk_ref(
         &self,
-        node_id: NodeId,
+        node_id: &NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.set_chunks.get(&node_id).and_then(|h| h.get(coords))
+        self.set_chunks.get(node_id).and_then(|h| h.get(coords))
     }
 
     pub fn array_chunks_iterator(
         &self,
-        node_id: NodeId,
+        node_id: &NodeId,
         node_path: &Path,
     ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
         if self.is_deleted(node_path) {
             return Either::Left(iter::empty());
         }
-        match self.set_chunks.get(&node_id) {
+        match self.set_chunks.get(node_id) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.iter()),
         }
@@ -190,12 +192,12 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.array_chunks_iterator(*node_id, path).filter_map(|(coords, payload)| {
+            self.array_chunks_iterator(node_id, path).filter_map(|(coords, payload)| {
                 payload.as_ref().map(|p| {
                     (
                         path.clone(),
                         ChunkInfo {
-                            node: *node_id,
+                            node: node_id.clone(),
                             coord: coords.clone(),
                             payload: p.clone(),
                         },
@@ -276,7 +278,7 @@ impl ChangeSet {
         node: NodeId,
         chunks: impl Iterator<Item = ChunkInfo> + 'a,
     ) -> impl Iterator<Item = ChunkInfo> + 'a {
-        chunks.filter_map(move |chunk| match self.get_chunk_ref(node, &chunk.coord) {
+        chunks.filter_map(move |chunk| match self.get_chunk_ref(&node, &chunk.coord) {
             None => Some(chunk),
             Some(new_payload) => {
                 new_payload.clone().map(|pl| ChunkInfo { payload: pl, ..chunk })
@@ -290,10 +292,10 @@ impl ChangeSet {
 
     pub fn get_new_array(&self, path: &Path) -> Option<NodeSnapshot> {
         self.get_array(path).map(|(id, meta)| {
-            let meta = self.get_updated_zarr_metadata(*id).unwrap_or(meta).clone();
-            let atts = self.get_user_attributes(*id).cloned();
+            let meta = self.get_updated_zarr_metadata(id).unwrap_or(meta).clone();
+            let atts = self.get_user_attributes(id).cloned();
             NodeSnapshot {
-                id: *id,
+                id: id.clone(),
                 path: path.clone(),
                 user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
                 // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
@@ -305,9 +307,9 @@ impl ChangeSet {
 
     pub fn get_new_group(&self, path: &Path) -> Option<NodeSnapshot> {
         self.get_group(path).map(|id| {
-            let atts = self.get_user_attributes(*id).cloned();
+            let atts = self.get_user_attributes(id).cloned();
             NodeSnapshot {
-                id: *id,
+                id: id.clone(),
                 path: path.clone(),
                 user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
                 node_data: NodeData::Group,
@@ -317,7 +319,7 @@ impl ChangeSet {
 
     pub fn new_nodes_iterator<'a>(
         &'a self,
-        manifest_id: &'a ManifestId,
+        manifest_id: Option<&'a ManifestId>,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
         self.new_nodes().filter_map(move |path| {
             if self.is_deleted(path) {
@@ -330,10 +332,14 @@ impl ChangeSet {
             match node.node_data {
                 NodeData::Group => Some(node),
                 NodeData::Array(meta, _no_manifests_yet) => {
-                    let new_manifests = vec![ManifestRef {
-                        object_id: manifest_id.clone(),
-                        extents: ManifestExtents(vec![]),
-                    }];
+                    let new_manifests = manifest_id
+                        .map(|mid| {
+                            vec![ManifestRef {
+                                object_id: mid.clone(),
+                                extents: ManifestExtents(vec![]),
+                            }]
+                        })
+                        .unwrap_or_default();
                     Some(NodeSnapshot {
                         node_data: NodeData::Array(meta, new_manifests),
                         ..node
@@ -353,7 +359,7 @@ impl ChangeSet {
         }
 
         let session_atts = self
-            .get_user_attributes(node.id)
+            .get_user_attributes(&node.id)
             .cloned()
             .map(|a| a.map(UserAttributesSnapshot::Inline));
         let new_atts = session_atts.unwrap_or(node.user_attributes);
@@ -361,7 +367,7 @@ impl ChangeSet {
             NodeData::Group => Some(NodeSnapshot { user_attributes: new_atts, ..node }),
             NodeData::Array(old_zarr_meta, _) => {
                 let new_zarr_meta = self
-                    .get_updated_zarr_metadata(node.id)
+                    .get_updated_zarr_metadata(&node.id)
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 

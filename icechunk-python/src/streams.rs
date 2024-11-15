@@ -62,7 +62,7 @@ impl PyAsyncGenerator {
 
         // TODO: Can we convert this is an async function or a coroutine in the next versions
         // of pyo3?
-        let result = pyo3_asyncio_0_21::tokio::future_into_py(py, future)?;
+        let result = pyo3_async_runtimes::tokio::future_into_py(py, future)?;
         Ok(Some(result.to_object(py)))
     }
 }

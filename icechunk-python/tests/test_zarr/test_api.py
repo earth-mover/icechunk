@@ -1,11 +1,14 @@
 import pathlib
+from typing import Literal
 
 import numpy as np
 import pytest
+from numpy.testing import assert_array_equal
+
 import zarr
 from icechunk import IcechunkStore
-from numpy.testing import assert_array_equal
-from zarr import Array, Group
+from tests.conftest import parse_store
+from zarr import Array, Group, group
 from zarr.abc.store import Store
 from zarr.api.synchronous import (
     create,
@@ -16,13 +19,13 @@ from zarr.api.synchronous import (
     save_array,
     save_group,
 )
-
-from ..conftest import parse_store
+from zarr.core.common import MemoryOrder, ZarrFormat
+from zarr.storage._utils import normalize_path
 
 
 @pytest.fixture(scope="function")
 async def memory_store() -> IcechunkStore:
-    return await parse_store("memory", "")
+    return parse_store("memory", "")
 
 
 def test_create_array(memory_store: Store) -> None:
@@ -46,6 +49,20 @@ def test_create_array(memory_store: Store) -> None:
     assert z.chunks == (40,)
 
 
+@pytest.mark.parametrize("path", ["foo", "/", "/foo", "///foo/bar"])
+@pytest.mark.parametrize("node_type", ["array", "group"])
+def test_open_normalized_path(
+    memory_store: IcechunkStore, path: str, node_type: Literal["array", "group"]
+) -> None:
+    node: Group | Array
+    if node_type == "group":
+        node = group(store=memory_store, path=path)
+    elif node_type == "array":
+        node = create(store=memory_store, path=path, shape=(2,))
+
+    assert node.path == normalize_path(path)
+
+
 async def test_open_array(memory_store: IcechunkStore) -> None:
     store = memory_store
 
@@ -55,7 +72,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     assert z.shape == (100,)
 
     # open array, overwrite
-    # _store_dict wont currently work with IcechunkStore
+    # _store_dict won't currently work with IcechunkStore
     # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
     store._store_dict = {}
@@ -66,10 +83,10 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
     # open array, read-only
     store_cls = type(store)
 
-    # _store_dict wont currently work with IcechunkStore
+    # _store_dict won't currently work with IcechunkStore
     # TODO: Should it?
 
-    ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
+    ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
     z = open(store=ro_store)
     assert isinstance(z, Array)
     assert z.shape == (200,)
@@ -96,13 +113,40 @@ async def test_open_group(memory_store: IcechunkStore) -> None:
 
     # open group, read-only
     store_cls = type(store)
-    # _store_dict wont currently work with IcechunkStore
+    # _store_dict won't currently work with IcechunkStore
     # TODO: Should it?
     pytest.xfail("IcechunkStore does not support _store_dict")
-    ro_store = await store_cls.open(store_dict=store._store_dict, mode="r")
+    ro_store = store_cls.open(store_dict=store._store_dict, mode="r")
     g = open_group(store=ro_store)
     assert isinstance(g, Group)
     # assert g.read_only
+
+
+@pytest.mark.parametrize("n_args", [10, 1, 0])
+@pytest.mark.parametrize("n_kwargs", [10, 1, 0])
+def test_save(memory_store: IcechunkStore, n_args: int, n_kwargs: int) -> None:
+    store = memory_store
+    data = np.arange(10)
+    args = [np.arange(10) for _ in range(n_args)]
+    kwargs = {f"arg_{i}": data for i in range(n_kwargs)}
+
+    if n_kwargs == 0 and n_args == 0:
+        with pytest.raises(ValueError):
+            save(store)
+    elif n_args == 1 and n_kwargs == 0:
+        save(store, *args)
+        array = open(store)
+        assert isinstance(array, Array)
+        assert_array_equal(array[:], data)
+    else:
+        save(store, *args, **kwargs)  # type: ignore[arg-type]
+        group = open(store)
+        assert isinstance(group, Group)
+        for array in group.array_values():
+            assert_array_equal(array[:], data)
+        for k in kwargs:
+            assert k in group
+        assert group.nmembers() == n_args + n_kwargs
 
 
 def test_save_errors() -> None:
@@ -115,6 +159,10 @@ def test_save_errors() -> None:
     with pytest.raises(ValueError):
         # no arrays provided
         save("data/group.zarr")
+    with pytest.raises(TypeError):
+        # mode is no valid argument and would get handled as an array
+        a = np.arange(10)
+        zarr.save("data/example.zarr", a, mode="w")
 
 
 def test_open_with_mode_r(tmp_path: pathlib.Path) -> None:
@@ -193,6 +241,22 @@ def test_open_with_mode_w_minus(tmp_path: pathlib.Path) -> None:
 #     assert_array_equal(foo, loader["foo"])
 #     assert_array_equal(bar, loader["bar"])
 #     assert "LazyLoader: " in repr(loader)
+
+
+@pytest.mark.parametrize("order", ["C", "F", None])
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_array_order(order: MemoryOrder | None, zarr_format: ZarrFormat) -> None:
+    arr = zarr.ones(shape=(2, 2), order=order, zarr_format=zarr_format)
+    expected = order or zarr.config.get("array.order")
+    assert arr.order == expected
+
+    vals = np.asarray(arr)
+    if expected == "C":
+        assert vals.flags.c_contiguous
+    elif expected == "F":
+        assert vals.flags.f_contiguous
+    else:
+        raise AssertionError
 
 
 def test_load_array(memory_store: Store) -> None:

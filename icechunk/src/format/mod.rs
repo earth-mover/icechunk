@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    ops::Bound,
+    ops::Range,
 };
 
 use bytes::Bytes;
@@ -43,14 +43,19 @@ pub struct ChunkTag;
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NodeTag;
+
 impl private::Sealed for SnapshotTag {}
 impl private::Sealed for ManifestTag {}
 impl private::Sealed for ChunkTag {}
 impl private::Sealed for AttributesTag {}
+impl private::Sealed for NodeTag {}
 impl FileTypeTag for SnapshotTag {}
 impl FileTypeTag for ManifestTag {}
 impl FileTypeTag for ChunkTag {}
 impl FileTypeTag for AttributesTag {}
+impl FileTypeTag for NodeTag {}
 
 // A 1e-9 conflict probability requires 2^33 ~ 8.5 bn chunks
 // using this site for the calculations: https://www.bdayprob.com/
@@ -58,6 +63,10 @@ pub type SnapshotId = ObjectId<12, SnapshotTag>;
 pub type ManifestId = ObjectId<12, ManifestTag>;
 pub type ChunkId = ObjectId<12, ChunkTag>;
 pub type AttributesId = ObjectId<12, AttributesTag>;
+
+// A 1e-9 conflict probability requires 2^17.55 ~ 200k nodes
+/// The internal id of an array or group, unique only to a single store version
+pub type NodeId = ObjectId<8, NodeTag>;
 
 impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub fn random() -> Self {
@@ -127,9 +136,6 @@ impl<'de, const SIZE: usize, T: FileTypeTag> Deserialize<'de> for ObjectId<SIZE,
     }
 }
 
-/// The internal id of an array or group, unique only to a single store version
-pub type NodeId = u32;
-
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 /// An ND index to an element in a chunk grid.
 pub struct ChunkIndices(pub Vec<u32>);
@@ -138,60 +144,47 @@ pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ByteRange(pub Bound<ChunkOffset>, pub Bound<ChunkOffset>);
+pub enum ByteRange {
+    /// The fixed length range represented by the given `Range`
+    Bounded(Range<ChunkOffset>),
+    /// All bytes from the given offset (included) to the end of the object
+    From(ChunkOffset),
+    /// Last n bytes in the object
+    Last(ChunkLength),
+}
+
+impl From<Range<ChunkOffset>> for ByteRange {
+    fn from(value: Range<ChunkOffset>) -> Self {
+        ByteRange::Bounded(value)
+    }
+}
 
 impl ByteRange {
     pub fn from_offset(offset: ChunkOffset) -> Self {
-        Self(Bound::Included(offset), Bound::Unbounded)
+        Self::From(offset)
     }
 
     pub fn from_offset_with_length(offset: ChunkOffset, length: ChunkOffset) -> Self {
-        Self(Bound::Included(offset), Bound::Excluded(offset + length))
+        Self::Bounded(offset..offset + length)
     }
 
     pub fn to_offset(offset: ChunkOffset) -> Self {
-        Self(Bound::Unbounded, Bound::Excluded(offset))
+        Self::Bounded(0..offset)
     }
 
     pub fn bounded(start: ChunkOffset, end: ChunkOffset) -> Self {
-        Self(Bound::Included(start), Bound::Excluded(end))
+        (start..end).into()
     }
 
-    pub fn length(&self) -> Option<u64> {
-        match (self.0, self.1) {
-            (_, Bound::Unbounded) => None,
-            (Bound::Unbounded, Bound::Excluded(end)) => Some(end),
-            (Bound::Unbounded, Bound::Included(end)) => Some(end + 1),
-            (Bound::Included(start), Bound::Excluded(end)) => Some(end - start),
-            (Bound::Excluded(start), Bound::Included(end)) => Some(end - start),
-            (Bound::Included(start), Bound::Included(end)) => Some(end - start + 1),
-            (Bound::Excluded(start), Bound::Excluded(end)) => Some(end - start - 1),
-        }
-    }
-
-    pub const ALL: Self = Self(Bound::Unbounded, Bound::Unbounded);
+    pub const ALL: Self = Self::From(0);
 
     pub fn slice(&self, bytes: Bytes) -> Bytes {
-        match (self.0, self.1) {
-            (Bound::Included(start), Bound::Excluded(end)) => {
-                bytes.slice(start as usize..end as usize)
+        match self {
+            ByteRange::Bounded(range) => {
+                bytes.slice(range.start as usize..range.end as usize)
             }
-            (Bound::Included(start), Bound::Unbounded) => bytes.slice(start as usize..),
-            (Bound::Unbounded, Bound::Excluded(end)) => bytes.slice(..end as usize),
-            (Bound::Excluded(start), Bound::Excluded(end)) => {
-                bytes.slice(start as usize + 1..end as usize)
-            }
-            (Bound::Excluded(start), Bound::Unbounded) => {
-                bytes.slice(start as usize + 1..)
-            }
-            (Bound::Unbounded, Bound::Included(end)) => bytes.slice(..=end as usize),
-            (Bound::Included(start), Bound::Included(end)) => {
-                bytes.slice(start as usize..=end as usize)
-            }
-            (Bound::Excluded(start), Bound::Included(end)) => {
-                bytes.slice(start as usize + 1..=end as usize)
-            }
-            (Bound::Unbounded, Bound::Unbounded) => bytes,
+            ByteRange::From(from) => bytes.slice(*from as usize..),
+            ByteRange::Last(n) => bytes.slice(bytes.len() - *n as usize..bytes.len()),
         }
     }
 }
@@ -199,12 +192,10 @@ impl ByteRange {
 impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
     fn from((start, end): (Option<ChunkOffset>, Option<ChunkOffset>)) -> Self {
         match (start, end) {
-            (Some(start), Some(end)) => {
-                Self(Bound::Included(start), Bound::Excluded(end))
-            }
-            (Some(start), None) => Self(Bound::Included(start), Bound::Unbounded),
-            (None, Some(end)) => Self(Bound::Unbounded, Bound::Excluded(end)),
-            (None, None) => Self(Bound::Unbounded, Bound::Unbounded),
+            (Some(start), Some(end)) => Self::Bounded(start..end),
+            (Some(start), None) => Self::From(start),
+            (None, Some(end)) => Self::Bounded(0..end),
+            (None, None) => Self::ALL,
         }
     }
 }

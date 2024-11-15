@@ -8,56 +8,44 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{
+    stream::{self, BoxStream},
+    StreamExt, TryStreamExt,
+};
 use object_store::{
     local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute,
-    AttributeValue, Attributes, GetOptions, GetRange, ObjectStore, PutMode, PutOptions,
-    PutPayload,
+    AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
+    PutOptions, PutPayload,
 };
 use std::{
-    fs::create_dir_all, future::ready, ops::Bound, path::Path as StdPath, sync::Arc,
+    fs::create_dir_all,
+    future::ready,
+    ops::Range,
+    path::Path as StdPath,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
-use super::{Storage, StorageError, StorageResult};
+use super::{
+    ListInfo, Storage, StorageError, StorageResult, CHUNK_PREFIX, MANIFEST_PREFIX,
+    REF_PREFIX, SNAPSHOT_PREFIX,
+};
 
 // Get Range is object_store specific, keep it with this module
 impl From<&ByteRange> for Option<GetRange> {
     fn from(value: &ByteRange) -> Self {
-        match (value.0, value.1) {
-            (Bound::Included(start), Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(start as usize..end as usize))
+        match value {
+            ByteRange::Bounded(Range { start, end }) => {
+                Some(GetRange::Bounded(*start as usize..*end as usize))
             }
-            (Bound::Included(start), Bound::Unbounded) => {
-                Some(GetRange::Offset(start as usize))
-            }
-            (Bound::Included(start), Bound::Included(end)) => {
-                Some(GetRange::Bounded(start as usize..end as usize + 1))
-            }
-            (Bound::Excluded(start), Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(start as usize + 1..end as usize))
-            }
-            (Bound::Excluded(start), Bound::Unbounded) => {
-                Some(GetRange::Offset(start as usize + 1))
-            }
-            (Bound::Excluded(start), Bound::Included(end)) => {
-                Some(GetRange::Bounded(start as usize + 1..end as usize + 1))
-            }
-            (Bound::Unbounded, Bound::Excluded(end)) => {
-                Some(GetRange::Bounded(0..end as usize))
-            }
-            (Bound::Unbounded, Bound::Included(end)) => {
-                Some(GetRange::Bounded(0..end as usize + 1))
-            }
-            (Bound::Unbounded, Bound::Unbounded) => None,
+            ByteRange::From(start) if *start == 0u64 => None,
+            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
+            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
         }
     }
 }
-
-const SNAPSHOT_PREFIX: &str = "snapshots/";
-const MANIFEST_PREFIX: &str = "manifests/";
-// const ATTRIBUTES_PREFIX: &str = "attributes/";
-const CHUNK_PREFIX: &str = "chunks/";
-const REF_PREFIX: &str = "refs";
 
 #[derive(Debug)]
 pub struct ObjectStorage {
@@ -72,7 +60,7 @@ pub struct ObjectStorage {
 }
 
 impl ObjectStorage {
-    /// Create an in memory Storage implementantion
+    /// Create an in memory Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub fn new_in_memory_store(prefix: Option<String>) -> ObjectStorage {
@@ -88,7 +76,7 @@ impl ObjectStorage {
         }
     }
 
-    /// Create an local filesystem Storage implementantion
+    /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, std::io::Error> {
@@ -104,15 +92,30 @@ impl ObjectStorage {
         })
     }
 
+    /// Return all keys in the store
+    ///
+    /// Intended for testing and debugging purposes only.
+    pub async fn all_keys(&self) -> StorageResult<Vec<String>> {
+        Ok(self
+            .store
+            .list(None)
+            .map_ok(|obj| obj.location.to_string())
+            .try_collect()
+            .await?)
+    }
+
+    fn get_path_str(&self, file_prefix: &str, id: &str) -> ObjectPath {
+        let path = format!("{}/{}/{}", self.prefix, file_prefix, id);
+        ObjectPath::from(path)
+    }
+
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
         id: &ObjectId<SIZE, T>,
     ) -> ObjectPath {
-        // TODO: be careful about allocation here
         // we serialize the url using crockford
-        let path = format!("{}/{}/{}", self.prefix, file_prefix, id);
-        ObjectPath::from(path)
+        self.get_path_str(file_prefix, id.to_string().as_str())
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
@@ -151,6 +154,17 @@ impl ObjectStorage {
                 )
             })
             .boxed()
+    }
+
+    async fn delete_batch(
+        &self,
+        prefix: &str,
+        batch: Vec<String>,
+    ) -> StorageResult<usize> {
+        let keys = batch.iter().map(|id| Ok(self.get_path_str(prefix, id)));
+        let results = self.store.delete_stream(stream::iter(keys).boxed());
+        // FIXME: flag errors instead of skipping them
+        Ok(results.filter(|res| ready(res.is_ok())).count().await)
     }
 }
 
@@ -361,4 +375,44 @@ impl Storage for ObjectStorage {
             })
             .map(|_| ())
     }
+
+    async fn list_objects<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let prefix = ObjectPath::from(format!("{}/{}", self.prefix.as_str(), prefix));
+        let stream = self
+            .store
+            .list(Some(&prefix))
+            // TODO: we should signal error instead of filtering
+            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))))
+            .err_into();
+        Ok(stream.boxed())
+    }
+
+    async fn delete_objects(
+        &self,
+        prefix: &str,
+        ids: BoxStream<'_, String>,
+    ) -> StorageResult<usize> {
+        let deleted = AtomicUsize::new(0);
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let deleted = &deleted;
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
+                    deleted.fetch_add(new_deletes, Ordering::Release);
+                }
+            })
+            .await;
+        Ok(deleted.into_inner())
+    }
+}
+
+fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
+    let created_at = object.last_modified;
+    let id = object.location.filename()?.to_string();
+    Some(ListInfo { id, created_at })
 }

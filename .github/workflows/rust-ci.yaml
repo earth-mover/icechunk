@@ -5,6 +5,9 @@ name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+    paths:
+      - 'icechunk/**'
+      - '.github/workflows/rust-ci.yaml'
   push:
     branches:
       - main

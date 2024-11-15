@@ -6,7 +6,6 @@ __pycache__/
 # imported files
 docs/icechunk-python/examples
 docs/icechunk-python/notebooks
-docs/spec.md
 
 # C extensions
 *.so

@@ -3,8 +3,9 @@ import time
 from dataclasses import dataclass
 from typing import cast
 
-import icechunk
 import numpy as np
+
+import icechunk
 import zarr
 from dask.distributed import Client
 
@@ -28,7 +29,7 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-async def mk_store(mode: str, task: Task):
+def mk_store(read_only: bool, task: Task):
     storage_config = icechunk.StorageConfig.s3_from_config(
         **task.storage_config,
         credentials=icechunk.S3Credentials(
@@ -38,9 +39,9 @@ async def mk_store(mode: str, task: Task):
     )
     store_config = icechunk.StoreConfig(**task.store_config)
 
-    store = await icechunk.IcechunkStore.open(
+    store = icechunk.IcechunkStore.open_or_create(
         storage=storage_config,
-        mode="a",
+        read_only=read_only,
         config=store_config,
     )
 
@@ -54,8 +55,8 @@ def generate_task_array(task: Task):
     return np.random.rand(nx, ny)
 
 
-async def execute_task(task: Task):
-    store = await mk_store("w", task)
+async def execute_task(task: Task) -> bytes:
+    store = mk_store(read_only=False, task=task)
 
     group = zarr.group(store=store, overwrite=False)
     array = cast(zarr.Array, group["array"])
@@ -120,7 +121,7 @@ async def test_distributed_writers():
         )
         for idx, area in enumerate(ranges)
     ]
-    store = await mk_store("r+", tasks[0])
+    store = mk_store(read_only=False, task=tasks[0])
     group = zarr.group(store=store, overwrite=True)
 
     n = CHUNKS_PER_DIM * CHUNK_DIM_SIZE
@@ -131,19 +132,21 @@ async def test_distributed_writers():
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snap = await store.commit("array created")
+    _first_snap = store.commit("array created")
 
     map_result = client.map(run_task, tasks)
-    change_sets_bytes = client.gather(map_result)
+    changes = client.gather(map_result)
 
     # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    commit_res = await store.distributed_commit("distributed commit", change_sets_bytes)
+    for change in changes:
+        store.merge(change)
+    commit_res = store.commit("distributed commit")
     assert commit_res
 
     # Lets open a new store to verify the results
-    store = await mk_store("r", tasks[0])
+    store = mk_store(read_only=False, task=tasks[0])
     all_keys = [key async for key in store.list_prefix("/")]
     assert (
         len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM

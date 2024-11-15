@@ -1,3 +1,4 @@
+use futures::{pin_mut, Stream, TryStreamExt};
 use itertools::Itertools;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 use thiserror::Error;
@@ -111,10 +112,10 @@ pub struct Manifest {
 impl Manifest {
     pub fn get_chunk_payload(
         &self,
-        node: NodeId,
+        node: &NodeId,
         coord: ChunkIndices,
     ) -> IcechunkResult<&ChunkPayload> {
-        self.chunks.get(&(node, coord)).ok_or_else(|| {
+        self.chunks.get(&(node.clone(), coord)).ok_or_else(|| {
             // FIXME: error
             IcechunkFormatError::ChunkCoordinatesNotFound { coords: ChunkIndices(vec![]) }
         })
@@ -122,9 +123,9 @@ impl Manifest {
 
     pub fn iter(
         self: Arc<Self>,
-        node: &NodeId,
+        node: NodeId,
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
-        PayloadIterator { manifest: self, for_node: *node, last_key: None }
+        PayloadIterator { manifest: self, for_node: node, last_key: None }
     }
 
     pub fn new(chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>) -> Self {
@@ -136,12 +137,28 @@ impl Manifest {
         }
     }
 
+    pub async fn from_stream<E>(
+        chunks: impl Stream<Item = Result<ChunkInfo, E>>,
+    ) -> Result<Self, E> {
+        let mut chunk_map = BTreeMap::new();
+        pin_mut!(chunks);
+        while let Some(chunk) = chunks.try_next().await? {
+            chunk_map.insert((chunk.node, chunk.coord), chunk.payload);
+        }
+        Ok(Self::new(chunk_map))
+    }
+
     pub fn chunks(&self) -> &BTreeMap<(NodeId, ChunkIndices), ChunkPayload> {
         &self.chunks
     }
 
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.chunks.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -171,7 +188,7 @@ impl Iterator for PayloadIterator {
                     .manifest
                     .chunks
                     .range((
-                        Bound::Included((self.for_node, ChunkIndices(vec![]))),
+                        Bound::Included((self.for_node.clone(), ChunkIndices(vec![]))),
                         Bound::Unbounded,
                     ))
                     .next()

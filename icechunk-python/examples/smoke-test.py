@@ -6,6 +6,7 @@ import time
 from typing import Literal
 
 import numpy as np
+
 import zarr
 from icechunk import IcechunkStore, S3Credentials, StorageConfig, StoreConfig
 from zarr.abc.store import Store
@@ -66,7 +67,7 @@ async def run(store: Store) -> None:
 
     first_commit = None
     if isinstance(store, IcechunkStore):
-        first_commit = await store.commit("initial commit")
+        first_commit = store.commit("initial commit")
 
     expected = {}
     expected["root-foo"] = create_array(
@@ -79,32 +80,32 @@ async def run(store: Store) -> None:
     group["root-foo"].attrs["update"] = "new attr"
 
     if isinstance(store, IcechunkStore):
-        _second_commit = await store.commit("added array, updated attr")
+        _second_commit = store.commit("added array, updated attr")
 
     assert len(group["root-foo"].attrs) == 2
     assert len(group.members()) == 1
 
     if isinstance(store, IcechunkStore) and first_commit is not None:
-        await store.checkout(first_commit)
+        store.checkout(first_commit)
     group.attrs["update"] = "new attr 2"
 
     if isinstance(store, IcechunkStore):
         try:
-            await store.commit("new attr 2")
+            store.commit("new attr 2")
         except ValueError:
             pass
         else:
             raise ValueError("should have conflicted")
 
-        await store.reset()  # FIXME: WHY
-        await store.checkout(branch="main")
+        store.reset()
+        store.checkout(branch="main")
 
     group["root-foo"].attrs["update"] = "new attr 2"
     if isinstance(store, IcechunkStore):
-        _third_commit = await store.commit("new attr 2")
+        _third_commit = store.commit("new attr 2")
 
         try:
-            await store.commit("rewrote array")
+            store.commit("rewrote array")
         except ValueError:
             pass
         else:
@@ -134,7 +135,7 @@ async def run(store: Store) -> None:
         fill_value=-1234,
     )
     if isinstance(store, IcechunkStore):
-        _fourth_commit = await store.commit("added groups and arrays")
+        _fourth_commit = store.commit("added groups and arrays")
 
     print(f"Write done in {time.time() - write_start} secs")
 
@@ -154,9 +155,9 @@ async def run(store: Store) -> None:
     print(f"Read done in {time.time() - read_start} secs")
 
 
-async def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
-    return await IcechunkStore.open(
-        storage=storage, mode="r+", config=StoreConfig(inline_chunk_threshold_bytes=1)
+def create_icechunk_store(*, storage: StorageConfig) -> IcechunkStore:
+    return IcechunkStore.open_or_create(
+        storage=storage, mode="w", config=StoreConfig(inline_chunk_threshold_bytes=1)
     )
 
 
@@ -173,7 +174,6 @@ async def create_zarr_store(*, store: Literal["memory", "local", "s3"]) -> Store
                 "anon": False,
                 "key": "minio123",
                 "secret": "minio123",
-                "region": "us-east-1",
                 "endpoint_url": "http://localhost:9000",
             },
         )
@@ -195,9 +195,9 @@ if __name__ == "__main__":
     )
 
     print("Icechunk store")
-    store = asyncio.run(create_icechunk_store(storage=MINIO))
+    store = create_icechunk_store(storage=MINIO)
     asyncio.run(run(store))
 
     print("Zarr store")
-    zarr_store = asyncio.run(create_zarr_store(store="local"))
+    zarr_store = asyncio.run(create_zarr_store(store="s3"))
     asyncio.run(run(zarr_store))

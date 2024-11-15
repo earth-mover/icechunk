@@ -13,7 +13,7 @@ use crate::{
     private,
 };
 
-use super::{Storage, StorageError, StorageResult};
+use super::{ListInfo, Storage, StorageError, StorageResult};
 
 #[derive(Debug)]
 pub struct MemCachingStorage {
@@ -163,6 +163,21 @@ impl Storage for MemCachingStorage {
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
     }
+
+    async fn list_objects<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend.list_objects(prefix).await
+    }
+
+    async fn delete_objects(
+        &self,
+        prefix: &str,
+        ids: BoxStream<'_, String>,
+    ) -> StorageResult<usize> {
+        self.backend.delete_objects(prefix, ids).await
+    }
 }
 
 #[cfg(test)]
@@ -174,7 +189,7 @@ mod test {
 
     use super::*;
     use crate::{
-        format::manifest::ChunkInfo,
+        format::{manifest::ChunkInfo, NodeId},
         repository::{ChunkIndices, ChunkPayload},
         storage::{logging::LoggingStorage, ObjectStorage, Storage},
     };
@@ -185,12 +200,12 @@ mod test {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
 
         let ci1 = ChunkInfo {
-            node: 1,
+            node: NodeId::random(),
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
         };
         let ci2 = ChunkInfo {
-            node: 1,
+            node: NodeId::random(),
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
@@ -248,18 +263,18 @@ mod test {
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
 
         let ci1 = ChunkInfo {
-            node: 1,
+            node: NodeId::random(),
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
         };
-        let ci2 = ChunkInfo { node: 2, ..ci1.clone() };
-        let ci3 = ChunkInfo { node: 3, ..ci1.clone() };
-        let ci4 = ChunkInfo { node: 4, ..ci1.clone() };
-        let ci5 = ChunkInfo { node: 5, ..ci1.clone() };
-        let ci6 = ChunkInfo { node: 6, ..ci1.clone() };
-        let ci7 = ChunkInfo { node: 7, ..ci1.clone() };
-        let ci8 = ChunkInfo { node: 8, ..ci1.clone() };
-        let ci9 = ChunkInfo { node: 9, ..ci1.clone() };
+        let ci2 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci3 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci4 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci5 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci6 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci7 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci8 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
         let id1 = ManifestId::random();
         let table1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());

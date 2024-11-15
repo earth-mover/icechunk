@@ -178,10 +178,14 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
     let change_sets = change_sets_bytes
         .map(|bytes| ChangeSet::import_from_bytes(bytes.as_slice()).unwrap());
 
+    // Merge the changesets into the first repo
+    for change_set in change_sets {
+        repo1.merge(change_set).await;
+    }
+
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
-    let _new_snapshot =
-        repo1.distributed_commit("main", change_sets, "distributed commit", None).await?;
+    let _new_snapshot = repo1.commit("main", "distributed commit", None).await?;
 
     // We check we can read all chunks correctly
     verify(repo1).await?;
