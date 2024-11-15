@@ -9,7 +9,7 @@ If you're not familiar with Zarr, you may want to start with the [Zarr Tutorial]
 Install Icechunk with pip
 
 ```python
-pip install icechunk 
+pip install icechunk
 ```
 
 !!! note

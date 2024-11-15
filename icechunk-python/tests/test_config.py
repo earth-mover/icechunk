@@ -1,7 +1,8 @@
 import os
 
-import icechunk
 import pytest
+
+import icechunk
 import zarr
 
 

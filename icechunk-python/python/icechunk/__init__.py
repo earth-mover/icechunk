@@ -2,12 +2,7 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable
 from typing import Any, Self
 
-from zarr.abc.store import ByteRangeRequest, Store
-from zarr.core.buffer import Buffer, BufferPrototype
-from zarr.core.common import BytesLike
-from zarr.core.sync import SyncMixin
-
-from ._icechunk_python import (
+from icechunk._icechunk_python import (
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
@@ -20,6 +15,10 @@ from ._icechunk_python import (
     pyicechunk_store_from_bytes,
     pyicechunk_store_open_existing,
 )
+from zarr.abc.store import ByteRangeRequest, Store
+from zarr.core.buffer import Buffer, BufferPrototype
+from zarr.core.common import BytesLike
+from zarr.core.sync import SyncMixin
 
 __all__ = [
     "__version__",
@@ -166,12 +165,12 @@ class IcechunkStore(Store, SyncMixin):
         """Return a read-only version of this store."""
         new_store = self._store.with_read_only(read_only=True)
         return self.__class__(store=new_store, read_only=True)
-    
+
     def as_writeable(self) -> Self:
         """Return a writeable version of this store."""
         new_store = self._store.with_read_only(read_only=False)
         return self.__class__(store=new_store, read_only=False)
-    
+
     def set_read_only(self) -> None:
         """Set the store to read-only mode."""
         self._store.set_read_only(read_only=True)
@@ -435,7 +434,7 @@ class IcechunkStore(Store, SyncMixin):
         including all groups and all arrays. But it will not modify the repository history.
         """
         return self._store.sync_clear()
-    
+
     async def is_empty(self, prefix: str) -> bool:
         """
         Check if the directory is empty.

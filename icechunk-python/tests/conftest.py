@@ -1,6 +1,7 @@
 from typing import Literal
 
 import pytest
+
 from icechunk import IcechunkStore, StorageConfig
 
 

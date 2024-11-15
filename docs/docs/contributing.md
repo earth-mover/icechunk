@@ -59,7 +59,7 @@ TODO
 
 ## Roadmap
 
-The initial release of Icechunk is just the beginning. We have a lot more planned for the format and the API. 
+The initial release of Icechunk is just the beginning. We have a lot more planned for the format and the API.
 
 ### Core format
 
@@ -87,7 +87,7 @@ On top of the foundation of the Icechunk format, we are looking to build a suite
 
 ### Zarr-related
 
-We’re very excited about a number of extensions to Zarr that would work great with Icechunk. 
+We’re very excited about a number of extensions to Zarr that would work great with Icechunk.
 
 - [Variable length chunks](https://zarr.dev/zeps/draft/ZEP0003.html)
 - [Chunk-level statistics](https://zarr.dev/zeps/draft/ZEP0005.html)

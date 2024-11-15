@@ -1,20 +1,20 @@
 import numpy as np
 import pytest
-from icechunk import IcechunkStore, StorageConfig
 from numpy.testing import assert_array_equal
-from zarr.core.sync import sync
+
+from icechunk import IcechunkStore, StorageConfig
 
 pytest.importorskip("hypothesis")
 
-import hypothesis.extra.numpy as npst  # noqa
-import hypothesis.strategies as st  # noqa
-from hypothesis import assume, settings, given, note, reproduce_failure  # noqa
-from zarr.testing.strategies import arrays, numpy_arrays, basic_indices  # noqa
+import hypothesis.strategies as st
+from hypothesis import assume, given, settings
+
+from zarr.testing.strategies import arrays, numpy_arrays
 
 readable_characters = st.characters(
-        # only use characters within the "Latin Extended-A" subset of unicode
-        categories=["L", "N", "P"],
-        max_codepoint=0x017F,
+    # only use characters within the "Latin Extended-A" subset of unicode
+    categories=["L", "N", "P"],
+    max_codepoint=0x017F,
 )
 _attr_keys = st.text(readable_characters, min_size=1)
 _attr_values = st.recursive(
@@ -30,12 +30,13 @@ icechunk_stores = st.builds(
     read_only=st.just(False),
 )
 
+
 @settings(report_multiple_bugs=False, deadline=None)
 @given(data=st.data(), nparray=numpy_arrays(zarr_formats=st.just(3)))
 def test_roundtrip(data: st.DataObject, nparray) -> None:
-    # TODO: support size-0 arrays
+    # TODO: support size-0 arrays GH392
     assume(nparray.size > 0)
-    # TODO: fix complex fill values
+    # TODO: fix complex fill values GH391
     assume(not np.iscomplexobj(nparray))
 
     zarray = data.draw(
@@ -43,6 +44,7 @@ def test_roundtrip(data: st.DataObject, nparray) -> None:
             stores=icechunk_stores,
             arrays=st.just(nparray),
             zarr_formats=st.just(3),
+            # TODO: use all attrs once fixed GH393
             attrs=simple_attrs,
         )
     )

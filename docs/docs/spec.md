@@ -32,7 +32,7 @@ The goals of the specification are as follows:
 
 ### Non Goals
 
-1. **Low Latency** - Icechunk is designed to support analytical workloads for large repositories. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
+1. **Low Latency** - Icechunk is designed to support analytical workloads for large repositories. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr.
 1. **No Catalog** - The spec does not extend beyond a single repository or provide a way to organize multiple repositories into a hierarchy.
 1. **Access Controls** - Access control is the responsibility of the storage medium.
 The spec is not designed to enable fine-grained access restrictions (e.g. only read specific arrays) within a single repository.
@@ -98,7 +98,7 @@ flowchart TD
     chunk3[Chunk File 3]
     chunk4[Chunk File 4]
     end
-    
+
     branch -- snapshot ID --> snapshot2
     snapshot1 --> attrs
     snapshot1 --> manifestA
@@ -109,7 +109,7 @@ flowchart TD
     manifestA --> chunk2
     manifestB --> chunk3
     manifestB --> chunk4
-    
+
 ```
 
 ### File Layout
@@ -215,7 +215,7 @@ Tags cannot be deleted once created.
 ### Snapshot Files
 
 The snapshot file fully describes the schema of the repository, including all arrays and groups.
- 
+
 The snapshot file is currently encoded using [MessagePack](https://msgpack.org/), but this may change before Icechunk version 1.0. Given the alpha status of this spec, the best way to understand the information stored
 in the snapshot file is through the data structure used internally by the Icechunk library for serialization. This data structure will most certainly change before the spec stabilization:
 
@@ -302,7 +302,7 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 A new repository is initialized by creating a new [possibly empty] snapshot file and then creating the first file in the main branch sequence.
 
-If another client attempts to initialize a repository in the same location, only one can succeed. 
+If another client attempts to initialize a repository in the same location, only one can succeed.
 
 ### Read from Repository
 
