@@ -61,7 +61,9 @@ async def test_distributed_writers():
         "allow_http": True,
     }
     store_config = {"inline_chunk_threshold_bytes": 5}
-    store = mk_store(read_only=False, storage_config=storage_config, store_config=store_config)
+    store = mk_store(
+        read_only=False, storage_config=storage_config, store_config=store_config
+    )
 
     shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
     dask_chunks = (CHUNK_DIM_SIZE * CHUNKS_PER_TASK,) * 2
@@ -82,7 +84,9 @@ async def test_distributed_writers():
     assert commit_res
 
     # Lets open a new store to verify the results
-    store = mk_store(read_only=True, storage_config=storage_config, store_config=store_config)
+    store = mk_store(
+        read_only=True, storage_config=storage_config, store_config=store_config
+    )
     all_keys = [key async for key in store.list_prefix("/")]
     assert (
         len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
