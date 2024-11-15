@@ -566,12 +566,7 @@ class IcechunkStore(Store, SyncMixin):
         ----------
         key : strz
         """
-        try:
-            return await self._store.delete(key)
-        except KeyError as _e:
-            # Zarr python expects no error if the key does not exist
-            # but an IcechunkStore returns an error if the key does not exist
-            pass
+        return await self._store.delete(key)
 
     @property
     def supports_partial_writes(self) -> bool:

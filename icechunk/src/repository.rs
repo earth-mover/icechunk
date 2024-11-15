@@ -426,7 +426,7 @@ impl Repository {
     ) -> RepositoryResult<()> {
         self.get_array(&path)
             .await
-            .map(|node| self.change_set.set_chunk_ref(node.id, coord, data))
+            .map(|node: NodeSnapshot| self.change_set.set_chunk_ref(node.id, coord, data))
     }
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {

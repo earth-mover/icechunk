@@ -720,9 +720,14 @@ impl Store {
                 // to avoid race conditions with other writers
                 // (remember this method takes &self and not &mut self)
                 let mut guard = self.repository.write().await;
-                let node = guard.get_node(&node_path).await.map_err(|_| {
-                    KeyNotFoundError::NodeNotFound { path: node_path.clone() }
-                })?;
+                let node = guard.get_node(&node_path).await;
+
+                // When there is no node at the given key, we don't consider it an error, instead we just do nothing
+                if let Err(RepositoryError::NodeNotFound { path: _, message: _ }) = node {
+                    return Ok(());
+                };
+
+                let node = node.map_err(StoreError::RepositoryError)?;
                 match node.node_data {
                     NodeData::Array(_, _) => {
                         Ok(guard.deref_mut().delete_array(node_path).await?)
@@ -735,7 +740,14 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 let mut guard = self.repository.write().await;
                 let repository = guard.deref_mut();
-                Ok(repository.set_chunk_ref(node_path, coords, None).await?)
+                match repository.set_chunk_ref(node_path, coords, None).await {
+                    Ok(_) => Ok(()),
+                    Err(RepositoryError::NodeNotFound { path: _, message: _ }) => {
+                        // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
+                        Ok(())
+                    }
+                    Err(err) => Err(StoreError::RepositoryError(err)),
+                }
             }
             Key::ZarrV2(_) => Ok(()),
         }
@@ -1784,6 +1796,9 @@ mod tests {
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
                 if path.to_string() == "/array",
         ));
+        // Deleting a non-existent key should not fail
+        store.delete("array/zarr.json").await.unwrap();
+
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
