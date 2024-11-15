@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 
-use super::{Storage, StorageError, StorageResult};
+use super::{ListInfo, Storage, StorageError, StorageResult};
 use crate::{
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
@@ -131,5 +131,20 @@ impl Storage for LoggingStorage {
         ref_name: &str,
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
+    }
+
+    async fn list_objects<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend.list_objects(prefix).await
+    }
+
+    async fn delete_objects(
+        &self,
+        prefix: &str,
+        ids: BoxStream<'_, String>,
+    ) -> StorageResult<usize> {
+        self.backend.delete_objects(prefix, ids).await
     }
 }

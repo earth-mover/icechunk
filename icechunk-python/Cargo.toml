@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-python"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.5"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -21,13 +21,13 @@ crate-type = ["cdylib"]
 bytes = "1.7.2"
 chrono = { version = "0.4.38" }
 futures = "0.3.30"
-icechunk = { path = "../icechunk", version = "0.1.0-alpha.3" }
-pyo3 = { version = "0.21", features = [
+icechunk = { path = "../icechunk", version = "0.1.0-alpha.4" }
+pyo3 = { version = "0.22", features = [
   "chrono",
   "extension-module",
   "experimental-async",
 ] }
-pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.22.0", features = ["tokio-runtime"] }
 async-stream = "0.3.5"
 thiserror = "1.0.64"
 tokio = "1.40"

@@ -98,7 +98,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     # Open the store,
     store = IcechunkStore.open_or_create(
         storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),
-        mode="w",
+        read_only=False,
         config=StoreConfig(
             virtual_ref_config=VirtualRefConfig.s3_anonymous(region="us-east-1", allow_http=False)
         ),
@@ -122,6 +122,3 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     assert len(depth_values) == 10
     actual_values = np.array([-0.95,-0.85,-0.75,-0.65,-0.55,-0.45,-0.35,-0.25,-0.15,-0.05])
     assert np.allclose(depth_values, actual_values)
-
-
-

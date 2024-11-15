@@ -11,7 +11,7 @@ async def tmp_store(tmpdir):
     store_path = f"{tmpdir}"
     store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(store_path),
-        mode="w",
+        read_only=False,
     )
 
     yield store
@@ -41,23 +41,23 @@ async def test_pickle(tmp_store):
 async def test_store_equality(tmpdir, tmp_store):
     assert tmp_store == tmp_store
 
-    local_store = await LocalStore.open(f"{tmpdir}/zarr", mode="w")
+    local_store = await LocalStore.open(f"{tmpdir}/zarr", read_only=False)
     assert tmp_store != local_store
 
     store2 = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.memory(prefix="test"),
-        mode="w",
+        read_only=False,
     )
     assert tmp_store != store2
 
     store3 = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
-        mode="a",
+        read_only=False,
     )
     assert tmp_store != store3
 
     store4 = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
-        mode="a",
+        read_only=False,
     )
     assert store3 == store4

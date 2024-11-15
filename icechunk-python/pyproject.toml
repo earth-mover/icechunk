@@ -16,11 +16,11 @@ classifiers = [
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0b1"]
+dependencies = ["zarr==3.0.0b2"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.5"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
 readme = "README.md"

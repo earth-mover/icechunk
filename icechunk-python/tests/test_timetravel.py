@@ -1,11 +1,14 @@
 import icechunk
 import zarr
+import zarr.core
+import zarr.core.buffer
 
 
 def test_timetravel():
     store = icechunk.IcechunkStore.create(
         storage=icechunk.StorageConfig.memory("test"),
         config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
+        read_only=False,
     )
 
     group = zarr.group(store=store, overwrite=True)
@@ -24,12 +27,18 @@ def test_timetravel():
     new_snapshot_id = store.commit("commit 2")
 
     store.checkout(snapshot_id=snapshot_id)
+    assert store.read_only
     assert air_temp[200, 6] == 42
 
     store.checkout(snapshot_id=new_snapshot_id)
+    assert store.read_only
     assert air_temp[200, 6] == 54
 
     store.checkout(branch="main")
+
+    store.set_writeable()
+    assert not store.read_only
+
     air_temp[:, :] = 76
     assert store.has_uncommitted_changes
     assert store.branch == "main"
@@ -82,3 +91,6 @@ async def test_branch_reset():
     assert "a/zarr.json" in keys
     assert "b/zarr.json" not in keys
 
+    assert (
+        await store.get("b/zarr.json", zarr.core.buffer.default_buffer_prototype())
+    ) is None

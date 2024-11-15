@@ -58,7 +58,12 @@ jobs:
       - name: Install cargo-release
         run: cargo install --locked cargo-release
 
+      - name: Setup git committer
+        run: |
+          git config --global user.email "joe@earthmover.io"
+          git config --global user.name "Joe Hamman"
+          
       - name: publish to crates
-        run: cargo release --tag-prefix icechunk-rust --execute
+        run: cargo release --no-confirm --tag-prefix icechunk-rust --execute
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

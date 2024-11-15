@@ -5,7 +5,8 @@ from typing import Any
 
 class PyIcechunkStore:
     def as_bytes(self) -> bytes: ...
-    def with_mode(self, read_only: bool) -> PyIcechunkStore: ...
+    def set_read_only(self, read_only: bool) -> None: ...
+    def with_read_only(self, read_only: bool) -> PyIcechunkStore: ...
     @property
     def snapshot_id(self) -> str: ...
     def change_set_bytes(self) -> bytes: ...
@@ -17,18 +18,14 @@ class PyIcechunkStore:
     async def async_checkout_branch(self, branch: str) -> None: ...
     def checkout_tag(self, tag: str) -> None: ...
     async def async_checkout_tag(self, tag: str) -> None: ...
-    def distributed_commit(
-        self, message: str, other_change_set_bytes: list[bytes]
-    ) -> str: ...
-    async def async_distributed_commit(
-        self, message: str, other_change_set_bytes: list[bytes]
-    ) -> str: ...
     def commit(self, message: str) -> str: ...
     async def async_commit(self, message: str) -> str: ...
     @property
     def has_uncommitted_changes(self) -> bool: ...
-    def reset(self) -> None: ...
-    async def async_reset(self) -> None: ...
+    def reset(self) -> bytes: ...
+    async def async_reset(self) -> bytes: ...
+    def merge(self, changes: bytes) -> None: ...
+    async def async_merge(self, changes: bytes) -> None: ...
     def new_branch(self, branch_name: str) -> str: ...
     async def async_new_branch(self, branch_name: str) -> str: ...
     def reset_branch(self, snapshot_id: str) -> None: ...
@@ -37,7 +34,7 @@ class PyIcechunkStore:
     async def async_tag(self, tag: str, snapshot_id: str) -> None: ...
     def ancestry(self) -> list[SnapshotMetadata]: ...
     def async_ancestry(self) -> PyAsyncSnapshotGenerator: ...
-    async def empty(self) -> bool: ...
+    async def is_empty(self, prefix: str) -> bool: ...
     async def clear(self) -> None: ...
     def sync_clear(self) -> None: ...
     async def get(
@@ -104,27 +101,7 @@ class StorageConfig:
     storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
     ```
     """
-    class Memory:
-        """Config for an in-memory storage backend"""
 
-        prefix: str
-
-    class Filesystem:
-        """Config for a local filesystem storage backend"""
-
-        root: str
-
-    class S3:
-        """Config for an S3 Object Storage compatible storage backend"""
-
-        bucket: str
-        prefix: str
-        credentials: S3Credentials | None
-        endpoint_url: str | None
-        allow_http: bool | None
-        region: str | None
-
-    def __init__(self, storage: Memory | Filesystem | S3): ...
     @classmethod
     def memory(cls, prefix: str) -> StorageConfig:
         """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
@@ -136,7 +113,14 @@ class StorageConfig:
         ...
 
     @classmethod
-    def s3_from_env(cls, bucket: str, prefix: str) -> StorageConfig:
+    def s3_from_env(
+        cls,
+        bucket: str,
+        prefix: str,
+        endpoint_url: str | None,
+        allow_http: bool = False,
+        region: str | None = None,
+    ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage backend
         with the given bucket and prefix
 
@@ -157,7 +141,7 @@ class StorageConfig:
         prefix: str,
         credentials: S3Credentials,
         endpoint_url: str | None,
-        allow_http: bool | None = None,
+        allow_http: bool = False,
         region: str | None = None,
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
@@ -174,7 +158,7 @@ class StorageConfig:
         bucket: str,
         prefix: str,
         endpoint_url: str | None,
-        allow_http: bool | None = None,
+        allow_http: bool = False,
         region: str | None = None,
     ) -> StorageConfig:
         """Create a StorageConfig object for an S3 Object Storage compatible storage
@@ -248,12 +232,6 @@ class VirtualRefConfig:
         """
         ...
 
-class KeyNotFound(Exception):
-    def __init__(
-        self,
-        info: Any
-    ): ...
-
 class StoreConfig:
     """Configuration for an IcechunkStore"""
 
@@ -274,7 +252,7 @@ class StoreConfig:
         inline_chunk_threshold_bytes: int | None = None,
         unsafe_overwrite_refs: bool | None = None,
         virtual_ref_config: VirtualRefConfig | None = None,
-    ): 
+    ):
         """Create a StoreConfig object with the given configuration options
 
         Parameters
@@ -289,24 +267,22 @@ class StoreConfig:
             Whether to allow overwriting refs in the store. Default is False. Experimental.
         virtual_ref_config: VirtualRefConfig | None
             Configurations for virtual references such as credentials and endpoints
-        
+
         Returns
         -------
         StoreConfig
             A StoreConfig object with the given configuration options
-        """    
+        """
         ...
 
 async def async_pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
 def pyicechunk_store_exists(storage: StorageConfig) -> bool: ...
-
 async def async_pyicechunk_store_create(
     storage: StorageConfig, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
 def pyicechunk_store_create(
     storage: StorageConfig, config: StoreConfig | None
 ) -> PyIcechunkStore: ...
-
 async def async_pyicechunk_store_open_existing(
     storage: StorageConfig, read_only: bool, config: StoreConfig | None
 ) -> PyIcechunkStore: ...

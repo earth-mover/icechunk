@@ -10,7 +10,7 @@ async def tmp_store(tmpdir):
     store_path = f"{tmpdir}"
     store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(store_path),
-        mode="a",
+        read_only=False,
         config=icechunk.StoreConfig(inline_chunk_threshold_bytes=5),
     )
 

@@ -36,7 +36,7 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
         store.put(key, data)
 
 
-def mk_store(mode):
+def mk_store(read_only: bool):
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
     store = ic.IcechunkStore.open_or_create(
@@ -53,7 +53,7 @@ def mk_store(mode):
                 region="us-east-1",
             ),
         ),
-        mode=mode,
+        read_only=read_only,
     )
     return store
 
@@ -69,7 +69,7 @@ async def write_a_test_repo():
     """
 
     print("Writing repository to ./tests/data/test-repo")
-    store = mk_store("w")
+    store = mk_store(read_only=False)
 
     root = zarr.group(store=store)
     group1 = root.create_group(
@@ -142,7 +142,7 @@ async def write_a_test_repo():
 
 
 async def test_icechunk_can_read_old_repo():
-    store = mk_store("r")
+    store = mk_store(read_only=True)
 
     expected_main_history = [
         "set virtual chunk",
@@ -165,7 +165,7 @@ async def test_icechunk_can_read_old_repo():
     store.checkout(tag="it works!")
     assert [p.message for p in store.ancestry()] == expected_branch_history[1:]
 
-    store = mk_store("r")
+    store = mk_store(read_only=False)
     store.checkout(branch="my-branch")
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
@@ -192,9 +192,9 @@ async def test_icechunk_can_read_old_repo():
     ]
     assert sorted(
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
-    ) == ["zarr.json"]
+    ) == ["c", "zarr.json"]
 
-    root = zarr.group(store=store)
+    root = zarr.group(store=store.as_writeable())
     # inner is not initialized, so it's all fill values
     inner = root["group2/group3/group4/group5/inner"]
     assert_array_equal(inner[:], float("nan"))

@@ -19,7 +19,7 @@ build-release *args='':
 
 # run clippy
 lint *args='':
-  cargo clippy -p icechunk -p icechunk-python --all-features {{args}}
+  cargo clippy --all-features {{args}}
 
 # reformat all rust files
 format *args='':
@@ -41,7 +41,11 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just compile-tests "--locked"
   just build
   just format "--check"
-  just lint
+  just lint "-p icechunk -p icechunk-python"
   just test
   just run-all-examples
   just check-deps
+
+pre-commit-python:
+  just format "--check -p icechunk-python"
+  just lint "-p icechunk-python"

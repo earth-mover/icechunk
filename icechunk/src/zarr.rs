@@ -29,9 +29,10 @@ use crate::{
     },
     refs::{update_branch, BranchVersion, Ref, RefError},
     repository::{
-        get_chunk, ArrayShape, ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape,
-        Codec, DataType, DimensionNames, FillValue, Path, RepositoryError,
-        RepositoryResult, StorageTransformer, UserAttributes, ZarrArrayMetadata,
+        get_chunk, raise_if_invalid_snapshot_id, ArrayShape, ChunkIndices,
+        ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, DimensionNames,
+        FillValue, Path, RepositoryError, RepositoryResult, StorageTransformer,
+        UserAttributes, ZarrArrayMetadata,
     },
     storage::{
         s3::{S3Config, S3Storage},
@@ -275,6 +276,8 @@ pub enum StoreError {
     NotFound(#[from] KeyNotFoundError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
+    #[error("error merging stores: `{0}`")]
+    MergeError(String),
     #[error("unsuccessful ref operation: `{0}`")]
     RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
@@ -346,6 +349,10 @@ impl Store {
         }
     }
 
+    pub fn set_mode(&mut self, mode: AccessMode) {
+        self.mode = mode;
+    }
+
     /// Creates a new clone of the store with the given access mode.
     pub fn with_access_mode(&self, mode: AccessMode) -> Self {
         Store {
@@ -382,22 +389,18 @@ impl Store {
 
     /// Resets the store to the head commit state. If there are any uncommitted changes, they will
     /// be lost.
-    pub async fn reset(&mut self) -> StoreResult<()> {
-        let guard = self.repository.read().await;
-        // carefully avoid the deadlock if we were to call self.snapshot_id()
-        let head_snapshot = guard.snapshot_id().clone();
-        let storage = Arc::clone(guard.storage());
-        let new_repository = Repository::update(storage, head_snapshot).build();
-        drop(guard);
-        self.repository = Arc::new(RwLock::new(new_repository));
-
-        Ok(())
+    pub async fn reset(&mut self) -> StoreResult<ChangeSet> {
+        Ok(self.repository.write().await.discard_changes())
     }
 
     /// Checkout a specific version of the repository. This can be a snapshot id, a tag, or a branch tip.
     ///
-    /// If the version is a branch tip, the branch will be set as the current branch. If the version
-    /// is a tag or snapshot id, the current branch will be unset and the store will be in detached state.
+    /// If the version is a branch tip, the branch will be set as the current branch.
+    /// The current [`AccessMode`] will be unchanged.
+    ///
+    /// If the version is a tag or snapshot id, the current branch will be unset and the store
+    /// will be in detached state. No commits are allowed in this state. Further the store will
+    /// be set to [`AccessMode::ReadOnly`] mode so that any attempts to modify the store will fail.
     ///
     /// If there are uncommitted changes, this method will return an error.
     pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
@@ -411,11 +414,14 @@ impl Store {
         match version {
             VersionInfo::SnapshotId(sid) => {
                 self.current_branch = None;
+                raise_if_invalid_snapshot_id(repo.storage().as_ref(), &sid).await?;
                 repo.set_snapshot_id(sid);
+                self.mode = AccessMode::ReadOnly;
             }
             VersionInfo::TagRef(tag) => {
                 self.current_branch = None;
-                repo.set_snapshot_from_tag(tag.as_str()).await?
+                repo.set_snapshot_from_tag(tag.as_str()).await?;
+                self.mode = AccessMode::ReadOnly;
             }
             VersionInfo::BranchTipRef(branch) => {
                 self.current_branch = Some(branch.clone());
@@ -462,8 +468,9 @@ impl Store {
         match self.current_branch() {
             None => Err(StoreError::NotOnBranch),
             Some(branch) => {
-                let old_snapshot = guard.snapshot_id();
                 let storage = guard.storage();
+                raise_if_invalid_snapshot_id(storage.as_ref(), &to_snapshot).await?;
+                let old_snapshot = guard.snapshot_id();
                 let overwrite = guard.config().unsafe_overwrite_refs;
                 let version = update_branch(
                     storage.as_ref(),
@@ -479,37 +486,29 @@ impl Store {
         }
     }
 
-    /// Commit the current changes to the current branch. If the store is not currently
-    /// on a branch, this will return an error.
-    pub async fn commit(&mut self, message: &str) -> StoreResult<SnapshotId> {
-        self.distributed_commit(message, vec![]).await
+    pub async fn merge(&self, changes: ChangeSet) {
+        self.repository.write().await.merge(changes).await;
     }
 
-    pub async fn distributed_commit<'a, I: IntoIterator<Item = Vec<u8>>>(
-        &mut self,
-        message: &str,
-        other_changesets_bytes: I,
-    ) -> StoreResult<SnapshotId> {
-        if let Some(branch) = &self.current_branch {
-            let other_change_sets: Vec<ChangeSet> = other_changesets_bytes
-                .into_iter()
-                .map(|v| ChangeSet::import_from_bytes(v.as_slice()))
-                .try_collect()?;
-            let result = self
-                .repository
-                .write()
-                .await
-                .deref_mut()
-                .distributed_commit(branch, other_change_sets, message, None)
-                .await?;
-            Ok(result)
-        } else {
-            Err(StoreError::NotOnBranch)
-        }
+    /// Commit the current changes to the current branch. If the store is not currently
+    /// on a branch, this will return an error.
+    pub async fn commit(&self, message: &str) -> StoreResult<SnapshotId> {
+        let Some(branch) = &self.current_branch else {
+            return Err(StoreError::NotOnBranch);
+        };
+
+        let result = self
+            .repository
+            .write()
+            .await
+            .deref_mut()
+            .commit(branch, message, None)
+            .await?;
+        Ok(result)
     }
 
     /// Tag the given snapshot with a specified tag
-    pub async fn tag(&mut self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
+    pub async fn tag(&self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
         self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
         Ok(())
     }
@@ -528,9 +527,9 @@ impl Store {
         Ok(self.repository.read().await.change_set_bytes()?)
     }
 
-    pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.repository.read().await.list_nodes().await?.next().is_none();
-        Ok(res)
+    pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
+        let res = self.list_dir(prefix).await?.next().await;
+        Ok(res.is_none())
     }
 
     pub async fn clear(&mut self) -> StoreResult<()> {
@@ -721,9 +720,14 @@ impl Store {
                 // to avoid race conditions with other writers
                 // (remember this method takes &self and not &mut self)
                 let mut guard = self.repository.write().await;
-                let node = guard.get_node(&node_path).await.map_err(|_| {
-                    KeyNotFoundError::NodeNotFound { path: node_path.clone() }
-                })?;
+                let node = guard.get_node(&node_path).await;
+
+                // When there is no node at the given key, we don't consider it an error, instead we just do nothing
+                if let Err(RepositoryError::NodeNotFound { path: _, message: _ }) = node {
+                    return Ok(());
+                };
+
+                let node = node.map_err(StoreError::RepositoryError)?;
                 match node.node_data {
                     NodeData::Array(_, _) => {
                         Ok(guard.deref_mut().delete_array(node_path).await?)
@@ -736,7 +740,14 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 let mut guard = self.repository.write().await;
                 let repository = guard.deref_mut();
-                Ok(repository.set_chunk_ref(node_path, coords, None).await?)
+                match repository.set_chunk_ref(node_path, coords, None).await {
+                    Ok(_) => Ok(()),
+                    Err(RepositoryError::NodeNotFound { path: _, message: _ }) => {
+                        // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
+                        Ok(())
+                    }
+                    Err(err) => Err(StoreError::RepositoryError(err)),
+                }
             }
             Key::ZarrV2(_) => Ok(()),
         }
@@ -1033,6 +1044,10 @@ async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
     match get_key(key, &ByteRange::ALL, repo).await {
         Ok(_) => Ok(true),
         Err(StoreError::NotFound(_)) => Ok(false),
+        Err(StoreError::RepositoryError(RepositoryError::NodeNotFound {
+            path: _,
+            message: _,
+        })) => Ok(false),
         Err(other_error) => Err(other_error),
     }
 }
@@ -1781,6 +1796,9 @@ mod tests {
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
                 if path.to_string() == "/array",
         ));
+        // Deleting a non-existent key should not fail
+        store.delete("array/zarr.json").await.unwrap();
+
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
@@ -1801,7 +1819,7 @@ mod tests {
         let storage =
             Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
         let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
+        let store = Store::from_repository(
             ds,
             AccessMode::ReadWrite,
             Some("main".to_string()),
@@ -1949,7 +1967,7 @@ mod tests {
             None,
         );
 
-        assert!(store.empty().await.unwrap());
+        assert!(store.is_empty("").await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
 
         assert_eq!(all_keys(&store).await.unwrap(), Vec::<String>::new());
@@ -1961,7 +1979,7 @@ mod tests {
             )
             .await?;
 
-        assert!(!store.empty().await.unwrap());
+        assert!(!store.is_empty("").await.unwrap());
         assert!(store.exists("zarr.json").await.unwrap());
         assert_eq!(all_keys(&store).await.unwrap(), vec!["zarr.json".to_string()]);
         store
@@ -1982,7 +2000,7 @@ mod tests {
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("group/array/zarr.json", zarr_meta).await?;
-        assert!(!store.empty().await.unwrap());
+        assert!(!store.is_empty("").await.unwrap());
         assert!(store.exists("zarr.json").await.unwrap());
         assert!(store.exists("group/array/zarr.json").await.unwrap());
         assert!(store.exists("group/zarr.json").await.unwrap());
@@ -2331,12 +2349,26 @@ mod tests {
 
         let new_snapshot_id = store.commit("update").await.unwrap();
 
+        let random_id = SnapshotId::random();
+        let res = store.checkout(VersionInfo::SnapshotId(random_id.clone())).await;
+        assert!(matches!(
+            res,
+            Err(StoreError::RepositoryError(RepositoryError::SnapshotNotFound { .. }))
+        ));
+
         store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
+        assert_eq!(store.mode, AccessMode::ReadOnly);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        store.checkout(VersionInfo::SnapshotId(new_snapshot_id)).await.unwrap();
+        store.checkout(VersionInfo::SnapshotId(new_snapshot_id.clone())).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
+        store.tag("tag_0", &new_snapshot_id).await.unwrap();
+        store.checkout(VersionInfo::TagRef("tag_0".to_string())).await.unwrap();
+        assert_eq!(store.mode, AccessMode::ReadOnly);
+
+        store.checkout(VersionInfo::BranchTipRef("main".to_string())).await.unwrap();
+        store.set_mode(AccessMode::ReadWrite);
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(store.has_uncommitted_changes().await, true);

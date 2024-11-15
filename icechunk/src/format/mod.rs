@@ -43,14 +43,19 @@ pub struct ChunkTag;
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NodeTag;
+
 impl private::Sealed for SnapshotTag {}
 impl private::Sealed for ManifestTag {}
 impl private::Sealed for ChunkTag {}
 impl private::Sealed for AttributesTag {}
+impl private::Sealed for NodeTag {}
 impl FileTypeTag for SnapshotTag {}
 impl FileTypeTag for ManifestTag {}
 impl FileTypeTag for ChunkTag {}
 impl FileTypeTag for AttributesTag {}
+impl FileTypeTag for NodeTag {}
 
 // A 1e-9 conflict probability requires 2^33 ~ 8.5 bn chunks
 // using this site for the calculations: https://www.bdayprob.com/
@@ -58,6 +63,10 @@ pub type SnapshotId = ObjectId<12, SnapshotTag>;
 pub type ManifestId = ObjectId<12, ManifestTag>;
 pub type ChunkId = ObjectId<12, ChunkTag>;
 pub type AttributesId = ObjectId<12, AttributesTag>;
+
+// A 1e-9 conflict probability requires 2^17.55 ~ 200k nodes
+/// The internal id of an array or group, unique only to a single store version
+pub type NodeId = ObjectId<8, NodeTag>;
 
 impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub fn random() -> Self {
@@ -126,9 +135,6 @@ impl<'de, const SIZE: usize, T: FileTypeTag> Deserialize<'de> for ObjectId<SIZE,
         ObjectId::try_from(s.as_str()).map_err(serde::de::Error::custom)
     }
 }
-
-/// The internal id of an array or group, unique only to a single store version
-pub type NodeId = u32;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 /// An ND index to an element in a chunk grid.
