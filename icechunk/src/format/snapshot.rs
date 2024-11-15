@@ -14,10 +14,9 @@ use crate::metadata::{
 };
 
 use super::{
-    format_constants, manifest::ManifestRef, AttributesId, 
-    ChunkIndices, IcechunkFormatError, IcechunkFormatVersion, 
-    IcechunkResult, ManifestId, NodeId, ObjectId, Path, SnapshotId,
-    TableOffset,
+    format_constants, manifest::ManifestRef, AttributesId, IcechunkFormatError,
+    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
+    SnapshotId, TableOffset, ChunkIndices
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +51,14 @@ pub struct ZarrArrayMetadata {
 
 impl ZarrArrayMetadata {
 
+    /// Returns an iterator over the maximum permitted chunk indices for the array.
+    ///
+    /// This function calculates the maximum chunk indices based on the shape of the array
+    /// and the chunk shape.
+    ///
+    /// # Returns
+    ///
+    /// An iterator over the maximum permitted chunk indices.
     fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u64> + '_ {
         self.shape
             .iter()
@@ -59,19 +66,22 @@ impl ZarrArrayMetadata {
             .map(|(s, cs)| ((s + cs.get() - 1)) / cs.get() - 1)
     }
 
+    /// Validates the provided chunk coordinates for the array.
+    ///
+    /// This function checks if the provided chunk indices are valid for the array.
+    ///
+    /// # Arguments
+    ///
+    /// * `coord` - The chunk indices to validate.
+    ///
+    /// # Returns
+    ///
+    /// An `IcechunkResult` indicating whether the chunk coordinates are valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IcechunkFormatError::ChunkCoordinatesNotFound` if the chunk coordinates are invalid.
     pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> IcechunkResult<bool> {
-
-        // Check if provided chunk indices are valid for array
-        // For example, given an array with shape (10000, 10000) 
-        // and chunk shape (1000, 1000) there will be 100 chunks 
-        // laid out in a 10 by 10 grid. The chunk with indices (0, 0) 
-        // provides data for rows 0-999 and columns 0-999 and is stored 
-        // under the key “0.0”; the chunk with indices (2, 4) provides data 
-        // for rows 2000-2999 and columns 4000-4999 and is stored under the 
-        // key “2.4”; etc. 
-
-        // assert_eq!(self.shape.len(), self.chunk_shape.len());
-
 
         let valid: bool = coord
                     .0

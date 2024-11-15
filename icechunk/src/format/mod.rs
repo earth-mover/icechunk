@@ -259,11 +259,11 @@ impl Path {
 
     pub fn new(path: &str) -> Result<Path, PathError> {
         let buf = Utf8UnixPathBuf::from(path);
-        if (!buf.is_absolute()) {
+        if !buf.is_absolute() {
             return Err(PathError::NotAbsolute);
         }
 
-        if (buf.normalize() != buf) {
+        if buf.normalize() != buf {
             return Err(PathError::NotCanonic);
         }
         Ok(Path(buf))
