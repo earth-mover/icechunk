@@ -50,10 +50,10 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
-          target: ${{ matrix.platform.target }}
+          # target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
-          manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
       - name: Cargo lint + format
         shell: bash

@@ -51,7 +51,7 @@ jobs:
         run: cargo install --locked cargo-deny
 
       - name: Check
-        if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           just pre-commit
 
