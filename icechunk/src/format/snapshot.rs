@@ -51,7 +51,15 @@ pub struct ZarrArrayMetadata {
 }
 
 impl ZarrArrayMetadata {
-    pub fn chunk_indicies_valid(&self, chunk_indices: &ChunkIndices) -> bool {
+
+    fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u64> + '_ {
+        self.shape
+            .iter()
+            .zip(self.chunk_shape.0.iter())
+            .map(|(s, cs)| ((s + cs.get() - 1)) / cs.get() - 1)
+    }
+
+    pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> IcechunkResult<bool> {
 
         // Check if provided chunk indices are valid for array
         // For example, given an array with shape (10000, 10000) 
@@ -60,28 +68,22 @@ impl ZarrArrayMetadata {
         // provides data for rows 0-999 and columns 0-999 and is stored 
         // under the key “0.0”; the chunk with indices (2, 4) provides data 
         // for rows 2000-2999 and columns 4000-4999 and is stored under the 
-        //key “2.4”; etc.
+        // key “2.4”; etc. 
 
-        assert_eq!(self.shape.len(), self.chunk_shape.len());
+        // assert_eq!(self.shape.len(), self.chunk_shape.len());
 
-        let mut num_chunks: u64;
-        let mut max_chunk_index: u64;
-        let mut requested_chunk_index: &u32;
-        let mut chunk_shape: &NonZeroU64;
-        for i in 0..self.shape.len() {
-            chunk_shape = self.chunk_shape.get(i).unwrap();
-            num_chunks = (self.shape[i] +  chunk_shape - 1) / chunk_shape;
-            max_chunk_index = num_chunks - 1;
-            requested_chunk_index = chunk_indices.get(i).unwrap();
-            if max_chunk_index > *requested_chunk_index as u64 {
-                continue;
-            } else {
-                return false;
-            }
 
+        let valid: bool = coord
+                    .0
+                    .iter()
+                    .zip(self.max_chunk_indices_permitted())
+                    .all(|(index, index_permitted)| *index <= index_permitted as u32);
+        
+        if valid {
+            Ok(true)
+        } else {
+            Err(IcechunkFormatError::ChunkCoordinatesNotFound { coords: (coord.clone()) })
         }
-        return true;
-
 
     }
 }

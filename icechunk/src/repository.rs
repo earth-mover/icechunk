@@ -511,19 +511,19 @@ impl Repository {
         data: Option<ChunkPayload>,
     ) -> RepositoryResult<()> {
 
-         let zarr_array = match self.get_array(&path).await {
-            res @ Ok(NodeSnapshot {node_data: NodeData::Array(zarr_metadata, _), ..}) => {
-                if !zarr_metadata.chunk_indicies_valid(&coord) {
-                    // error!
-                } else {
-                    // no error!
-                }
-            },
+        let node_snapshot = self.get_array(&path).await?;
 
-        };
-        zarr_array
-            .await
-            .map(|node: NodeSnapshot| self.change_set.set_chunk_ref(node.id, coord, data))
+        if let NodeData::Array(zarr_metadata, _, ) = node_snapshot.node_data {
+            zarr_metadata.valid_chunk_coord(&coord)?;
+            self.change_set.set_chunk_ref(node_snapshot.id, coord, data);  
+            Ok(())         
+        } else {
+            Err(RepositoryError::NotAnArray {
+                node: node_snapshot,
+                message: "getting an array".to_string(),
+            })
+        }
+        
     }
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
