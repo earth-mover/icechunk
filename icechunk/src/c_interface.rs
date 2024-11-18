@@ -1,4 +1,4 @@
-use libc::{c_char,c_int,c_void};
+use libc::{c_char,c_int};
 use std::boxed::Box;
 use std::sync::Arc;
 use std::ffi::CStr;
@@ -63,12 +63,14 @@ pub unsafe extern "C" fn icechunk_add_group(ptr: *mut Repository, group_name_ptr
     //Block until finished
     let res = block_on(fut);
     // Put the box into a raw pointer to prevent it from being cleaned
-    _ = Box::into_raw(ds);
+    let _ = Box::into_raw(ds);
     match res {
         Ok(_) => return 0,
         Err(_) => return -1, 
     }
 }
+
+
 
 #[no_mangle]
 pub extern "C" fn icechunk_free_repository(repo: *mut Repository)->c_int {
@@ -79,3 +81,4 @@ pub extern "C" fn icechunk_free_repository(repo: *mut Repository)->c_int {
     }
     return 0
 }
+
