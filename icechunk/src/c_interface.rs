@@ -19,7 +19,10 @@ pub extern "C" fn create_inmemory_repository(ptr: *mut *mut Repository)->c_int {
         Arc::new(MemCachingStorage::new(Arc::clone(&storage), 2, 2, 0, 0)),
         false,
     );
-    let ds_finished = block_on(ds).unwrap().build();
+    let ds_finished = match block_on(ds) {
+        Ok(inst) => inst.build(),
+        Err(_) => return -1
+    };
     unsafe {
         *ptr = null_mut();
         *ptr = Box::into_raw(Box::new(ds_finished));
@@ -32,26 +35,39 @@ pub extern "C" fn create_inmemory_repository(ptr: *mut *mut Repository)->c_int {
 pub unsafe extern "C" fn icechunk_add_root_group(ptr: *mut Repository)->c_int {
     let mut ds: Box<Repository> = Box::from_raw(ptr);
     let fut = ds.add_group(Path::root());
-    block_on(fut).unwrap();
+    let res = block_on(fut);
     // Put the box into a raw pointer to prevent it from being cleaned
     let _ = Box::into_raw(ds);
-    return 0
+    match res {
+        Ok(_) => return 0,
+        Err(_) => return -1, 
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn icechunk_add_group(ptr: *mut Repository, group_name_ptr: *const c_char)->c_int {
     
-    let group_name: &CStr = unsafe { CStr::from_ptr(group_name_ptr) };
-    let group_name_slice: &str = group_name.to_str().unwrap();
+    //We wrap the char ptr into a &CStr to avoid taking ownership
+    let group_name: &CStr = CStr::from_ptr(group_name_ptr);
+    let path: Path = match group_name.to_str() {
+        Ok(x) => match x.try_into()  {
+            Ok(x) => x,
+            Err(_) => return -1,
+        },
+        Err(_) => return -1,
+    };
     
     let mut ds: Box<Repository> = Box::from_raw(ptr);
 
-    let fut = ds.add_group(group_name_slice.try_into().unwrap());
+    let fut = ds.add_group(path);
     //Block until finished
-    block_on(fut).unwrap();
+    let res = block_on(fut);
     // Put the box into a raw pointer to prevent it from being cleaned
-    let _ = Box::into_raw(ds);
-    return 0
+    _ = Box::into_raw(ds);
+    match res {
+        Ok(_) => return 0,
+        Err(_) => return -1, 
+    }
 }
 
 #[no_mangle]
