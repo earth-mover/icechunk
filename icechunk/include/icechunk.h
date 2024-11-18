@@ -17,4 +17,4 @@ int icechunk_add_root_group(struct Repository *ptr);
 
 int icechunk_add_group(struct Repository *ptr, const char *group_name_ptr);
 
-void icechunk_free_repository(struct Repository *repo);
+int icechunk_free_repository(struct Repository *repo);

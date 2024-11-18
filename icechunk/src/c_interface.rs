@@ -30,32 +30,36 @@ pub extern "C" fn create_inmemory_repository(ptr: *mut *mut Repository)->c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn icechunk_add_root_group(ptr: *mut Repository)->c_int {
-    println!("I am in Rust!");
     let mut ds: Box<Repository> = Box::from_raw(ptr);
-    ds.add_group(Path::root());
+    let fut = ds.add_group(Path::root());
+    block_on(fut).unwrap();
     // Put the box into a raw pointer to prevent it from being cleaned
     let _ = Box::into_raw(ds);
     return 0
 }
 
 #[no_mangle]
-pub async unsafe extern "C" fn icechunk_add_group(ptr: *mut Repository, group_name_ptr: *const c_char)->c_int {
+pub unsafe extern "C" fn icechunk_add_group(ptr: *mut Repository, group_name_ptr: *const c_char)->c_int {
     
     let group_name: &CStr = unsafe { CStr::from_ptr(group_name_ptr) };
     let group_name_slice: &str = group_name.to_str().unwrap();
     
     let mut ds: Box<Repository> = Box::from_raw(ptr);
-    ds.add_group(group_name_slice.try_into().unwrap()).await.unwrap();
+
+    let fut = ds.add_group(group_name_slice.try_into().unwrap());
+    //Block until finished
+    block_on(fut).unwrap();
     // Put the box into a raw pointer to prevent it from being cleaned
     let _ = Box::into_raw(ds);
     return 0
 }
 
 #[no_mangle]
-pub extern "C" fn icechunk_free_repository(repo: *mut Repository) {
+pub extern "C" fn icechunk_free_repository(repo: *mut Repository)->c_int {
     if !repo.is_null() {
         unsafe {
             drop(Box::from_raw(repo));
         }
     }
+    return 0
 }
