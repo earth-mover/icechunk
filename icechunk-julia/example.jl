@@ -1,26 +1,12 @@
-#using IceChunk
+using IceChunk
 
-macro icechunk_lib()
-    joinpath(@__DIR__, "..", "target", "release", "libicechunk.dylib")
-end
+repo = IceChunk.icechunk_create_inmemory_repository()
 
+IceChunk.icechunk_add_root_group(repo)
 
-ptr = Ref{Ptr{Cvoid}}()
-@show ptr[]
-ret = @ccall @icechunk_lib().create_inmemory_repository(ptr::Ptr{Ptr{Cvoid}})::Cint
-@show ptr[]
-@assert ret===Cint(0) 
+IceChunk.icechunk_add_group(repo, "/group_a")
 
+IceChunk.icechunk_add_group(repo, "/group_b")
 
-ret = @ccall @icechunk_lib().icechunk_add_root_group(ptr[]::Ptr{Cvoid})::Cint
-@assert ret === Cint(0)
-
-
-
+IceChunk.icechunk_free_repository(repo)
 name = "/group_a"
-ret = @ccall @icechunk_lib().icechunk_add_group(ptr[]::Ptr{Cvoid}, name::Cstring)::Cint
-#repo = IceChunk.icechunk_create_inmemory_repository()
-@show ret
-
-
-@ccall @icechunk_lib().icechunk_free_repository(ptr[]::Ptr{Cvoid})::Cint
