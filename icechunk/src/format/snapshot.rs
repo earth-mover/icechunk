@@ -54,16 +54,23 @@ impl ZarrArrayMetadata {
     /// Returns an iterator over the maximum permitted chunk indices for the array.
     ///
     /// This function calculates the maximum chunk indices based on the shape of the array
-    /// and the chunk shape.
+    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
+    /// this will always result in proper indices at the boundaries.
     ///
     /// # Returns
     ///
-    /// An iterator over the maximum permitted chunk indices.
-    fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u64> + '_ {
-        self.shape
+    /// A ChunkIndices type containing the max chunk index for each dimension.
+    fn max_chunk_indices_permitted(&self) -> ChunkIndices {
+
+        debug_assert_eq!(self.shape.len(), self.chunk_shape.0.len());
+
+        ChunkIndices(
+            self.shape
             .iter()
             .zip(self.chunk_shape.0.iter())
-            .map(|(s, cs)| ((s + cs.get() - 1)) / cs.get() - 1)
+            .map(|(s, cs)| if *s == 0 { 0 } else { ((s - 1) / cs.get()) as u32 })
+            .collect()
+        )
     }
 
     /// Validates the provided chunk coordinates for the array.
@@ -81,20 +88,16 @@ impl ZarrArrayMetadata {
     /// # Errors
     ///
     /// Returns `IcechunkFormatError::ChunkCoordinatesNotFound` if the chunk coordinates are invalid.
-    pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> IcechunkResult<bool> {
+    pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> bool {
 
-        let valid: bool = coord
-                    .0
-                    .iter()
-                    .zip(self.max_chunk_indices_permitted())
-                    .all(|(index, index_permitted)| *index <= index_permitted as u32);
-        
-        if valid {
-            Ok(true)
-        } else {
-            Err(IcechunkFormatError::ChunkCoordinatesNotFound { coords: (coord.clone()) })
-        }
+        debug_assert_eq!(self.shape.len(), coord.0.len());
 
+        coord
+        .0
+        .iter()
+        .zip(self.max_chunk_indices_permitted().0)
+        .all(|(index, index_permitted)| *index <= index_permitted)
+   
     }
 }
 
@@ -498,5 +501,63 @@ mod tests {
             }),
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_valid_chunk_coord() {
+
+        let zarr_meta1 = ZarrArrayMetadata {
+            shape: vec![10000, 10001, 9999],
+            data_type: DataType::Float32,
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+            ]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Float32(0f32),
+
+            codecs: vec![Codec {
+                name: "mycodec".to_string(),
+                configuration: Some(HashMap::from_iter(iter::once((
+                    "foo".to_string(),
+                    serde_json::Value::from(42),
+                )))),
+            }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: Some(HashMap::from_iter(iter::once((
+                    "foo".to_string(),
+                    serde_json::Value::from(42),
+                )))),
+            }]),
+            dimension_names: Some(vec![
+                Some("x".to_string()),
+                Some("y".to_string()),
+                Some("t".to_string()),
+            ]),
+        };
+
+        
+        let zarr_meta2 = ZarrArrayMetadata{
+            shape: vec![0, 0, 0],
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+            ]),
+            ..zarr_meta1.clone()
+
+        };
+
+        let coord1 = ChunkIndices(vec![9, 10, 9]);
+        let coord2 = ChunkIndices(vec![10, 11, 10]);
+        let coord3 = ChunkIndices(vec![0, 0 ,0]);
+
+        assert_eq!(true, zarr_meta1.valid_chunk_coord(&coord1));
+        assert_eq!(false, zarr_meta1.valid_chunk_coord(&coord2));
+        
+        assert_eq!(true, zarr_meta2.valid_chunk_coord(&coord3));
+
     }
 }

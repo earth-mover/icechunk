@@ -514,9 +514,13 @@ impl Repository {
         let node_snapshot = self.get_array(&path).await?;
 
         if let NodeData::Array(zarr_metadata, _, ) = node_snapshot.node_data {
-            zarr_metadata.valid_chunk_coord(&coord)?;
-            self.change_set.set_chunk_ref(node_snapshot.id, coord, data);  
-            Ok(())         
+            if zarr_metadata.valid_chunk_coord(&coord) {
+                self.change_set.set_chunk_ref(node_snapshot.id, coord, data);
+                Ok(())
+            } else {
+                Err(RepositoryError::FormatError(IcechunkFormatError::ChunkCoordinatesNotFound { coords: coord }))
+            }
+                     
         } else {
             Err(RepositoryError::NotAnArray {
                 node: node_snapshot,
