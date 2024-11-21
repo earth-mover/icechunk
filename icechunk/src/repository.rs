@@ -2230,6 +2230,257 @@ mod tests {
         Ok(())
     }
 
+    async fn get_repos_for_conflict() -> Result<(Repository, Repository), Box<dyn Error>>
+    {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let mut repo1 = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        repo1.add_group("/foo/bar".try_into().unwrap()).await?;
+        repo1.add_array("/foo/bar/some-array".try_into().unwrap(), basic_meta()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "create directory", None).await?;
+
+        let repo2 =
+            Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+
+        Ok((repo1, repo2))
+    }
+
+    fn basic_meta() -> ZarrArrayMetadata {
+        ZarrArrayMetadata {
+            shape: vec![5],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        }
+    }
+
+    fn assert_has_conflict(conflict: &Conflict, rebase_result: RepositoryResult<()>) {
+        match rebase_result {
+            Err(RepositoryError::RebaseFailed { conflicts, .. }) => {
+                assert!(conflicts.contains(conflict));
+            }
+            other => panic!("test failed, expected conflict, got {:?}", other),
+        }
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_node_conflict_with_existing_node(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
+        repo1.add_group(conflict_path.clone()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "create group", None).await?;
+
+        repo2.add_array(conflict_path.clone(), basic_meta()).await?;
+        repo2.commit("main", "create array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_node_conflict_in_path() -> Result<(), Box<dyn Error>>
+    {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
+        repo1.add_array(conflict_path.clone(), basic_meta()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "create array", None).await?;
+
+        let inner_path: Path = "/foo/bar/conflict/inner".try_into().unwrap();
+        repo2.add_array(inner_path.clone(), basic_meta()).await?;
+        repo2.commit("main", "create inner array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::NewNodeInInvalidGroup(conflict_path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_double_zarr_metadata_edit(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1.update_array(path.clone(), basic_meta()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
+
+        repo2.update_array(path.clone(), basic_meta()).await?;
+        repo2.commit("main", "update array again", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::ZarrMetadataDoubleUpdate(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_metadata_edit_of_deleted(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1.delete_array(path.clone()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "delete array", None).await?;
+
+        repo2.update_array(path.clone(), basic_meta()).await?;
+        repo2.commit("main", "update array again", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::ZarrMetadataUpdateOfDeletedArray(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_double_user_atts_edit() -> Result<(), Box<dyn Error>>
+    {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
+
+        repo2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        repo2.commit("main", "update array user atts", None).await.unwrap_err();
+        let node_id = repo2.get_array(&path).await?.id;
+        assert_has_conflict(
+            &Conflict::UserAttributesDoubleUpdate { path, node_id },
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_user_atts_edit_of_deleted(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1.delete_array(path.clone()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "delete array", None).await?;
+
+        repo2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        repo2.commit("main", "update array user atts", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::UserAttributesUpdateOfDeletedNode(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_delete_when_array_metadata_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1.update_array(path.clone(), basic_meta()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
+
+        repo2.delete_array(path.clone()).await?;
+        repo2.commit("main", "delete array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedArray(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_delete_when_array_user_atts_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update user attributes", None).await?;
+
+        repo2.delete_array(path.clone()).await?;
+        repo2.commit("main", "delete array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedArray(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_delete_when_chunks_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update chunks", None).await?;
+
+        repo2.delete_array(path.clone()).await?;
+        repo2.commit("main", "delete array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedArray(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_conflict_detection_delete_when_group_user_atts_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        repo1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update user attributes", None).await?;
+
+        repo2.delete_group(path.clone()).await?;
+        repo2.commit("main", "delete group", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedGroup(path),
+            repo2.rebase(&ConflictDetector, "main").await,
+        );
+        Ok(())
+    }
+
     #[tokio::test()]
     async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
@@ -2404,9 +2655,6 @@ mod tests {
             };
 
             let res = repo2.rebase(&solver, "main").await;
-            //let expected_conflicts =
-            //[(new_array_path.clone(), 1_usize)].into_iter().collect();
-            dbg!(&res);
             assert!(matches!(
             res,
             Err(RepositoryError::RebaseFailed { snapshot, conflicts, })
@@ -2502,6 +2750,115 @@ mod tests {
         } else {
             panic!("Bad test, it should conflict")
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_conflict_resolution_double_user_atts_edit_with_ours(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            )
+            .await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
+
+        repo2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
+            )
+            .await?;
+        repo2.commit("main", "update array user atts", None).await.unwrap_err();
+
+        let solver = BasicConflictSolver {
+            on_user_attributes_conflict: VersionSelection::UseOurs,
+            ..Default::default()
+        };
+
+        repo2.rebase(&solver, "main").await?;
+        repo2.commit("main", "after conflict", None).await?;
+
+        let atts = repo2.get_node(&path).await.unwrap().user_attributes.unwrap();
+        assert_eq!(
+            atts,
+            UserAttributesSnapshot::Inline(
+                UserAttributes::try_new(br#"{"repo":2}"#).unwrap()
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_conflict_resolution_double_user_atts_edit_with_theirs(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            )
+            .await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
+
+        // we made one extra random change to the repo, because we'll undo the user attributes
+        // update and we cannot commit an empty change
+        repo2.add_group("/baz".try_into().unwrap()).await?;
+
+        repo2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
+            )
+            .await?;
+        repo2.commit("main", "update array user atts", None).await.unwrap_err();
+
+        let solver = BasicConflictSolver {
+            on_user_attributes_conflict: VersionSelection::UseTheirs,
+            ..Default::default()
+        };
+
+        repo2.rebase(&solver, "main").await?;
+        repo2.commit("main", "after conflict", None).await?;
+
+        let atts = repo2.get_node(&path).await.unwrap().user_attributes.unwrap();
+        assert_eq!(
+            atts,
+            UserAttributesSnapshot::Inline(
+                UserAttributes::try_new(br#"{"repo":1}"#).unwrap()
+            )
+        );
+
+        repo2.get_node(&"/baz".try_into().unwrap()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_conflict_resolution_delete_of_updated_array(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1.update_array(path.clone(), basic_meta()).await?;
+        repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
+
+        repo2.delete_array(path.clone()).await?;
+        repo2.commit("main", "delete array", None).await.unwrap_err();
+
+        repo2.rebase(&BasicConflictSolver::default(), "main").await?;
+        repo2.commit("main", "after conflict", None).await?;
+
+        assert!(matches!(
+            repo2.get_node(&path).await,
+            Err(RepositoryError::NodeNotFound { .. })
+        ));
 
         Ok(())
     }

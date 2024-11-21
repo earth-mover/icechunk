@@ -20,7 +20,6 @@ pub struct BasicConflictSolver {
     pub on_chunk_conflict: VersionSelection,
     pub fail_on_delete_of_updated_array: bool,
     pub fail_on_delete_of_updated_group: bool,
-    pub fail_on_delete_of_updated_descendants: bool,
 }
 
 impl Default for BasicConflictSolver {
@@ -30,7 +29,6 @@ impl Default for BasicConflictSolver {
             on_chunk_conflict: VersionSelection::UseOurs,
             fail_on_delete_of_updated_array: false,
             fail_on_delete_of_updated_group: false,
-            fail_on_delete_of_updated_descendants: false,
         }
     }
 }
@@ -96,9 +94,6 @@ impl BasicConflictSolver {
                 ) ||
                 matches!(conflict,
                     DeleteOfUpdatedGroup(_) if self.fail_on_delete_of_updated_group
-                ) ||
-                matches!(conflict,
-                    DeleteOfUpdatedGroupDescendants(_) if self.fail_on_delete_of_updated_descendants
                 )
             },
         );
@@ -142,10 +137,6 @@ impl BasicConflictSolver {
                 }
                 DeleteOfUpdatedGroup(_) => {
                     assert!(!self.fail_on_delete_of_updated_group);
-                    // this is a no-op, the solution is to still delete the group
-                }
-                DeleteOfUpdatedGroupDescendants(_) => {
-                    assert!(!self.fail_on_delete_of_updated_descendants);
                     // this is a no-op, the solution is to still delete the group
                 }
                 _ => panic!("bug in conflict resolution, conflict: {:?}", conflict),

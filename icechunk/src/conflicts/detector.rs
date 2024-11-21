@@ -43,7 +43,8 @@ impl ConflictSolver for ConflictDetector {
             for parent in path.ancestors().skip(1) {
                 match previous_repo.get_array(&parent).await {
                     Ok(_) => return Ok(Some(Conflict::NewNodeInInvalidGroup(parent))),
-                    Err(RepositoryError::NodeNotFound { .. }) => {}
+                    Err(RepositoryError::NodeNotFound { .. })
+                    | Err(RepositoryError::NotAnArray { .. }) => {}
                     Err(err) => return Err(err),
                 }
             }
@@ -96,7 +97,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let updated_attributes_on_deleted_node = current_changes
-            .updated_arrays
+            .updated_attributes
             .keys()
             .filter(|node_id| {
                 previous_change.deleted_arrays.contains(node_id)
@@ -179,6 +180,51 @@ impl ConflictSolver for ConflictDetector {
             },
         );
 
+        let deletes_of_updated_arrays = stream::iter(
+            current_changes.deleted_arrays.iter().map(Ok),
+        )
+        .try_filter_map(|path| async {
+            let id = match previous_repo.get_node(path).await {
+                Ok(node) => Some(node.id),
+                Err(RepositoryError::NodeNotFound { .. }) => None,
+                Err(err) => Err(err)?,
+            };
+
+            if let Some(node_id) = id {
+                if previous_change.updated_zarr_metadata.contains(&node_id)
+                    || previous_change.updated_user_attributes.contains(&node_id)
+                    || previous_change.updated_chunks.contains_key(&node_id)
+                {
+                    Ok(Some(Conflict::DeleteOfUpdatedArray(path.clone())))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        });
+
+        let deletes_of_updated_groups = stream::iter(
+            current_changes.deleted_groups.iter().map(Ok),
+        )
+        .try_filter_map(|path| async {
+            let id = match previous_repo.get_node(path).await {
+                Ok(node) => Some(node.id),
+                Err(RepositoryError::NodeNotFound { .. }) => None,
+                Err(err) => Err(err)?,
+            };
+
+            if let Some(node_id) = id {
+                if previous_change.updated_user_attributes.contains(&node_id) {
+                    Ok(Some(Conflict::DeleteOfUpdatedGroup(path.clone())))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        });
+
         let all_conflicts: Vec<_> = new_nodes_explicit_conflicts
             .chain(new_nodes_implicit_conflicts)
             .chain(updated_arrays_already_updated)
@@ -188,6 +234,8 @@ impl ConflictSolver for ConflictDetector {
             .chain(chunks_updated_in_deleted_array)
             .chain(chunks_updated_in_updated_array)
             .chain(chunks_double_updated)
+            .chain(deletes_of_updated_arrays)
+            .chain(deletes_of_updated_groups)
             .try_collect()
             .await?;
 

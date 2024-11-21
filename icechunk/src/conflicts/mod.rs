@@ -38,7 +38,8 @@ pub enum Conflict {
     },
     DeleteOfUpdatedArray(Path),
     DeleteOfUpdatedGroup(Path),
-    DeleteOfUpdatedGroupDescendants(Path),
+    // FIXME: we are missing the case of current change deleting a group and previous change
+    // creating something new under it
 }
 
 #[derive(Debug)]
