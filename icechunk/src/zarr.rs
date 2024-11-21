@@ -37,6 +37,7 @@ use crate::{
     storage::{
         s3::{S3Config, S3Storage},
         virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+        azure_blob::{AzureBlobConfig, AzureBlobStorage}, 
     },
     ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
@@ -60,6 +61,13 @@ pub enum StorageConfig {
         #[serde(flatten)]
         config: Option<S3Config>,
     },
+
+    #[serde(rename = "azure_blob")]
+    AzureBlobStore {
+        prefix: String,
+        #[serde(flatten)]
+        config: AzureBlobConfig,
+    },
 }
 
 impl StorageConfig {
@@ -75,6 +83,12 @@ impl StorageConfig {
             }
             StorageConfig::S3ObjectStore { bucket, prefix, config } => {
                 let storage = S3Storage::new_s3_store(bucket, prefix, config.as_ref())
+                    .await
+                    .map_err(|e| format!("Error creating storage: {e}"))?;
+                Ok(Arc::new(storage))
+            }
+            StorageConfig::AzureBlobStore { prefix, config }  => {
+                let storage = AzureBlobStorage::new_azure_blob_store(prefix, config)
                     .await
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))

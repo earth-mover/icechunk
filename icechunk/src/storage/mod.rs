@@ -24,6 +24,7 @@ pub mod logging;
 pub mod object_store;
 pub mod s3;
 pub mod virtual_ref;
+pub mod azure_blob;
 
 pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
@@ -52,6 +53,8 @@ pub enum StorageError {
     S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] ByteStreamError),
+    #[error("error with azure storage operation {0}")]
+    AzureBlobError(#[from] azure_core::Error),
     #[error("messagepack decode error: {0}")]
     MsgPackDecodeError(#[from] rmp_serde::decode::Error),
     #[error("messagepack encode error: {0}")]
