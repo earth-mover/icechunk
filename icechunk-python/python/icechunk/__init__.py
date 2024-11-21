@@ -1,6 +1,6 @@
 # module
 import contextlib
-from collections.abc import AsyncGenerator, AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterable
 from typing import Any, Self
 
 from icechunk._icechunk_python import (
@@ -167,7 +167,7 @@ class IcechunkStore(Store, SyncMixin):
         self.__dict__ = state
 
     @contextlib.contextmanager
-    def preserve_read_only(self) -> None:
+    def preserve_read_only(self) -> Generator[None, None, None]:
         """
         Context manager to allow unpickling this store preserving `read_only` status.
         By default, stores are set to read-only after unpickling.
