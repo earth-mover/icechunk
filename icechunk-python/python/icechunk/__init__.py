@@ -1,4 +1,5 @@
 # module
+import contextlib
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable
 from typing import Any, Self
 
@@ -33,6 +34,7 @@ __all__ = [
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyIcechunkStore
+    _pickle_preserves_read_only: bool
 
     @classmethod
     async def open(cls, *args: Any, **kwargs: Any) -> Self:
@@ -89,6 +91,7 @@ class IcechunkStore(Store, SyncMixin):
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
             )
         self._store = store
+        self._pickle_preserves_read_only = False
 
     @classmethod
     def open_existing(
@@ -152,6 +155,8 @@ class IcechunkStore(Store, SyncMixin):
         # we serialize the Rust store as bytes
         d = self.__dict__.copy()
         d["_store"] = self._store.as_bytes()
+        if not self._pickle_preserves_read_only:
+            d["_read_only"] = True
         return d
 
     def __setstate__(self, state: Any) -> None:
@@ -160,6 +165,18 @@ class IcechunkStore(Store, SyncMixin):
         store_repr = state["_store"]
         state["_store"] = pyicechunk_store_from_bytes(store_repr, read_only)
         self.__dict__ = state
+
+    @contextlib.contextmanager
+    def preserve_read_only(self) -> None:
+        """
+        Context manager to allow unpickling this store preserving `read_only` status.
+        By default, stores are set to read-only after unpickling.
+        """
+        try:
+            self._pickle_preserves_read_only = True
+            yield
+        finally:
+            self._pickle_preserves_read_only = False
 
     def as_read_only(self) -> Self:
         """Return a read-only version of this store."""
