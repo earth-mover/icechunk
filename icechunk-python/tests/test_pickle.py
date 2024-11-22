@@ -20,6 +20,19 @@ async def tmp_store(tmpdir):
     store.close()
 
 
+async def test_pickle_read_only(tmp_store):
+    assert tmp_store._read_only is False
+
+    roundtripped = pickle.loads(pickle.dumps(tmp_store))
+    assert roundtripped._read_only is True
+
+    with tmp_store.preserve_read_only():
+        roundtripped = pickle.loads(pickle.dumps(tmp_store))
+        assert roundtripped._read_only is False
+
+    assert tmp_store._read_only is False
+
+
 async def test_pickle(tmp_store):
     root = zarr.group(store=tmp_store)
     array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="float32")
@@ -31,7 +44,7 @@ async def test_pickle(tmp_store):
     store_loaded = pickle.loads(pickled)
     assert store_loaded == tmp_store
 
-    root_loaded = zarr.open_group(store_loaded)
+    root_loaded = zarr.open_group(store_loaded, mode="r")
     array_loaded = root_loaded["ones"]
 
     assert type(array_loaded) is zarr.Array

@@ -38,6 +38,7 @@ test = [
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
   "xarray>=2024.11.0",
+  "hypothesis",
 ]
 
 [tool.maturin]
