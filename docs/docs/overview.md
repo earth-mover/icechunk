@@ -4,8 +4,8 @@ title: Overview
 # Icechunk
 
 Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
-Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features 
-that enhance performance, collaboration, and safety in a cloud-computing context. 
+Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features
+that enhance performance, collaboration, and safety in a cloud-computing context.
 
 ## Docs Organization
 
@@ -34,7 +34,7 @@ Let's break down what "transactional storage engine for Zarr" actually means:
   This allows Zarr to be used more like a database.
 
 The core entity in Icechunk is a repository or **repo**.
-A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as 
+A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as
 self-contained _Zarr Store_.
 The most common scenario is for an Icechunk repo to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
 However, formally a repo can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
@@ -63,7 +63,7 @@ Arrays have two fundamental properties:
 - **shape** - a tuple of integers which specify the dimensions of each axis of the array. A 10 x 10 square array would have shape (10, 10)
 - **data type** - a specification of what type of data is found in each element, e.g. integer, float, etc. Different data types have different precision (e.g. 16-bit integer, 64-bit float, etc.)
 
-In Zarr / Icechunk, arrays are split into **chunks**, 
+In Zarr / Icechunk, arrays are split into **chunks**,
 A chunk is the minimum unit of data that must be read / written from storage, and thus choices about chunking have strong implications for performance.
 Zarr leaves this completely up to the user.
 Chunk shape should be chosen based on the anticipated data access pattern for each array
@@ -138,4 +138,3 @@ flowchart TD
     zarr-python[Zarr Library] <-- key / value--> icechunk[Icechunk Library]
     icechunk <-- data / metadata files --> storage[(Object Storage)]
 ```
-

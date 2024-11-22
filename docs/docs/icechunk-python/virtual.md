@@ -7,9 +7,9 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
     While virtual references are fully supported in Icechunk, creating virtual datasets currently relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and their current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
     With time, these experimental features will make their way into the released packages.
 
-To create virtual Icechunk datasets with Python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages. 
+To create virtual Icechunk datasets with Python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages.
 
-`kerchunk` allows scanning the metadata of existing data files to extract virtual references. It also provides methods to combine these references into [larger virtual datasets](https://fsspec.github.io/kerchunk/tutorial.html#combine-multiple-kerchunked-datasets-into-a-single-logical-aggregate-dataset), which can be exported to it's [reference format](https://fsspec.github.io/kerchunk/spec.html). 
+`kerchunk` allows scanning the metadata of existing data files to extract virtual references. It also provides methods to combine these references into [larger virtual datasets](https://fsspec.github.io/kerchunk/tutorial.html#combine-multiple-kerchunked-datasets-into-a-single-logical-aggregate-dataset), which can be exported to it's [reference format](https://fsspec.github.io/kerchunk/spec.html).
 
 `VirtualiZarr` lets users ingest existing data files into virtual datasets using various different tools under the hood, including `kerchunk`, `xarray`, `zarr`, and now `icechunk`. It does so by creating virtual references to existing data that can be combined and manipulated to create larger virtual datasets using `xarray`. These datasets can then be exported to `kerchunk` reference format or to an `Icechunk` store, without ever copying or moving the existing data files.
 
@@ -62,10 +62,10 @@ We can now use `xarray` to combine these virtual datasets into one large virtual
 import xarray as xr
 
 virtual_ds = xr.concat(
-    virtual_datasets, 
-    dim='time', 
-    coords='minimal', 
-    compat='override', 
+    virtual_datasets,
+    dim='time',
+    coords='minimal',
+    compat='override',
     combine_attrs='override'
 )
 
@@ -83,7 +83,7 @@ virtual_ds = xr.concat(
 #    err      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 ```
 
-We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk store to write this dataset to. 
+We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk store to write this dataset to.
 
 !!! note
 
@@ -92,7 +92,7 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 !!! note
 
     Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
-    
+
 ```python
 from icechunk import IcechunkStore, StorageConfig, StoreConfig, VirtualRefConfig
 
@@ -103,12 +103,12 @@ storage = StorageConfig.s3_from_config(
     credentials=S3Credentials(
         access_key_id="REPLACE_ME",
         secret_access_key="REPLACE_ME",
-        session_token="REPLACE_ME"  
+        session_token="REPLACE_ME"
     )
 )
 
 store = IcechunkStore.create(
-    storage=storage, 
+    storage=storage,
     config=StoreConfig(
         virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
     )
@@ -124,7 +124,7 @@ virtual_ds.virtualize.to_icechunk(store)
 The refs are written so lets save our progress by committing to the store.
 
 !!! note
-    
+
     Your commit hash will be different! For more on the version control features of Icechunk, see the [version control page](./version-control.md).
 
 ```python
@@ -137,9 +137,9 @@ Now we can read the dataset from the store using xarray to confirm everything we
 
 ```python
 ds = xr.open_zarr(
-    store, 
-    zarr_version=3, 
-    consolidated=False, 
+    store,
+    zarr_version=3,
+    consolidated=False,
     chunks={},
 )
 
@@ -157,7 +157,7 @@ ds = xr.open_zarr(
 #    err      (time, zlev, lat, lon) float64 257MB dask.array<chunksize=(1, 1, 720, 1440), meta=np.ndarray>
 ```
 
-Success! We have created our full dataset with 31 timesteps spanning the month of august, all with virtual references to pre-existing data files in object store. This means we can now version control our dataset, allowing us to update it, and roll it back to a previous version without copying or moving any data from the original files. 
+Success! We have created our full dataset with 31 timesteps spanning the month of august, all with virtual references to pre-existing data files in object store. This means we can now version control our dataset, allowing us to update it, and roll it back to a previous version without copying or moving any data from the original files.
 
 Finally, let's make a plot of the sea surface temperature!
 
@@ -169,7 +169,7 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 ## Virtual Reference API
 
-While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk. 
+While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk.
 
 ### Virtual Reference Storage Support
 

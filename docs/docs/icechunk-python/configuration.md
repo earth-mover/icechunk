@@ -17,7 +17,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
     With this option, the credentials for connecting to S3 are detected automatically from your environment.
     This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.StorageConfig.s3_from_env)
-    
+
     ```python
     icechunk.StorageConfig.s3_from_env(
         bucket="icechunk-test",
@@ -28,7 +28,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "Provide credentials"
 
     With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.StorageConfig.s3_from_config)
-    
+
     ```python
     icechunk.StorageConfig.s3_from_config(
         bucket="icechunk-test",
@@ -49,7 +49,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
     With this option, you connect to S3 anonymously (without credentials).
     This is suitable for public data. [See the API](./reference.md#icechunk.StorageConfig.s3_anonymous)
-    
+
     ```python
     icechunk.StorageConfig.s3_anonymous(
         bucket="icechunk-test",
@@ -153,8 +153,8 @@ Now we can now create or open an Icechunk store using our config.
     )
 
     store = icechunk.IcechunkStore.create(
-        storage=storage, 
-        mode="w", 
+        storage=storage,
+        read_only=False,
     )
     ```
 
@@ -167,8 +167,8 @@ Now we can now create or open an Icechunk store using our config.
     )
 
     store = icechunk.IcechunkStore.create(
-        storage=storage, 
-        mode="w", 
+        storage=storage,
+        read_only=False,
     )
     ```
 
@@ -188,8 +188,8 @@ Now we can now create or open an Icechunk store using our config.
     )
 
     store = icechunk.IcechunkStore.open_existing(
-        storage=storage, 
-        mode="r+", 
+        storage=storage,
+        read_only=False,
         config=config,
     )
     ```
@@ -204,11 +204,34 @@ Now we can now create or open an Icechunk store using our config.
 
     store = icechunk.IcechunkStore.open_existing(
         storage=storage,
-        mode='r+',
+        read_only=False,
         config=config,
     )
     ```
 
-#### Access Mode
+#### Read Only Mode
 
-Note that in all of the above examples, a `mode` is provided to instruct the access level of the user to the store. This mode instructs whether the store should be opened in read only mode, and the store should start with a clean slate (although Icechunk prevents the possibility of accidentally overwriting any data that was previously comimtted to the store forever). For more about the access modes, see the [`zarr-python` docs](https://zarr.readthedocs.io/en/v3/_autoapi/zarr/abc/store/index.html#zarr.abc.store.AccessMode).
+Note that in all of the above examples, a `read_only` is provided to instruct the access level of the user to the store. This instructs whether the store should be opened in read only mode. When the store is marked read only, no write operations can be called and will resolve in a `ValueError`.
+
+It is possible to make a read only store writeable and vice versa:
+
+```python
+# Store is opened writeable
+store = icechunk.IcechunkStore.open_existing(
+    storage=storage,
+    read_only=False,
+    config=config,
+)
+
+# Change in place to read_only
+store.set_read_only()
+
+# Open another instance of the store that is writeable
+writeable_store = store.as_writeable()
+
+# Open another read only instance of the store
+another_store = writeable_store.as_read_only()
+
+# Set it writeable in place
+another_store.set_writeable()
+```

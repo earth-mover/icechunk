@@ -542,9 +542,9 @@ impl Store {
         Ok(self.repository.read().await.change_set_bytes()?)
     }
 
-    pub async fn empty(&self) -> StoreResult<bool> {
-        let res = self.repository.read().await.list_nodes().await?.next().is_none();
-        Ok(res)
+    pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
+        let res = self.list_dir(prefix).await?.next().await;
+        Ok(res.is_none())
     }
 
     pub async fn clear(&mut self) -> StoreResult<()> {
@@ -735,9 +735,14 @@ impl Store {
                 // to avoid race conditions with other writers
                 // (remember this method takes &self and not &mut self)
                 let mut guard = self.repository.write().await;
-                let node = guard.get_node(&node_path).await.map_err(|_| {
-                    KeyNotFoundError::NodeNotFound { path: node_path.clone() }
-                })?;
+                let node = guard.get_node(&node_path).await;
+
+                // When there is no node at the given key, we don't consider it an error, instead we just do nothing
+                if let Err(RepositoryError::NodeNotFound { path: _, message: _ }) = node {
+                    return Ok(());
+                };
+
+                let node = node.map_err(StoreError::RepositoryError)?;
                 match node.node_data {
                     NodeData::Array(_, _) => {
                         Ok(guard.deref_mut().delete_array(node_path).await?)
@@ -750,7 +755,14 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 let mut guard = self.repository.write().await;
                 let repository = guard.deref_mut();
-                Ok(repository.set_chunk_ref(node_path, coords, None).await?)
+                match repository.set_chunk_ref(node_path, coords, None).await {
+                    Ok(_) => Ok(()),
+                    Err(RepositoryError::NodeNotFound { path: _, message: _ }) => {
+                        // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
+                        Ok(())
+                    }
+                    Err(err) => Err(StoreError::RepositoryError(err)),
+                }
             }
             Key::ZarrV2(_) => Ok(()),
         }
@@ -1047,6 +1059,10 @@ async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
     match get_key(key, &ByteRange::ALL, repo).await {
         Ok(_) => Ok(true),
         Err(StoreError::NotFound(_)) => Ok(false),
+        Err(StoreError::RepositoryError(RepositoryError::NodeNotFound {
+            path: _,
+            message: _,
+        })) => Ok(false),
         Err(other_error) => Err(other_error),
     }
 }
@@ -1795,6 +1811,9 @@ mod tests {
             Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
                 if path.to_string() == "/array",
         ));
+        // Deleting a non-existent key should not fail
+        store.delete("array/zarr.json").await.unwrap();
+
         store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
@@ -1963,7 +1982,7 @@ mod tests {
             None,
         );
 
-        assert!(store.empty().await.unwrap());
+        assert!(store.is_empty("").await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
 
         assert_eq!(all_keys(&store).await.unwrap(), Vec::<String>::new());
@@ -1975,7 +1994,7 @@ mod tests {
             )
             .await?;
 
-        assert!(!store.empty().await.unwrap());
+        assert!(!store.is_empty("").await.unwrap());
         assert!(store.exists("zarr.json").await.unwrap());
         assert_eq!(all_keys(&store).await.unwrap(), vec!["zarr.json".to_string()]);
         store
@@ -1996,7 +2015,7 @@ mod tests {
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("group/array/zarr.json", zarr_meta).await?;
-        assert!(!store.empty().await.unwrap());
+        assert!(!store.is_empty("").await.unwrap());
         assert!(store.exists("zarr.json").await.unwrap());
         assert!(store.exists("group/array/zarr.json").await.unwrap());
         assert!(store.exists("group/zarr.json").await.unwrap());

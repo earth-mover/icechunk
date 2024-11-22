@@ -1,5 +1,7 @@
 import numpy as np
 import pytest
+from object_store import ClientOptions, ObjectStore
+
 import zarr
 import zarr.core
 import zarr.core.buffer
@@ -10,7 +12,6 @@ from icechunk import (
     StoreConfig,
     VirtualRefConfig,
 )
-from object_store import ClientOptions, ObjectStore
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
@@ -97,22 +98,24 @@ async def test_write_minio_virtual_refs():
 async def test_from_s3_public_virtual_refs(tmpdir):
     # Open the store,
     store = IcechunkStore.open_or_create(
-        storage=StorageConfig.filesystem(f'{tmpdir}/virtual'),
-        mode="w",
+        storage=StorageConfig.filesystem(f"{tmpdir}/virtual"),
+        read_only=False,
         config=StoreConfig(
-            virtual_ref_config=VirtualRefConfig.s3_anonymous(region="us-east-1", allow_http=False)
+            virtual_ref_config=VirtualRefConfig.s3_anonymous(
+                region="us-east-1", allow_http=False
+            )
         ),
     )
     root = zarr.Group.from_store(store=store, zarr_format=3)
     depth = root.require_array(
-        name="depth", shape=((10, )), chunk_shape=((10,)), dtype="float64"
+        name="depth", shape=((10,)), chunk_shape=((10,)), dtype="float64"
     )
 
     store.set_virtual_ref(
-        "depth/c/0", 
+        "depth/c/0",
         "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.fields.f030.nc",
-        offset=119339, 
-        length=80
+        offset=119339,
+        length=80,
     )
 
     nodes = [n async for n in store.list()]
@@ -120,8 +123,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
 
     depth_values = depth[:]
     assert len(depth_values) == 10
-    actual_values = np.array([-0.95,-0.85,-0.75,-0.65,-0.55,-0.45,-0.35,-0.25,-0.15,-0.05])
+    actual_values = np.array(
+        [-0.95, -0.85, -0.75, -0.65, -0.55, -0.45, -0.35, -0.25, -0.15, -0.05]
+    )
     assert np.allclose(depth_values, actual_values)
-
-
-
