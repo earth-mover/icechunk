@@ -78,7 +78,8 @@ async def test_distributed_writers():
     _first_snap = store.commit("array created")
 
     with Client(n_workers=8):
-        store_dask(store, sources=[dask_array], targets=[zarray])
+        with store.preserve_read_only():
+            store_dask(store, sources=[dask_array], targets=[zarray])
         commit_res = store.commit("distributed commit")
         assert commit_res
 
