@@ -48,10 +48,14 @@ def create_test_data(
 
 
 @contextlib.contextmanager
-def roundtrip(data: xr.Dataset):
+def roundtrip(data: xr.Dataset, preserve_read_only: bool = False):
     with tempfile.TemporaryDirectory() as tmpdir:
         store = IcechunkStore.create(StorageConfig.filesystem(tmpdir))
-        to_icechunk(data, store=store, mode="w")
+        if preserve_read_only:
+            with store.preserve_read_only():
+                to_icechunk(data, store=store, mode="w")
+        else:
+            to_icechunk(data, store=store, mode="w")
         with xr.open_zarr(store, consolidated=False) as ds:
             yield ds
 
