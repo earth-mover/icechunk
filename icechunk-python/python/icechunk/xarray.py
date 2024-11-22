@@ -12,10 +12,12 @@ import zarr
 from icechunk import IcechunkStore
 from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_store, merge_stores
+from icechunk.vendor.xarray import _choose_default_mode
 from xarray import Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
+Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 
@@ -34,7 +36,7 @@ def is_chunked_array(x: Any) -> bool:
     if has_dask:
         import dask
 
-        return dask.base.is_dask_collection(x)  # type: ignore[return-type]
+        return dask.base.is_dask_collection(x)
     else:
         return False
 
@@ -94,11 +96,13 @@ class XarrayDatasetWriter:
             )
 
     def _open_group(
-        self, *, group, mode: ZarrWriteModes | None, append_dim: Hashable | None, region
+        self,
+        *,
+        group: str | None,
+        mode: ZarrWriteModes | None,
+        append_dim: Hashable | None,
+        region: Region,
     ) -> None:
-        from xarray.backends.zarr import _choose_default_mode
-
-        # TODO: move this in to open_group upstream
         concrete_mode: ZarrWriteModes = _choose_default_mode(
             mode=mode, append_dim=append_dim, region=region
         )
@@ -139,46 +143,6 @@ class XarrayDatasetWriter:
         dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
 
         self._initialized = True
-
-    def for_write(self, *, group, mode="w-"):
-        self._open_group(
-            group=group,
-            mode=mode,
-            zarr_format=3,
-            append_dim=None,
-            write_region=None,
-        )
-
-    def for_region(self, *, group, region) -> None:
-        self._open_group(
-            group=group,
-            mode="r+",
-            zarr_format=3,
-            append_dim=None,
-            write_region=region,
-        )
-        # Xarray today raises an error if there are variables whose dimensions
-        # do not overlap with the region's dimensions
-        self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
-
-    def for_append(self, *, group, append_dim) -> None:
-        self._open_group(
-            group=group,
-            mode="r+",
-            zarr_format=3,
-            append_dim=append_dim,
-            write_region=None,
-        )
-        # TODO: raise if dataset has vars do not have the append_dim.
-
-    def describe_change(self):
-        """
-        This method will describe a list of changes.
-        1. Arrays that will be appended to
-        1. New arrays to be written.
-        """
-        # TODO:
-        pass
 
     def write_eager(self) -> None:
         """
@@ -239,7 +203,7 @@ def to_icechunk(
     # write_empty_chunks: bool | None = None,
     safe_chunks: bool = True,
     append_dim: Hashable | None = None,
-    region: Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None = None,
+    region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,

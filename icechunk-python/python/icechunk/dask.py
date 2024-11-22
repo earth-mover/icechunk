@@ -41,9 +41,9 @@ def store_dask(
     split_every: int | None = None,
     **store_kwargs: Any,
 ) -> None:
-    stored_arrays = dask.array.store(
+    stored_arrays = dask.array.store(  # type: ignore[attr-defined]
         sources=sources,
-        targets=targets,
+        targets=targets,  # type: ignore[arg-type]
         regions=regions,
         compute=False,
         return_stored=True,
