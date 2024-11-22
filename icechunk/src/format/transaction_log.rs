@@ -29,10 +29,8 @@ impl TransactionLog {
         parent_nodes: impl Iterator<Item = &'a NodeSnapshot>,
         child_nodes: impl Iterator<Item = &'a NodeSnapshot>,
     ) -> Self {
-        //let all_paths: HashMap<&Path, &NodeId> =
-        //   nodes.map(|node| (&node.path, &node.id)).collect();
-        let new_groups = cs.new_groups.values().cloned().collect();
-        let new_arrays = cs.new_arrays.values().map(|(node, _)| node.clone()).collect();
+        let new_groups = cs.new_groups().map(|(_, node_id)| node_id).cloned().collect();
+        let new_arrays = cs.new_arrays().map(|(_, node_id)| node_id).cloned().collect();
         let parent_nodes =
             parent_nodes.map(|n| (n.id.clone(), n.node_type())).collect::<HashSet<_>>();
         let child_nodes =
@@ -52,11 +50,11 @@ impl TransactionLog {
             }
         }
 
-        let updated_user_attributes = cs.updated_attributes.keys().cloned().collect();
-        let updated_zarr_metadata = cs.updated_arrays.keys().cloned().collect();
+        let updated_user_attributes =
+            cs.user_attributes_updated_nodes().cloned().collect();
+        let updated_zarr_metadata = cs.zarr_updated_arrays().cloned().collect();
         let updated_chunks = cs
-            .set_chunks
-            .iter()
+            .chunk_changes()
             .map(|(k, v)| (k.clone(), v.keys().cloned().collect()))
             .collect();
 

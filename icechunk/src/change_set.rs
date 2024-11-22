@@ -19,21 +19,44 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
-    pub(crate) new_groups: HashMap<Path, NodeId>,
-    pub(crate) new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
-    pub(crate) updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
+    new_groups: HashMap<Path, NodeId>,
+    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
+    updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
     // These paths may point to Arrays or Groups,
     // since both Groups and Arrays support UserAttributes
-    pub(crate) updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
+    updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
-    pub(crate) set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
-    pub(crate) deleted_groups: HashSet<Path>,
-    pub(crate) deleted_arrays: HashSet<Path>,
+    set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    deleted_groups: HashSet<Path>,
+    deleted_arrays: HashSet<Path>,
 }
 
 impl ChangeSet {
-    pub fn written_arrays(&self) -> impl Iterator<Item = &NodeId> {
-        self.set_chunks.keys()
+    pub fn zarr_updated_arrays(&self) -> impl Iterator<Item = &NodeId> {
+        self.updated_arrays.keys()
+    }
+
+    pub fn deleted_arrays(&self) -> impl Iterator<Item = &Path> {
+        self.deleted_arrays.iter()
+    }
+
+    pub fn deleted_groups(&self) -> impl Iterator<Item = &Path> {
+        self.deleted_groups.iter()
+    }
+
+    pub fn user_attributes_updated_nodes(&self) -> impl Iterator<Item = &NodeId> {
+        self.updated_attributes.keys()
+    }
+
+    pub fn chunk_changes(
+        &self,
+    ) -> impl Iterator<Item = (&NodeId, &HashMap<ChunkIndices, Option<ChunkPayload>>)>
+    {
+        self.set_chunks.iter()
+    }
+
+    pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
+        self.chunk_changes().map(|(node, _)| node)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -178,10 +201,16 @@ impl ChangeSet {
         self.set_chunks.get(node_id).and_then(|h| h.get(coords))
     }
 
-    pub fn unset_chunk_ref(&mut self, node_id: NodeId, coord: &ChunkIndices) {
-        self.set_chunks.entry(node_id).and_modify(|h| {
-            h.remove(coord);
-        });
+    /// Drop the updated chunk references for the node.
+    /// This will only drop the references for which `predicate` returns true
+    pub fn drop_chunk_changes(
+        &mut self,
+        node_id: &NodeId,
+        predicate: impl Fn(&ChunkIndices) -> bool,
+    ) {
+        if let Some(changes) = self.set_chunks.get_mut(node_id) {
+            changes.retain(|coord, _| !predicate(coord));
+        }
     }
 
     pub fn array_chunks_iterator(
@@ -217,22 +246,16 @@ impl ChangeSet {
         })
     }
 
-    pub fn all_modified_chunks_iterator(
-        &self,
-    ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> + '_ {
-        self.set_chunks.iter().map(|(node, changes)| (node, changes.keys()))
-    }
-
-    pub fn new_nodes(&self) -> impl Iterator<Item = &Path> {
+    pub fn new_nodes(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
         self.new_groups().chain(self.new_arrays())
     }
 
-    pub fn new_groups(&self) -> impl Iterator<Item = &Path> {
-        self.new_groups.keys()
+    pub fn new_groups(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
+        self.new_groups.iter()
     }
 
-    pub fn new_arrays(&self) -> impl Iterator<Item = &Path> {
-        self.new_arrays.keys()
+    pub fn new_arrays(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
+        self.new_arrays.iter().map(|(path, (node_id, _))| (path, node_id))
     }
 
     pub fn take_chunks(
@@ -345,7 +368,7 @@ impl ChangeSet {
         &'a self,
         manifest_id: Option<&'a ManifestId>,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
-        self.new_nodes().filter_map(move |path| {
+        self.new_nodes().filter_map(move |(path, _)| {
             if self.is_deleted(path) {
                 return None;
             }
@@ -405,5 +428,9 @@ impl ChangeSet {
                 })
             }
         }
+    }
+
+    pub fn undo_user_attributes_update(&mut self, node_id: &NodeId) {
+        self.updated_attributes.remove(node_id);
     }
 }

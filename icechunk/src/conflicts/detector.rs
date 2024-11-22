@@ -26,7 +26,7 @@ impl ConflictSolver for ConflictDetector {
         let new_nodes_explicit_conflicts = stream::iter(
             current_changes.new_nodes().map(Ok),
         )
-        .try_filter_map(|path| async {
+        .try_filter_map(|(path, _)| async {
             match previous_repo.get_node(path).await {
                 Ok(_) => {
                     Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
@@ -39,7 +39,7 @@ impl ConflictSolver for ConflictDetector {
         let new_nodes_implicit_conflicts = stream::iter(
             current_changes.new_nodes().map(Ok),
         )
-        .try_filter_map(|path| async {
+        .try_filter_map(|(path, _)| async {
             for parent in path.ancestors().skip(1) {
                 match previous_repo.get_array(&parent).await {
                     Ok(_) => return Ok(Some(Conflict::NewNodeInInvalidGroup(parent))),
@@ -52,8 +52,7 @@ impl ConflictSolver for ConflictDetector {
         });
 
         let updated_arrays_already_updated = current_changes
-            .updated_arrays
-            .keys()
+            .zarr_updated_arrays()
             .filter(|node_id| previous_change.updated_zarr_metadata.contains(node_id))
             .map(Ok);
 
@@ -66,8 +65,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let updated_arrays_were_deleted = current_changes
-            .updated_arrays
-            .keys()
+            .zarr_updated_arrays()
             .filter(|node_id| previous_change.deleted_arrays.contains(node_id))
             .map(Ok);
 
@@ -80,8 +78,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let updated_attributes_already_updated = current_changes
-            .updated_attributes
-            .keys()
+            .user_attributes_updated_nodes()
             .filter(|node_id| previous_change.updated_user_attributes.contains(node_id))
             .map(Ok);
 
@@ -97,8 +94,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let updated_attributes_on_deleted_node = current_changes
-            .updated_attributes
-            .keys()
+            .user_attributes_updated_nodes()
             .filter(|node_id| {
                 previous_change.deleted_arrays.contains(node_id)
                     || previous_change.deleted_groups.contains(node_id)
@@ -114,8 +110,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let chunks_updated_in_deleted_array = current_changes
-            .set_chunks
-            .keys()
+            .arrays_with_chunk_changes()
             .filter(|node_id| previous_change.deleted_arrays.contains(node_id))
             .map(Ok);
 
@@ -131,8 +126,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let chunks_updated_in_updated_array = current_changes
-            .set_chunks
-            .keys()
+            .arrays_with_chunk_changes()
             .filter(|node_id| previous_change.updated_zarr_metadata.contains(node_id))
             .map(Ok);
 
@@ -148,7 +142,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let chunks_double_updated =
-            current_changes.set_chunks.iter().filter_map(|(node_id, changes)| {
+            current_changes.chunk_changes().filter_map(|(node_id, changes)| {
                 if let Some(previous_changes) =
                     previous_change.updated_chunks.get(node_id)
                 {
@@ -181,7 +175,7 @@ impl ConflictSolver for ConflictDetector {
         );
 
         let deletes_of_updated_arrays = stream::iter(
-            current_changes.deleted_arrays.iter().map(Ok),
+            current_changes.deleted_arrays().map(Ok),
         )
         .try_filter_map(|path| async {
             let id = match previous_repo.get_node(path).await {
@@ -205,7 +199,7 @@ impl ConflictSolver for ConflictDetector {
         });
 
         let deletes_of_updated_groups = stream::iter(
-            current_changes.deleted_groups.iter().map(Ok),
+            current_changes.deleted_groups().map(Ok),
         )
         .try_filter_map(|path| async {
             let id = match previous_repo.get_node(path).await {

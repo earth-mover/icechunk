@@ -114,8 +114,7 @@ impl BasicConflictSolver {
                             // this is a no-op, our change will override the conflicting change
                         }
                         VersionSelection::UseTheirs => {
-                            let changes = current_changes.set_chunks.get_mut(&node_id).expect("Bug in conflict resolution: node_id not found in set_chunks map");
-                            changes.retain(|coord,_| ! chunk_coordinates.contains(coord));
+                            current_changes.drop_chunk_changes(&node_id, |coord| chunk_coordinates.contains(coord))
                         }
                         VersionSelection::Fail => panic!("Bug in conflict resolution: ChunkDoubleUpdate flagged as unrecoverable")
                     }
@@ -126,7 +125,7 @@ impl BasicConflictSolver {
                             // this is a no-op, our change will override the conflicting change
                         }
                         VersionSelection::UseTheirs => {
-                            current_changes.updated_attributes.remove(&node_id);
+                            current_changes.undo_user_attributes_update(&node_id);
                         }
                         VersionSelection::Fail => panic!("Bug in conflict resolution: UserAttributesDoubleUpdate flagged as unrecoverable")
                     }
