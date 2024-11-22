@@ -58,14 +58,3 @@ pub trait ConflictSolver {
         current_repo: &Repository,
     ) -> RepositoryResult<ConflictResolution>;
 }
-
-async fn find_path(node: &NodeId, repo: &Repository) -> RepositoryResult<Option<Path>> {
-    // FIXME: optimize
-    Ok(repo.list_nodes().await?.find_map(|node_snap| {
-        if node_snap.id == *node {
-            Some(node_snap.path)
-        } else {
-            None
-        }
-    }))
-}

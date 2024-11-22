@@ -175,6 +175,8 @@ pub enum RepositoryError {
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("error in repository deserialization `{0}`")]
     DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
+    ConflictingPathNotFound(NodeId),
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;

@@ -1,16 +1,20 @@
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::DerefMut,
+    sync::Mutex,
+};
 
 use async_trait::async_trait;
 use futures::{stream, StreamExt, TryStreamExt};
 
 use crate::{
     change_set::ChangeSet,
-    format::transaction_log::TransactionLog,
+    format::{snapshot::NodeSnapshot, transaction_log::TransactionLog, NodeId, Path},
     repository::{RepositoryError, RepositoryResult},
     Repository,
 };
 
-use super::{find_path, Conflict, ConflictResolution, ConflictSolver};
+use super::{Conflict, ConflictResolution, ConflictSolver};
 
 pub struct ConflictDetector;
 
@@ -51,6 +55,8 @@ impl ConflictSolver for ConflictDetector {
             Ok(None)
         });
 
+        let path_finder = PathFinder::new(current_repo.list_nodes().await?);
+
         let updated_arrays_already_updated = current_changes
             .zarr_updated_arrays()
             .filter(|node_id| previous_change.updated_zarr_metadata.contains(node_id))
@@ -58,9 +64,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_arrays_already_updated = stream::iter(updated_arrays_already_updated)
             .and_then(|node_id| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::ZarrMetadataDoubleUpdate(path))
             });
 
@@ -71,9 +75,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_arrays_were_deleted = stream::iter(updated_arrays_were_deleted)
             .and_then(|node_id| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::ZarrMetadataUpdateOfDeletedArray(path))
             });
 
@@ -84,9 +86,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_attributes_already_updated =
             stream::iter(updated_attributes_already_updated).and_then(|node_id| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::UserAttributesDoubleUpdate {
                     path,
                     node_id: node_id.clone(),
@@ -103,9 +103,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_attributes_on_deleted_node =
             stream::iter(updated_attributes_on_deleted_node).and_then(|node_id| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::UserAttributesUpdateOfDeletedNode(path))
             });
 
@@ -116,9 +114,7 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_updated_in_deleted_array =
             stream::iter(chunks_updated_in_deleted_array).and_then(|node_id| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::ChunksUpdatedInDeletedArray {
                     path,
                     node_id: node_id.clone(),
@@ -132,9 +128,7 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_updated_in_updated_array =
             stream::iter(chunks_updated_in_updated_array).and_then(|node_id| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::ChunksUpdatedInUpdatedArray {
                     path,
                     node_id: node_id.clone(),
@@ -163,9 +157,7 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_double_updated = stream::iter(chunks_double_updated).and_then(
             |(node_id, conflicting_coords)| async {
-                let path = find_path(node_id, current_repo)
-                    .await?
-                    .expect("Bug in conflict detection");
+                let path = path_finder.find(node_id)?;
                 Ok(Conflict::ChunkDoubleUpdate {
                     path,
                     node_id: node_id.clone(),
@@ -240,6 +232,39 @@ impl ConflictSolver for ConflictDetector {
                 reason: all_conflicts,
                 unmodified: current_changes,
             })
+        }
+    }
+}
+
+struct PathFinder<It>(Mutex<(HashMap<NodeId, Path>, Option<It>)>);
+
+impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
+    fn new(iter: It) -> Self {
+        Self(Mutex::new((HashMap::new(), Some(iter))))
+    }
+
+    fn find(&self, node_id: &NodeId) -> RepositoryResult<Path> {
+        // we can safely unwrap th eresult of `lock` because there is no failing code called while
+        // the mutex is hold. The mutex is there purely to support interior mutability
+        #![allow(clippy::expect_used)]
+        let mut guard = self.0.lock().expect("Concurrency bug in PathFinder");
+
+        let (ref mut cache, ref mut iter) = guard.deref_mut();
+        if let Some(cached) = cache.get(node_id) {
+            Ok(cached.clone())
+        } else if let Some(iterator) = iter {
+            for node in iterator {
+                if &node.id == node_id {
+                    cache.insert(node.id, node.path.clone());
+                    return Ok(node.path);
+                } else {
+                    cache.insert(node.id, node.path);
+                }
+            }
+            *iter = None;
+            Err(RepositoryError::ConflictingPathNotFound(node_id.clone()))
+        } else {
+            Err(RepositoryError::ConflictingPathNotFound(node_id.clone()))
         }
     }
 }
