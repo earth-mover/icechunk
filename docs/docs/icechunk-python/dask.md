@@ -2,7 +2,7 @@
 
 !!! warning
 
-    Using Xarray, Dask, and Icechunk requires `icechunk>=FOO`, `dask>=2024.11.0`, and `xarray>=2024.11.0`. 
+    Using Xarray, Dask, and Icechunk requires `icechunk>=0.1.0a5`, `dask>=2024.11.0`, and `xarray>=2024.11.0`.
 
 
 First let's start a distributed Client and create an IcechunkStore.
@@ -22,7 +22,7 @@ icechunk_store = IcechunkStore.create(storage_config)
 
 ## Icechunk + Dask
 
-Use [`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) to write a dask array to an icechunk store. 
+Use [`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) to write a dask array to an icechunk store.
 The API follows that of [`dask.array.store`](https://docs.dask.org/en/stable/generated/dask.array.store.html) *without*
 support for the `compute` kwarg.
 
@@ -33,7 +33,7 @@ dask_chunks = (20, 20)
 dask_array = dask.array.random.random(shape, chunks=dask_chunks)
 ```
 
-Now create the zarr array you will write to. 
+Now create the zarr array you will write to.
 ```python
 zarr_chunks = (10, 10)
 group = zarr.group(store=icechunk_store, overwrite=True)
@@ -44,7 +44,7 @@ zarray = group.create_array(
     chunk_shape=zarr_chunks,
     dtype="f8",
     fill_value=float("nan"),
-)  
+)
 ```
 Note that the chunks in the store are a divisor of the dask chunks. This means each individual
 write task is independent, and will not conflict. It is your responsibility to ensure that such
@@ -66,7 +66,7 @@ icechunk_store.commit("wrote a dask array!")
 
 ### Simple
 
-The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to xarray's 
+The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported. See the next section if you need delayed writes.
 

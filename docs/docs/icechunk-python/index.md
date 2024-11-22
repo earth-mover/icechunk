@@ -4,5 +4,5 @@
 - [examples](/icechunk-python/examples/)
 - [notebooks](/icechunk-python/notebooks/)
 - [quickstart](/icechunk-python/quickstart/)
-- [distributed](/icechunk-python/distributed-writes.md)
+- [distributed](/icechunk-python/dask.md)
 - [reference](/icechunk-python/reference/)
