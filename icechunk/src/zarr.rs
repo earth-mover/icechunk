@@ -64,6 +64,7 @@ pub enum StorageConfig {
 
     #[serde(rename = "azure_blob")]
     AzureBlobStore {
+        container: String,
         prefix: String,
         #[serde(flatten)]
         config: AzureBlobConfig,
@@ -87,8 +88,8 @@ impl StorageConfig {
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))
             }
-            StorageConfig::AzureBlobStore { prefix, config }  => {
-                let storage = AzureBlobStorage::new_azure_blob_store(prefix, config)
+            StorageConfig::AzureBlobStore { container, prefix, config }  => {
+                let storage = AzureBlobStorage::new_azure_blob_store(container, prefix, config)
                     .await
                     .map_err(|e| format!("Error creating storage: {e}"))?;
                 Ok(Arc::new(storage))

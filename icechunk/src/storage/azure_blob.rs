@@ -56,6 +56,7 @@ pub enum AzureStorageCredentials {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Location {
+    
     #[serde(rename = "public")]
     Public(String),
     #[serde(rename = "china")]
@@ -66,41 +67,34 @@ pub enum Location {
     Custom(String, String),
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AzureBlobConfig {
-    pub cloud_location: Option<Location>,
-    pub account: String,
+    pub cloud_location: Location,
     pub credentials: AzureStorageCredentials,
-    pub container_name: String
 }
 
-pub async fn mk_client(config: &AzureBlobConfig) -> ContainerClient {
-    let account = config.account.clone();
-    let container = config.container_name.clone();
-    let location = match config.cloud_location.clone() {
-        Some(location) => match location {
-            Location::Public(account) => CloudLocation::Public { account },
-            Location::China(account) => CloudLocation::China { account },
-            Location::Emulator(address, port) => CloudLocation::Emulator { address, port },
-            Location::Custom(account, uri) => CloudLocation::Custom { account, uri },
-        },
-        None => CloudLocation::Public { account: account },
+pub async fn mk_client(config: &AzureBlobConfig) -> ClientBuilder {
+    let (location, account) = match config.cloud_location.clone() {
+        Location::Public(account) => (CloudLocation::Public { account: account.clone() }, Some(account)),
+            Location::China(account) => (CloudLocation::China { account: account.clone() }, Some(account)),
+            Location::Emulator(address, port) => (CloudLocation::Emulator { address, port }, None),
+            Location::Custom(account, uri) => (CloudLocation::Custom {  account: account.clone(), uri }, Some(account)),
     };
 
     let storage_credentials = match config.credentials.clone() {
         AzureStorageCredentials::Anonymous => StorageCredentials::anonymous(),
         AzureStorageCredentials::AccessKey(key) => {
-            if matches!(config.cloud_location, Some(Location::Emulator { .. })) {
+            if matches!(config.cloud_location, Location::Emulator { .. }) {
                 StorageCredentials::emulator()
             } else {
-                StorageCredentials::access_key(config.account.clone(), key.unwrap())
+                StorageCredentials::access_key(account.unwrap(), key.unwrap())
             }
         },
         AzureStorageCredentials::SASToken(token) => StorageCredentials::sas_token(token).unwrap(),
         AzureStorageCredentials::BearerToken(token) => StorageCredentials::bearer_token(token),
     };
 
-    ClientBuilder::with_location(location, storage_credentials).container_client(&container)
+    ClientBuilder::with_location(location, storage_credentials)
 }
 
 const SNAPSHOT_PREFIX: &str = "snapshots/";
@@ -111,10 +105,12 @@ const REF_PREFIX: &str = "refs";
 
 impl AzureBlobStorage {
     pub async fn new_azure_blob_store(
+        container_name: impl Into<String>,
         prefix: impl Into<String>,
         config: &AzureBlobConfig,
     ) -> Result<AzureBlobStorage, StorageError> {
-        let client = Arc::new(mk_client(config).await);
+        let client_builder = mk_client(config).await;
+        let client = Arc::new(client_builder.container_client(container_name));
         Ok(AzureBlobStorage { client, prefix: prefix.into() })
     }
 
@@ -156,22 +152,9 @@ impl AzureBlobStorage {
 
     async fn get_object_range(&self, key: &str, byte_range: &ByteRange) -> StorageResult<Bytes> {
         let blob_client = self.get_blob_client(key);
-        let range = get_range(byte_range);
-        let mut result: Vec<u8> = vec![];
-
-        // The stream is composed of individual calls to the get blob endpoint
-        let mut stream = blob_client.get().range(range.unwrap()).into_stream();
-        while let Some(value) = stream.next().await {
-            let mut body = value?.data;
-            // For each response, we stream the body instead of collecting it all
-            // into one large allocation.
-            while let Some(value) = body.next().await {
-                let value = value?;
-                result.extend(&value);
-            }
-        }
-
-        Ok(Bytes::from(result))
+        Ok(get_object_range(&blob_client, byte_range)
+            .await
+            .map_err(StorageError::from)?)
     }
 
     async fn put_object(
@@ -191,14 +174,44 @@ impl AzureBlobStorage {
         path.into_os_string().into_string().map(|s| s.replace("\\", "/")).map_err(StorageError::BadPrefix)
     }
 
+    async fn create_container_if_not_exists(&self) -> Result<(), StorageError> {
+        if self.client.exists().await? {
+            return Ok(());
+        }
+
+        self.client.create().await.map_err(StorageError::from)
+    }
+
 }
 
-pub fn get_range(range: &ByteRange) -> Option<Range> {
-    match range {
+pub async fn get_object_range(blob_client: &BlobClient, byte_range: &ByteRange) -> StorageResult<Bytes> {
+    let range = match byte_range {
         ByteRange::Bounded(range) => Some(Range::new(range.start, range.end)),
         ByteRange::From(offset) => Some(Range::new(*offset, u64::MAX)),
         ByteRange::Last(n) => Some(Range::new(u64::MAX - n, u64::MAX)),
+    };
+
+    let mut result: Vec<u8> = vec![];
+
+    // The stream is composed of individual calls to the get blob endpoint
+    let mut stream = blob_client.get().range(range.unwrap()).into_stream();
+    while let Some(value) = stream.next().await {
+        let mut body = value?.data;
+        // For each response, we stream the body instead of collecting it all
+        // into one large allocation.
+        while let Some(value) = body.next().await {
+            let value = value?;
+            result.extend(&value);
+        }
     }
+
+    Ok(Bytes::from(result))
+}
+
+pub async fn create_container_if_not_exists(
+    storage: &AzureBlobStorage,
+) -> Result<(), StorageError> {
+    storage.create_container_if_not_exists().await
 }
 
 impl private::Sealed for AzureBlobStorage {}
