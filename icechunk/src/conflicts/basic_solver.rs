@@ -116,6 +116,9 @@ impl BasicConflictSolver {
                         VersionSelection::UseTheirs => {
                             current_changes.drop_chunk_changes(&node_id, |coord| chunk_coordinates.contains(coord))
                         }
+                        // we can panic here because we have returned from the function if there
+                        // were any unsolvable conflicts
+                        #[allow(clippy::panic)]
                         VersionSelection::Fail => panic!("Bug in conflict resolution: ChunkDoubleUpdate flagged as unrecoverable")
                     }
                 }
@@ -127,6 +130,9 @@ impl BasicConflictSolver {
                         VersionSelection::UseTheirs => {
                             current_changes.undo_user_attributes_update(&node_id);
                         }
+                        // we can panic here because we have returned from the function if there
+                        // were any unsolvable conflicts
+                        #[allow(clippy::panic)]
                         VersionSelection::Fail => panic!("Bug in conflict resolution: UserAttributesDoubleUpdate flagged as unrecoverable")
                     }
                 }
@@ -138,6 +144,9 @@ impl BasicConflictSolver {
                     assert!(!self.fail_on_delete_of_updated_group);
                     // this is a no-op, the solution is to still delete the group
                 }
+                // we can panic here because we have returned from the function if there
+                // were any unsolvable conflicts
+                #[allow(clippy::panic)]
                 _ => panic!("bug in conflict resolution, conflict: {:?}", conflict),
             }
         }

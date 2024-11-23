@@ -988,7 +988,8 @@ async fn get_metadata(
         None => None,
         Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
         // FIXME: implement
-        Some(UserAttributesSnapshot::Ref(_)) => todo!(),
+        #[allow(clippy::unimplemented)]
+        Some(UserAttributesSnapshot::Ref(_)) => unimplemented!(),
     };
     let full_metadata = match node.node_data {
         NodeData::Group => {
