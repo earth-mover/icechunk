@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     iter::{self},
+    mem::take,
     pin::Pin,
     sync::Arc,
 };
@@ -320,7 +321,10 @@ impl Repository {
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
             // FIXME: implement splitting of snapshot history
-            Either::Left(parent.local_ancestry().chain(iter::once_with(|| todo!())))
+            #[allow(clippy::unimplemented)]
+            Either::Left(
+                parent.local_ancestry().chain(iter::once_with(|| unimplemented!())),
+            )
         } else {
             Either::Right(parent.local_ancestry())
         };
@@ -738,7 +742,10 @@ impl Repository {
         let ref_data =
             fetch_branch_tip(self.storage.as_ref(), update_branch_name).await?;
 
-        if ref_data.snapshot != self.snapshot_id {
+        if ref_data.snapshot == self.snapshot_id {
+            // nothing to do, commit should work without rebasing
+            Ok(())
+        } else {
             let current_snapshot =
                 self.storage.fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
@@ -750,7 +757,7 @@ impl Repository {
             // TODO: this clone is expensive
             // we currently need it to be able to process commits one by one without modifying the
             // changeset in case of failure
-            let mut changeset = self.change_set.clone();
+            // let mut changeset = self.change_set.clone();
 
             // we need to reverse the iterator to process them in order of oldest first
             for snap_id in new_commits.into_iter().rev() {
@@ -763,12 +770,15 @@ impl Repository {
                     virtual_resolver: self.virtual_resolver.clone(),
                 };
 
+                let change_set = take(&mut self.change_set);
                 // TODO: this should probably execute in a worker thread
-                match solver.solve(&tx_log, &repo, changeset, self).await? {
+                match solver.solve(&tx_log, &repo, change_set, self).await? {
                     ConflictResolution::Patched(patched_changeset) => {
-                        changeset = patched_changeset;
+                        self.change_set = patched_changeset;
+                        self.snapshot_id = snap_id;
                     }
-                    ConflictResolution::Unsolvable { reason, .. } => {
+                    ConflictResolution::Unsolvable { reason, unmodified } => {
+                        self.change_set = unmodified;
                         return Err(RepositoryError::RebaseFailed {
                             snapshot: snap_id,
                             conflicts: reason,
@@ -777,12 +787,7 @@ impl Repository {
                 }
             }
 
-            self.change_set = changeset;
-            self.snapshot_id = ref_data.snapshot;
             Ok(())
-        } else {
-            //FIXME:
-            todo!()
         }
     }
 
@@ -2861,6 +2866,120 @@ mod tests {
             repo2.get_node(&path).await,
             Err(RepositoryError::NodeNotFound { .. })
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_conflict_resolution_success_through_multiple_commits(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        for coord in [0u32, 1, 2] {
+            repo1
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![coord]),
+                    Some(ChunkPayload::Inline("repo 1".into())),
+                )
+                .await?;
+            repo1
+                .commit(
+                    Ref::DEFAULT_BRANCH,
+                    format!("update chunk {}", coord).as_str(),
+                    None,
+                )
+                .await?;
+        }
+
+        for coord in [0u32, 1, 2] {
+            repo2
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![coord]),
+                    Some(ChunkPayload::Inline("repo 2".into())),
+                )
+                .await?;
+        }
+
+        repo2
+            .commit(Ref::DEFAULT_BRANCH, "update chunk on repo 2", None)
+            .await
+            .unwrap_err();
+
+        let solver = BasicConflictSolver {
+            on_chunk_conflict: VersionSelection::UseTheirs,
+            ..Default::default()
+        };
+
+        repo2.rebase(&solver, "main").await?;
+        repo2.commit("main", "after conflict", None).await?;
+        for coord in [0, 1, 2] {
+            let payload = repo2.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?;
+            assert_eq!(payload, Some(ChunkPayload::Inline("repo 1".into())));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_conflict_resolution_failure_in_multiple_commits(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut repo1, mut repo2) = get_repos_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        repo1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            )
+            .await?;
+        let non_conflicting_snap =
+            repo1.commit(Ref::DEFAULT_BRANCH, "update user atts", None).await?;
+
+        repo1
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("repo 1".into())),
+            )
+            .await?;
+
+        let conflicting_snap =
+            repo1.commit(Ref::DEFAULT_BRANCH, "update chunk ref", None).await?;
+
+        repo2
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("repo 2".into())),
+            )
+            .await?;
+
+        repo2.commit(Ref::DEFAULT_BRANCH, "update chunk ref", None).await.unwrap_err();
+        let solver = BasicConflictSolver {
+            on_chunk_conflict: VersionSelection::Fail,
+            ..Default::default()
+        };
+
+        dbg!(repo2.snapshot_id());
+        let err = repo2.rebase(&solver, "main").await.unwrap_err();
+
+        assert!(matches!(
+        err,
+        RepositoryError::RebaseFailed { snapshot, conflicts}
+            if snapshot == conflicting_snap &&
+            conflicts.len() == 1 &&
+            matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+                        if path == path && chunk_coordinates == &[ChunkIndices(vec![0])].into())
+            ));
+
+        dbg!(repo2.snapshot_id());
+        dbg!(&non_conflicting_snap);
+        dbg!(&conflicting_snap);
+        // we were able to rebase one commit but not the second one,
+        // so now the parent is the first commit
+        assert_eq!(repo2.snapshot_id(), &non_conflicting_snap);
 
         Ok(())
     }
