@@ -244,7 +244,7 @@ impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
     }
 
     fn find(&self, node_id: &NodeId) -> RepositoryResult<Path> {
-        // we can safely unwrap th eresult of `lock` because there is no failing code called while
+        // we can safely unwrap the result of `lock` because there is no failing code called while
         // the mutex is hold. The mutex is there purely to support interior mutability
         #![allow(clippy::expect_used)]
         let mut guard = self.0.lock().expect("Concurrency bug in PathFinder");
