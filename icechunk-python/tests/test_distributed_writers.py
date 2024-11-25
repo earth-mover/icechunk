@@ -55,7 +55,7 @@ def generate_task_array(task: Task):
     return np.random.rand(nx, ny)
 
 
-async def execute_task(task: Task) -> bytes:
+async def execute_task(task: Task) -> bytes:  # noqa: RUF029
     store = mk_store(read_only=False, task=task)
 
     group = zarr.group(store=store, overwrite=False)

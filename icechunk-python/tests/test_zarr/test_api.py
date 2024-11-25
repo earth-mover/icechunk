@@ -24,7 +24,7 @@ from zarr.storage._utils import normalize_path
 
 
 @pytest.fixture(scope="function")
-async def memory_store() -> IcechunkStore:
+def memory_store() -> IcechunkStore:
     return parse_store("memory", "")
 
 
@@ -63,7 +63,7 @@ def test_open_normalized_path(
     assert node.path == normalize_path(path)
 
 
-async def test_open_array(memory_store: IcechunkStore) -> None:
+def test_open_array(memory_store: IcechunkStore) -> None:
     store = memory_store
 
     # open array, create if doesn't exist
@@ -97,7 +97,7 @@ async def test_open_array(memory_store: IcechunkStore) -> None:
         open(store="doesnotexist", mode="r")
 
 
-async def test_open_group(memory_store: IcechunkStore) -> None:
+def test_open_group(memory_store: IcechunkStore) -> None:
     store = memory_store
 
     # open group, create if doesn't exist

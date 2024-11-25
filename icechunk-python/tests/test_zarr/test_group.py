@@ -985,7 +985,7 @@ class TestInfo:
         assert result == expected
 
 
-async def test_delitem_removes_children(
+def test_delitem_removes_children(
     store: IcechunkStore, zarr_format: ZarrFormat
 ) -> None:
     # https://github.com/zarr-developers/zarr-python/issues/2191

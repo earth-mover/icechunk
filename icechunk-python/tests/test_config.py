@@ -7,7 +7,7 @@ import zarr
 
 
 @pytest.fixture(scope="function")
-async def tmp_store(tmpdir):
+def tmp_store(tmpdir):
     store_path = f"{tmpdir}"
     store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(store_path),
@@ -20,7 +20,7 @@ async def tmp_store(tmpdir):
     store.close()
 
 
-async def test_no_inline_chunks(tmp_store):
+def test_no_inline_chunks(tmp_store):
     store = tmp_store[0]
     store_path = tmp_store[1]
     array = zarr.open_array(
@@ -40,7 +40,7 @@ async def test_no_inline_chunks(tmp_store):
     assert len(os.listdir(f"{store_path}/chunks")) == 10
 
 
-async def test_inline_chunks(tmp_store):
+def test_inline_chunks(tmp_store):
     store = tmp_store[0]
     store_path = tmp_store[1]
 
