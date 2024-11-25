@@ -2,7 +2,7 @@ mod errors;
 mod storage;
 mod streams;
 
-use std::{borrow::Cow, convert::Infallible, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
@@ -23,7 +23,7 @@ use icechunk::{
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
-    types::{PyBytes, PyList, PyNone, PyString},
+    types::{PyBytes, PyNone, PyString},
 };
 use storage::{PyS3Credentials, PyStorageConfig, PyVirtualRefConfig};
 use streams::PyAsyncGenerator;
@@ -531,10 +531,7 @@ impl PyIcechunkStore {
         })
     }
 
-    fn new_branch(
-        &self,
-        branch_name: String,
-    ) -> PyIcechunkStoreResult<String> {
+    fn new_branch(&self, branch_name: String) -> PyIcechunkStoreResult<String> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = do_new_branch(store, branch_name).await?;
@@ -553,10 +550,7 @@ impl PyIcechunkStore {
         })
     }
 
-    fn reset_branch(
-        &self,
-        to_snapshot: String,
-    ) -> PyIcechunkStoreResult<()> {
+    fn reset_branch(&self, to_snapshot: String) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_reset_branch(store, to_snapshot).await?;
@@ -579,11 +573,7 @@ impl PyIcechunkStore {
         })
     }
 
-    fn tag(
-        &self,
-        tag: String,
-        snapshot_id: String,
-    ) -> PyIcechunkStoreResult<()> {
+    fn tag(&self, tag: String, snapshot_id: String) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_tag(store, tag, snapshot_id).await?;
@@ -591,18 +581,14 @@ impl PyIcechunkStore {
         })
     }
 
-    fn ancestry(
-        &self,
-    ) -> PyIcechunkStoreResult<Vec<PySnapshotMetadata>> {
+    fn ancestry(&self) -> PyIcechunkStoreResult<Vec<PySnapshotMetadata>> {
         // TODO: this holds everything in memory
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let store = self.store.read().await;
             let ancestry = store
                 .ancestry()
                 .await?
-                .map_ok(|parent| {
-                    Into::<PySnapshotMetadata>::into(parent)
-                })
+                .map_ok(|parent| Into::<PySnapshotMetadata>::into(parent))
                 .try_collect::<Vec<_>>()
                 .await?;
             Ok(ancestry)
@@ -617,7 +603,10 @@ impl PyIcechunkStore {
             })?
             .map_ok(|parent| {
                 let parent = Into::<PySnapshotMetadata>::into(parent);
-                Python::with_gil(|py| parent.into_py(py))
+                Python::with_gil(|py| {
+                    let bound_parent = parent.into_pyobject(py).unwrap();
+                    bound_parent.to_object(py)
+                })
             });
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncGenerator::new(prepared_list))
@@ -671,12 +660,7 @@ impl PyIcechunkStore {
             // We need to distinguish the "safe" case of trying to fetch an uninitialized key
             // from other types of errors, we use PyKeyError exception for that
             match data {
-                Ok(data) => {
-                    Python::with_gil(|py| {
-                        let bound_bytes = PyBytes::new(py, &data);
-                        bound_bytes.into_pyobject(py).map_err(PyIcechunkStoreError::from)
-                    })
-                }
+                Ok(data) => Ok(Vec::from(data)),
                 Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
                 Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
             }
@@ -702,15 +686,7 @@ impl PyIcechunkStore {
                 .into_iter()
                 // If we want to error instead of returning None we can collect into
                 // a Result<Vec<_>, _> and short circuit
-                .map(|x| {
-                    x.map(|x| {
-                        Python::with_gil(|py| {
-                            let bound_bytes = PyBytes::new(py, &x);
-                            bound_bytes.to_object(py)
-                        })
-                    })
-                    .ok()
-                })
+                .map(|x| x.map(|x| Vec::from(x)).ok())
                 .collect::<Vec<_>>();
 
             Ok(result)
