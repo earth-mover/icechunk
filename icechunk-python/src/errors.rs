@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use icechunk::{
     format::IcechunkFormatError, repository::RepositoryError, zarr::StoreError,
 };
@@ -30,6 +32,12 @@ pub(crate) enum PyIcechunkStoreError {
     PyError(#[from] PyErr),
     #[error("{0}")]
     UnkownError(String),
+}
+
+impl From<Infallible> for PyIcechunkStoreError {
+    fn from(_: Infallible) -> Self {
+        PyIcechunkStoreError::UnkownError("Infallible".to_string())
+    }
 }
 
 impl From<StoreError> for PyIcechunkStoreError {
