@@ -23,7 +23,7 @@ use icechunk::{
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
-    types::{PyBytes, PyNone, PyString},
+    types::{PyNone, PyString},
 };
 use storage::{PyS3Credentials, PyStorageConfig, PyVirtualRefConfig};
 use streams::PyAsyncGenerator;
@@ -588,7 +588,7 @@ impl PyIcechunkStore {
             let ancestry = store
                 .ancestry()
                 .await?
-                .map_ok(|parent| Into::<PySnapshotMetadata>::into(parent))
+                .map_ok(Into::<PySnapshotMetadata>::into)
                 .try_collect::<Vec<_>>()
                 .await?;
             Ok(ancestry)
@@ -603,10 +603,7 @@ impl PyIcechunkStore {
             })?
             .map_ok(|parent| {
                 let parent = Into::<PySnapshotMetadata>::into(parent);
-                Python::with_gil(|py| {
-                    let bound_parent = parent.into_pyobject(py).unwrap();
-                    bound_parent.to_object(py)
-                })
+                Python::with_gil(|py| parent.into_py(py))
             });
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncGenerator::new(prepared_list))
@@ -686,7 +683,7 @@ impl PyIcechunkStore {
                 .into_iter()
                 // If we want to error instead of returning None we can collect into
                 // a Result<Vec<_>, _> and short circuit
-                .map(|x| x.map(|x| Vec::from(x)).ok())
+                .map(|x| x.map(Vec::from).ok())
                 .collect::<Vec<_>>();
 
             Ok(result)
