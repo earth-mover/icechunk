@@ -14,7 +14,7 @@ repos:
     hooks:
       - id: ruff-format
       - id: ruff
-        args: ["--fix", "--show-fixes", "icechunk-python/"]
+        args: ["--preview", "--fix", "--show-fixes", "icechunk-python/"]
   - repo: https://github.com/rhysd/actionlint
     rev: v1.6.26
     hooks:
