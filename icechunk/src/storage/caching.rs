@@ -8,7 +8,8 @@ use quick_cache::sync::Cache;
 use crate::{
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
-        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+        transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
+        SnapshotId,
     },
     private,
 };
@@ -20,6 +21,7 @@ pub struct MemCachingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     snapshot_cache: Cache<SnapshotId, Arc<Snapshot>>,
     manifest_cache: Cache<ManifestId, Arc<Manifest>>,
+    transactions_cache: Cache<SnapshotId, Arc<TransactionLog>>,
     attributes_cache: Cache<AttributesId, Arc<AttributesTable>>,
     chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
 }
@@ -29,6 +31,7 @@ impl MemCachingStorage {
         backend: Arc<dyn Storage + Send + Sync>,
         num_snapshots: u16,
         num_manifests: u16,
+        num_transactions: u16,
         num_attributes: u16,
         num_chunks: u16,
     ) -> Self {
@@ -36,6 +39,7 @@ impl MemCachingStorage {
             backend,
             snapshot_cache: Cache::new(num_snapshots as usize),
             manifest_cache: Cache::new(num_manifests as usize),
+            transactions_cache: Cache::new(num_transactions as usize),
             attributes_cache: Cache::new(num_attributes as usize),
             chunk_cache: Cache::new(num_chunks as usize),
         }
@@ -88,6 +92,20 @@ impl Storage for MemCachingStorage {
         }
     }
 
+    async fn fetch_transaction_log(
+        &self,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<TransactionLog>> {
+        match self.transactions_cache.get_value_or_guard_async(id).await {
+            Ok(log) => Ok(log),
+            Err(guard) => {
+                let log = self.backend.fetch_transaction_log(id).await?;
+                let _fail_is_ok = guard.insert(Arc::clone(&log));
+                Ok(log)
+            }
+        }
+    }
+
     async fn fetch_chunk(
         &self,
         id: &ChunkId,
@@ -131,6 +149,16 @@ impl Storage for MemCachingStorage {
     ) -> Result<(), StorageError> {
         self.backend.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
         self.manifest_cache.insert(id, manifest);
+        Ok(())
+    }
+
+    async fn write_transaction_log(
+        &self,
+        id: SnapshotId,
+        log: Arc<TransactionLog>,
+    ) -> StorageResult<()> {
+        self.backend.write_transaction_log(id.clone(), Arc::clone(&log)).await?;
+        self.transactions_cache.insert(id, log);
         Ok(())
     }
 
@@ -217,7 +245,7 @@ mod test {
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 0, 2, 0, 0);
+        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 0, 2, 0, 0, 0);
 
         let manifest = Arc::new(vec![ci2].into_iter().collect());
         let id = ManifestId::random();
@@ -293,6 +321,7 @@ mod test {
             // the cache can only fit 2 manifests.
             0,
             2,
+            0,
             0,
             0,
         );

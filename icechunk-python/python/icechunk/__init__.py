@@ -24,9 +24,9 @@ from zarr.core.sync import SyncMixin
 __all__ = [
     "__version__",
     "IcechunkStore",
-    "StorageConfig",
     "S3Credentials",
     "SnapshotMetadata",
+    "StorageConfig",
     "StoreConfig",
     "VirtualRefConfig",
 ]
