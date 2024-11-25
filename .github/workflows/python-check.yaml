@@ -79,7 +79,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
-          ruff check
+          ruff check --preview
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
