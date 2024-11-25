@@ -23,9 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
-        attributes::AttributesTable, manifest::Manifest,
-        snapshot::Snapshot, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId,
-        SnapshotId,
+        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId, SnapshotId
     }, private, zarr::ObjectId, Storage, StorageError
 };
 
@@ -102,6 +100,7 @@ const MANIFEST_PREFIX: &str = "manifests/";
 // const ATTRIBUTES_PREFIX: &str = "attributes/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
+const TRANSACTION_PREFIX: &str = "transactions/";
 
 impl AzureBlobStorage {
     pub async fn new_azure_blob_store(
@@ -138,6 +137,10 @@ impl AzureBlobStorage {
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> StorageResult<String> {
         self.get_path(SNAPSHOT_PREFIX, id)
+    }
+
+    fn get_transaction_path(&self, id: &SnapshotId) -> StorageResult<String> {
+        self.get_path(TRANSACTION_PREFIX, id)
     }
 
     fn get_blob_client(&self, blob_name: &str) -> BlobClient {
@@ -246,6 +249,17 @@ impl Storage for AzureBlobStorage {
         Ok(bytes)
     }
 
+    async fn fetch_transaction_log(
+        &self,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<TransactionLog>> {
+        let key = self.get_transaction_path(id)?;
+        let bytes = self.get_object(key.as_str()).await?;
+        // TODO: optimize using from_read
+        let res = rmp_serde::from_slice(bytes.as_ref())?;
+        Ok(Arc::new(res))
+    }
+
     async fn write_snapshot(
         &self,
         id: SnapshotId,
@@ -291,6 +305,20 @@ impl Storage for AzureBlobStorage {
         //FIXME: use multipart upload
         let body = bytes.to_vec();
         self.put_object(key.as_str(), body).await
+    }
+
+    async fn write_transaction_log(
+        &self,
+        id: SnapshotId,
+        log: Arc<TransactionLog>,
+    ) -> StorageResult<()> {
+        let key = self.get_transaction_path(&id)?;
+        let bytes = rmp_serde::to_vec(log.as_ref())?;
+        self.put_object(
+            key.as_str(),
+            bytes,
+        )
+        .await
     }
 
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
