@@ -28,6 +28,7 @@ pub mod storage;
 #[cfg(test)]
 pub mod strategies;
 pub mod zarr;
+pub mod c_interface;
 
 pub use repository::{Repository, RepositoryBuilder, RepositoryConfig, SnapshotMetadata};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
