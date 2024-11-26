@@ -10,13 +10,13 @@ repos:
       - id: mixed-line-ending
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff version.
-    rev: 'v0.7.2'
+    rev: 'v0.8.0'
     hooks:
       - id: ruff-format
       - id: ruff
         args: ["--fix", "--show-fixes", "icechunk-python/"]
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.6.26
+    rev: v1.7.4
     hooks:
       - id: actionlint
         files: ".github/workflows/"
@@ -28,7 +28,7 @@ repos:
       - id: codespell
   - repo: local
     hooks:
-      - id: format-lint
+      - id: just-rust
         name: just
         description: Run the just pre-commit step
         entry: just pre-commit

@@ -6,7 +6,7 @@ use icechunk::{
         ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
         FillValue, Path, StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
-    storage::{MemCachingStorage, ObjectStorage},
+    storage::ObjectStorage,
     zarr::StoreError,
     Repository, Storage,
 };
@@ -30,7 +30,7 @@ let mut ds = Repository::create(Arc::clone(&storage));
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(ObjectStorage::new_in_memory_store(None));
     let mut ds = Repository::init(
-        Arc::new(MemCachingStorage::new(Arc::clone(&storage), 2, 2, 0, 0)),
+        Repository::add_in_mem_asset_caching(Arc::clone(&storage)),
         false,
     )
     .await?
