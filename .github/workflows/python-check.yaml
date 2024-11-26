@@ -55,7 +55,7 @@ jobs:
           sccache: 'true'
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
-      - name: Cargo lint + format
+      - name: Cargo lint + format icechunk-python
         shell: bash
         working-directory: icechunk
         run: |
@@ -71,15 +71,14 @@ jobs:
           pip install icechunk['test'] --find-links dist --force-reinstall
           mypy python
 
-      # - name: ruff
-      #   shell: bash
-      #   working-directory: icechunk-python
-      #   run: |
-      #     set -e
-      #     python3 -m venv .venv
-      #     source .venv/bin/activate
-      #     pip install icechunk['test'] --find-links dist --force-reinstall
-      #     ruff check
+      - name: pre-commit lint
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          pip install pre-commit
+          SKIP=just-rust pre-commit run --all-files
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
