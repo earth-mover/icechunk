@@ -603,6 +603,7 @@ impl PyIcechunkStore {
             })?
             .map_ok(|parent| {
                 let parent = Into::<PySnapshotMetadata>::into(parent);
+                #[allow(deprecated)]
                 Python::with_gil(|py| parent.into_py(py))
             });
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
@@ -856,6 +857,7 @@ impl PyIcechunkStore {
     }
 
     fn list(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
@@ -868,6 +870,7 @@ impl PyIcechunkStore {
     }
 
     fn list_prefix(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
@@ -879,6 +882,7 @@ impl PyIcechunkStore {
     }
 
     fn list_dir(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
