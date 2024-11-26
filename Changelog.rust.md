@@ -1,5 +1,7 @@
 # Changelog
 
+## Rust Icechunk Library 0.1.0-alpha.5
+
 ## Rust Icechunk Library 0.1.0-alpha.4
 
 ### Features

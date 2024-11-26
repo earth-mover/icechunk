@@ -198,7 +198,7 @@ def test_array_v3_fill_value(
 
 
 @pytest.mark.parametrize("store", ["memory"], indirect=True)
-async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:  # noqa: RUF029
+async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:
     shape = (10,)
     arr = Array.create(
         store=store,
