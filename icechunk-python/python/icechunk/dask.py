@@ -41,6 +41,29 @@ def store_dask(
     split_every: int | None = None,
     **store_kwargs: Any,
 ) -> None:
+    """
+    A version of ``dask.array.store`` for Icechunk stores.
+
+    This method will eagerly execute writes to the Icechunk store, and will
+    merge the changesets corresponding to each write task. The `store` object
+    passed in will be updated in-place with the fully merged changeset.
+
+    Parameters
+    ----------
+    store: IcechunkStore
+        Icechunk store to write to.
+    sources: list of `dask.array.Array`
+        List of dask arrays to write.
+    targets : list of `zarr.Array`
+        Corresponding list of Zarr array objects to write to.
+    regions: list of tuple of slice, optional
+        Corresponding region for each of `targets` to write to.
+    split_every: int, optional
+        Number of changesets to merge at a given time.
+    **store_kwargs:
+        Arbitrary keyword arguments passed to `dask.array.store`. Notably `compute`,
+        `return_stored`, `load_stored`, and `lock` are unsupported.
+    """
     stored_arrays = dask.array.store(  # type: ignore[attr-defined]
         sources=sources,
         targets=targets,  # type: ignore[arg-type]
