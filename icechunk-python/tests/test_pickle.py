@@ -8,7 +8,7 @@ from zarr.storage import LocalStore
 
 
 @pytest.fixture(scope="function")
-async def tmp_store(tmpdir):
+def tmp_store(tmpdir):
     store_path = f"{tmpdir}"
     store = icechunk.IcechunkStore.open_or_create(
         storage=icechunk.StorageConfig.filesystem(store_path),
@@ -20,7 +20,7 @@ async def tmp_store(tmpdir):
     store.close()
 
 
-async def test_pickle_read_only(tmp_store):
+def test_pickle_read_only(tmp_store):
     assert tmp_store._read_only is False
 
     roundtripped = pickle.loads(pickle.dumps(tmp_store))
@@ -33,7 +33,7 @@ async def test_pickle_read_only(tmp_store):
     assert tmp_store._read_only is False
 
 
-async def test_pickle(tmp_store):
+def test_pickle(tmp_store):
     root = zarr.group(store=tmp_store)
     array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="float32")
     array[:] = 20

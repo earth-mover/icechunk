@@ -59,7 +59,7 @@ def create_array(*, group, name, size, dtype, fill_value) -> np.ndarray:
     return array
 
 
-async def run(store: Store) -> None:
+def run(store: Store) -> None:
     write_start = time.time()
     group = zarr.group(store=store, overwrite=True)
     group.attrs["foo"] = "foo"

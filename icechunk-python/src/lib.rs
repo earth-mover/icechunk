@@ -23,7 +23,7 @@ use icechunk::{
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
-    types::{PyBytes, PyList, PyNone, PyString},
+    types::{PyNone, PyString},
 };
 use storage::{PyS3Credentials, PyStorageConfig, PyVirtualRefConfig};
 use streams::PyAsyncGenerator;
@@ -378,7 +378,7 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_checkout_snapshot(store, snapshot_id).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(PyNone::get(py).to_owned())
         })
     }
 
@@ -401,7 +401,7 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_checkout_branch(store, branch).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(PyNone::get(py).to_owned())
         })
     }
 
@@ -424,7 +424,7 @@ impl PyIcechunkStore {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_checkout_tag(store, tag).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(PyNone::get(py).to_owned())
         })
     }
 
@@ -457,7 +457,7 @@ impl PyIcechunkStore {
 
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = do_commit(store, message).await?;
-            Ok(PyString::new_bound(py, res.as_str()))
+            Ok(PyString::new(py, res.as_str()))
         })
     }
 
@@ -512,11 +512,11 @@ impl PyIcechunkStore {
         })
     }
 
-    fn reset<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+    fn reset(&self) -> PyIcechunkStoreResult<Cow<[u8]>> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let changes = do_reset(store).await?;
-            Ok(PyBytes::new_bound(py, &changes))
+            Ok(Cow::Owned(changes))
         })
     }
 
@@ -531,15 +531,11 @@ impl PyIcechunkStore {
         })
     }
 
-    fn new_branch<'py>(
-        &'py self,
-        py: Python<'py>,
-        branch_name: String,
-    ) -> PyResult<Bound<'py, PyString>> {
+    fn new_branch(&self, branch_name: String) -> PyIcechunkStoreResult<String> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = do_new_branch(store, branch_name).await?;
-            Ok(PyString::new_bound(py, res.as_str()))
+            Ok(res)
         })
     }
 
@@ -554,15 +550,11 @@ impl PyIcechunkStore {
         })
     }
 
-    fn reset_branch<'py>(
-        &'py self,
-        py: Python<'py>,
-        to_snapshot: String,
-    ) -> PyResult<Bound<'py, PyNone>> {
+    fn reset_branch(&self, to_snapshot: String) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_reset_branch(store, to_snapshot).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(())
         })
     }
 
@@ -581,36 +573,25 @@ impl PyIcechunkStore {
         })
     }
 
-    fn tag<'py>(
-        &'py self,
-        py: Python<'py>,
-        tag: String,
-        snapshot_id: String,
-    ) -> PyResult<Bound<'py, PyNone>> {
+    fn tag(&self, tag: String, snapshot_id: String) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_tag(store, tag, snapshot_id).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(())
         })
     }
 
-    fn ancestry<'py>(
-        &'py self,
-        py: Python<'py>,
-    ) -> PyIcechunkStoreResult<Bound<'py, PyList>> {
+    fn ancestry(&self) -> PyIcechunkStoreResult<Vec<PySnapshotMetadata>> {
         // TODO: this holds everything in memory
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let store = self.store.read().await;
-            let list = store
+            let ancestry = store
                 .ancestry()
                 .await?
-                .map_ok(|parent| {
-                    let parent = Into::<PySnapshotMetadata>::into(parent);
-                    Python::with_gil(|py| parent.into_py(py))
-                })
+                .map_ok(Into::<PySnapshotMetadata>::into)
                 .try_collect::<Vec<_>>()
                 .await?;
-            Ok(PyList::new_bound(py, list))
+            Ok(ancestry)
         })
     }
 
@@ -622,6 +603,7 @@ impl PyIcechunkStore {
             })?
             .map_ok(|parent| {
                 let parent = Into::<PySnapshotMetadata>::into(parent);
+                #[allow(deprecated)]
                 Python::with_gil(|py| parent.into_py(py))
             });
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
@@ -653,12 +635,12 @@ impl PyIcechunkStore {
         })
     }
 
-    fn sync_clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyNone>> {
+    fn sync_clear(&self) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
 
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(())
         })
     }
 
@@ -676,13 +658,7 @@ impl PyIcechunkStore {
             // We need to distinguish the "safe" case of trying to fetch an uninitialized key
             // from other types of errors, we use PyKeyError exception for that
             match data {
-                Ok(data) => {
-                    let pybytes = Python::with_gil(|py| {
-                        let bound_bytes = PyBytes::new_bound(py, &data);
-                        bound_bytes.to_object(py)
-                    });
-                    Ok(pybytes)
-                }
+                Ok(data) => Ok(Vec::from(data)),
                 Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
                 Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
             }
@@ -708,15 +684,7 @@ impl PyIcechunkStore {
                 .into_iter()
                 // If we want to error instead of returning None we can collect into
                 // a Result<Vec<_>, _> and short circuit
-                .map(|x| {
-                    x.map(|x| {
-                        Python::with_gil(|py| {
-                            let bound_bytes = PyBytes::new_bound(py, &x);
-                            bound_bytes.to_object(py)
-                        })
-                    })
-                    .ok()
-                })
+                .map(|x| x.map(Vec::from).ok())
                 .collect::<Vec<_>>();
 
             Ok(result)
@@ -809,18 +777,17 @@ impl PyIcechunkStore {
         })
     }
 
-    fn set_virtual_ref<'py>(
-        &'py self,
-        py: Python<'py>,
+    fn set_virtual_ref(
+        &self,
         key: String,
         location: String,
         offset: ChunkOffset,
         length: ChunkLength,
-    ) -> PyResult<Bound<'py, PyNone>> {
+    ) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_set_virtual_ref(store, key, location, offset, length).await?;
-            Ok(PyNone::get_bound(py).to_owned())
+            Ok(())
         })
     }
 
@@ -890,6 +857,7 @@ impl PyIcechunkStore {
     }
 
     fn list(&self) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
@@ -902,6 +870,7 @@ impl PyIcechunkStore {
     }
 
     fn list_prefix(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;
@@ -913,6 +882,7 @@ impl PyIcechunkStore {
     }
 
     fn list_dir(&self, prefix: String) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+        #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let store = self.store.read().await;

@@ -6,7 +6,7 @@ use pyo3::{exceptions::PyStopAsyncIteration, prelude::*};
 use tokio::sync::Mutex;
 
 type PyObjectStream =
-    Arc<Mutex<Pin<Box<dyn Stream<Item = Result<PyObject, StoreError>> + Send>>>>;
+    Arc<Mutex<Pin<Box<dyn Stream<Item = Result<Py<PyAny>, StoreError>> + Send>>>>;
 
 /// An async generator that yields strings from a rust stream of strings
 ///
@@ -41,7 +41,7 @@ impl PyAsyncGenerator {
     fn __anext__<'py>(
         slf: PyRefMut<'py, Self>,
         py: Python<'py>,
-    ) -> PyResult<Option<PyObject>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         // Arc::clone is cheap, so we can clone the Arc here because we move into the
         // future block
         let stream = slf.stream.clone();
@@ -62,7 +62,6 @@ impl PyAsyncGenerator {
 
         // TODO: Can we convert this is an async function or a coroutine in the next versions
         // of pyo3?
-        let result = pyo3_async_runtimes::tokio::future_into_py(py, future)?;
-        Ok(Some(result.to_object(py)))
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 }
