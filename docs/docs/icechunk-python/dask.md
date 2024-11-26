@@ -1,6 +1,11 @@
 # Distributed Writes with dask
 
-!!! warning
+You can use Icechunk in conjunction with Xarray and Dask to perform large-scale distributed writes from a multi-node cluster.
+However, because of how Icechunk works, it's not possible to use the existing [`Dask.Array.to_zarr`](https://docs.dask.org/en/latest/generated/dask.array.to_zarr.html) or [`Xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html) functions with either the Dask multiprocessing or distributed schedulers. (It is fine with the multithreaded scheduler.)
+
+Instead, Icechunk provides its own specialized functions to make distributed writes with Dask and Xarray.
+This page explains how to use these specialized functions.
+!!! note
 
     Using Xarray, Dask, and Icechunk requires `icechunk>=0.1.0a5`, `dask>=2024.11.0`, and `xarray>=2024.11.0`.
 
@@ -22,7 +27,7 @@ icechunk_store = IcechunkStore.create(storage_config)
 
 ## Icechunk + Dask
 
-Use [`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) to write a dask array to an icechunk store.
+Use [`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) to write a Dask array to an Icechunk store.
 The API follows that of [`dask.array.store`](https://docs.dask.org/en/stable/generated/dask.array.store.html) *without*
 support for the `compute` kwarg.
 
@@ -33,7 +38,7 @@ dask_chunks = (20, 20)
 dask_array = dask.array.random.random(shape, chunks=dask_chunks)
 ```
 
-Now create the zarr array you will write to.
+Now create the Zarr array you will write to.
 ```python
 zarr_chunks = (10, 10)
 group = zarr.group(store=icechunk_store, overwrite=True)
@@ -66,7 +71,7 @@ icechunk_store.commit("wrote a dask array!")
 
 ### Simple
 
-The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to xarray's
+The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported. See the next section if you need delayed writes.
 
