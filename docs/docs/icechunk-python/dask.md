@@ -73,7 +73,7 @@ icechunk_store.commit("wrote a dask array!")
 
 The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
-Notably the ``compute`` kwarg is not supported. See the next section if you need delayed writes.
+Notably the ``compute`` kwarg is not supported.
 
 Now roundtrip an xarray dataset
 ```python
