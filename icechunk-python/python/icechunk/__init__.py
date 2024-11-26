@@ -22,13 +22,13 @@ from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
 
 __all__ = [
-    "__version__",
     "IcechunkStore",
     "S3Credentials",
     "SnapshotMetadata",
     "StorageConfig",
     "StoreConfig",
     "VirtualRefConfig",
+    "__version__",
 ]
 
 
