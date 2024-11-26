@@ -5,7 +5,6 @@
 ### Features
 
 - Sync with zarr 2.0b2. The biuggest change is the `mode` param on `IcechunkStore` methods has been simplified to `read_only`.
-- When checking out a snapshot or tag, the `IcechunkStore` will be set to read-only. If you want to write to the store, you must call `IcechunkStore::set_writeable()`.
 - Changed `IcechunkStore::distributed_commit` to `IcechunkStore::merge`, which now does *not* commit, but attempts to merge the changes from another store back into the current store.
 - Added a new `icechunk.dask.store_dask` method to write a dask array to an icechunk store. This is required for safely writing dask arrays to an icechunk store.
 - Added a new `icechunk.xarray.to_icechunk` method to convert an xarray dataset to an icechunk store. This and `icehunk.dask.store_dask` are required for safely writing xarray datasets with distributed dask arrays to an icechunk store.
@@ -13,7 +12,8 @@
 ### Fixes
 
 - The `StorageConfig` methods have been correctly typed.
-- Fixed a bug when pickling `IcechunkStore` instances.
+- `IcechunkStore` instances are now set to `read_only` by default after pickling.
+- When checking out a snapshot or tag, the `IcechunkStore` will be set to read-only. If you want to write to the store, you must call `IcechunkStore::set_writeable()`.
 - An error will now be raised if you try to checkout a snapshot that does not exist.
 
 ## Python Icechunk Library 0.1.0a4
