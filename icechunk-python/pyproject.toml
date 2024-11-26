@@ -35,8 +35,9 @@ test = [
   "pytest-cov",
   "pytest-asyncio",
   "ruff",
-  "dask",
-  "distributed",
+  "dask>=2024.11.0",
+  "distributed>=2024.11.0",
+  "xarray>=2024.11.0",
   "hypothesis",
 ]
 
@@ -63,6 +64,12 @@ python_version = "3.11"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = [
+  "toolz.*",
+]
 
 [tool.ruff]
 line-length = 90
@@ -95,7 +102,6 @@ ignore = [
   "E501",    # line too long - let the formatter worry about that
   "E731",    # do not assign a lambda expression, use a def
   "UP007",   # use X | Y for type annotations
-  "UP027",   # deprecated
   "C40",     # unnecessary generator, comprehension, or literal
   "PGH003",  # type:ignore without code
   "PIE790",  # unnecessary pass statement

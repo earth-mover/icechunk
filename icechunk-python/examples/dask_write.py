@@ -1,5 +1,7 @@
 """
-This example uses Dask to write or update an array in an Icechunk repository.
+This example uses Dask as a task orchestration framework
+to write or update an array in an Icechunk repository.
+To write an Xarray object with dask array use `icechunk.xarray.to_icechunk`
 
 To understand all the available options run:
 ```

@@ -137,6 +137,8 @@ plugins:
       default_handler: python
       handlers:
         python:
+          options:
+            docstring_style: numpy
           paths: [../icechunk-python/python]
 
   - mkdocs-jupyter:
@@ -176,6 +178,7 @@ nav:
     - icechunk-python/quickstart.md
     - icechunk-python/configuration.md
     - icechunk-python/xarray.md
+    - icechunk-python/dask.md
     - icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md

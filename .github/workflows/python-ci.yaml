@@ -67,7 +67,6 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          working-directory: icechunk-python
           name: wheels-linux-${{ matrix.platform.target }}
           path: icechunk-python/dist
 
