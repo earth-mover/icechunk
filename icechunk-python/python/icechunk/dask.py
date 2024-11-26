@@ -128,7 +128,7 @@ def stateful_store_reduce(
 
     array_names = tuple(a.name for a in stored_arrays)
     all_array_keys = list(
-        # flatten is untyped..
+        # flatten is untyped
         itertools.chain(*[flatten(array.__dask_keys__()) for array in stored_arrays])  # type: ignore[no-untyped-call]
     )
     token = tokenize(array_names, chunk, aggregate, split_every)
