@@ -4,10 +4,9 @@
 
 ### Features
 
-- Sync with zarr 2.0b2. The biuggest change is the `mode` param on `IcechunkStore` methods has been simplified to `read_only`.
+- Sync with zarr 3.0b2. The biggest change is the `mode` param on `IcechunkStore` methods has been simplified to `read_only`.
 - Changed `IcechunkStore::distributed_commit` to `IcechunkStore::merge`, which now does *not* commit, but attempts to merge the changes from another store back into the current store.
-- Added a new `icechunk.dask.store_dask` method to write a dask array to an icechunk store. This is required for safely writing dask arrays to an icechunk store.
-- Added a new `icechunk.xarray.to_icechunk` method to convert an xarray dataset to an icechunk store. This and `icehunk.dask.store_dask` are required for safely writing xarray datasets with distributed dask arrays to an icechunk store.
+- Added a new `icechunk.xarray.to_icechunk` method to write an xarray dataset to an icechunk store. This is *required* for safely writing xarray datasets with dask arrays to an icechunk store in a distributed or multi-processing context.
 
 ### Fixes
 
