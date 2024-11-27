@@ -44,7 +44,7 @@ async def test_write_minio_virtual_refs():
     # Open the store
     store = IcechunkStore.open_or_create(
         storage=StorageConfig.memory("virtual"),
-        mode="w",
+        read_only=False,
         config=StoreConfig(
             virtual_ref_config=VirtualRefConfig.s3_from_config(
                 credentials=S3Credentials(
@@ -146,7 +146,7 @@ async def test_append_virtual_ref(tmpdir):
     # Open the store
     store = IcechunkStore.open_or_create(
         storage=StorageConfig.memory("virtual"),
-        mode="w",
+        read_only=False,
         config=StoreConfig(
             virtual_ref_config=VirtualRefConfig.s3_from_config(
                 credentials=S3Credentials(
@@ -161,12 +161,8 @@ async def test_append_virtual_ref(tmpdir):
     )
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
-    time = root.require_array(
-        name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4"
-    )
-    lon = root.require_array(
-        name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4"
-    )
+    time = root.require_array(name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4")
+    _lon = root.require_array(name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4")
 
     # Set longitude
     store.set_virtual_ref(
