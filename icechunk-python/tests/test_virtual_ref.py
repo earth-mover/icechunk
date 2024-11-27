@@ -127,3 +127,81 @@ async def test_from_s3_public_virtual_refs(tmpdir):
         [-0.95, -0.85, -0.75, -0.65, -0.55, -0.45, -0.35, -0.25, -0.15, -0.05]
     )
     assert np.allclose(depth_values, actual_values)
+
+
+async def test_append_virtual_ref(tmpdir):
+    write_chunks_to_minio(
+        [
+            ("path/to/python/chunk-1", b"first"),
+            ("path/to/python/chunk-2", b"second"),
+            ("path/to/python/chunk-3", b"third"),
+            ("path/to/python/chunk-4", b"fourth"),
+            ("path/to/python/chunk-5", b"fifth"),
+            ("path/to/python/chunk-6", b"sixth"),
+            ("path/to/python/chunk-7", b"seventh"),
+            ("path/to/python/chunk-8", b"eighth"),
+        ]
+    )
+
+    # Open the store
+    store = IcechunkStore.open_or_create(
+        storage=StorageConfig.memory("virtual"),
+        mode="w",
+        config=StoreConfig(
+            virtual_ref_config=VirtualRefConfig.s3_from_config(
+                credentials=S3Credentials(
+                    access_key_id="minio123",
+                    secret_access_key="minio123",
+                ),
+                endpoint_url="http://localhost:9000",
+                allow_http=True,
+                region="us-east-1",
+            )
+        ),
+    )
+
+    root = zarr.Group.from_store(store=store, zarr_format=3)
+    time = root.require_array(
+        name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4"
+    )
+    lon = root.require_array(
+        name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4"
+    )
+
+    # Set longitude
+    store.set_virtual_ref(
+        "lon/c/0", "s3://testbucket/path/to/python/chunk-5", offset=0, length=4
+    )
+
+    store.set_virtual_ref(
+        "time/c/0", "s3://testbucket/path/to/python/chunk-1", offset=0, length=4
+    )
+    store.set_virtual_ref(
+        "time/c/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
+    )
+
+    assert (await store._store.get("lon/c/0")) == b"fift"
+    assert (await store._store.get("time/c/0")) == b"firs"
+    assert (await store._store.get("time/c/1")) == b"econ"
+
+    store.commit("Initial commit")
+
+    # resize the array and append a new chunk
+    time.resize((3,))
+
+    store.set_virtual_ref(
+        "time/c/2", "s3://testbucket/path/to/python/chunk-3", offset=0, length=4
+    )
+
+    assert (await store._store.get("lon/c/0")) == b"fift"
+    assert (await store._store.get("time/c/0")) == b"firs"
+    assert (await store._store.get("time/c/1")) == b"econ"
+    assert (await store._store.get("time/c/2")) == b"thir"
+
+    # commit
+    store.commit("Append virtual ref")
+
+    assert (await store._store.get("lon/c/0")) == b"fift"
+    assert (await store._store.get("time/c/0")) == b"firs"
+    assert (await store._store.get("time/c/1")) == b"econ"
+    assert (await store._store.get("time/c/2")) == b"thir"
