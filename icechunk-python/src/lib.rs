@@ -8,7 +8,7 @@ use std::{borrow::Cow, sync::Arc};
 use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use conflicts::{PyBasicConflictSolver, PyVersionSelection};
+use conflicts::{PyBasicConflictSolver, PyConflictDetector, PyVersionSelection};
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
@@ -1050,6 +1050,7 @@ fn _icechunk_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySnapshotMetadata>()?;
     m.add_class::<PyVirtualRefConfig>()?;
     m.add_class::<PyVersionSelection>()?;
+    m.add_class::<PyConflictDetector>()?;
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(async_pyicechunk_store_exists, m)?)?;

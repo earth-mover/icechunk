@@ -1,4 +1,4 @@
-use icechunk::conflicts::basic_solver::{BasicConflictSolver, VersionSelection};
+use icechunk::conflicts::{basic_solver::{BasicConflictSolver, VersionSelection}, detector::ConflictDetector};
 use pyo3::{prelude::*, types::PyType};
 
 #[pyclass(name = "VersionSelection")]
@@ -44,6 +44,17 @@ impl From<&PyVersionSelection> for VersionSelection {
 impl AsRef<VersionSelection> for PyVersionSelection {
     fn as_ref(&self) -> &VersionSelection {
         &self.0
+    }
+}
+
+#[pyclass(name = "ConflictDetector")]
+pub struct PyConflictDetector(ConflictDetector);
+
+#[pymethods]
+impl PyConflictDetector {
+    #[new]
+    fn new() -> Self {
+        PyConflictDetector(ConflictDetector)
     }
 }
 
