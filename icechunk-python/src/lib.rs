@@ -1,3 +1,4 @@
+mod conflicts;
 mod errors;
 mod storage;
 mod streams;
@@ -7,9 +8,11 @@ use std::{borrow::Cow, sync::Arc};
 use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use conflicts::{PyBasicConflictSolver, PyVersionSelection};
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
+    conflicts::ConflictSolver,
     format::{manifest::VirtualChunkRef, ChunkLength},
     refs::Ref,
     repository::{ChangeSet, VirtualChunkLocation},
@@ -481,6 +484,25 @@ impl PyIcechunkStore {
         })
     }
 
+    fn async_rebase<'py>(
+        &'py self,
+        py: Python<'py>,
+        solver: PyBasicConflictSolver,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.store);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            do_rebase(store, solver.as_ref()).await
+        })
+    }
+
+    fn rebase(&self, solver: PyBasicConflictSolver) -> PyIcechunkStoreResult<()> {
+        let store = Arc::clone(&self.store);
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            do_rebase(store, solver.as_ref()).await?;
+            Ok(())
+        })
+    }
+
     fn change_set_bytes(&self) -> PyIcechunkStoreResult<Vec<u8>> {
         let store = self.store.blocking_read();
         let res = pyo3_async_runtimes::tokio::get_runtime()
@@ -945,6 +967,15 @@ async fn do_merge(
     Ok(())
 }
 
+async fn do_rebase(
+    store: Arc<RwLock<Store>>,
+    solver: &dyn ConflictSolver,
+) -> PyResult<()> {
+    let store = store.read().await;
+    store.rebase(solver).await.map_err(PyIcechunkStoreError::from)?;
+    Ok(())
+}
+
 async fn do_reset<'py>(store: Arc<RwLock<Store>>) -> PyResult<Vec<u8>> {
     let changes =
         store.write().await.reset().await.map_err(PyIcechunkStoreError::StoreError)?;
@@ -1018,6 +1049,8 @@ fn _icechunk_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStoreConfig>()?;
     m.add_class::<PySnapshotMetadata>()?;
     m.add_class::<PyVirtualRefConfig>()?;
+    m.add_class::<PyVersionSelection>()?;
+    m.add_class::<PyBasicConflictSolver>()?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(async_pyicechunk_store_exists, m)?)?;
     m.add_function(wrap_pyfunction!(pyicechunk_store_create, m)?)?;

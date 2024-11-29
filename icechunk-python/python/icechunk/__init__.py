@@ -4,11 +4,13 @@ from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterable
 from typing import Any, Self
 
 from icechunk._icechunk_python import (
+    BasicConflictSolver,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
     StorageConfig,
     StoreConfig,
+    VersionSelection,
     VirtualRefConfig,
     __version__,
     pyicechunk_store_create,
@@ -22,11 +24,13 @@ from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
 
 __all__ = [
+    "BasicConflictSolver",
     "IcechunkStore",
     "S3Credentials",
     "SnapshotMetadata",
     "StorageConfig",
     "StoreConfig",
+    "VersionSelection",
     "VirtualRefConfig",
     "__version__",
 ]
@@ -323,9 +327,6 @@ class IcechunkStore(Store, SyncMixin):
     def merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
-        This will create a new snapshot on the current branch and return
-        the new snapshot id.
-
         This method will fail if:
 
         * there is no currently checked out branch
@@ -338,9 +339,6 @@ class IcechunkStore(Store, SyncMixin):
     async def async_merge(self, changes: bytes) -> None:
         """Merge the changes from another store into this store.
 
-        This will create a new snapshot on the current branch and return
-        the new snapshot id.
-
         This method will fail if:
 
         * there is no currently checked out branch
@@ -349,6 +347,30 @@ class IcechunkStore(Store, SyncMixin):
         The behavior is undefined if the stores applied conflicting changes.
         """
         return await self._store.async_merge(changes)
+
+    def rebase(self, solver: BasicConflictSolver) -> None:
+        """Rebase the current branch onto the given branch by detecting and
+        attempting to fix conflicts between the current store and the tip of the branch.
+
+        When there are more than one commit between the parent snapshot and the tip of
+        the branch, `rebase` iterates over all of them, older first, trying to fast-forward.
+        If at some point it finds a conflict it cannot recover from, `rebase` leaves the
+        store in a consistent state, that would successfully commit on top
+        of the latest successfully fast-forwarded commit.
+        """
+        return self._store.rebase(solver)
+
+    async def async_rebase(self, solver: BasicConflictSolver) -> None:
+        """Rebase the current branch onto the given branch by detecting and
+        attempting to fix conflicts between the current store and the tip of the branch.
+
+        When there are more than one commit between the parent snapshot and the tip of
+        the branch, `rebase` iterates over all of them, older first, trying to fast-forward.
+        If at some point it finds a conflict it cannot recover from, `rebase` leaves the
+        store in a consistent state, that would successfully commit on top
+        of the latest successfully fast-forwarded commit.
+        """
+        return await self._store.async_rebase(solver)
 
     @property
     def has_uncommitted_changes(self) -> bool:

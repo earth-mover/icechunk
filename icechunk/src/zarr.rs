@@ -21,24 +21,19 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    change_set::ChangeSet,
-    format::{
+    change_set::ChangeSet, conflicts::ConflictSolver, format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
-    },
-    refs::{update_branch, BranchVersion, Ref, RefError},
-    repository::{
+    }, refs::{update_branch, BranchVersion, Ref, RefError}, repository::{
         get_chunk, raise_if_invalid_snapshot_id, ArrayShape, ChunkIndices,
         ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, Path, RepositoryError, RepositoryResult, StorageTransformer,
         UserAttributes, ZarrArrayMetadata,
-    },
-    storage::{
+    }, storage::{
         s3::{S3Config, S3Storage},
         virtual_ref::ObjectStoreVirtualChunkResolverConfig,
-    },
-    ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
+    }, ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage
 };
 
 pub use crate::format::ObjectId;
@@ -488,6 +483,18 @@ impl Store {
 
     pub async fn merge(&self, changes: ChangeSet) {
         self.repository.write().await.merge(changes).await;
+    }
+
+    /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
+    /// the tip of the current branch. If the store is not currently on a branch, this will return
+    /// an error.
+    pub async fn rebase(&self, solver: &dyn ConflictSolver) -> StoreResult<()> {
+        let Some(branch) = &self.current_branch else {
+            return Err(StoreError::NotOnBranch);
+        };
+
+        self.repository.write().await.rebase(solver, branch).await?;
+        Ok(())
     }
 
     /// Commit the current changes to the current branch. If the store is not currently

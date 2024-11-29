@@ -1,7 +1,30 @@
+from typing import cast
+import pytest
+
 import icechunk
 import zarr
 import zarr.core
 import zarr.core.buffer
+
+from zarr import Array
+
+
+@pytest.fixture
+def stores_for_rebase(tmpdir):
+    store_a = icechunk.IcechunkStore.create(
+        storage=icechunk.StorageConfig.filesystem(str(tmpdir)),
+    )
+
+    root = zarr.group(store=store_a)
+    root.create_group("foo/bar")
+    root.create_array("foo/bar/some-array", shape=(10, 10), dtype="i4")
+    store_a.commit("commit 1")
+
+    store_b = icechunk.IcechunkStore.open_existing(
+        storage=icechunk.StorageConfig.filesystem(str(tmpdir))
+    )
+
+    return store_a, store_b
 
 
 def test_timetravel():
@@ -94,3 +117,28 @@ async def test_branch_reset():
     assert (
         await store.get("b/zarr.json", zarr.core.buffer.default_buffer_prototype())
     ) is None
+
+
+def test_rebase_user_attrs_edit_with_ours(stores_for_rebase):
+    store_a, store_b = stores_for_rebase
+
+    root_a = zarr.group(store=store_a)
+    array_a = cast(Array, root_a["foo/bar/some-array"])
+    array_a.attrs["repo"] = 1
+    store_a.commit("update array")
+
+    root_b = zarr.group(store=store_b)
+    array_b = cast(Array, root_b["foo/bar/some-array"])
+    array_b.attrs["repo"] = 2
+
+    with pytest.raises(ValueError):
+        store_b.commit("update array")
+
+    solver = icechunk.BasicConflictSolver(
+        on_user_attributes_conflict=icechunk.VersionSelection.use_ours(),
+    )
+
+    store_b.rebase(solver)
+    store_b.commit("after conflict")
+
+    assert array_b.attrs["repo"] == 2

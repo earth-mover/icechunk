@@ -26,6 +26,8 @@ class PyIcechunkStore:
     async def async_reset(self) -> bytes: ...
     def merge(self, changes: bytes) -> None: ...
     async def async_merge(self, changes: bytes) -> None: ...
+    def rebase(self, solver: BasicConflictSolver) -> None: ...
+    async def async_rebase(self, solver: BasicConflictSolver) -> None: ...
     def new_branch(self, branch_name: str) -> str: ...
     async def async_new_branch(self, branch_name: str) -> str: ...
     def reset_branch(self, snapshot_id: str) -> None: ...
@@ -272,6 +274,51 @@ class StoreConfig:
         -------
         StoreConfig
             A StoreConfig object with the given configuration options
+        """
+        ...
+
+
+class VersionSelection:
+    """Configuration for selecting a version when performing conflict resolution"""
+
+    @classmethod
+    def use_ours(cls) -> VersionSelection:
+        """Select the local version when performing conflict resolution"""
+        ...
+
+    @classmethod
+    def use_theirs(cls) -> VersionSelection:
+        """Select the remote version when performing conflict resolution"""
+        ...
+
+    @classmethod
+    def fail(cls) -> VersionSelection:
+        """Fail if a conflict is encountered when performing conflict resolution"""
+        ...
+
+
+class BasicConflictSolver:
+    """A basic conflict solver that allows for simple configuration of resolution behavior"""
+
+    def __init__(
+        self,
+        *,
+        on_user_attributes_conflict: VersionSelection = VersionSelection.use_ours(),
+        on_chunk_conflict: VersionSelection = VersionSelection.use_ours(),
+        fail_on_delete_of_updated_array: bool = False,
+        fail_on_delete_of_updated_group: bool = False,
+    ) -> BasicConflictSolver:
+        """Create a BasicConflictSolver object with the given configuration options
+
+        Parameters:
+        on_user_attributes_conflict: VersionSelection
+            The behavior to use when a user attribute conflict is encountered, by default VersionSelection.use_ours()
+        on_chunk_conflict: VersionSelection
+            The behavior to use when a chunk conflict is encountered, by default VersionSelection.use_theirs()
+        fail_on_delete_of_updated_array: bool
+            Whether to fail when a chunk is deleted that has been updated, by default False
+        fail_on_delete_of_updated_group: bool
+            Whether to fail when a group is deleted that has been updated, by default False
         """
         ...
 
