@@ -16,6 +16,7 @@ use crate::{
 
 use super::{Conflict, ConflictResolution, ConflictSolver};
 
+#[derive(Clone, Debug)]
 pub struct ConflictDetector;
 
 #[async_trait]

@@ -1,4 +1,4 @@
-use icechunk::conflicts::{basic_solver::{BasicConflictSolver, VersionSelection}, detector::ConflictDetector};
+use icechunk::conflicts::{basic_solver::{BasicConflictSolver, VersionSelection}, detector::ConflictDetector, ConflictSolver};
 use pyo3::{prelude::*, types::PyType};
 
 #[pyclass(name = "VersionSelection")]
@@ -48,6 +48,7 @@ impl AsRef<VersionSelection> for PyVersionSelection {
 }
 
 #[pyclass(name = "ConflictDetector")]
+#[derive(Clone, Debug)]
 pub struct PyConflictDetector(ConflictDetector);
 
 #[pymethods]
@@ -55,6 +56,24 @@ impl PyConflictDetector {
     #[new]
     fn new() -> Self {
         PyConflictDetector(ConflictDetector)
+    }
+}
+
+impl From<PyConflictDetector> for ConflictDetector {
+    fn from(value: PyConflictDetector) -> Self {
+        value.0
+    }
+}
+
+impl From<&PyConflictDetector> for ConflictDetector {
+    fn from(value: &PyConflictDetector) -> Self {
+        value.0.clone()
+    }
+}
+
+impl AsRef<ConflictDetector> for PyConflictDetector {
+    fn as_ref(&self) -> &ConflictDetector {
+        &self.0
     }
 }
 
@@ -96,5 +115,23 @@ impl From<&PyBasicConflictSolver> for BasicConflictSolver {
 impl AsRef<BasicConflictSolver> for PyBasicConflictSolver {
     fn as_ref(&self) -> &BasicConflictSolver {
         &self.0
+    }
+}
+
+
+#[derive(FromPyObject)]
+pub enum PyConflictSolver {
+    #[pyo3(transparent)]
+    Detect(PyConflictDetector),
+    #[pyo3(transparent)]
+    Basic(PyBasicConflictSolver),
+}
+
+impl AsRef<dyn ConflictSolver + 'static> for PyConflictSolver {
+    fn as_ref(&self) -> &(dyn ConflictSolver + 'static) {
+        match self {
+            PyConflictSolver::Detect(detector) => detector.as_ref(),
+            PyConflictSolver::Basic(solver) => solver.as_ref(),
+        }
     }
 }

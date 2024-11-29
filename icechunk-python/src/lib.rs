@@ -8,7 +8,7 @@ use std::{borrow::Cow, sync::Arc};
 use ::icechunk::{format::ChunkOffset, Store};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use conflicts::{PyBasicConflictSolver, PyConflictDetector, PyVersionSelection};
+use conflicts::{PyBasicConflictSolver, PyConflictDetector, PyConflictSolver, PyVersionSelection};
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
@@ -495,7 +495,7 @@ impl PyIcechunkStore {
         })
     }
 
-    fn rebase(&self, solver: PyBasicConflictSolver) -> PyIcechunkStoreResult<()> {
+    fn rebase(&self, solver: PyConflictSolver) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             do_rebase(store, solver.as_ref()).await?;

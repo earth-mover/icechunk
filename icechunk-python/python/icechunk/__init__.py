@@ -5,6 +5,7 @@ from typing import Any, Self
 
 from icechunk._icechunk_python import (
     BasicConflictSolver,
+    ConflictDetector,
     PyIcechunkStore,
     S3Credentials,
     SnapshotMetadata,
@@ -25,6 +26,7 @@ from zarr.core.sync import SyncMixin
 
 __all__ = [
     "BasicConflictSolver",
+    "ConflictDetector",
     "IcechunkStore",
     "S3Credentials",
     "SnapshotMetadata",
@@ -348,8 +350,8 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.async_merge(changes)
 
-    def rebase(self, solver: BasicConflictSolver) -> None:
-        """Rebase the current branch onto the given branch by detecting and
+    def rebase(self, solver: ConflictDetector | BasicConflictSolver) -> None:
+        """Rebase the current branch onto the given branch by detecting and optionally
         attempting to fix conflicts between the current store and the tip of the branch.
 
         When there are more than one commit between the parent snapshot and the tip of
@@ -360,8 +362,8 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.rebase(solver)
 
-    async def async_rebase(self, solver: BasicConflictSolver) -> None:
-        """Rebase the current branch onto the given branch by detecting and
+    async def async_rebase(self, solver: ConflictDetector | BasicConflictSolver) -> None:
+        """Rebase the current branch onto the given branch by detecting and optionally
         attempting to fix conflicts between the current store and the tip of the branch.
 
         When there are more than one commit between the parent snapshot and the tip of
