@@ -1,11 +1,11 @@
 from typing import cast
+
 import pytest
 
 import icechunk
 import zarr
 import zarr.core
 import zarr.core.buffer
-
 from zarr import Array
 
 

@@ -277,7 +277,6 @@ class StoreConfig:
         """
         ...
 
-
 class VersionSelection:
     """Configuration for selecting a version when performing conflict resolution"""
 
@@ -295,7 +294,6 @@ class VersionSelection:
     def fail(cls) -> VersionSelection:
         """Fail if a conflict is encountered when performing conflict resolution"""
         ...
-
 
 class BasicConflictSolver:
     """A basic conflict solver that allows for simple configuration of resolution behavior"""
