@@ -524,18 +524,8 @@ mod tests {
                     serde_json::Value::from(42),
                 )))),
             }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
+            storage_transformers: None,
+            dimension_names: None,
         };
 
         
@@ -554,10 +544,10 @@ mod tests {
         let coord2 = ChunkIndices(vec![10, 11, 10]);
         let coord3 = ChunkIndices(vec![0, 0 ,0]);
 
-        assert_eq!(true, zarr_meta1.valid_chunk_coord(&coord1));
-        assert_eq!(false, zarr_meta1.valid_chunk_coord(&coord2));
+        assert!(zarr_meta1.valid_chunk_coord(&coord1));
+        assert!(!zarr_meta1.valid_chunk_coord(&coord2));
         
-        assert_eq!(true, zarr_meta2.valid_chunk_coord(&coord3));
+        assert!(zarr_meta2.valid_chunk_coord(&coord3));
 
     }
 }
