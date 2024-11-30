@@ -206,8 +206,12 @@ impl Iterator for PayloadIterator {
                     .range((Bound::Excluded(last_key), Bound::Unbounded))
                     .next()
                 {
-                    self.last_key = Some(k.clone());
-                    Some((coord.clone(), payload.clone()))
+                    if k.0 == self.for_node {
+                        self.last_key = Some(k.clone());
+                        Some((coord.clone(), payload.clone()))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
