@@ -2427,6 +2427,64 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        ds.add_group(Path::root()).await?;
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![5, 5],
+            data_type: DataType::Float16,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap(), NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Float16(f32::NEG_INFINITY),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let apath: Path = "/array1".try_into()?;
+
+        ds.add_array(apath.clone(), zarr_meta.clone()).await?;
+
+        ds.commit("main", "first commit", None).await?;
+
+        // add 3 chunks
+        // First 2 chunks are valid, third will be invalid chunk indices
+
+        assert!(
+            ds.set_chunk_ref(
+            apath.clone(),
+            ChunkIndices(vec![0, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        ).await.is_ok()
+        );
+        assert!(
+            ds.set_chunk_ref(
+            apath.clone(),
+            ChunkIndices(vec![2, 2]),
+            Some(ChunkPayload::Inline("hello".into())),
+        ).await.is_ok()
+        );
+
+        let bad_result = ds.set_chunk_ref(
+            apath.clone(),
+            ChunkIndices(vec![3, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+            ).await;
+
+        match bad_result {
+            Err(RepositoryError::FormatError(IcechunkFormatError::ChunkCoordinatesNotFound { coords })) => {
+                assert_eq!(coords, ChunkIndices(vec![3, 0]))
+            },
+            _ => panic!("Expected Chunk Coordinates Not Found Error")
+        }
+        Ok(())
+    }
+
     /// Construct two repos on the same storage, with a commit, a group and an array
     ///
     /// Group: /foo/bar
