@@ -1822,7 +1822,11 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2069,7 +2073,7 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![5, 5],
             data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap(), NonZeroU64::new(2).unwrap()]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2224,9 +2228,13 @@ mod tests {
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
+            shape: vec![4, 2, 4],
             data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(2).unwrap()
+                ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2258,6 +2266,12 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 1, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
         let ds = Repository::update(Arc::clone(&storage), snapshot_id).await?.build();
         let coords = ds
@@ -2271,7 +2285,8 @@ mod tests {
             vec![
                 ChunkIndices(vec![0, 0, 0]),
                 ChunkIndices(vec![0, 0, 1]),
-                ChunkIndices(vec![1, 0, 0])
+                ChunkIndices(vec![1, 0, 0]),
+                ChunkIndices(vec![0, 1, 0])
             ]
             .into_iter()
             .collect()
@@ -2316,7 +2331,11 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap()],
+            ),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
