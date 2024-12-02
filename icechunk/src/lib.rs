@@ -24,7 +24,7 @@ pub mod metadata;
 pub mod ops;
 pub mod refs;
 pub mod repository;
-pub mod sessions;
+pub mod session;
 pub mod storage;
 #[cfg(test)]
 pub mod strategies;
