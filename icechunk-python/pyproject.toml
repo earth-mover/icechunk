@@ -23,7 +23,7 @@ name = "icechunk"
 version = "0.1.0-alpha.6"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
-readme = "README.md"
+readme = "../README.md"
 packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
