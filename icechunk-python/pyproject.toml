@@ -45,6 +45,7 @@ test = [
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
+exclude = ["README.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
