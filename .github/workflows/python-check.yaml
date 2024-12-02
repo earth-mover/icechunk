@@ -114,11 +114,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: "icechunk"
+
       - name: Stand up MinIO
+        working-directory: icechunk
         run: |
           docker compose up -d minio
 
       - name: Wait for MinIO to be ready
+        working-directory: icechunk
         run: |
           for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
