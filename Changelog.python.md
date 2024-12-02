@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a6
+
+### Fixes
+
+- Fixed an error during commits where chunks would get mixed between different arrays
+
 ## Python Icechunk Library 0.1.0a5
 
 ### Features

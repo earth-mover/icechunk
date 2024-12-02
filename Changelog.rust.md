@@ -1,5 +1,11 @@
 # Changelog
 
+## Rust Icechunk Library 0.1.0-alpha.6
+
+### Fixes
+
+- Fixed an error during commits where chunks would get mixed between different arrays
+
 ## Rust Icechunk Library 0.1.0-alpha.5
 
 ### Features
