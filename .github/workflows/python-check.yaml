@@ -135,10 +135,12 @@ jobs:
       - name: pytest
         shell: bash
         working-directory: icechunk/icechunk-python
+        env:
+          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          ICECHUNK_XARRAY_BACKENDS_TESTS=1 pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
