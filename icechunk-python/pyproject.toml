@@ -20,10 +20,10 @@ dependencies = ["zarr==3.0.0b2"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
-readme = "README.md"
+readme = "../README.md"
 packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
@@ -45,6 +45,7 @@ test = [
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
+exclude = ["README.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
