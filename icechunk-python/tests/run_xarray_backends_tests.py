@@ -50,13 +50,11 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
             pytest.skip("v2 not supported")
         yield IcechunkStore.create(StorageConfig.memory())
 
-    @pytest.skip(reason="memory icechunk stores cannot be pickled.")
     def test_pickle(self):
-        pass
+        pytest.skip(reason="memory icechunk stores cannot be pickled.")
 
-    @pytest.skip(reason="memory icechunk stores cannot be pickled.")
     def test_pickle_dataarray(self):
-        pass
+        pytest.skip(reason="memory icechunk stores cannot be pickled.")
 
 
 class TestIcechunkStoreMinio(IcechunkStoreBase):
