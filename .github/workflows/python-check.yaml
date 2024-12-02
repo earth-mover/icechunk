@@ -107,3 +107,38 @@ jobs:
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
+  xarray-backends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: "icechunk"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0 # Fetch all history for all branches and tags.
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk/icechunk-python
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+
+      - name: pytest
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install icechunk['test'] --find-links dist --force-reinstall
+          # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
+          ICECHUNK_XARRAY_BACKENDS_TESTS=1 pytest -c=../../xarray/pyproject.toml -W ignore tests/test_xarray_backends.py
