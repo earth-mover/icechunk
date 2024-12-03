@@ -64,6 +64,11 @@ impl ChangeSet {
     }
 
     pub fn add_group(&mut self, path: Path, node_id: NodeId) {
+        // when overwriting a group that exists in the base snapshot,
+        // zarr will delete the group first, and then add a new group
+        // get_group prioritizes `deleted_groups` over `new_groups`,
+        // so we must remove from `deleted_groups` here
+        self.deleted_groups.remove(&path);
         self.new_groups.insert(path, node_id);
     }
 
@@ -121,6 +126,11 @@ impl ChangeSet {
         node_id: NodeId,
         metadata: ZarrArrayMetadata,
     ) {
+        // when overwriting a array that exists in the base snapshot,
+        // zarr will delete the array first, and then add a new group
+        // get_group prioritizes `deleted_arrays` over `new_arrays`,
+        // so we must remove from `deleted_arrays` here
+        self.deleted_arrays.remove(&path);
         self.new_arrays.insert(path, (node_id, metadata));
     }
 
