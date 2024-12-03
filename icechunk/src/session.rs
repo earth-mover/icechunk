@@ -192,7 +192,7 @@ impl Session {
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    async fn add_group(&mut self, path: Path) -> SessionResult<()> {
+    pub async fn add_group(&mut self, path: Path) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -216,7 +216,7 @@ impl Session {
     /// Delete a group in the hierarchy
     ///
     /// Deletes of non existing groups will succeed.
-    async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
+    pub async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -234,7 +234,7 @@ impl Session {
     /// Add an array to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    async fn add_array(
+    pub async fn add_array(
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
@@ -262,7 +262,7 @@ impl Session {
     // Updates an array Zarr metadata
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    async fn update_array(
+    pub async fn update_array(
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
@@ -280,7 +280,7 @@ impl Session {
     /// Delete an array in the hierarchy
     ///
     /// Deletes of non existing array will succeed.
-    async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
+    pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -296,7 +296,7 @@ impl Session {
     }
 
     /// Record the write or delete of user attributes to array or group
-    async fn set_user_attributes(
+    pub async fn set_user_attributes(
         &mut self,
         path: Path,
         atts: Option<UserAttributes>,
@@ -313,7 +313,7 @@ impl Session {
     // Record the write, referenceing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
-    async fn set_chunk_ref(
+    pub async fn set_chunk_ref(
         &mut self,
         path: Path,
         coord: ChunkIndices,
@@ -343,7 +343,7 @@ impl Session {
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
-    fn get_chunk_writer(
+    pub fn get_chunk_writer(
         &self,
     ) -> SessionResult<
         impl FnOnce(
@@ -372,7 +372,7 @@ impl Session {
         Ok(closure)
     }
 
-    async fn clear(&mut self) -> SessionResult<()> {
+    pub async fn clear(&mut self) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -390,7 +390,7 @@ impl Session {
     }
 
     /// Discard all uncommitted changes and return them as a `ChangeSet`
-    fn discard_changes(&mut self) -> SessionResult<ChangeSet> {
+    pub fn discard_changes(&mut self) -> SessionResult<ChangeSet> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -398,7 +398,7 @@ impl Session {
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    async fn merge(&mut self, changes: ChangeSet) -> SessionResult<()> {
+    pub async fn merge(&mut self, changes: ChangeSet) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -406,7 +406,7 @@ impl Session {
         Ok(())
     }
 
-    async fn commit(
+    pub async fn commit(
         self,
         message: &str,
         properties: Option<SnapshotProperties>,
@@ -545,34 +545,32 @@ impl Session {
             // let mut changeset = self.change_set.clone();
 
             // we need to reverse the iterator to process them in order of oldest first
-            // for snap_id in new_commits.into_iter().rev() {
-            //     let tx_log = self.storage.fetch_transaction_log(&snap_id).await?;
-            //     let repo = Repository {
-            //         config: self.config().clone(),
-            //         storage: self.storage.clone(),
-            //         snapshot_id: snap_id.clone(),
-            //         change_set: ChangeSet::default(),
-            //         virtual_resolver: self.virtual_resolver.clone(),
-            //     };
+            for snap_id in new_commits.into_iter().rev() {
+                let tx_log = self.storage.fetch_transaction_log(&snap_id).await?;
 
-            //     let change_set = take(&mut self.change_set);
-            //     // TODO: this should probably execute in a worker thread
-            //     match solver.solve(&tx_log, &repo, change_set, self).await? {
-            //         ConflictResolution::Patched(patched_changeset) => {
-            //             self.change_set = patched_changeset;
-            //             self.snapshot_id = snap_id;
-            //         }
-            //         ConflictResolution::Unsolvable { reason, unmodified } => {
-            //             self.change_set = unmodified;
-            //             return Err(RepositoryError::RebaseFailed {
-            //                 snapshot: snap_id,
-            //                 conflicts: reason,
-            //             });
-            //         }
-            //     }
-            // }
+                let session = Self::create_readable_session(
+                    self.config.clone(),
+                    Arc::clone(&self.storage),
+                    Arc::clone(&self.virtual_resolver),
+                    self.snapshot_id.clone(),
+                );
 
-            todo!("Need to implement rebase");
+                let change_set = take(&mut self.change_set);
+                // TODO: this should probably execute in a worker thread
+                match solver.solve(&tx_log, &session, change_set, self).await? {
+                    ConflictResolution::Patched(patched_changeset) => {
+                        self.change_set = patched_changeset;
+                        self.snapshot_id = snap_id;
+                    }
+                    ConflictResolution::Unsolvable { reason, unmodified } => {
+                        self.change_set = unmodified;
+                        return Err(RepositoryError::RebaseFailed {
+                            snapshot: snap_id,
+                            conflicts: reason,
+                        });
+                    }
+                }
+            }
 
             Ok(())
         }
