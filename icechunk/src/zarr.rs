@@ -2484,6 +2484,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_overwrite() -> Result<(), Box<dyn std::error::Error>> {
+        // GH347
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        let meta1 = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
+        );
+        let meta2 = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":84}}"#,
+        );
+        let zarr_meta1 = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta2 = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":84},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+
+        // with no commit in the middle, this tests the changeset
+        store.set("zarr.json", meta1.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
+        store.delete("zarr.json").await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        store.set("zarr.json", meta2.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        assert_eq!(
+            &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            &zarr_meta2
+        );
+
+        // with a commit in the middle, this tests the changeset interaction with snapshot
+        store.set("zarr.json", meta1).await.unwrap();
+        store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
+        store.commit("initial commit").await.unwrap();
+        store.delete("zarr.json").await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        store.set("zarr.json", meta2.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        store.commit("commit 2").await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        assert_eq!(
+            &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            &zarr_meta2
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
