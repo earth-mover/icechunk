@@ -5,6 +5,7 @@
 ### Fixes
 
 - Allow overwriting existing groups and arrays in Icechunk stores
+- Fix a bug in `list_prefix`
 
 ## Rust Icechunk Library 0.1.0-alpha.6
 
