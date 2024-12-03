@@ -12,6 +12,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use crate::{
     change_set::ChangeSet,
@@ -32,7 +33,8 @@ use crate::{
     refs::{fetch_branch_tip, update_branch, RefError},
     repository::{ChunkPayload, RepositoryError, RepositoryResult, ZarrArrayMetadata},
     storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
-    zarr::ObjectId,
+    store::Store,
+    zarr::{ObjectId, StoreOptions},
     RepositoryConfig, Storage,
 };
 
@@ -92,6 +94,13 @@ impl Session {
 
     pub fn read_only(&self) -> bool {
         self.branch_name.is_none()
+    }
+
+    pub fn store(&mut self) -> Store {
+        let read_only = self.read_only();
+        let mutexed = Arc::new(RwLock::new(self));
+
+        Store::new(mutexed, StoreOptions::default(), read_only)
     }
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {

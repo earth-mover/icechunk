@@ -33,14 +33,22 @@ use crate::{
     zarr::{KeyNotFoundError, ListDirItem, StoreError, StoreOptions, StoreResult},
 };
 
-pub struct Store {
-    session: Arc<RwLock<Session>>,
+pub struct Store<'a> {
+    session: Arc<RwLock<&'a mut Session>>,
     config: StoreOptions,
     read_only: bool,
 }
 
-impl Store {
-    pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
+impl <'a> Store<'a> {
+    pub fn new(session: Arc<RwLock<&'a mut Session>>, config: StoreOptions, read_only: bool) -> Self {
+        Self {
+            session,
+            config,
+            read_only,
+        }
+    }
+
+    pub async fn is_empty<'b: 'a>(&'a self, prefix: &'b str) -> StoreResult<bool> {
         let res = self.list_dir(prefix).await?.next().await;
         Ok(res.is_none())
     }
@@ -289,14 +297,14 @@ impl Store {
     }
 
     pub async fn list(
-        &self,
+        &'a self,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         self.list_prefix("/").await
     }
 
-    pub async fn list_prefix(
-        &self,
-        prefix: &str,
+    pub async fn list_prefix<'b: 'a>(
+        &'a self,
+        prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -307,9 +315,9 @@ impl Store {
         Ok(futures::stream::iter(meta.chain(chunks).collect::<Vec<_>>().await))
     }
 
-    pub async fn list_dir(
-        &self,
-        prefix: &str,
+    pub async fn list_dir<'b: 'a>(
+        &'a self,
+        prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -324,8 +332,8 @@ impl Store {
     }
 
     pub async fn list_dir_items(
-        &self,
-        prefix: &str,
+        &'a self,
+        prefix: &'a str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -400,7 +408,7 @@ impl Store {
         set_group_meta(path, group_meta, guard.deref_mut()).await
     }
 
-    async fn list_metadata_prefix<'a, 'b: 'a>(
+    async fn list_metadata_prefix<'b: 'a>(
         &'a self,
         prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
@@ -430,7 +438,7 @@ impl Store {
         Ok(res)
     }
 
-    async fn list_chunks_prefix<'a, 'b: 'a>(
+    async fn list_chunks_prefix<'b: 'a>(
         &'a self,
         prefix: &'b str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
