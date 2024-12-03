@@ -188,6 +188,8 @@ pub enum RepositoryError {
     ConflictingPathNotFound(NodeId),
     #[error("error in config deserialization `{0}`")]
     ConfigDeserializationError(#[from] serde_yml::Error),
+    #[error("invalid chunk index: coordinates {coords:?} are not valid for array at {path}")]
+    InvalidIndex { coords: ChunkIndices, path: Path }
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
@@ -518,7 +520,10 @@ impl Repository {
                 self.change_set.set_chunk_ref(node_snapshot.id, coord, data);
                 Ok(())
             } else {
-                Err(RepositoryError::FormatError(IcechunkFormatError::ChunkCoordinatesNotFound { coords: coord }))
+                Err(RepositoryError::InvalidIndex { 
+                    coords: coord,
+                    path: path.clone()
+                })
             }
                      
         } else {
@@ -2477,10 +2482,14 @@ mod tests {
             ).await;
 
         match bad_result {
-            Err(RepositoryError::FormatError(IcechunkFormatError::ChunkCoordinatesNotFound { coords })) => {
-                assert_eq!(coords, ChunkIndices(vec![3, 0]))
+            Err(RepositoryError::InvalidIndex { 
+                coords,
+                path
+            }) => {
+                assert_eq!(coords, ChunkIndices(vec![3, 0]));
+                assert_eq!(path, apath);
             },
-            _ => panic!("Expected Chunk Coordinates Not Found Error")
+            _ => panic!("Expected InvalidIndex Error")
         }
         Ok(())
     }
