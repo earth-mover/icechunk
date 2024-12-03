@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use std::{
     collections::HashSet,
     future::{ready, Future},
@@ -7,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
@@ -34,40 +37,37 @@ use crate::{
     RepositoryConfig, Storage,
 };
 
-pub struct ReadableSession {
-    config: RepositoryConfig,
-    storage: Arc<dyn Storage + Send + Sync>,
-    snapshot_id: SnapshotId,
-    change_set: ChangeSet,
-    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
-}
+pub trait ReadableSession {
+    fn config(&self) -> &RepositoryConfig;
+    fn storage(&self) -> &Arc<dyn Storage + Send + Sync>;
+    fn virtual_resolver(&self) -> &Arc<dyn VirtualChunkResolver + Send + Sync>;
+    fn snapshot_id(&self) -> &SnapshotId;
+    fn change_set(&self) -> &ChangeSet;
 
-impl ReadableSession {
-    pub fn change_set(&self) -> &ChangeSet {
-        &self.change_set
+    async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
+        get_node(self.storage().as_ref(), &self.snapshot_id(), &self.change_set(), path)
+            .await
     }
 
-    pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_node(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+    async fn get_array(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
+        get_array(self.storage().as_ref(), &self.snapshot_id(), &self.change_set(), path)
+            .await
     }
 
-    pub async fn get_array(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_array(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+    async fn get_group(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
+        get_group(self.storage().as_ref(), &self.snapshot_id(), &self.change_set(), path)
+            .await
     }
 
-    pub async fn get_group(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_group(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
-    }
-
-    pub async fn get_chunk_ref(
+    async fn get_chunk_ref(
         &self,
         path: &Path,
         coords: &ChunkIndices,
     ) -> RepositoryResult<Option<ChunkPayload>> {
         get_chunk_ref(
-            self.storage.as_ref(),
-            &self.snapshot_id,
-            &self.change_set,
+            self.storage().as_ref(),
+            &self.snapshot_id(),
+            &self.change_set(),
             path,
             coords,
         )
@@ -98,7 +98,7 @@ impl ReadableSession {
     ///
     /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
     /// the bytes.
-    pub async fn get_chunk_reader(
+    async fn get_chunk_reader(
         &self,
         path: &Path,
         coords: &ChunkIndices,
@@ -107,10 +107,10 @@ impl ReadableSession {
         Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>,
     > {
         get_chunk_reader(
-            &self.storage,
-            &self.virtual_resolver,
-            &self.snapshot_id,
-            &self.change_set,
+            &self.storage(),
+            &self.virtual_resolver(),
+            &self.snapshot_id(),
+            &self.change_set(),
             path,
             coords,
             byte_range,
@@ -118,147 +118,49 @@ impl ReadableSession {
         .await
     }
 
-    pub async fn get_old_chunk(
+    async fn get_old_chunk(
         &self,
         node: NodeId,
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
     ) -> RepositoryResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
-        get_old_chunk(self.storage.as_ref(), node, manifests, coords).await
+        get_old_chunk(self.storage().as_ref(), node, manifests, coords).await
     }
 
-    pub async fn list_nodes(
+    async fn list_nodes(
         &self,
     ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
-            .await
-    }
-
-    pub async fn all_chunks(
-        &self,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + '_>
-    {
-        all_chunks(self.storage.as_ref(), &self.change_set, &self.snapshot_id).await
-    }
-}
-
-pub struct WriteableSession {
-    config: RepositoryConfig,
-    storage: Arc<dyn Storage + Send + Sync>,
-    snapshot_id: SnapshotId,
-    change_set: ChangeSet,
-    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
-}
-
-impl WriteableSession {
-    pub fn change_set(&self) -> &ChangeSet {
-        &self.change_set
-    }
-
-    pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_node(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
-    }
-
-    pub async fn get_array(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_array(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
-    }
-
-    pub async fn get_group(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_group(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
-    }
-
-    pub async fn get_chunk_ref(
-        &self,
-        path: &Path,
-        coords: &ChunkIndices,
-    ) -> RepositoryResult<Option<ChunkPayload>> {
-        get_chunk_ref(
-            self.storage.as_ref(),
-            &self.snapshot_id,
-            &self.change_set,
-            path,
-            coords,
+        updated_nodes(
+            self.storage().as_ref(),
+            &self.change_set(),
+            &self.snapshot_id(),
+            None,
         )
         .await
     }
 
-    /// Get a future that reads the the payload of a chunk from object store
-    ///
-    /// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
-    /// than needed. We want the bytes to be pulled from object store without holding a ref to the
-    /// [`Repository`], that way, writes can happen concurrently.
-    ///
-    /// The result of calling this function is None, if the chunk reference is not present in the
-    /// repository, or a [`Future`] that will fetch the bytes, possibly failing.
-    ///
-    /// Example usage:
-    /// ```ignore
-    /// get_chunk(
-    ///     ds.get_chunk_reader(
-    ///         &path,
-    ///         &ChunkIndices(vec![0, 0, 0]),
-    ///         &ByteRange::ALL,
-    ///     )
-    ///     .await
-    ///     .unwrap(),
-    /// ).await?
-    /// ```
-    ///
-    /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
-    /// the bytes.
-    pub async fn get_chunk_reader(
-        &self,
-        path: &Path,
-        coords: &ChunkIndices,
-        byte_range: &ByteRange,
-    ) -> RepositoryResult<
-        Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>,
-    > {
-        get_chunk_reader(
-            &self.storage,
-            &self.virtual_resolver,
-            &self.snapshot_id,
-            &self.change_set,
-            path,
-            coords,
-            byte_range,
-        )
-        .await
-    }
-
-    pub async fn get_old_chunk(
-        &self,
-        node: NodeId,
-        manifests: &[ManifestRef],
-        coords: &ChunkIndices,
-    ) -> RepositoryResult<Option<ChunkPayload>> {
-        // FIXME: use manifest extents
-        get_old_chunk(self.storage.as_ref(), node, manifests, coords).await
-    }
-
-    pub async fn list_nodes(
-        &self,
-    ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(self.storage.as_ref(), &self.change_set(), &self.snapshot_id, None)
-            .await
-    }
-
-    pub async fn all_chunks(
+    async fn all_chunks(
         &self,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + '_>
     {
-        all_chunks(self.storage.as_ref(), &self.change_set(), &self.snapshot_id).await
+        all_chunks(self.storage().as_ref(), &self.change_set(), &self.snapshot_id()).await
     }
+}
+
+pub trait WriteableSession: ReadableSession {
+    fn branch_name(&self) -> &str;
+
+    fn change_set_mut(&mut self) -> &mut ChangeSet;
 
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_group(&mut self, path: Path) -> RepositoryResult<()> {
+    async fn add_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_node(&path).await {
             Err(RepositoryError::NodeNotFound { .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_group(path.clone(), id);
+                self.change_set_mut().add_group(path.clone(), id);
                 Ok(())
             }
             Ok(node) => Err(RepositoryError::AlreadyExists {
@@ -272,10 +174,10 @@ impl WriteableSession {
     /// Delete a group in the hierarchy
     ///
     /// Deletes of non existing groups will succeed.
-    pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
+    async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_group(&path).await {
             Ok(node) => {
-                self.change_set.delete_group(node.path, &node.id);
+                self.change_set_mut().delete_group(node.path, &node.id);
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -286,7 +188,7 @@ impl WriteableSession {
     /// Add an array to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_array(
+    async fn add_array(
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
@@ -294,7 +196,7 @@ impl WriteableSession {
         match self.get_node(&path).await {
             Err(RepositoryError::NodeNotFound { .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_array(path, id, metadata);
+                self.change_set_mut().add_array(path, id, metadata);
                 Ok(())
             }
             Ok(node) => Err(RepositoryError::AlreadyExists {
@@ -308,23 +210,23 @@ impl WriteableSession {
     // Updates an array Zarr metadata
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn update_array(
+    async fn update_array(
         &mut self,
         path: Path,
         metadata: ZarrArrayMetadata,
     ) -> RepositoryResult<()> {
         self.get_array(&path)
             .await
-            .map(|node| self.change_set.update_array(node.id, metadata))
+            .map(|node| self.change_set_mut().update_array(node.id, metadata))
     }
 
     /// Delete an array in the hierarchy
     ///
     /// Deletes of non existing array will succeed.
-    pub async fn delete_array(&mut self, path: Path) -> RepositoryResult<()> {
+    async fn delete_array(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_array(&path).await {
             Ok(node) => {
-                self.change_set.delete_array(node.path, &node.id);
+                self.change_set_mut().delete_array(node.path, &node.id);
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -333,28 +235,28 @@ impl WriteableSession {
     }
 
     /// Record the write or delete of user attributes to array or group
-    pub async fn set_user_attributes(
+    async fn set_user_attributes(
         &mut self,
         path: Path,
         atts: Option<UserAttributes>,
     ) -> RepositoryResult<()> {
         let node = self.get_node(&path).await?;
-        self.change_set.update_user_attributes(node.id, atts);
+        self.change_set_mut().update_user_attributes(node.id, atts);
         Ok(())
     }
 
     // Record the write, referenceing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
-    pub async fn set_chunk_ref(
+    async fn set_chunk_ref(
         &mut self,
         path: Path,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> RepositoryResult<()> {
-        self.get_array(&path)
-            .await
-            .map(|node: NodeSnapshot| self.change_set.set_chunk_ref(node.id, coord, data))
+        self.get_array(&path).await.map(|node: NodeSnapshot| {
+            self.change_set_mut().set_chunk_ref(node.id, coord, data)
+        })
     }
 
     /// Returns a function that can be used to asynchronously write chunk bytes to object store
@@ -370,15 +272,15 @@ impl WriteableSession {
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
-    pub fn get_chunk_writer(
+    fn get_chunk_writer(
         &self,
     ) -> impl FnOnce(
         Bytes,
     ) -> Pin<
         Box<dyn Future<Output = RepositoryResult<ChunkPayload>> + Send>,
     > {
-        let threshold = self.config.inline_chunk_threshold_bytes as usize;
-        let storage = Arc::clone(&self.storage);
+        let threshold = self.config().inline_chunk_threshold_bytes as usize;
+        let storage = Arc::clone(&self.storage());
         move |data: Bytes| {
             async move {
                 let payload = if data.len() > threshold {
@@ -392,7 +294,7 @@ impl WriteableSession {
         }
     }
 
-    pub async fn clear(&mut self) -> RepositoryResult<()> {
+    async fn clear(&mut self) -> RepositoryResult<()> {
         let to_delete: Vec<(NodeType, Path)> =
             self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
 
@@ -406,13 +308,13 @@ impl WriteableSession {
     }
 
     /// Discard all uncommitted changes and return them as a `ChangeSet`
-    pub fn discard_changes(&mut self) -> ChangeSet {
-        std::mem::take(&mut self.change_set)
+    fn discard_changes(&mut self) -> ChangeSet {
+        std::mem::take(&mut self.change_set_mut())
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    pub async fn merge(&mut self, changes: ChangeSet) {
-        self.change_set.merge(changes);
+    async fn merge(&mut self, changes: ChangeSet) {
+        self.change_set_mut().merge(changes);
     }
 
     /// After changes to the repository have been made, this generates and writes to `Storage` the updated datastructures.
@@ -422,47 +324,45 @@ impl WriteableSession {
     ///
     /// Returns the `ObjectId` of the new Snapshot file. It's the callers responsibility to commit
     /// this id change.
-    pub async fn flush(
+    async fn flush(
         &mut self,
         message: &str,
         properties: SnapshotProperties,
     ) -> RepositoryResult<SnapshotId> {
         let new_snapshot_id = flush(
-            self.storage.as_ref(),
-            &self.change_set,
-            &self.snapshot_id,
+            self.storage().as_ref(),
+            &self.change_set(),
+            &self.snapshot_id(),
             message,
             properties,
         )
         .await?;
 
-        self.snapshot_id = new_snapshot_id.clone();
-        self.change_set = ChangeSet::default();
+        // self.snapshot_id = new_snapshot_id.clone();
+        // self.change_set = ChangeSet::default();
         Ok(new_snapshot_id)
     }
 
-    pub async fn commit(
+    async fn commit(
         &mut self,
-        update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> RepositoryResult<SnapshotId> {
-        let current = fetch_branch_tip(self.storage.as_ref(), update_branch_name).await;
+        let current =
+            fetch_branch_tip(self.storage().as_ref(), &self.branch_name()).await;
 
         match current {
-            Err(RefError::RefNotFound(_)) => {
-                self.do_commit(update_branch_name, message, properties).await
-            }
+            Err(RefError::RefNotFound(_)) => self.do_commit(message, properties).await,
             Err(err) => Err(err.into()),
             Ok(ref_data) => {
                 // we can detect there will be a conflict before generating the new snapshot
-                if ref_data.snapshot != self.snapshot_id {
+                if ref_data.snapshot != *self.snapshot_id() {
                     Err(RepositoryError::Conflict {
-                        expected_parent: Some(self.snapshot_id.clone()),
+                        expected_parent: Some(self.snapshot_id().clone()),
                         actual_parent: Some(ref_data.snapshot.clone()),
                     })
                 } else {
-                    self.do_commit(update_branch_name, message, properties).await
+                    self.do_commit(message, properties).await
                 }
             }
         }
@@ -470,20 +370,19 @@ impl WriteableSession {
 
     async fn do_commit(
         &mut self,
-        update_branch_name: &str,
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> RepositoryResult<SnapshotId> {
-        let parent_snapshot = self.snapshot_id.clone();
+        let parent_snapshot = self.snapshot_id().clone();
         let properties = properties.unwrap_or_default();
         let new_snapshot = self.flush(message, properties).await?;
 
         match update_branch(
-            self.storage.as_ref(),
-            update_branch_name,
+            self.storage().as_ref(),
+            &self.branch_name(),
             new_snapshot.clone(),
             Some(&parent_snapshot),
-            self.config.unsafe_overwrite_refs,
+            self.config().unsafe_overwrite_refs,
         )
         .await
         {
@@ -558,24 +457,24 @@ impl WriteableSession {
     /// If at some point it finds a conflict it cannot recover from, `rebase` leaves the
     /// `Repository` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
-    pub async fn rebase(
+    async fn rebase(
         &mut self,
         solver: &dyn ConflictSolver,
         update_branch_name: &str,
     ) -> RepositoryResult<()> {
         let ref_data =
-            fetch_branch_tip(self.storage.as_ref(), update_branch_name).await?;
+            fetch_branch_tip(self.storage().as_ref(), update_branch_name).await?;
 
-        if ref_data.snapshot == self.snapshot_id {
+        if ref_data.snapshot == *self.snapshot_id() {
             // nothing to do, commit should work without rebasing
             Ok(())
         } else {
             let current_snapshot =
-                self.storage.fetch_snapshot(&ref_data.snapshot).await?;
+                self.storage().fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
             let anc = current_snapshot.local_ancestry().map(|meta| meta.id);
             let new_commits = iter::once(ref_data.snapshot.clone())
-                .chain(anc.take_while(|snap_id| snap_id != &self.snapshot_id))
+                .chain(anc.take_while(|snap_id| snap_id != self.snapshot_id()))
                 .collect::<Vec<_>>();
 
             // TODO: this clone is expensive
@@ -615,6 +514,113 @@ impl WriteableSession {
 
             Ok(())
         }
+    }
+}
+
+pub struct ReadOnlySession {
+    config: RepositoryConfig,
+    storage: Arc<dyn Storage + Send + Sync>,
+    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+    snapshot_id: SnapshotId,
+    change_set: ChangeSet,
+}
+
+impl ReadOnlySession {
+    pub fn new(
+        config: RepositoryConfig,
+        storage: Arc<dyn Storage + Send + Sync>,
+        virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+        snapshot_id: SnapshotId,
+    ) -> Self {
+        Self {
+            config,
+            storage,
+            virtual_resolver,
+            snapshot_id,
+            change_set: ChangeSet::default(),
+        }
+    }
+}
+
+impl ReadableSession for ReadOnlySession {
+    fn config(&self) -> &RepositoryConfig {
+        &self.config
+    }
+
+    fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
+        &self.storage
+    }
+
+    fn virtual_resolver(&self) -> &Arc<dyn VirtualChunkResolver + Send + Sync> {
+        &self.virtual_resolver
+    }
+
+    fn snapshot_id(&self) -> &SnapshotId {
+        &self.snapshot_id
+    }
+
+    fn change_set(&self) -> &ChangeSet {
+        &self.change_set
+    }
+}
+
+pub struct WriteSession {
+    config: RepositoryConfig,
+    storage: Arc<dyn Storage + Send + Sync>,
+    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+    branch_name: String,
+    snapshot_id: SnapshotId,
+    change_set: ChangeSet,
+}
+
+impl WriteSession {
+    pub fn new(
+        config: RepositoryConfig,
+        storage: Arc<dyn Storage + Send + Sync>,
+        virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+        branch_name: String,
+        snapshot_id: SnapshotId,
+    ) -> Self {
+        Self {
+            config,
+            storage,
+            virtual_resolver,
+            branch_name,
+            snapshot_id,
+            change_set: ChangeSet::default(),
+        }
+    }
+}
+
+impl ReadableSession for WriteSession {
+    fn config(&self) -> &RepositoryConfig {
+        &self.config
+    }
+
+    fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
+        &self.storage
+    }
+
+    fn virtual_resolver(&self) -> &Arc<dyn VirtualChunkResolver + Send + Sync> {
+        &self.virtual_resolver
+    }
+
+    fn snapshot_id(&self) -> &SnapshotId {
+        &self.snapshot_id
+    }
+
+    fn change_set(&self) -> &ChangeSet {
+        &self.change_set
+    }
+}
+
+impl WriteableSession for WriteSession {
+    fn branch_name(&self) -> &str {
+        &self.branch_name
+    }
+
+    fn change_set_mut(&mut self) -> &mut ChangeSet {
+        &mut self.change_set
     }
 }
 

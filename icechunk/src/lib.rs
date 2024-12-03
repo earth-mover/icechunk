@@ -23,9 +23,11 @@ pub mod format;
 pub mod metadata;
 pub mod ops;
 pub mod refs;
+pub mod repo;
 pub mod repository;
 pub mod session;
 pub mod storage;
+pub mod store;
 #[cfg(test)]
 pub mod strategies;
 pub mod zarr;
