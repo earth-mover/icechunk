@@ -21,24 +21,19 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    change_set::ChangeSet,
-    format::{
+    change_set::ChangeSet, format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
-    },
-    refs::{update_branch, BranchVersion, Ref, RefError},
-    repository::{
+    }, refs::{update_branch, BranchVersion, Ref, RefError}, repository::{
         get_chunk, raise_if_invalid_snapshot_id, ArrayShape, ChunkIndices,
         ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, Path, RepositoryError, RepositoryResult, StorageTransformer,
         UserAttributes, ZarrArrayMetadata,
-    },
-    storage::{
+    }, session::SessionError, storage::{
         s3::{S3Config, S3Storage},
         virtual_ref::ObjectStoreVirtualChunkResolverConfig,
-    },
-    ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
+    }, ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage
 };
 
 pub use crate::format::ObjectId;
@@ -274,6 +269,8 @@ pub enum StoreError {
     NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
+    #[error("unsuccessful session operation: `{0}`")]
+    SessionError(#[from] SessionError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
     #[error("error merging stores: `{0}`")]
