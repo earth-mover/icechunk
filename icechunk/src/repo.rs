@@ -10,7 +10,7 @@ use crate::{
         update_branch, BranchVersion, Ref, RefError,
     },
     repository::{raise_if_invalid_snapshot_id, RepositoryError, RepositoryResult},
-    session::{ReadOnlySession, WriteSession},
+    session::Session,
     storage::virtual_ref::VirtualChunkResolver,
     zarr::VersionInfo,
     MemCachingStorage, RepositoryConfig, SnapshotMetadata, Storage,
@@ -177,7 +177,7 @@ impl Repository {
     pub async fn readable_session(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<ReadOnlySession> {
+    ) -> RepositoryResult<Session> {
         let snapshot_id: SnapshotId = match version {
             VersionInfo::SnapshotId(sid) => {
                 raise_if_invalid_snapshot_id(self.storage.as_ref(), &sid).await?;
@@ -193,7 +193,7 @@ impl Repository {
             }
         }?;
 
-        let session = ReadOnlySession::new(
+        let session = Session::create_readable_session(
             self.config.clone(),
             self.storage.clone(),
             self.virtual_resolver.clone(),
@@ -203,12 +203,9 @@ impl Repository {
         Ok(session)
     }
 
-    pub async fn writeable_session(
-        &self,
-        branch: &str,
-    ) -> RepositoryResult<WriteSession> {
+    pub async fn writeable_session(&self, branch: &str) -> RepositoryResult<Session> {
         let ref_data = fetch_branch_tip(self.storage.as_ref(), branch).await?;
-        let session = WriteSession::new(
+        let session = Session::create_writable_session(
             self.config.clone(),
             self.storage.clone(),
             self.virtual_resolver.clone(),
