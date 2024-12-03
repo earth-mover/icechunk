@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a7
+
+### Fixes
+
+- Allow overwriting existing groups and arrays in Icechunk stores
+
 ## Python Icechunk Library 0.1.0a6
 
 ### Fixes

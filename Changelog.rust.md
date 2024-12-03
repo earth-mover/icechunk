@@ -1,5 +1,11 @@
 # Changelog
 
+## Rust Icechunk Library 0.1.0-alpha.7
+
+### Fixes
+
+- Allow overwriting existing groups and arrays in Icechunk stores
+
 ## Rust Icechunk Library 0.1.0-alpha.6
 
 ### Fixes

@@ -20,7 +20,7 @@ dependencies = ["zarr==3.0.0b2"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
 readme = "../README.md"
