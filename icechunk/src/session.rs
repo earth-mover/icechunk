@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
@@ -15,9 +14,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    change_set::ChangeSet,
-    conflicts::{ConflictResolution, ConflictSolver},
-    format::{
+    change_set::ChangeSet, conflicts::{ConflictResolution, ConflictSolver}, format::{
         manifest::{
             ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef, VirtualChunkRef,
         },
@@ -28,14 +25,7 @@ use crate::{
         transaction_log::TransactionLog,
         ByteRange, ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path,
         SnapshotId,
-    },
-    metadata::UserAttributes,
-    refs::{fetch_branch_tip, update_branch, RefError},
-    repository::{ChunkPayload, RepositoryError, RepositoryResult, ZarrArrayMetadata},
-    storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
-    store::Store,
-    zarr::{ObjectId, StoreOptions},
-    RepositoryConfig, Storage,
+    }, metadata::UserAttributes, refs::{fetch_branch_tip, update_branch, RefError}, repo::RepositoryConfig, repository::{ChunkPayload, RepositoryError, RepositoryResult, ZarrArrayMetadata}, storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver}, store::Store, zarr::{ObjectId, StoreOptions}, Storage
 };
 
 #[derive(Debug, Error)]
@@ -59,7 +49,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn create_readable_session(
+    pub fn create_readonly_session(
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
@@ -557,7 +547,7 @@ impl Session {
             for snap_id in new_commits.into_iter().rev() {
                 let tx_log = self.storage.fetch_transaction_log(&snap_id).await?;
 
-                let session = Self::create_readable_session(
+                let session = Self::create_readonly_session(
                     self.config.clone(),
                     Arc::clone(&self.storage),
                     Arc::clone(&self.virtual_resolver),

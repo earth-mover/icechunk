@@ -16,6 +16,23 @@ use crate::{
     MemCachingStorage, RepositoryConfig, SnapshotMetadata, Storage,
 };
 
+#[derive(Clone, Debug)]
+pub struct RepositoryConfig {
+    // Chunks smaller than this will be stored inline in the manifst
+    pub inline_chunk_threshold_bytes: u16,
+    // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
+    // own risk in object stores for which we don't support write-object-if-not-exists. There is
+    // the possibility of race conditions if this variable is set to true and there are concurrent
+    // commit attempts.
+    pub unsafe_overwrite_refs: bool,
+}
+
+impl Default for RepositoryConfig {
+    fn default() -> Self {
+        Self { inline_chunk_threshold_bytes: 512, unsafe_overwrite_refs: false }
+    }
+}
+
 #[derive(Debug)]
 pub struct Repository {
     config: RepositoryConfig,
@@ -174,7 +191,7 @@ impl Repository {
         Ok(tags)
     }
 
-    pub async fn readable_session(
+    pub async fn readonly_session(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<Session> {
@@ -193,7 +210,7 @@ impl Repository {
             }
         }?;
 
-        let session = Session::create_readable_session(
+        let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage.clone(),
             self.virtual_resolver.clone(),

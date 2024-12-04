@@ -19,15 +19,13 @@ pub use crate::{
     },
 };
 use crate::{
-    conflicts::{Conflict, ConflictResolution, ConflictSolver},
-    format::{
+    conflicts::{Conflict, ConflictResolution, ConflictSolver}, format::{
         manifest::VirtualReferenceError, snapshot::ManifestFileInfo,
         transaction_log::TransactionLog, ManifestId, SnapshotId,
-    },
-    storage::virtual_ref::{
+    }, repo::RepositoryConfig, storage::virtual_ref::{
         construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
         VirtualChunkResolver,
-    },
+    }
 };
 use bytes::Bytes;
 use chrono::Utc;
@@ -54,22 +52,7 @@ use crate::{
     MemCachingStorage, Storage, StorageError,
 };
 
-#[derive(Clone, Debug)]
-pub struct RepositoryConfig {
-    // Chunks smaller than this will be stored inline in the manifst
-    pub inline_chunk_threshold_bytes: u16,
-    // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    // own risk in object stores for which we don't support write-object-if-not-exists. There is
-    // the possibility of race conditions if this variable is set to true and there are concurrent
-    // commit attempts.
-    pub unsafe_overwrite_refs: bool,
-}
 
-impl Default for RepositoryConfig {
-    fn default() -> Self {
-        Self { inline_chunk_threshold_bytes: 512, unsafe_overwrite_refs: false }
-    }
-}
 
 #[derive(Debug)]
 pub struct Repository {
