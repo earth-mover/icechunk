@@ -11,10 +11,12 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    change_set::ChangeSet, conflicts::{ConflictResolution, ConflictSolver}, format::{
+    change_set::ChangeSet,
+    conflicts::{ConflictResolution, ConflictSolver},
+    format::{
         manifest::{
             ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef, VirtualChunkRef,
         },
@@ -25,7 +27,15 @@ use crate::{
         transaction_log::TransactionLog,
         ByteRange, ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path,
         SnapshotId,
-    }, metadata::UserAttributes, refs::{fetch_branch_tip, update_branch, RefError}, repo::RepositoryConfig, repository::{ChunkPayload, RepositoryError, RepositoryResult, ZarrArrayMetadata}, storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver}, store::Store, zarr::{ObjectId, StoreOptions}, Storage
+    },
+    metadata::UserAttributes,
+    refs::{fetch_branch_tip, update_branch, RefError},
+    repo::RepositoryConfig,
+    repository::{ChunkPayload, RepositoryError, RepositoryResult, ZarrArrayMetadata},
+    storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
+    store::Store,
+    zarr::{ObjectId, StoreOptions},
+    Storage,
 };
 
 #[derive(Debug, Error)]
@@ -45,7 +55,7 @@ pub struct Session {
     virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
-    change_set: ChangeSet,
+    change_set: Arc<RwLock<ChangeSet>>,
 }
 
 impl Session {
@@ -61,7 +71,7 @@ impl Session {
             virtual_resolver,
             branch_name: None,
             snapshot_id,
-            change_set: ChangeSet::default(),
+            change_set: Arc::new(RwLock::new(ChangeSet::default())),
         }
     }
 
@@ -78,7 +88,7 @@ impl Session {
             virtual_resolver,
             branch_name: Some(branch_name),
             snapshot_id,
-            change_set: ChangeSet::default(),
+            change_set: Arc::new(RwLock::new(ChangeSet::default())),
         }
     }
 
@@ -86,23 +96,25 @@ impl Session {
         self.branch_name.is_none()
     }
 
-    pub fn store(&mut self) -> Store {
+    pub fn store(self: Arc<Self>) -> Store {
         let read_only = self.read_only();
-        let mutexed = Arc::new(RwLock::new(self));
 
-        Store::new(mutexed, StoreOptions::default(), read_only)
+        Store::new(self.clone(), StoreOptions::default(), read_only)
     }
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_node(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+        let guard = self.change_set.read().await;
+        get_node(self.storage.as_ref(), &self.snapshot_id, &guard, path).await
     }
 
     pub async fn get_array(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_array(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+        let guard = self.change_set.read().await;
+        get_array(self.storage.as_ref(), &self.snapshot_id, &guard, path).await
     }
 
     pub async fn get_group(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
-        get_group(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+        let guard = self.change_set.read().await;
+        get_group(self.storage.as_ref(), &self.snapshot_id, &guard, path).await
     }
 
     pub async fn get_chunk_ref(
@@ -110,14 +122,9 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
     ) -> RepositoryResult<Option<ChunkPayload>> {
-        get_chunk_ref(
-            self.storage.as_ref(),
-            &self.snapshot_id,
-            &self.change_set,
-            path,
-            coords,
-        )
-        .await
+        let guard = self.change_set.read().await;
+        get_chunk_ref(self.storage.as_ref(), &self.snapshot_id, &guard, path, coords)
+            .await
     }
 
     /// Get a future that reads the the payload of a chunk from object store
@@ -152,11 +159,12 @@ impl Session {
     ) -> RepositoryResult<
         Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>,
     > {
+        let guard = self.change_set.read().await;
         get_chunk_reader(
             &self.storage,
             &self.virtual_resolver,
             &self.snapshot_id,
-            &self.change_set,
+            &guard,
             path,
             coords,
             byte_range,
@@ -177,21 +185,31 @@ impl Session {
     pub async fn list_nodes(
         &self,
     ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
-            .await
+        let guard = self.change_set.read().await;
+        updated_nodes(
+            self.storage.as_ref(),
+            &guard,
+            &self.snapshot_id,
+            None
+        ).await
     }
 
     pub async fn all_chunks(
         &self,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + '_>
     {
-        all_chunks(self.storage.as_ref(), &self.change_set, &self.snapshot_id).await
+        let guard = self.change_set.read().await;
+        all_chunks(
+            self.storage.as_ref(),
+            &guard,
+            &self.snapshot_id
+        ).await
     }
 
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_group(&mut self, path: Path) -> SessionResult<()> {
+    pub async fn add_group(&self, path: Path) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -199,7 +217,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(RepositoryError::NodeNotFound { .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_group(path.clone(), id);
+                self.change_set.write().await.add_group(path.clone(), id);
                 Ok(())
             }
             Ok(node) => Err(RepositoryError::AlreadyExists {
@@ -215,14 +233,14 @@ impl Session {
     /// Delete a group in the hierarchy
     ///
     /// Deletes of non existing groups will succeed.
-    pub async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
+    pub async fn delete_group(&self, path: Path) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
 
         match self.get_group(&path).await {
             Ok(node) => {
-                self.change_set.delete_group(node.path, &node.id);
+                self.change_set.write().await.delete_group(node.path, &node.id);
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -234,7 +252,7 @@ impl Session {
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
     pub async fn add_array(
-        &mut self,
+        &self,
         path: Path,
         metadata: ZarrArrayMetadata,
     ) -> SessionResult<()> {
@@ -245,7 +263,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(RepositoryError::NodeNotFound { .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_array(path, id, metadata);
+                self.change_set.write().await.add_array(path, id, metadata);
                 Ok(())
             }
             Ok(node) => Err(RepositoryError::AlreadyExists {
@@ -262,7 +280,7 @@ impl Session {
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
     pub async fn update_array(
-        &mut self,
+        &self,
         path: Path,
         metadata: ZarrArrayMetadata,
     ) -> SessionResult<()> {
@@ -270,23 +288,22 @@ impl Session {
             return Err(SessionError::ReadOnlySession);
         }
 
-        self.get_array(&path)
-            .await
-            .map(|node| self.change_set.update_array(node.id, metadata))?;
+        let node = self.get_array(&path).await?;
+        self.change_set.write().await.update_array(node.id, metadata);
         Ok(())
     }
 
     /// Delete an array in the hierarchy
     ///
     /// Deletes of non existing array will succeed.
-    pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
+    pub async fn delete_array(&self, path: Path) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
 
         match self.get_array(&path).await {
             Ok(node) => {
-                self.change_set.delete_array(node.path, &node.id);
+                self.change_set.write().await.delete_array(node.path, &node.id);
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -296,7 +313,7 @@ impl Session {
 
     /// Record the write or delete of user attributes to array or group
     pub async fn set_user_attributes(
-        &mut self,
+        &self,
         path: Path,
         atts: Option<UserAttributes>,
     ) -> SessionResult<()> {
@@ -305,7 +322,7 @@ impl Session {
         }
 
         let node = self.get_node(&path).await?;
-        self.change_set.update_user_attributes(node.id, atts);
+        self.change_set.write().await.update_user_attributes(node.id, atts);
         Ok(())
     }
 
@@ -313,7 +330,7 @@ impl Session {
     //
     // Caller has to write the chunk before calling this.
     pub async fn set_chunk_ref(
-        &mut self,
+        &self,
         path: Path,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
@@ -322,9 +339,8 @@ impl Session {
             return Err(SessionError::ReadOnlySession);
         }
 
-        self.get_array(&path).await.map(|node: NodeSnapshot| {
-            self.change_set.set_chunk_ref(node.id, coord, data)
-        })?;
+        let node = self.get_array(&path).await?;
+        self.change_set.write().await.set_chunk_ref(node.id, coord, data);
 
         Ok(())
     }
@@ -371,7 +387,7 @@ impl Session {
         Ok(closure)
     }
 
-    pub async fn clear(&mut self) -> SessionResult<()> {
+    pub async fn clear(&self) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
@@ -389,19 +405,21 @@ impl Session {
     }
 
     /// Discard all uncommitted changes and return them as a `ChangeSet`
-    pub fn discard_changes(&mut self) -> SessionResult<ChangeSet> {
+    pub fn discard_changes(&self) -> SessionResult<ChangeSet> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
-        Ok(std::mem::take(&mut self.change_set))
+
+        let mut guard = self.change_set.blocking_write();
+        Ok(std::mem::take(&mut guard))
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    pub async fn merge(&mut self, changes: ChangeSet) -> SessionResult<()> {
+    pub async fn merge(&self, changes: ChangeSet) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
         }
-        self.change_set.merge(changes);
+        self.change_set.write().await.merge(changes);
         Ok(())
     }
 
@@ -416,6 +434,7 @@ impl Session {
 
         let current = fetch_branch_tip(self.storage.as_ref(), &branch_name).await;
 
+        let guard = self.change_set.write().await;
         let id = match current {
             Err(RefError::RefNotFound(_)) => {
                 do_commit(
@@ -423,7 +442,7 @@ impl Session {
                     self.storage.as_ref(),
                     &branch_name,
                     &self.snapshot_id,
-                    &self.change_set,
+                    &guard,
                     message,
                     properties,
                 )
@@ -443,7 +462,7 @@ impl Session {
                         self.storage.as_ref(),
                         &branch_name,
                         &self.snapshot_id,
-                        &self.change_set,
+                        &guard,
                         message,
                         properties,
                     )
@@ -554,15 +573,16 @@ impl Session {
                     self.snapshot_id.clone(),
                 );
 
-                let change_set = take(&mut self.change_set);
+                let mut guard = self.change_set.write().await;
+                let change_set = std::mem::replace(&mut *guard, ChangeSet::default());
                 // TODO: this should probably execute in a worker thread
                 match solver.solve(&tx_log, &session, change_set, self).await? {
                     ConflictResolution::Patched(patched_changeset) => {
-                        self.change_set = patched_changeset;
+                        *guard = patched_changeset;
                         self.snapshot_id = snap_id;
                     }
                     ConflictResolution::Unsolvable { reason, unmodified } => {
-                        self.change_set = unmodified;
+                        *guard = unmodified;
                         return Err(RepositoryError::RebaseFailed {
                             snapshot: snap_id,
                             conflicts: reason,
