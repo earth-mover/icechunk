@@ -512,27 +512,21 @@ impl Repository {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> RepositoryResult<()> {
-
         let node_snapshot = self.get_array(&path).await?;
 
-        if let NodeData::Array(zarr_metadata, _, ) = node_snapshot.node_data {
+        if let NodeData::Array(zarr_metadata, _) = node_snapshot.node_data {
             if zarr_metadata.valid_chunk_coord(&coord) {
                 self.change_set.set_chunk_ref(node_snapshot.id, coord, data);
                 Ok(())
             } else {
-                Err(RepositoryError::InvalidIndex { 
-                    coords: coord,
-                    path: path.clone()
-                })
+                Err(RepositoryError::InvalidIndex { coords: coord, path: path.clone() })
             }
-                     
         } else {
             Err(RepositoryError::NotAnArray {
                 node: node_snapshot,
                 message: "getting an array".to_string(),
             })
         }
-        
     }
 
     pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
@@ -1831,7 +1825,7 @@ mod tests {
                 NonZeroU64::new(2).unwrap(),
                 NonZeroU64::new(2).unwrap(),
                 NonZeroU64::new(1).unwrap(),
-                ]),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2078,7 +2072,10 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![5, 5],
             data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap(), NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2238,8 +2235,8 @@ mod tests {
             chunk_shape: ChunkShape(vec![
                 NonZeroU64::new(2).unwrap(),
                 NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(2).unwrap()
-                ]),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2339,8 +2336,8 @@ mod tests {
             chunk_shape: ChunkShape(vec![
                 NonZeroU64::new(2).unwrap(),
                 NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap()],
-            ),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2443,7 +2440,10 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![5, 5],
             data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap(), NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2460,36 +2460,37 @@ mod tests {
         // add 3 chunks
         // First 2 chunks are valid, third will be invalid chunk indices
 
-        assert!(
-            ds.set_chunk_ref(
-            apath.clone(),
-            ChunkIndices(vec![0, 0]),
-            Some(ChunkPayload::Inline("hello".into())),
-        ).await.is_ok()
-        );
-        assert!(
-            ds.set_chunk_ref(
-            apath.clone(),
-            ChunkIndices(vec![2, 2]),
-            Some(ChunkPayload::Inline("hello".into())),
-        ).await.is_ok()
-        );
+        assert!(ds
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await
+            .is_ok());
+        assert!(ds
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![2, 2]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await
+            .is_ok());
 
-        let bad_result = ds.set_chunk_ref(
-            apath.clone(),
-            ChunkIndices(vec![3, 0]),
-            Some(ChunkPayload::Inline("hello".into())),
-            ).await;
+        let bad_result = ds
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![3, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await;
 
         match bad_result {
-            Err(RepositoryError::InvalidIndex { 
-                coords,
-                path
-            }) => {
+            Err(RepositoryError::InvalidIndex { coords, path }) => {
                 assert_eq!(coords, ChunkIndices(vec![3, 0]));
                 assert_eq!(path, apath);
-            },
-            _ => panic!("Expected InvalidIndex Error")
+            }
+            _ => panic!("Expected InvalidIndex Error"),
         }
         Ok(())
     }
