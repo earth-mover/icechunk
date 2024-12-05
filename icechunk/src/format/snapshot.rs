@@ -14,9 +14,9 @@ use crate::metadata::{
 };
 
 use super::{
-    format_constants, manifest::ManifestRef, AttributesId, IcechunkFormatError,
-    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
-    SnapshotId, TableOffset, ChunkIndices
+    format_constants, manifest::ManifestRef, AttributesId, ChunkIndices,
+    IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
+    ObjectId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +50,6 @@ pub struct ZarrArrayMetadata {
 }
 
 impl ZarrArrayMetadata {
-
     /// Returns an iterator over the maximum permitted chunk indices for the array.
     ///
     /// This function calculates the maximum chunk indices based on the shape of the array
@@ -61,15 +60,14 @@ impl ZarrArrayMetadata {
     ///
     /// A ChunkIndices type containing the max chunk index for each dimension.
     fn max_chunk_indices_permitted(&self) -> ChunkIndices {
-
         debug_assert_eq!(self.shape.len(), self.chunk_shape.0.len());
 
         ChunkIndices(
             self.shape
-            .iter()
-            .zip(self.chunk_shape.0.iter())
-            .map(|(s, cs)| if *s == 0 { 0 } else { ((s - 1) / cs.get()) as u32 })
-            .collect()
+                .iter()
+                .zip(self.chunk_shape.0.iter())
+                .map(|(s, cs)| if *s == 0 { 0 } else { ((s - 1) / cs.get()) as u32 })
+                .collect(),
         )
     }
 
@@ -83,21 +81,19 @@ impl ZarrArrayMetadata {
     ///
     /// # Returns
     ///
-    /// An `IcechunkResult` indicating whether the chunk coordinates are valid.
+    /// An bool indicating whether the chunk coordinates are valid.
     ///
     /// # Errors
     ///
-    /// Returns `IcechunkFormatError::ChunkCoordinatesNotFound` if the chunk coordinates are invalid.
+    /// Returns false if the chunk coordinates are invalid.
     pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> bool {
-
         debug_assert_eq!(self.shape.len(), coord.0.len());
 
         coord
-        .0
-        .iter()
-        .zip(self.max_chunk_indices_permitted().0)
-        .all(|(index, index_permitted)| *index <= index_permitted)
-   
+            .0
+            .iter()
+            .zip(self.max_chunk_indices_permitted().0)
+            .all(|(index, index_permitted)| *index <= index_permitted)
     }
 }
 
@@ -505,7 +501,6 @@ mod tests {
 
     #[test]
     fn test_valid_chunk_coord() {
-
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![10000, 10001, 9999],
             data_type: DataType::Float32,
@@ -528,8 +523,7 @@ mod tests {
             dimension_names: None,
         };
 
-        
-        let zarr_meta2 = ZarrArrayMetadata{
+        let zarr_meta2 = ZarrArrayMetadata {
             shape: vec![0, 0, 0],
             chunk_shape: ChunkShape(vec![
                 NonZeroU64::new(1000).unwrap(),
@@ -537,17 +531,15 @@ mod tests {
                 NonZeroU64::new(1000).unwrap(),
             ]),
             ..zarr_meta1.clone()
-
         };
 
         let coord1 = ChunkIndices(vec![9, 10, 9]);
         let coord2 = ChunkIndices(vec![10, 11, 10]);
-        let coord3 = ChunkIndices(vec![0, 0 ,0]);
+        let coord3 = ChunkIndices(vec![0, 0, 0]);
 
         assert!(zarr_meta1.valid_chunk_coord(&coord1));
         assert!(!zarr_meta1.valid_chunk_coord(&coord2));
-        
-        assert!(zarr_meta2.valid_chunk_coord(&coord3));
 
+        assert!(zarr_meta2.valid_chunk_coord(&coord3));
     }
 }
