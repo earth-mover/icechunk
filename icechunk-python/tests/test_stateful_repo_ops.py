@@ -150,6 +150,10 @@ class Model:
         self.is_at_branch_head = True
         self.branch = ref
 
+    def reset_branch(self, commit) -> None:
+        self.branches[self.branch] = commit
+        self.checkout_branch(self.branch)
+
     def delete_branch(self, branch_name):
         del self.branches[branch_name]
 
@@ -191,7 +195,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @initialize(data=st.data())
     def initialize(self, data):
         self.sync_store = SyncStoreWrapper(IcechunkStore.create(StorageConfig.memory()))
-        self.model.branch = "main"
+        self.model.HEAD = self.repo.ancestry()[0].id
+        self.model.new_branch("main")
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
@@ -289,10 +294,21 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # This will test out checking out and deleting a tag that does not exist.
         return name
 
-
     def reset(self) -> None:
         self.repo.reset()
         self.model.checkout_branch(self.model.branch)
+
+    @rule(commit=commits)
+    def reset_branch(self, commit) -> None:
+        if self.model.branch is None or self.model.changes_made:
+            # must be at branch tip, and with clean state, to reset it
+            with pytest.raises(ValueError):
+                self.repo.reset_branch(commit)
+            return
+
+        note(f"resetting branch {self.model.branch} from {self.model.HEAD} to {commit}")
+        self.repo.reset_branch(commit)
+        self.model.reset_branch(commit)
 
     # @rule(branch=consumes(branches))
     # def delete_branch(self, branch):
