@@ -971,18 +971,20 @@ async fn get_node<'a>(
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> RepositoryResult<NodeSnapshot> {
+    let maybe_node = get_existing_node(storage, change_set, snapshot_id, path).await;
     // We need to look for nodes in self.change_set and the snapshot file
-    if change_set.is_deleted(path) {
+    if maybe_node.is_ok() && change_set.is_deleted(&path, &maybe_node.unwrap().id) {
         return Err(RepositoryError::NodeNotFound {
             path: path.clone(),
             message: "getting node".to_string(),
         });
     }
+
     match change_set.get_new_node(path) {
         Some(node) => Ok(node),
         None => {
             let node = get_existing_node(storage, change_set, snapshot_id, path).await?;
-            if change_set.is_deleted(&node.path) {
+            if change_set.is_deleted(&node.path, &node.id) {
                 Err(RepositoryError::NodeNotFound {
                     path: path.clone(),
                     message: "getting node".to_string(),
@@ -2504,10 +2506,11 @@ mod tests {
         repo1.update_array(path.clone(), basic_meta()).await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path: path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
@@ -2531,10 +2534,11 @@ mod tests {
             .await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update user attributes", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
@@ -2559,10 +2563,11 @@ mod tests {
             .await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update chunks", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
@@ -2586,10 +2591,11 @@ mod tests {
             .await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update user attributes", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_group(path.clone()).await?;
         repo2.commit("main", "delete group", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedGroup(path),
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())

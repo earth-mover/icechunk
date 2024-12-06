@@ -36,8 +36,14 @@ pub enum Conflict {
         path: Path,
         node_id: NodeId,
     },
-    DeleteOfUpdatedArray(Path),
-    DeleteOfUpdatedGroup(Path),
+    DeleteOfUpdatedArray {
+        path: Path,
+        node_id: NodeId,
+    },
+    DeleteOfUpdatedGroup {
+        path: Path,
+        node_id: NodeId,
+    },
     // FIXME: we are missing the case of current change deleting a group and previous change
     // creating something new under it
 }

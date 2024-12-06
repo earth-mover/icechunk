@@ -169,7 +169,8 @@ impl ConflictSolver for ConflictDetector {
         let deletes_of_updated_arrays = stream::iter(
             current_changes.deleted_arrays().map(Ok),
         )
-        .try_filter_map(|path| async {
+        .try_filter_map(|(path, _node_id)| async {
+            // FIXME: reuse node_id?
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(RepositoryError::NodeNotFound { .. }) => None,
@@ -181,7 +182,10 @@ impl ConflictSolver for ConflictDetector {
                     || previous_change.updated_user_attributes.contains(&node_id)
                     || previous_change.updated_chunks.contains_key(&node_id)
                 {
-                    Ok(Some(Conflict::DeleteOfUpdatedArray(path.clone())))
+                    Ok(Some(Conflict::DeleteOfUpdatedArray {
+                        path: path.clone(),
+                        node_id: node_id.clone(),
+                    }))
                 } else {
                     Ok(None)
                 }
@@ -193,7 +197,7 @@ impl ConflictSolver for ConflictDetector {
         let deletes_of_updated_groups = stream::iter(
             current_changes.deleted_groups().map(Ok),
         )
-        .try_filter_map(|path| async {
+        .try_filter_map(|(path, _node_id)| async {
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(RepositoryError::NodeNotFound { .. }) => None,
@@ -202,7 +206,10 @@ impl ConflictSolver for ConflictDetector {
 
             if let Some(node_id) = id {
                 if previous_change.updated_user_attributes.contains(&node_id) {
-                    Ok(Some(Conflict::DeleteOfUpdatedGroup(path.clone())))
+                    Ok(Some(Conflict::DeleteOfUpdatedGroup {
+                        path: path.clone(),
+                        node_id: node_id.clone(),
+                    }))
                 } else {
                     Ok(None)
                 }
