@@ -109,7 +109,7 @@ class Model:
         self.commits: dict[str, dict] = {}
         self.tags: dict[str, TagModel] = {}
         # TODO: This is only tracking the HEAD,
-        # Should we  model the branch as an ordered list of commits?
+        # Should we model the branch as an ordered list of commits?
         self.branches: dict[str, str] = {}
 
     def __setitem__(self, key, value):
@@ -146,8 +146,7 @@ class Model:
         self.branch = name
         self.is_at_branch_head = True
         assert self.HEAD is not None
-        # TODO: A branch is not created till a *new* commit is made.
-        # self.branches[name] = self.HEAD
+        self.branches[name] = self.HEAD
 
     def checkout_branch(self, ref: str) -> None:
         self.checkout_commit(self.branches[ref])
@@ -165,9 +164,6 @@ class Model:
 
     def checkout_tag(self, ref):
         self.checkout_commit(self.tags[str(ref)].commit_id)
-
-    # def delete_tag(self, tag_name):
-    #     del self.tags[tag_name]
 
     def list_prefix(self, prefix: str):
         assert prefix == ""
@@ -256,8 +252,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert not self.repo.read_only
             self.model.checkout_branch(ref)
 
-    # TODO: remove the precondition
-    # @precondition(lambda self: self.model.has_commits)
     @rule(name=simple_text | st.just("main"), target=branches)
     def new_branch(self, name):
         note(f"Creating branch {name!r}")
@@ -294,17 +288,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # returning this `name` to the Bundle is OK even if the tag was not created
         # This will test out checking out and deleting a tag that does not exist.
         return name
-
-    # @rule(tag=consumes(tags))
-    # def delete_tag(self, tag):
-    #     note(f"Deleting tag {tag!r}")
-    #     if tag in self.model.tags:
-    #         self.repo.delete_tag(tag)
-    #         self.model.delete_tag(tag)
-    #     else:
-    #         note("Expecting error.")
-    #         with pytest.raises(ValueError):
-    #             self.repo.delete_tag(tag)
 
     # @rule(branch=consumes(branches))
     # def delete_branch(self, branch):
