@@ -1940,8 +1940,12 @@ mod tests {
             store.delete("array/foo").await,
             Err(StoreError::InvalidKey { key }) if key == "array/foo",
         ));
-        // FIXME: deleting an invalid chunk should not be allowed.
-        store.delete("array/c/10/1/1").await.unwrap();
+
+        assert!(matches!(
+            store.delete("array/c/10/1/1").await,
+            Err(StoreError::RepositoryError(RepositoryError::InvalidIndex { coords, path }))
+                if path.to_string() == "/array" && coords == ChunkIndices([10, 1, 1].to_vec())
+        ));
 
         Ok(())
     }
