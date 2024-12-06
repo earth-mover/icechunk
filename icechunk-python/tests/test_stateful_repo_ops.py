@@ -254,6 +254,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             note(f"Checking out branch {ref!r}")
             self.repo.checkout(branch=ref)
             assert not self.repo.read_only
+            self.model.checkout_branch(ref)
 
     # TODO: remove the precondition
     # @precondition(lambda self: self.model.has_commits)
