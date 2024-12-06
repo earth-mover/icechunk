@@ -193,7 +193,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.sync_store = SyncStoreWrapper(IcechunkStore.create(StorageConfig.memory()))
         self.model.branch = "main"
         # initialize with some data always
-        self.set_doc(path="/zarr.json", value=data.draw(v3_group_metadata()))
+        # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
+        #       with an array's zarr.json
+        # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
+        self.set_doc(path="/zarr.json", value=data.draw(v3_array_metadata()))
 
     @rule(path=metadata_paths, value=v3_array_metadata())
     def set_doc(self, path: str, value: Buffer):
