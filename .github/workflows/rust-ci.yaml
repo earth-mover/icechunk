@@ -8,6 +8,12 @@ on:
     paths:
       - 'icechunk/**'
       - '.github/workflows/rust-ci.yaml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'compose.yaml'
+      - 'deny.toml'
+      - 'Justfile'
+      - 'rustfmt.toml'
   push:
     branches:
       - main
