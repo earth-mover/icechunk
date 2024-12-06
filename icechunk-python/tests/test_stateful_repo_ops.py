@@ -82,11 +82,8 @@ def v3_array_metadata(draw):
 
 MAX_TEXT_SIZE = 120
 
-metadata_paths = st.lists(
-    st.text(zrst.zarr_key_chars, min_size=1),
-    min_size=1,
-    max_size=5,
-).map(lambda x: "/".join(x) + "/zarr.json")
+keys = st.lists(zrst.node_names, min_size=1, max_size=4).map("/".join)
+metadata_paths = keys.map(lambda x: x + "/zarr.json")
 
 
 @dataclass
