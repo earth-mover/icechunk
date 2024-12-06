@@ -32,11 +32,11 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
 async def test_write_minio_virtual_refs():
     write_chunks_to_minio(
         [
-            ("path/to/python/chunk-1", b"first"),
-            ("path/to/python/chunk-2", b"second"),
-            ("path/to/python/chunk-3", b"third"),
-            ("path/to/python/chunk-4", b"fourth"),
-            ("path/to/python/chunk-5", b"fifth"),
+            ("path/to/python/new/chunk-1", b"first"),
+            ("path/to/python/new/chunk-2", b"second"),
+            ("path/to/python/new/chunk-3", b"third"),
+            ("path/to/python/new/chunk-4", b"fourth"),
+            ("path/to/python/new/chunk-5", b"fifth"),
         ]
     )
 
@@ -67,14 +67,14 @@ async def test_issue_418():
 
     # Set longitude
     store.set_virtual_ref(
-        "lon/c/0", "s3://testbucket/path/to/python/chunk-5", offset=0, length=4
+        "lon/c/0", "s3://testbucket/path/to/python/new/chunk-5", offset=0, length=4
     )
 
     store.set_virtual_ref(
-        "time/c/0", "s3://testbucket/path/to/python/chunk-1", offset=0, length=4
+        "time/c/0", "s3://testbucket/path/to/python/new/chunk-1", offset=0, length=4
     )
     store.set_virtual_ref(
-        "time/c/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
+        "time/c/1", "s3://testbucket/path/to/python/new/chunk-2", offset=1, length=4
     )
 
     assert (await store._store.get("lon/c/0")) == b"fift"
@@ -87,7 +87,7 @@ async def test_issue_418():
     time.resize((3,))
 
     store.set_virtual_ref(
-        "time/c/2", "s3://testbucket/path/to/python/chunk-3", offset=0, length=4
+        "time/c/2", "s3://testbucket/path/to/python/new/chunk-3", offset=0, length=4
     )
 
     assert (await store._store.get("lon/c/0")) == b"fift"
