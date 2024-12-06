@@ -120,26 +120,25 @@ class Model:
     def has_commits(self) -> bool:
         return bool(self.commits)
 
-    def commit(self, id_) -> None:
-        as_str = str(id_)
-        self.commits[as_str] = copy.deepcopy(self.store)
+    def commit(self, ref: str) -> None:
+        self.commits[ref] = copy.deepcopy(self.store)
         self.changes_made = False
-        self.HEAD = as_str
+        self.HEAD = ref
 
         assert self.branch is not None
-        self.branches[self.branch] = as_str
+        self.branches[self.branch] = ref
 
-    def checkout_commit(self, ref) -> None:
+    def checkout_commit(self, ref: str) -> None:
         assert str(ref) in self.commits
         # deepcopy so that we allow changes, but the committed store remains unchanged
         # TODO: consider Frozen stores in self.commit?
-        self.store = copy.deepcopy(self.commits[str(ref)])
+        self.store = copy.deepcopy(self.commits[ref])
         self.changes_made = False
-        self.HEAD = str(ref)
+        self.HEAD = ref
         self.is_at_branch_head = False
         self.branch = None
 
-    def new_branch(self, name):
+    def new_branch(self, name: str) -> None:
         self.branch = name
         self.is_at_branch_head = True
         assert self.HEAD is not None
@@ -154,19 +153,19 @@ class Model:
         self.branches[self.branch] = commit
         self.checkout_branch(self.branch)
 
-    def delete_branch(self, branch_name):
+    def delete_branch(self, branch_name: str) -> None:
         del self.branches[branch_name]
 
-    def tag(self, tag_name, commit_id):
+    def tag(self, tag_name: str, commit_id: str) -> None:
         if commit_id is None:
             assert self.HEAD is not None
             commit_id = self.HEAD
         self.tags[tag_name] = TagModel(commit_id=str(commit_id))
 
-    def checkout_tag(self, ref):
+    def checkout_tag(self, ref: str) -> None:
         self.checkout_commit(self.tags[str(ref)].commit_id)
 
-    def list_prefix(self, prefix: str):
+    def list_prefix(self, prefix: str) -> None:
         assert prefix == ""
         return tuple(self.store)
 
