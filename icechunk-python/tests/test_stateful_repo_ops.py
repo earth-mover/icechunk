@@ -289,6 +289,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # This will test out checking out and deleting a tag that does not exist.
         return name
 
+
+    def reset(self) -> None:
+        self.repo.reset()
+        self.model.checkout_branch(self.model.branch)
+
     # @rule(branch=consumes(branches))
     # def delete_branch(self, branch):
     #     note(f"Deleting branch {branch!r}")
