@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 # TODO: reset_branch, reset
+import json
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 from zarr.core.buffer import Buffer, default_buffer_prototype
@@ -15,12 +17,13 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import note
+from hypothesis import assume, note
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
     Settings,
     initialize,
+    invariant,
     precondition,
     rule,
     run_state_machine_as_test,
@@ -200,11 +203,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
-        self.set_doc(path="/zarr.json", value=data.draw(v3_array_metadata()))
+        self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata()))
 
     @rule(path=metadata_paths, value=v3_array_metadata())
     def set_doc(self, path: str, value: Buffer):
         note(f"setting path {path!r} with {value.to_bytes()!r}")
+        # FIXME: remove when we support complex values with infinity fill_value
+        assume("complex" not in json.loads(value.to_bytes())["data_type"])
         if self.model.is_at_branch_head:
             self.sync_store.set(path, value)
             self.model[path] = value
@@ -320,17 +325,28 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     #         with pytest.raises(ValueError):
     #             self.repo.delete_branch(branch)
 
-    # @invariant()
-    # def check_list_prefix_from_root(self):
-    #     model_list = self.model.list_prefix("")
-    #     al_list = self.repo.list_prefix("")
+    @invariant()
+    def check_list_prefix_from_root(self):
+        model_list = self.model.list_prefix("")
+        ice_list = self.sync_store.list_prefix("")
 
-    #     assert sorted(model_list) == sorted(al_list)
-    #     # FIXME:
-    #     docs = self.repo.getitems(al_list)
+        assert sorted(model_list) == sorted(ice_list)
 
-    #     for k in model_list:
-    #         assert self.model[k] == json.loads(docs[k])
+        for k in model_list:
+            # need to load to dict to compare since ordering of entries might differ
+            expected = json.loads(self.model[k].to_bytes())
+            actual = json.loads(
+                self.sync_store.get(k, default_buffer_prototype()).to_bytes()
+            )
+            # FIXME: zarr omits this if None?
+            if "dimension_names" not in expected:
+                actual.pop("dimension_names")
+            actual_fv = actual.pop("fill_value")
+            expected_fv = expected.pop("fill_value")
+            if actual_fv != expected_fv:
+                # TODO: is this right? we are losing accuracy in serialization
+                np.testing.assert_allclose(actual_fv, expected_fv)
+            assert actual == expected
 
     # @invariant()
     # def check_commit_data(self):
