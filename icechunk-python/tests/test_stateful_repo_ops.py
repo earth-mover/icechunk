@@ -232,47 +232,36 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(ValueError, match="uncommitted changes"):
                 self.repo.checkout(str(ref) if as_string else ref)
 
-    @rule(ref=st.one_of(branches, tags))
-    def checkout_branch_or_tag(self, ref):
+    @rule(ref=tags)
+    def checkout_tag(self, ref):
         """
         Tags and branches are combined here since checkout magically works for both.
         This test is relying on the model tracking tags and branches accurately.
         """
-        if ref in self.model.tags:
+        if ref in self.model.tags and not self.model.changes_made:
             note(f"Checking out tag {ref!r}")
             self.repo.checkout(tag=ref)
             assert self.repo.read_only
             self.model.checkout_tag(ref)
-
-        elif ref in self.model.branches:
-            note(f"Checking out branch {ref!r}")
-            self.repo.checkout(branch=ref)
-            assert not self.repo.read_only
-            self.model.checkout_branch(ref)
-
         else:
             note("Expecting error.")
             with pytest.raises(ValueError):
-                self.repo.checkout(branch=ref)
-            with pytest.raises(ValueError):
                 self.repo.checkout(tag=ref)
 
-    def is_valid_branch_or_tag_name(self, name):
-        # TODO: remove the first condition when we always create branches remotely.
-        note(self.model.tags)
-        note(self.model.branches)
-        return (
-            name != self.model.branch
-            and name not in self.model.tags
-            and name not in self.model.branches
-        )
+    @rule(ref=branches)
+    def checkout_branch(self, ref):
+        if ref in self.model.branches and not self.model.changes_made:
+            note(f"Checking out branch {ref!r}")
+            self.repo.checkout(branch=ref)
+            assert not self.repo.read_only
 
     # TODO: remove the precondition
-    @precondition(lambda self: self.model.has_commits)
+    # @precondition(lambda self: self.model.has_commits)
     @rule(name=simple_text | st.just("main"), target=branches)
     def new_branch(self, name):
         note(f"Creating branch {name!r}")
-        if not self.model.changes_made and self.is_valid_branch_or_tag_name(name):
+        # we can create a tag and branch with the same name
+        if not self.model.changes_made and name not in self.model.branches:
             self.repo.new_branch(name)
             assert not self.repo.read_only
             self.model.new_branch(name)
@@ -293,7 +282,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     )
     def tag(self, name, commit_id, message):
         note(f"Creating tag {name!r} for commit {commit_id!r} with message {message!r}")
-        if self.is_valid_branch_or_tag_name(name):
+        # we can create a tag and branch with the same name
+        if name not in self.model.tags:
             self.repo.tag(name, commit_id)
             self.model.tag(name, commit_id)
         else:
