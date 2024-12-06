@@ -3,9 +3,12 @@ from typing import Any
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import assume
+from hypothesis import assume, note
 from hypothesis.stateful import (
     Settings,
+    initialize,
+    precondition,
+    invariant,
     rule,
     run_state_machine_as_test,
 )
@@ -19,7 +22,38 @@ from zarr.testing.strategies import (
 )
 
 
+# TODO: more before/after commit invariants?
+# TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
+    def __init__(self, *args, **kwargs):
+        note("__init__")
+        super().__init__(*args, **kwargs)
+
+    @initialize()
+    def init_store(self) -> None:
+        note("init_store")
+        import zarr
+
+        # This lets us reuse the fixture provided store.
+        self._sync(self.store.clear())  # FIXME: upstream
+        lsbefore = self._sync_iter(self.store.list_prefix(''))
+        zarr.group(store=self.store)
+        lsafter = self._sync_iter(self.store.list_prefix(''))
+        assert len(lsbefore) == 0, ("more than 0 keys after clearing", lsbefore)
+        assert len(lsafter) == 1, "more than 1 key after creating group"
+
+    @precondition(lambda self: self.store.has_uncommitted_changes)
+    @rule()
+    def commit_with_check(self):
+        note("commiting and checking list_prefix")
+        lsbefore = self._sync_iter(self.store.list_prefix(''))
+        self.store.commit("foo")
+        lsafter = self._sync_iter(self.store.list_prefix(''))
+        if sorted(lsbefore) != sorted(lsafter):
+            raise ValueError("listing changed before and after commiting.")
+        else:
+            note("succesfully commited and checked.")
+
     @rule(
         data=st.data(),
         name=node_names,
@@ -39,6 +73,14 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # TODO: fix complex fill values GH391
         assume(not np.iscomplexobj(array))
         super().add_array(data, name, array_and_chunks)
+
+    # TODO: port to zarr
+    @invariant()
+    def check_list_prefix_from_root(self) -> None:
+        model_list = self._sync_iter(self.model.list_prefix(""))
+        store_list = self._sync_iter(self.store.list_prefix(""))
+        note(f"Checking {len(model_list)} expected keys vs {len(store_list)} actual keys")
+        assert sorted(model_list) == sorted(store_list), (sorted(model_list), sorted(store_list))
 
 
 def test_zarr_hierarchy():
