@@ -221,16 +221,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.commit(commit_id)
         return commit_id
 
-    @rule(ref=commits, as_string=st.booleans())
-    def checkout_commit(self, ref, as_string):
-        note(f"Checking out commit {ref}, as_string={as_string}")
+    @rule(ref=commits)
+    def checkout_commit(self, ref):
+        note(f"Checking out commit {ref}")
         if not self.model.changes_made:
-            self.repo.checkout(str(ref) if as_string else ref)
+            self.repo.checkout(ref)
             assert self.repo.read_only
             self.model.checkout_commit(ref)
         else:
             with pytest.raises(ValueError, match="uncommitted changes"):
-                self.repo.checkout(str(ref) if as_string else ref)
+                self.repo.checkout(ref)
 
     @rule(ref=tags)
     def checkout_tag(self, ref):
