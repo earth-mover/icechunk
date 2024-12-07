@@ -11,7 +11,7 @@ use crate::{
     change_set::ChangeSet,
     format::{snapshot::NodeSnapshot, transaction_log::TransactionLog, NodeId, Path},
     repository::{RepositoryError, RepositoryResult},
-    Repository,
+    session::Session
 };
 
 use super::{Conflict, ConflictResolution, ConflictSolver};
@@ -23,15 +23,15 @@ impl ConflictSolver for ConflictDetector {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
-        previous_repo: &Repository,
+        previous_session: &Session,
         current_changes: ChangeSet,
-        current_repo: &Repository,
+        current_session: &Session,
     ) -> RepositoryResult<ConflictResolution> {
         let new_nodes_explicit_conflicts = stream::iter(
             current_changes.new_nodes().map(Ok),
         )
         .try_filter_map(|(path, _)| async {
-            match previous_repo.get_node(path).await {
+            match previous_session.get_node(path).await {
                 Ok(_) => {
                     Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
                 }
@@ -45,7 +45,7 @@ impl ConflictSolver for ConflictDetector {
         )
         .try_filter_map(|(path, _)| async {
             for parent in path.ancestors().skip(1) {
-                match previous_repo.get_array(&parent).await {
+                match previous_session.get_array(&parent).await {
                     Ok(_) => return Ok(Some(Conflict::NewNodeInInvalidGroup(parent))),
                     Err(RepositoryError::NodeNotFound { .. })
                     | Err(RepositoryError::NotAnArray { .. }) => {}
@@ -55,7 +55,7 @@ impl ConflictSolver for ConflictDetector {
             Ok(None)
         });
 
-        let path_finder = PathFinder::new(current_repo.list_nodes().await?);
+        let path_finder = PathFinder::new(current_session.list_nodes().await?);
 
         let updated_arrays_already_updated = current_changes
             .zarr_updated_arrays()
@@ -170,7 +170,7 @@ impl ConflictSolver for ConflictDetector {
             current_changes.deleted_arrays().map(Ok),
         )
         .try_filter_map(|path| async {
-            let id = match previous_repo.get_node(path).await {
+            let id = match previous_session.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(RepositoryError::NodeNotFound { .. }) => None,
                 Err(err) => Err(err)?,
@@ -194,7 +194,7 @@ impl ConflictSolver for ConflictDetector {
             current_changes.deleted_groups().map(Ok),
         )
         .try_filter_map(|path| async {
-            let id = match previous_repo.get_node(path).await {
+            let id = match previous_session.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(RepositoryError::NodeNotFound { .. }) => None,
                 Err(err) => Err(err)?,
