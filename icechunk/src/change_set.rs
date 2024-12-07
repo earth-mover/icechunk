@@ -27,8 +27,8 @@ pub struct ChangeSet {
     updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
     // FIXME: issue with too many inline chunks kept in mem
     set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
-    deleted_groups: HashSet<Path>,
-    deleted_arrays: HashSet<Path>,
+    deleted_groups: HashSet<(Path, NodeId)>,
+    deleted_arrays: HashSet<(Path, NodeId)>,
 }
 
 impl ChangeSet {
@@ -36,11 +36,11 @@ impl ChangeSet {
         self.updated_arrays.keys()
     }
 
-    pub fn deleted_arrays(&self) -> impl Iterator<Item = &Path> {
+    pub fn deleted_arrays(&self) -> impl Iterator<Item = &(Path, NodeId)> {
         self.deleted_arrays.iter()
     }
 
-    pub fn deleted_groups(&self) -> impl Iterator<Item = &Path> {
+    pub fn deleted_groups(&self) -> impl Iterator<Item = &(Path, NodeId)> {
         self.deleted_groups.iter()
     }
 
@@ -64,11 +64,6 @@ impl ChangeSet {
     }
 
     pub fn add_group(&mut self, path: Path, node_id: NodeId) {
-        // when overwriting a group that exists in the base snapshot,
-        // zarr will delete the group first, and then add a new group
-        // get_group prioritizes `deleted_groups` over `new_groups`,
-        // so we must remove from `deleted_groups` here
-        self.deleted_groups.remove(&path);
         self.new_groups.insert(path, node_id);
     }
 
@@ -91,7 +86,7 @@ impl ChangeSet {
             }
             None => {
                 // it's an old group, we need to flag it as deleted
-                self.deleted_groups.insert(path);
+                self.deleted_groups.insert((path, node_id.clone()));
             }
         }
     }
@@ -126,11 +121,6 @@ impl ChangeSet {
         node_id: NodeId,
         metadata: ZarrArrayMetadata,
     ) {
-        // when overwriting a array that exists in the base snapshot,
-        // zarr will delete the array first, and then add a new group
-        // get_group prioritizes `deleted_arrays` over `new_arrays`,
-        // so we must remove from `deleted_arrays` here
-        self.deleted_arrays.remove(&path);
         self.new_arrays.insert(path, (node_id, metadata));
     }
 
@@ -151,14 +141,24 @@ impl ChangeSet {
         self.updated_attributes.remove(node_id);
         self.set_chunks.remove(node_id);
         if !is_new_array {
-            self.deleted_arrays.insert(path);
+            self.deleted_arrays.insert((path, node_id.clone()));
         }
     }
 
-    pub fn is_deleted(&self, path: &Path) -> bool {
-        self.deleted_groups.contains(path)
-            || self.deleted_arrays.contains(path)
-            || path.ancestors().skip(1).any(|parent| self.is_deleted(&parent))
+    pub fn is_deleted(&self, path: &Path, node_id: &NodeId) -> bool {
+        dbg!(format!("checking is_deleted for {0} & {1}", path, node_id));
+        let key = (path.clone(), node_id.clone());
+        self.deleted_groups.contains(&key)
+            || self.deleted_arrays.contains(&key)
+            || path.ancestors().skip(1).any(|parent| {
+                self.get_group(&parent).is_some_and(|parent_node_id| {
+                    dbg!(format!(
+                        "checking ancestor {0}, node_id: {1}",
+                        parent, parent_node_id
+                    ));
+                    self.is_deleted(&parent, parent_node_id)
+                })
+            })
     }
 
     pub fn has_updated_attributes(&self, node_id: &NodeId) -> bool {
@@ -228,7 +228,7 @@ impl ChangeSet {
         node_id: &NodeId,
         node_path: &Path,
     ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
-        if self.is_deleted(node_path) {
+        if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
         }
         match self.set_chunks.get(node_id) {
@@ -378,8 +378,8 @@ impl ChangeSet {
         &'a self,
         manifest_id: Option<&'a ManifestId>,
     ) -> impl Iterator<Item = NodeSnapshot> + 'a {
-        self.new_nodes().filter_map(move |(path, _)| {
-            if self.is_deleted(path) {
+        self.new_nodes().filter_map(move |(path, node_id)| {
+            if self.is_deleted(path, node_id) {
                 return None;
             }
             // we should be able to create the full node because we
@@ -411,7 +411,7 @@ impl ChangeSet {
         node: NodeSnapshot,
         new_manifests: Option<Vec<ManifestRef>>,
     ) -> Option<NodeSnapshot> {
-        if self.is_deleted(&node.path) {
+        if self.is_deleted(&node.path, &node.id) {
             return None;
         }
 

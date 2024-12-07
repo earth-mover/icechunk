@@ -90,10 +90,10 @@ impl BasicConflictSolver {
                     ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
                 ) ||
                 matches!(conflict,
-                    DeleteOfUpdatedArray(_) if self.fail_on_delete_of_updated_array
+                         DeleteOfUpdatedArray{..} if self.fail_on_delete_of_updated_array
                 ) ||
                 matches!(conflict,
-                    DeleteOfUpdatedGroup(_) if self.fail_on_delete_of_updated_group
+                    DeleteOfUpdatedGroup{..} if self.fail_on_delete_of_updated_group
                 )
             },
         );
@@ -136,11 +136,11 @@ impl BasicConflictSolver {
                         VersionSelection::Fail => panic!("Bug in conflict resolution: UserAttributesDoubleUpdate flagged as unrecoverable")
                     }
                 }
-                DeleteOfUpdatedArray(_) => {
+                DeleteOfUpdatedArray { .. } => {
                     assert!(!self.fail_on_delete_of_updated_array);
                     // this is a no-op, the solution is to still delete the array
                 }
-                DeleteOfUpdatedGroup(_) => {
+                DeleteOfUpdatedGroup { .. } => {
                     assert!(!self.fail_on_delete_of_updated_group);
                     // this is a no-op, the solution is to still delete the group
                 }
