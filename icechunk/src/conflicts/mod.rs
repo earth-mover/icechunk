@@ -49,7 +49,7 @@ pub enum ConflictResolution {
 }
 
 #[async_trait]
-pub trait ConflictSolver {
+pub trait ConflictSolver: Send + Sync {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
