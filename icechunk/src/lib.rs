@@ -33,9 +33,9 @@ pub mod strategies;
 pub mod zarr;
 
 pub use repo::RepositoryConfig;
-pub use repository::{Repository, RepositoryBuilder, SnapshotMetadata};
+pub use repository::{Repository, RepositoryBuilder};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
-pub use zarr::Store;
+pub use store::Store;
 
 mod private {
     /// Used to seal traits we don't want user code to implement, to maintain compatibility.

@@ -2,9 +2,10 @@ use std::{iter, sync::Arc};
 
 use futures::Stream;
 use itertools::Either;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    format::{snapshot::Snapshot, SnapshotId},
+    format::{snapshot::{Snapshot, SnapshotMetadata}, SnapshotId},
     refs::{
         create_tag, fetch_branch_tip, fetch_ref, fetch_tag, list_branches, list_tags,
         update_branch, BranchVersion, Ref, RefError,
@@ -12,11 +13,10 @@ use crate::{
     repository::{raise_if_invalid_snapshot_id, RepositoryError, RepositoryResult},
     session::Session,
     storage::virtual_ref::VirtualChunkResolver,
-    zarr::VersionInfo,
-    MemCachingStorage, SnapshotMetadata, Storage,
+    MemCachingStorage, Storage,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepositoryConfig {
     // Chunks smaller than this will be stored inline in the manifst
     pub inline_chunk_threshold_bytes: u16,
@@ -32,6 +32,18 @@ impl Default for RepositoryConfig {
         Self { inline_chunk_threshold_bytes: 512, unsafe_overwrite_refs: false }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VersionInfo {
+    #[serde(rename = "snapshot_id")]
+    SnapshotId(SnapshotId),
+    #[serde(rename = "tag")]
+    TagRef(String),
+    #[serde(rename = "branch")]
+    BranchTipRef(String),
+}
+
 
 #[derive(Debug)]
 pub struct Repository {

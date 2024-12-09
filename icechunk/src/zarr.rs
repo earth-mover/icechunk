@@ -92,16 +92,6 @@ impl StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum VersionInfo {
-    #[serde(rename = "snapshot_id")]
-    SnapshotId(SnapshotId),
-    #[serde(rename = "tag")]
-    TagRef(String),
-    #[serde(rename = "branch")]
-    BranchTipRef(String),
-}
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use tokio::sync::OnceCell;
 use url::{self, Url};
 
-use super::s3::{mk_client, range_to_header, S3Config};
+use super::s3::{mk_client, range_to_header, S3ClientOptions};
 
 #[async_trait]
 pub trait VirtualChunkResolver: Debug + private::Sealed {
@@ -25,7 +25,7 @@ pub trait VirtualChunkResolver: Debug + private::Sealed {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ObjectStoreVirtualChunkResolverConfig {
-    S3(S3Config),
+    S3(S3ClientOptions),
 }
 
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl ObjectStoreVirtualChunkResolver {
             .get_or_init(|| async move {
                 match config.as_ref() {
                     Some(ObjectStoreVirtualChunkResolverConfig::S3(config)) => {
-                        mk_client(Some(config)).await
+                        mk_client(Some(&config)).await
                     }
                     None => mk_client(None).await,
                 }

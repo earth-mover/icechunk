@@ -16,6 +16,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, skip_serializing_none, TryFromInto};
+use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
@@ -23,15 +24,82 @@ use crate::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
-    },
-    metadata::{
+    }, metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, StorageTransformer, UserAttributes,
-    },
-    repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata},
-    session::{Session, SessionError},
-    zarr::{KeyNotFoundError, ListDirItem, StoreError, StoreOptions, StoreResult},
+    }, refs::RefError, repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata}, session::{Session, SessionError}
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ListDirItem {
+    Key(String),
+    Prefix(String),
+}
+
+pub type StoreResult<A> = Result<A, StoreError>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum KeyNotFoundError {
+    #[error("chunk cannot be find for key `{key}`")]
+    ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
+    #[error("node not found at `{path}`")]
+    NodeNotFound { path: Path },
+    #[error("v2 key not found at `{key}`")]
+    ZarrV2KeyNotFound { key: String },
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum StoreError {
+    #[error("invalid zarr key format `{key}`")]
+    InvalidKey { key: String },
+    #[error("this operation is not allowed: {0}")]
+    NotAllowed(String),
+    #[error("object not found: `{0}`")]
+    NotFound(#[from] KeyNotFoundError),
+    #[error("unsuccessful session operation: `{0}`")]
+    SessionError(#[from] SessionError),
+    #[error("unsuccessful repository operation: `{0}`")]
+    RepositoryError(#[from] RepositoryError),
+    #[error("error merging stores: `{0}`")]
+    MergeError(String),
+    #[error("unsuccessful ref operation: `{0}`")]
+    RefError(#[from] RefError),
+    #[error("cannot commit when no snapshot is present")]
+    NoSnapshot,
+    #[error("all commits must be made on a branch")]
+    NotOnBranch,
+    #[error("bad metadata: `{0}`")]
+    BadMetadata(#[from] serde_json::Error),
+    #[error("store method `{0}` is not implemented by Icechunk")]
+    Unimplemented(&'static str),
+    #[error("bad key prefix: `{0}`")]
+    BadKeyPrefix(String),
+    #[error("error during parallel execution of get_partial_values")]
+    PartialValuesPanic,
+    #[error("cannot write to read-only store")]
+    ReadOnly,
+    #[error(
+        "uncommitted changes in repository, commit changes or reset repository and try again."
+    )]
+    UncommittedChanges,
+    #[error("unknown store error: `{0}`")]
+    Unknown(Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoreOptions {
+    pub get_partial_values_concurrency: u16,
+}
+
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self { get_partial_values_concurrency: 10 }
+    }
+}
+
 
 pub struct Store {
     session: Arc<RwLock<Session>>,

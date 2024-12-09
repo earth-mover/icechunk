@@ -17,6 +17,7 @@ use object_store::{
     AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
     PutOptions, PutPayload,
 };
+use serde::Serialize;
 use std::{
     fs::create_dir_all,
     future::ready,
@@ -47,8 +48,9 @@ impl From<&ByteRange> for Option<GetRange> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ObjectStorage {
+    #[serde(skip)]
     store: Arc<dyn ObjectStore>,
     prefix: String,
     // We need this because object_store's local file implementation doesn't sort refs. Since this
