@@ -90,7 +90,7 @@ impl BasicConflictSolver {
                     ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
                 ) ||
                 matches!(conflict,
-                     DeleteOfUpdatedArray{..} if self.fail_on_delete_of_updated_array
+                    DeleteOfUpdatedArray{..} if self.fail_on_delete_of_updated_array
                 ) ||
                 matches!(conflict,
                     DeleteOfUpdatedGroup{..} if self.fail_on_delete_of_updated_group
