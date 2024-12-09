@@ -20,6 +20,7 @@ def test_timetravel():
     assert air_temp[200, 6] == 42
 
     snapshot_id = store.commit("commit 1")
+    assert not store._read_only
 
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
@@ -49,12 +50,14 @@ def test_timetravel():
     assert air_temp[200, 6] == 54
 
     store.new_branch("feature")
+    assert not store._read_only
     assert store.branch == "feature"
     air_temp[:, :] = 90
     feature_snapshot_id = store.commit("commit 3")
     store.tag("v1.0", feature_snapshot_id)
 
     store.checkout(tag="v1.0")
+    assert store._read_only
     assert store.branch is None
     assert air_temp[200, 6] == 90
 

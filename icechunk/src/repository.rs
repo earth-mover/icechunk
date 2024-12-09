@@ -2686,16 +2686,27 @@ mod tests {
             .set_chunk_ref(
                 new_array_path.clone(),
                 ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("hello".into())),
+                Some(ChunkPayload::Inline("hello0".into())),
             )
             .await?;
         repo1
             .set_chunk_ref(
                 new_array_path.clone(),
                 ChunkIndices(vec![1]),
-                Some(ChunkPayload::Inline("hello".into())),
+                Some(ChunkPayload::Inline("hello1".into())),
             )
             .await?;
+
+        let new_array_2_path: Path = "/array_2".try_into().unwrap();
+        repo1.add_array(new_array_2_path.clone(), zarr_meta.clone()).await?;
+        repo1
+            .set_chunk_ref(
+                new_array_2_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("bye0".into())),
+            )
+            .await?;
+
         let conflicting_snap =
             repo1.commit("main", "write two chunks with repo 1", None).await?;
 
@@ -2707,7 +2718,7 @@ mod tests {
             .set_chunk_ref(
                 new_array_path.clone(),
                 ChunkIndices(vec![2]),
-                Some(ChunkPayload::Inline("hello".into())),
+                Some(ChunkPayload::Inline("hello2".into())),
             )
             .await?;
         if let Err(RepositoryError::Conflict { .. }) =
@@ -2719,7 +2730,21 @@ mod tests {
             repo2.commit("main", "after conflict", None).await?;
             let data =
                 repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
-            assert_eq!(data, Some(ChunkPayload::Inline("hello".into())));
+            assert_eq!(data, Some(ChunkPayload::Inline("hello2".into())));
+
+            // other chunks written by the conflicting commit are still there
+            let data =
+                repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello0".into())));
+            let data =
+                repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
+
+            // new arrays written by the conflicting commit are still there
+            let data =
+                repo2.get_chunk_ref(&new_array_2_path, &ChunkIndices(vec![0])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("bye0".into())));
+
             let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
             assert_eq!(commits[0].message, "after conflict");
             assert_eq!(commits[1].message, "write two chunks with repo 1");
@@ -2847,7 +2872,7 @@ mod tests {
             repo2.commit("main", "after conflict", None).await?;
             let data =
                 repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
-            assert_eq!(data, Some(ChunkPayload::Inline("hello".into())));
+            assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
             let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
             assert_eq!(commits[0].message, "after conflict");
             assert_eq!(commits[1].message, "write two chunks with repo 1");

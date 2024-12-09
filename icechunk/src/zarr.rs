@@ -299,6 +299,20 @@ pub enum StoreError {
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
+fn is_prefix_match(key: &str, prefix: &str) -> bool {
+    match key.strip_prefix(prefix) {
+        None => false,
+        Some(rest) => {
+            // we have a few cases
+            prefix.is_empty()   // if prefix was empty anything matches
+                || rest.is_empty()  // if stripping prefix left empty we have a match
+                || rest.starts_with('/') // next component so we match
+                                         // what we don't include is other matches,
+                                         // we want to catch prefix/foo but not prefix-foo
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Store {
     repository: Arc<RwLock<Repository>>,
@@ -891,20 +905,8 @@ impl Store {
             for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
-                    match meta_key.strip_prefix(prefix) {
-                        None => {}
-                        Some(rest) => {
-                            // we have a few cases
-                            if prefix.is_empty()   // if prefix was empty anything matches
-                               || rest.is_empty()  // if stripping prefix left empty we have a match
-                               || rest.starts_with('/') // next component so we match
-                               // what we don't include is other matches,
-                               // we want to catch prefix/foo but not prefix-foo
-                            {
-                                yield meta_key;
-                            }
-
-                    }
+                if is_prefix_match(&meta_key, prefix) {
+                    yield meta_key;
                 }
             }
         };
@@ -925,7 +927,7 @@ impl Store {
                 match maybe_path_chunk {
                     Ok((path,chunk)) => {
                         let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
-                        if chunk_key.starts_with(prefix) {
+                        if is_prefix_match(&chunk_key, prefix) {
                             yield chunk_key;
                         }
                     }
@@ -2236,13 +2238,10 @@ mod tests {
             )
             .await?;
 
-        store
-            .borrow_mut()
-            .set(
-                "group-suffix/zarr.json",
-                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
-            )
-            .await?;
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.borrow_mut().set("group-suffix/zarr.json", zarr_meta).await.unwrap();
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set_if_not_exists("group-suffix/c/0/1/0", data.clone()).await.unwrap();
 
         assert_eq!(
             store.list_dir("group/").await?.try_collect::<Vec<_>>().await?,
@@ -2476,6 +2475,54 @@ mod tests {
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite() -> Result<(), Box<dyn std::error::Error>> {
+        // GH347
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        let meta1 = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
+        );
+        let meta2 = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":84}}"#,
+        );
+        let zarr_meta1 = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta2 = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":84},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+
+        // with no commit in the middle, this tests the changeset
+        store.set("zarr.json", meta1.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
+        store.delete("zarr.json").await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        store.set("zarr.json", meta2.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        assert_eq!(
+            &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            &zarr_meta2
+        );
+
+        // with a commit in the middle, this tests the changeset interaction with snapshot
+        store.set("zarr.json", meta1).await.unwrap();
+        store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
+        store.commit("initial commit").await.unwrap();
+        store.delete("zarr.json").await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        store.set("zarr.json", meta2.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        store.commit("commit 2").await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        assert_eq!(
+            &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            &zarr_meta2
         );
 
         Ok(())

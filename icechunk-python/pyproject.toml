@@ -16,11 +16,11 @@ classifiers = [
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0b2"]
+dependencies = ["zarr==3.0.0b3"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
 readme = "../README.md"
@@ -34,6 +34,7 @@ test = [
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
+  "pytest-xdist",
   "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
