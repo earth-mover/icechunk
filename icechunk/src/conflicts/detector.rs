@@ -170,7 +170,6 @@ impl ConflictSolver for ConflictDetector {
             current_changes.deleted_arrays().map(Ok),
         )
         .try_filter_map(|(path, _node_id)| async {
-            // FIXME: reuse node_id?
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(RepositoryError::NodeNotFound { .. }) => None,
