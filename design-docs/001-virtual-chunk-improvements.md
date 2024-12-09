@@ -87,7 +87,7 @@ struct Config {
 }
 ```
 
-The `Config` object acts as a default, overrideable by users at runtime. But different fields of configuration may have different behaviors on overrides.
+The `Config` object acts as a default, overridable by users at runtime. But different fields of configuration may have different behaviors on overrides.
 
 ### New mechanism to set virtual references
 
@@ -147,7 +147,7 @@ This is how the mapping from location to cloud+bucket+prefix+credentials works:
 * We use the rest of the data in the matched container to instantiate an object store client (or retrieve it from cache)
 * Credentials for the client must be passed by the user when the repository is instantiated, by indicating the container name to which they apply
 
-We have one default container for each supported object store, the container has protocol and name s3, gcs, tigris, etc. and has an empty `bucket_prefix` and no region configured. These default containers, just like any others set in the persistent repo configuration, can be overriden when the repository is instantiated.
+We have one default container for each supported object store, the container has protocol and name s3, gcs, tigris, etc. and has an empty `bucket_prefix` and no region configured. These default containers, just like any others set in the persistent repo configuration, can be overridden when the repository is instantiated.
 
 When a region is not indicated and the platform needs it, the logic is:
 
