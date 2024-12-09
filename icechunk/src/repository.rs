@@ -609,15 +609,7 @@ impl Repository {
     }
 
     pub async fn clear(&mut self) -> RepositoryResult<()> {
-        let to_delete: Vec<(NodeType, Path)> =
-            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
-
-        for (t, p) in to_delete {
-            match t {
-                NodeType::Group => self.delete_group(p).await?,
-                NodeType::Array => self.delete_array(p).await?,
-            }
-        }
+        self.delete_group(Path::try_from("/").expect("should not fail")).await?;
         Ok(())
     }
 
@@ -922,7 +914,9 @@ impl From<Repository> for ChangeSet {
 }
 
 pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
-    match key.strip_prefix(prefix) {
+    let tomatch =
+        if prefix != &String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
+    match tomatch {
         None => false,
         Some(rest) => {
             // we have a few cases
