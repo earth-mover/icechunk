@@ -19,13 +19,16 @@ pub use crate::{
     },
 };
 use crate::{
-    conflicts::{Conflict, ConflictResolution, ConflictSolver}, format::{
+    conflicts::{Conflict, ConflictResolution, ConflictSolver},
+    format::{
         manifest::VirtualReferenceError, snapshot::ManifestFileInfo,
         transaction_log::TransactionLog, ManifestId, SnapshotId,
-    }, repo::RepositoryConfig, storage::virtual_ref::{
+    },
+    repo::RepositoryConfig,
+    storage::virtual_ref::{
         construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
         VirtualChunkResolver,
-    }
+    },
 };
 use bytes::Bytes;
 use chrono::Utc;
@@ -51,8 +54,6 @@ use crate::{
     storage::virtual_ref::ObjectStoreVirtualChunkResolver,
     MemCachingStorage, Storage, StorageError,
 };
-
-
 
 #[derive(Debug)]
 pub struct Repository {

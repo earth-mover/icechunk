@@ -11,7 +11,7 @@ use crate::{
     change_set::ChangeSet,
     format::{snapshot::NodeSnapshot, transaction_log::TransactionLog, NodeId, Path},
     repository::{RepositoryError, RepositoryResult},
-    session::Session
+    session::Session,
 };
 
 use super::{Conflict, ConflictResolution, ConflictSolver};

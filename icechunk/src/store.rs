@@ -34,18 +34,18 @@ use crate::{
 };
 
 pub struct Store {
-    session: Arc<Session>,
+    session: Arc<RwLock<Session>>,
     config: StoreOptions,
     read_only: bool,
 }
 
 impl Store {
-    pub fn new(session: Arc<Session>, config: StoreOptions, read_only: bool) -> Self {
-        Self {
-            session,
-            config,
-            read_only,
-        }
+    pub fn from_session(
+        session: Arc<RwLock<Session>>,
+        config: StoreOptions,
+        read_only: bool,
+    ) -> Self {
+        Self { session, config, read_only }
     }
 
     pub async fn is_empty<'a>(self, prefix: &'a str) -> StoreResult<bool> {
@@ -54,11 +54,13 @@ impl Store {
     }
 
     pub async fn clear(&self) -> StoreResult<()> {
-        Ok(self.session.clear().await?)
+        let mut guard = self.session.write().await.clear().await?;
+        Ok(())
     }
 
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
-        get_key(key, byte_range, &self.session).await
+        let guard = self.session.read().await;
+        get_key(key, byte_range, &guard).await
     }
 
     /// Get all the requested keys concurrently.
@@ -123,7 +125,8 @@ impl Store {
     }
 
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
-        exists(key, &self.session).await
+        let guard = self.session.read().await;
+        exists(key, &guard).await
     }
 
     pub fn supports_writes(&self) -> StoreResult<bool> {
@@ -142,7 +145,7 @@ impl Store {
         &self,
         key: &str,
         value: Bytes,
-        locked_session: Option<&Session>,
+        locked_session: Option<&mut Session>,
     ) -> StoreResult<()> {
         if self.read_only {
             return Err(StoreError::ReadOnly);
@@ -170,14 +173,13 @@ impl Store {
                         session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                     None => {
+                        let mut session = self.session.write().await;
                         // we only lock the session to get the writer
-                        let writer = self.session.get_chunk_writer()?;
+                        let writer = session.get_chunk_writer()?;
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
-                        self.session
-                            .set_chunk_ref(node_path, coords, Some(payload))
-                            .await?
+                        session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                 }
                 Ok(())
@@ -189,10 +191,13 @@ impl Store {
     }
 
     pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
-        if exists(key, &self.session).await? {
+        // we use a write lock to check if the key exists and then to set it, so we dont have race conditions
+        // between the check and the set
+        let mut guard = self.session.write().await;
+        if exists(key, &guard).await? {
             Ok(())
         } else {
-            self.set_with_optional_locking(key, value, Some(&self.session)).await
+            self.set_with_optional_locking(key, value, Some(&mut guard)).await
         }
     }
 
@@ -209,6 +214,8 @@ impl Store {
         match Key::parse(key)? {
             Key::Chunk { node_path, coords } => {
                 self.session
+                    .write()
+                    .await
                     .set_chunk_ref(
                         node_path,
                         coords,
@@ -233,7 +240,8 @@ impl Store {
                 // we need to hold the lock while we do the node search and the write
                 // to avoid race conditions with other writers
                 // (remember this method takes &self and not &mut self)
-                let node = self.session.get_node(&node_path).await;
+                let mut guard = self.session.write().await;
+                let node = guard.get_node(&node_path).await;
 
                 // When there is no node at the given key, we don't consider it an error, instead we just do nothing
                 if let Err(RepositoryError::NodeNotFound { path: _, message: _ }) = node {
@@ -242,16 +250,13 @@ impl Store {
 
                 let node = node.map_err(StoreError::RepositoryError)?;
                 match node.node_data {
-                    NodeData::Array(_, _) => {
-                        Ok(self.session.delete_array(node_path).await?)
-                    }
-                    NodeData::Group => {
-                        Ok(self.session.delete_group(node_path).await?)
-                    }
+                    NodeData::Array(_, _) => Ok(guard.delete_array(node_path).await?),
+                    NodeData::Group => Ok(guard.delete_group(node_path).await?),
                 }
             }
             Key::Chunk { node_path, coords } => {
-                match self.session.set_chunk_ref(node_path, coords, None).await {
+                let mut guard = self.session.write().await;
+                match guard.set_chunk_ref(node_path, coords, None).await {
                     Ok(_) => Ok(()),
                     Err(SessionError::RepositoryError(
                         RepositoryError::NodeNotFound { path: _, message: _ },
@@ -355,7 +360,7 @@ impl Store {
         &self,
         path: Path,
         array_meta: ArrayMetadata,
-        locked_session: Option<&Session>,
+        locked_session: Option<&mut Session>,
     ) -> Result<(), StoreError> {
         match locked_session {
             Some(session) => set_array_meta(path, array_meta, session).await,
@@ -370,14 +375,15 @@ impl Store {
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
-        set_array_meta(path, array_meta, &self.session).await
+        let mut guard = self.session.write().await;
+        set_array_meta(path, array_meta, &mut guard).await
     }
 
     async fn set_group_meta(
         &self,
         path: Path,
         group_meta: GroupMetadata,
-        locked_session: Option<&Session>,
+        locked_session: Option<&mut Session>,
     ) -> Result<(), StoreError> {
         match locked_session {
             Some(session) => set_group_meta(path, group_meta, session).await,
@@ -392,7 +398,8 @@ impl Store {
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
-        set_group_meta(path, group_meta, &self.session).await
+        let mut guard = self.session.write().await;
+        set_group_meta(path, group_meta, &mut guard).await
     }
 
     async fn list_metadata_prefix<'a, 'b: 'a>(
@@ -401,7 +408,8 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            for node in self.session.list_nodes().await? {
+            let guard = self.session.read().await;
+            for node in guard.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
                     match meta_key.strip_prefix(prefix) {
@@ -432,7 +440,8 @@ impl Store {
         let res = try_stream! {
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in self.session.all_chunks().await.map_err(StoreError::RepositoryError)? {
+            let guard = self.session.read().await;
+            for await maybe_path_chunk in guard.all_chunks().await.map_err(StoreError::RepositoryError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
                     Ok((path,chunk)) => {
@@ -452,7 +461,7 @@ impl Store {
 async fn set_array_meta(
     path: Path,
     array_meta: ArrayMetadata,
-    session: &Session,
+    session: &mut Session,
 ) -> Result<(), StoreError> {
     if session.get_array(&path).await.is_ok() {
         // TODO: we don't necessarily need to update both
@@ -469,7 +478,7 @@ async fn set_array_meta(
 async fn set_group_meta(
     path: Path,
     group_meta: GroupMetadata,
-    session: &Session,
+    session: &mut Session,
 ) -> Result<(), StoreError> {
     // we need to hold the lock while we search the group and do the update to avoid race
     // conditions with other writers (notice we don't take &mut self)

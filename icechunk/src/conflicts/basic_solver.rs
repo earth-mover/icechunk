@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 
 use crate::{
-    change_set::ChangeSet, format::transaction_log::TransactionLog, repository::RepositoryResult, session::Session
+    change_set::ChangeSet, format::transaction_log::TransactionLog,
+    repository::RepositoryResult, session::Session,
 };
 
 use super::{detector::ConflictDetector, Conflict, ConflictResolution, ConflictSolver};

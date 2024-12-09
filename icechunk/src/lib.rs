@@ -32,7 +32,8 @@ pub mod store;
 pub mod strategies;
 pub mod zarr;
 
-pub use repository::{Repository, RepositoryBuilder, RepositoryConfig, SnapshotMetadata};
+pub use repo::RepositoryConfig;
+pub use repository::{Repository, RepositoryBuilder, SnapshotMetadata};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
 pub use zarr::Store;
 

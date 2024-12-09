@@ -13,7 +13,7 @@ use crate::{
     session::Session,
     storage::virtual_ref::VirtualChunkResolver,
     zarr::VersionInfo,
-    MemCachingStorage, RepositoryConfig, SnapshotMetadata, Storage,
+    MemCachingStorage, SnapshotMetadata, Storage,
 };
 
 #[derive(Clone, Debug)]
