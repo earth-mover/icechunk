@@ -611,8 +611,16 @@ impl Repository {
     }
 
     pub async fn clear(&mut self) -> RepositoryResult<()> {
-        #[allow(clippy::expect_used)]
-        self.delete_group(Path::try_from("/").expect("should not fail")).await?;
+        // TODO: can this be a delete_group("/") instead?
+        let to_delete: Vec<(NodeType, Path)> =
+            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
+
+        for (t, p) in to_delete {
+            match t {
+                NodeType::Group => self.delete_group(p).await?,
+                NodeType::Array => self.delete_array(p).await?,
+            }
+        }
         Ok(())
     }
 
