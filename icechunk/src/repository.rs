@@ -356,16 +356,18 @@ impl Repository {
     pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_group(&path).await {
             Ok(parent) => {
-                let nodes_iter: Vec<NodeSnapshot> = self.list_nodes().await?.collect();
+                let nodes_iter: Vec<NodeSnapshot> = self
+                    .list_nodes()
+                    .await?
+                    .filter(|node| node.path.starts_with(&parent.path))
+                    .collect();
                 for node in nodes_iter {
-                    if is_prefix_match(&node.path.to_string(), &parent.path.to_string()) {
-                        match node.node_type() {
-                            NodeType::Group => {
-                                self.change_set.delete_group(node.path, &node.id)
-                            }
-                            NodeType::Array => {
-                                self.change_set.delete_array(node.path, &node.id)
-                            }
+                    match node.node_type() {
+                        NodeType::Group => {
+                            self.change_set.delete_group(node.path, &node.id)
+                        }
+                        NodeType::Array => {
+                            self.change_set.delete_array(node.path, &node.id)
                         }
                     }
                 }
@@ -916,7 +918,7 @@ impl From<Repository> for ChangeSet {
 
 pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
     let tomatch =
-        if prefix != &String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
+        if prefix != String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
     match tomatch {
         None => false,
         Some(rest) => {
@@ -952,7 +954,7 @@ pub async fn get_chunk(
     }
 }
 
-// Yields nodes in the base snapshot, applying any relevant updates in the changeset
+/// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
@@ -976,8 +978,8 @@ async fn updated_existing_nodes<'a>(
     Ok(updated_nodes)
 }
 
-// Yields nodes with the snapshot, applying any relevant updates in the changeset,
-// *and* new nodes in the changeset
+/// Yields nodes with the snapshot, applying any relevant updates in the changeset,
+/// *and* new nodes in the changeset
 async fn updated_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
@@ -2525,7 +2527,7 @@ mod tests {
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray { path: path, node_id: node.id },
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())

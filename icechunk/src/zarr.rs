@@ -911,10 +911,10 @@ impl Store {
             let repository = Arc::clone(&self.repository).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in  repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
+            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
-                    Ok((path,chunk)) => {
+                    Ok((path, chunk)) => {
                         let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
                         if is_prefix_match(&chunk_key, prefix) {
                             yield chunk_key;
