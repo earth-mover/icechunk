@@ -34,6 +34,7 @@ use crate::{
         FillValue, Path, RepositoryError, RepositoryResult, StorageTransformer,
         UserAttributes, ZarrArrayMetadata,
     },
+    session::SessionError,
     storage::{
         s3::{S3Config, S3Storage},
         virtual_ref::ObjectStoreVirtualChunkResolverConfig,
@@ -91,16 +92,6 @@ impl StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum VersionInfo {
-    #[serde(rename = "snapshot_id")]
-    SnapshotId(SnapshotId),
-    #[serde(rename = "tag")]
-    TagRef(String),
-    #[serde(rename = "branch")]
-    BranchTipRef(String),
-}
 
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -274,6 +265,8 @@ pub enum StoreError {
     NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
+    #[error("unsuccessful session operation: `{0}`")]
+    SessionError(#[from] SessionError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
     #[error("error merging stores: `{0}`")]
