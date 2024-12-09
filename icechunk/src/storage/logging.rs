@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 
-use super::{ListInfo, Storage, StorageError, StorageResult};
+use super::{ETag, ListInfo, Storage, StorageError, StorageResult};
 use crate::{
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
@@ -36,6 +36,16 @@ impl private::Sealed for LoggingStorage {}
 #[async_trait]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
+    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+        self.backend.fetch_config().await
+    }
+    async fn update_config(
+        &self,
+        config: Bytes,
+        etag: Option<&str>,
+    ) -> StorageResult<ETag> {
+        self.backend.update_config(config, etag).await
+    }
     async fn fetch_snapshot(
         &self,
         id: &SnapshotId,

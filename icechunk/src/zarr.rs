@@ -165,7 +165,9 @@ impl RepositoryConfig {
                     (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
                 }
                 Some(VersionInfo::SnapshotId(sid)) => {
-                    let builder = Repository::update(storage, sid.clone());
+                    let builder = Repository::update(storage, sid.clone())
+                        .await
+                        .map_err(|err| format!("Error initializing repository: {err}"))?;
                     (builder, None)
                 }
                 Some(VersionInfo::TagRef(tag)) => {
@@ -1885,7 +1887,7 @@ mod tests {
 
         let oid = store.commit("commit").await?;
 
-        let ds = Repository::update(storage, oid).build();
+        let ds = Repository::update(storage, oid).await?.build();
         let store = Store::from_repository(ds, AccessMode::ReadWrite, None, None);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
@@ -2373,7 +2375,7 @@ mod tests {
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         let new_store_from_snapshot = Store::from_repository(
-            Repository::update(Arc::clone(&storage), snapshot_id).build(),
+            Repository::update(Arc::clone(&storage), snapshot_id).await?.build(),
             AccessMode::ReadWrite,
             None,
             None,
@@ -2456,7 +2458,7 @@ mod tests {
         );
 
         let store = Store::from_repository(
-            Repository::update(Arc::clone(&storage), empty_snap).build(),
+            Repository::update(Arc::clone(&storage), empty_snap).await?.build(),
             AccessMode::ReadWrite,
             None,
             None,

@@ -61,6 +61,8 @@ pub enum StorageError {
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
+    #[error("the etag does not match")]
+    ConfigUpdateConflict,
     #[error("unknown storage error: {0}")]
     Other(String),
 }
@@ -78,6 +80,9 @@ const MANIFEST_PREFIX: &str = "manifests/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
+const CONFIG_PATH: &str = "config.yaml";
+
+pub type ETag = String;
 
 /// Fetch and write the parquet files that represent the repository in object store
 ///
@@ -85,6 +90,13 @@ const TRANSACTION_PREFIX: &str = "transactions/";
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 pub trait Storage: fmt::Debug + private::Sealed {
+    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>>;
+    async fn update_config(
+        &self,
+        config: Bytes,
+        etag: Option<&str>,
+    ) -> StorageResult<ETag>;
+
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,
