@@ -146,19 +146,8 @@ impl ChangeSet {
     }
 
     pub fn is_deleted(&self, path: &Path, node_id: &NodeId) -> bool {
-        dbg!(format!("checking is_deleted for {0} & {1}", path, node_id));
         let key = (path.clone(), node_id.clone());
-        self.deleted_groups.contains(&key)
-            || self.deleted_arrays.contains(&key)
-            || path.ancestors().skip(1).any(|parent| {
-                self.get_group(&parent).is_some_and(|parent_node_id| {
-                    dbg!(format!(
-                        "checking ancestor {0}, node_id: {1}",
-                        parent, parent_node_id
-                    ));
-                    self.is_deleted(&parent, parent_node_id)
-                })
-            })
+        self.deleted_groups.contains(&key) || self.deleted_arrays.contains(&key)
     }
 
     pub fn has_updated_attributes(&self, node_id: &NodeId) -> bool {

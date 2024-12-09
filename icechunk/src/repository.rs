@@ -355,8 +355,20 @@ impl Repository {
     /// Deletes of non existing groups will succeed.
     pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_group(&path).await {
-            Ok(node) => {
-                self.change_set.delete_group(node.path, &node.id);
+            Ok(parent) => {
+                let nodes_iter: Vec<NodeSnapshot> = self.list_nodes().await?.collect();
+                for node in nodes_iter {
+                    if is_prefix_match(&node.path.to_string(), &parent.path.to_string()) {
+                        match node.node_type() {
+                            NodeType::Group => {
+                                self.change_set.delete_group(node.path, &node.id)
+                            }
+                            NodeType::Array => {
+                                self.change_set.delete_array(node.path, &node.id)
+                            }
+                        }
+                    }
+                }
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -909,6 +921,20 @@ impl From<Repository> for ChangeSet {
     }
 }
 
+pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
+    match key.strip_prefix(prefix) {
+        None => false,
+        Some(rest) => {
+            // we have a few cases
+            prefix.is_empty()   // if prefix was empty anything matches
+                || rest.is_empty()  // if stripping prefix left empty we have a match
+                || rest.starts_with('/') // next component so we match
+                                         // what we don't include is other matches,
+                                         // we want to catch prefix/foo but not prefix-foo
+        }
+    }
+}
+
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
@@ -931,6 +957,7 @@ pub async fn get_chunk(
     }
 }
 
+// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
@@ -954,6 +981,8 @@ async fn updated_existing_nodes<'a>(
     Ok(updated_nodes)
 }
 
+// Yields nodes with the snapshot, applying any relevant updates in the changeset,
+// *and* new nodes in the changeset
 async fn updated_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
@@ -971,15 +1000,6 @@ async fn get_node<'a>(
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> RepositoryResult<NodeSnapshot> {
-    let maybe_node = get_existing_node(storage, change_set, snapshot_id, path).await;
-    // We need to look for nodes in self.change_set and the snapshot file
-    if maybe_node.is_ok() && change_set.is_deleted(&path, &maybe_node.unwrap().id) {
-        return Err(RepositoryError::NodeNotFound {
-            path: path.clone(),
-            message: "getting node".to_string(),
-        });
-    }
-
     match change_set.get_new_node(path) {
         Some(node) => Ok(node),
         None => {
