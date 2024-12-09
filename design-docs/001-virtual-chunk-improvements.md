@@ -138,9 +138,9 @@ When a virtual chunk is requested, Icechunk will find in the `location` field of
 
 The mapping is done by comparing the protocol and path to the set of configured virtual chunk containers, plus a set of default virtual chunk containers.
 
-This is how the mapping from location to cloud+bucket+prefix+credentials works:
+This is how the mapping from a chunk location (url) to cloud+bucket+prefix+credentials works:
 
-* Using the `location` protocol we find all containers that match the protocol
+* Using the chunk location's protocol, we find all containers that have a matching `protocol` field
 * We sort the matching containers in order of descending prefix length
 * We find the first one that has a `bucket_prefix` that is a prefix of the `location` path (this will be the most specific container that matches)
 * If no containers match, the chunk request cannot be fulfilled and we fail with an error message indicating the missing config.
