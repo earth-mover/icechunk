@@ -609,6 +609,7 @@ impl Repository {
     }
 
     pub async fn clear(&mut self) -> RepositoryResult<()> {
+        #[allow(clippy::expect_used)]
         self.delete_group(Path::try_from("/").expect("should not fail")).await?;
         Ok(())
     }
