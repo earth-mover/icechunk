@@ -242,7 +242,7 @@ class IcechunkStore(Store, SyncMixin):
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
             self._store.checkout_snapshot(snapshot_id)
-            self._read_only = True
+            self.set_read_only()
             return
         if branch is not None:
             if tag is not None:
@@ -250,11 +250,12 @@ class IcechunkStore(Store, SyncMixin):
                     "only one of snapshot_id, branch, or tag may be specified"
                 )
             self._store.checkout_branch(branch)
-            self._read_only = True
+            # We preserve the read-only status here so you can checkout a branch
+            # on a read-only store, and be guaranteed that you won't modify the store.
             return
         if tag is not None:
             self._store.checkout_tag(tag)
-            self._read_only = True
+            self.set_read_only()
             return
 
         raise ValueError("a snapshot_id, branch, or tag must be specified")
@@ -385,7 +386,9 @@ class IcechunkStore(Store, SyncMixin):
 
         This requires having no uncommitted changes.
         """
-        return self._store.new_branch(branch_name)
+        ret = self._store.new_branch(branch_name)
+        self.set_writeable()
+        return ret
 
     async def async_reset_branch(self, to_snapshot: str) -> None:
         """Reset the currently checked out branch to point to a different snapshot.
