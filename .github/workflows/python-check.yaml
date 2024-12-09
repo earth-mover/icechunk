@@ -9,6 +9,12 @@ on:
       - 'icechunk/**'
       - 'icechunk-python/**'
       - '.github/workflows/python-check.yaml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'compose.yaml'
+      - 'deny.toml'
+      - 'Justfile'
+      - 'rustfmt.toml'
   workflow_dispatch:
 
 concurrency:
@@ -96,8 +102,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          pytest
+          pytest -n 4
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
