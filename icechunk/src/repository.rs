@@ -228,9 +228,9 @@ impl Repository {
 
         // Fail if the snapshot id cannot be found
         #[allow(clippy::expect_used)]
-        let _must_exist = h1.await.expect("Thread died unexpectadly")?;
+        let _must_exist = h1.await.expect("Thread died unexpectedly")?;
         #[allow(clippy::expect_used)]
-        match h2.await.expect("Thread died unexpectadly")? {
+        match h2.await.expect("Thread died unexpectedly")? {
             Some((config, etag)) => Ok(RepositoryBuilder::new(
                 storage,
                 previous_version_snapshot_id,
