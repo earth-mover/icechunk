@@ -45,7 +45,7 @@ pub enum VersionInfo {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,

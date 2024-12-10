@@ -15,7 +15,8 @@ use url::{self, Url};
 use super::s3::{mk_client, range_to_header, S3ClientOptions};
 
 #[async_trait]
-pub trait VirtualChunkResolver: Debug + private::Sealed {
+#[typetag::serde(tag = "type")]
+pub trait VirtualChunkResolver: Debug + private::Sealed + Send + Sync {
     async fn fetch_chunk(
         &self,
         location: &VirtualChunkLocation,
@@ -28,8 +29,9 @@ pub enum ObjectStoreVirtualChunkResolverConfig {
     S3(S3ClientOptions),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ObjectStoreVirtualChunkResolver {
+    #[serde(skip)]
     s3: OnceCell<Client>,
     config: Box<Option<ObjectStoreVirtualChunkResolverConfig>>,
 }
@@ -135,7 +137,17 @@ pub fn construct_valid_byte_range(
 
 impl private::Sealed for ObjectStoreVirtualChunkResolver {}
 
+impl<'de> serde::Deserialize<'de> for ObjectStoreVirtualChunkResolver {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Self::new(serde::Deserialize::deserialize(deserializer)?))
+    }
+}
+
 #[async_trait]
+#[typetag::serde]
 impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
     async fn fetch_chunk(
         &self,
