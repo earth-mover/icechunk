@@ -107,23 +107,97 @@ async def test_from_s3_public_virtual_refs(tmpdir):
         ),
     )
     root = zarr.Group.from_store(store=store, zarr_format=3)
-    depth = root.require_array(
-        name="depth", shape=((10,)), chunk_shape=((10,)), dtype="float64"
+    year = root.require_array(
+        name="year", shape=((72,)), chunk_shape=((72,)), dtype="float32"
     )
 
     store.set_virtual_ref(
-        "depth/c/0",
-        "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.fields.f030.nc",
-        offset=119339,
-        length=80,
+        "year/c/0",
+        "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
+        offset=22306,
+        length=288,
     )
 
     nodes = [n async for n in store.list()]
-    assert "depth/c/0" in nodes
+    assert "year/c/0" in nodes
 
-    depth_values = depth[:]
-    assert len(depth_values) == 10
+    year_values = year[:]
+    assert len(year_values) == 72
     actual_values = np.array(
-        [-0.95, -0.85, -0.75, -0.65, -0.55, -0.45, -0.35, -0.25, -0.15, -0.05]
+        [
+            2018.0,
+            2018.0139,
+            2018.0278,
+            2018.0416,
+            2018.0555,
+            2018.0695,
+            2018.0834,
+            2018.0972,
+            2018.1111,
+            2018.125,
+            2018.1389,
+            2018.1528,
+            2018.1666,
+            2018.1805,
+            2018.1945,
+            2018.2084,
+            2018.2222,
+            2018.2361,
+            2018.25,
+            2018.2639,
+            2018.2778,
+            2018.2916,
+            2018.3055,
+            2018.3195,
+            2018.3334,
+            2018.3472,
+            2018.3611,
+            2018.375,
+            2018.3889,
+            2018.4028,
+            2018.4166,
+            2018.4305,
+            2018.4445,
+            2018.4584,
+            2018.4722,
+            2018.4861,
+            2018.5,
+            2018.5139,
+            2018.5278,
+            2018.5416,
+            2018.5555,
+            2018.5695,
+            2018.5834,
+            2018.5972,
+            2018.6111,
+            2018.625,
+            2018.6389,
+            2018.6528,
+            2018.6666,
+            2018.6805,
+            2018.6945,
+            2018.7084,
+            2018.7222,
+            2018.7361,
+            2018.75,
+            2018.7639,
+            2018.7778,
+            2018.7916,
+            2018.8055,
+            2018.8195,
+            2018.8334,
+            2018.8472,
+            2018.8611,
+            2018.875,
+            2018.8889,
+            2018.9028,
+            2018.9166,
+            2018.9305,
+            2018.9445,
+            2018.9584,
+            2018.9722,
+            2018.9861,
+        ],
+        dtype="float32",
     )
-    assert np.allclose(depth_values, actual_values)
+    assert np.allclose(year_values, actual_values)
