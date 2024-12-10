@@ -29,6 +29,7 @@ in pkgs.mkShell.override {
     just # script launcher with a make flavor
     alejandra # nix code formatter
     markdownlint-cli2
+    python3
   ];
 
   shellHook = ''

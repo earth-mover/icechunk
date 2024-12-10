@@ -58,7 +58,7 @@ use crate::{
     MemCachingStorage, Storage, StorageError,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepositoryConfig {
     // Chunks smaller than this will be stored inline in the manifst
     pub inline_chunk_threshold_bytes: u16,
@@ -194,7 +194,7 @@ pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
 impl Repository {
     pub async fn fetch_config(
-        storage: Arc<dyn Storage + Send + Sync>,
+        storage: &(dyn Storage + Send + Sync),
     ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
         match storage.fetch_config().await? {
             Some((bytes, etag)) => {
@@ -203,16 +203,6 @@ impl Repository {
             }
             None => Ok(None),
         }
-    }
-
-    pub async fn update_config(
-        storage: Arc<dyn Storage + Send + Sync>,
-        config: RepositoryConfig,
-        current_etag: Option<&str>,
-    ) -> RepositoryResult<ETag> {
-        let bytes = Bytes::from(serde_yml::to_string(&config)?);
-        let res = storage.update_config(bytes, current_etag).await?;
-        Ok(res)
     }
 
     pub async fn update(
@@ -224,7 +214,8 @@ impl Repository {
 
         let snap_id = previous_version_snapshot_id.clone();
         let h1 = tokio::spawn(async move { storage_c1.fetch_snapshot(&snap_id).await });
-        let h2 = tokio::spawn(Self::fetch_config(storage_c2));
+        let h2 =
+            tokio::spawn(async move { Self::fetch_config(storage_c2.as_ref()).await });
 
         // Fail if the snapshot id cannot be found
         #[allow(clippy::expect_used)]
@@ -334,6 +325,12 @@ impl Repository {
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    pub async fn update_config(&self) -> RepositoryResult<ETag> {
+        let bytes = Bytes::from(serde_yml::to_string(self.config())?);
+        let res = self.storage.update_config(bytes, self.config_etag.as_deref()).await?;
+        Ok(res)
     }
 
     pub(crate) fn set_snapshot_id(&mut self, snapshot_id: SnapshotId) {
@@ -3244,6 +3241,54 @@ mod tests {
         // so now the parent is the first commit
         assert_eq!(repo2.snapshot_id(), &non_conflicting_snap);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Rebase over multiple commits with partial failure
+    ///
+    /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
+    async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let repo = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        // initializing a repo doesn't create the config file
+        assert!(Repository::fetch_config(storage.as_ref()).await?.is_none());
+        // it inits with the default config
+        assert_eq!(repo.config(), &RepositoryConfig::default());
+        // updating the persistent config create a new file with default values
+        let etag = repo.update_config().await?;
+        assert_ne!(etag, "");
+        assert_eq!(
+            Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
+            RepositoryConfig::default()
+        );
+
+        // reload the repo changing config
+        let repo = Repository::from_branch_tip(storage.clone(), "main")
+            .await?
+            .with_inline_threshold_bytes(42)
+            .build();
+
+        assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+
+        // update the persistent config
+        let etag = repo.update_config().await?;
+        assert_ne!(etag, "");
+        assert_eq!(
+            Repository::fetch_config(storage.as_ref())
+                .await?
+                .unwrap()
+                .0
+                .inline_chunk_threshold_bytes,
+            42
+        );
+
+        // verify loading againg gets the value from persistent config
+        let repo = Repository::from_branch_tip(storage.clone(), "main").await?.build();
+        assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
         Ok(())
     }
 
