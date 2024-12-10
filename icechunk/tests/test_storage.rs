@@ -270,13 +270,13 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 #[tokio::test]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
-        let etag = storage.update_config(Bytes::copy_from_slice(b"hello"), None).await?;
+        let first_etag = storage.update_config(Bytes::copy_from_slice(b"hello"), None).await?;
         let config = Bytes::copy_from_slice(b"bye");
-        let etag = storage.update_config(config.clone(), Some(etag.as_str())).await?;
-        assert_ne!(etag, "");
+        let second_etag = storage.update_config(config.clone(), Some(first_etag.as_str())).await?;
+        assert_ne!(second_etag, first_etag);
         let res = storage.fetch_config().await?;
         assert!(
-            matches!(res, Some((bytes, actual_etag)) if actual_etag == etag && bytes == config )
+            matches!(res, Some((bytes, actual_etag)) if actual_etag == second_etag && bytes == config )
         );
         Ok(())
     }).await?;

@@ -219,9 +219,14 @@ impl Repository {
 
         // Fail if the snapshot id cannot be found
         #[allow(clippy::expect_used)]
-        let _must_exist = h1.await.expect("Thread died unexpectedly")?;
+        let _must_exist = h1
+            .await
+            .expect("Error fetching config. Perhaps thread died unexpectedly.")?;
         #[allow(clippy::expect_used)]
-        match h2.await.expect("Thread died unexpectedly")? {
+        match h2
+            .await
+            .expect("Error fetching config. Perhaps thread died unexpectedly.")?
+        {
             Some((config, etag)) => Ok(RepositoryBuilder::new(
                 storage,
                 previous_version_snapshot_id,
@@ -3245,9 +3250,6 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Rebase over multiple commits with partial failure
-    ///
-    /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
