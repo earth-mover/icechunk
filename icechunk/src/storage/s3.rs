@@ -29,12 +29,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     format::{
-        attributes::AttributesTable, format_constants, manifest::Manifest,
-        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, FileTypeTag, ManifestId, SnapshotId,
+        attributes::AttributesTable, format_constants, manifest::Manifest, snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId
     },
     private,
-    zarr::ObjectId,
     Storage, StorageError,
 };
 

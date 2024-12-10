@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 
 use crate::{
-    change_set::ChangeSet, format::transaction_log::TransactionLog,
-    repository::RepositoryResult, session::Session,
+    change_set::ChangeSet,
+    format::transaction_log::TransactionLog,
+    session::{Session, SessionResult},
 };
 
 use super::{detector::ConflictDetector, Conflict, ConflictResolution, ConflictSolver};
@@ -41,7 +42,7 @@ impl ConflictSolver for BasicConflictSolver {
         previous_session: &Session,
         current_changes: ChangeSet,
         current_session: &Session,
-    ) -> RepositoryResult<ConflictResolution> {
+    ) -> SessionResult<ConflictResolution> {
         match ConflictDetector
             .solve(previous_change, previous_session, current_changes, current_session)
             .await?
@@ -69,7 +70,7 @@ impl BasicConflictSolver {
         current_changes: ChangeSet,
         _current_session: &Session,
         conflicts: Vec<Conflict>,
-    ) -> RepositoryResult<ConflictResolution> {
+    ) -> SessionResult<ConflictResolution> {
         use Conflict::*;
         let unsolvable = conflicts.iter().any(
             |conflict| {

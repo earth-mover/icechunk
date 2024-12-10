@@ -23,10 +23,15 @@ use crate::{
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{NodeData, UserAttributesSnapshot, ZarrArrayMetadata},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
-    }, metadata::{
+    },
+    metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, StorageTransformer, UserAttributes,
-    }, refs::RefError, repo::RepositoryError, session::{get_chunk, Session, SessionError}, utils::serde::arc_rwlock_serde
+    },
+    refs::RefError,
+    repository::RepositoryError,
+    session::{get_chunk, Session, SessionError},
+    utils::serde::arc_rwlock_serde,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1034,5 +1039,1359 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
             }
             _ => Err("cannot parse ChunkKeyEncoding"),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+
+    use std::borrow::BorrowMut;
+
+    use crate::storage::s3::{S3Credentials, StaticS3Credentials};
+
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let version1 = keys(store, "/").await?;
+        let mut version2 = store.list().await?.try_collect::<Vec<_>>().await?;
+        version2.sort();
+        assert_eq!(version1, version2);
+        Ok(version1)
+    }
+
+    async fn keys(
+        store: &Store,
+        prefix: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut res = store.list_prefix(prefix).await?.try_collect::<Vec<_>>().await?;
+        res.sort();
+        Ok(res)
+    }
+
+    #[test]
+    fn test_parse_key() {
+        assert!(matches!(
+            Key::parse("zarr.json"),
+            Ok(Key::Metadata { node_path}) if node_path.to_string() == "/"
+        ));
+        assert!(matches!(
+            Key::parse("a/zarr.json"),
+            Ok(Key::Metadata { node_path }) if node_path.to_string() == "/a"
+        ));
+        assert!(matches!(
+            Key::parse("a/b/c/zarr.json"),
+            Ok(Key::Metadata { node_path }) if node_path.to_string() == "/a/b/c"
+        ));
+        assert!(matches!(
+            Key::parse("foo/c"),
+            Ok(Key::Chunk { node_path, coords }) if node_path.to_string() == "/foo" && coords == ChunkIndices(vec![])
+        ));
+        assert!(matches!(
+            Key::parse("foo/bar/c"),
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/foo/bar" && coords == ChunkIndices(vec![])
+        ));
+        assert!(matches!(
+            Key::parse("foo/c/1/2/3"),
+            Ok(Key::Chunk {
+                node_path,
+                coords,
+            }) if node_path.to_string() == "/foo" && coords == ChunkIndices(vec![1,2,3])
+        ));
+        assert!(matches!(
+            Key::parse("foo/bar/baz/c/1/2/3"),
+            Ok(Key::Chunk {
+                node_path,
+                coords,
+            }) if node_path.to_string() == "/foo/bar/baz" && coords == ChunkIndices(vec![1,2,3])
+        ));
+        assert!(matches!(
+            Key::parse("c"),
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/" && coords == ChunkIndices(vec![])
+        ));
+        assert!(matches!(
+            Key::parse("c/0/0"),
+            Ok(Key::Chunk { node_path, coords}) if node_path.to_string() == "/" && coords == ChunkIndices(vec![0,0])
+        ));
+        assert!(matches!(
+            Key::parse(".zarray"),
+            Ok(Key::ZarrV2(s) ) if s == ".zarray"
+        ));
+        assert!(matches!(
+            Key::parse(".zgroup"),
+            Ok(Key::ZarrV2(s) ) if s == ".zgroup"
+        ));
+        assert!(matches!(
+            Key::parse(".zattrs"),
+            Ok(Key::ZarrV2(s) ) if s == ".zattrs"
+        ));
+        assert!(matches!(
+            Key::parse(".zmetadata"),
+            Ok(Key::ZarrV2(s) ) if s == ".zmetadata"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zgroup"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zgroup"
+        ));
+        assert!(matches!(
+            Key::parse("foo/bar/.zarray"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/bar/.zarray"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zmetadata"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zmetadata"
+        ));
+        assert!(matches!(
+            Key::parse("foo/.zattrs"),
+            Ok(Key::ZarrV2(s) ) if s == "foo/.zattrs"
+        ));
+    }
+
+    #[test]
+    fn test_format_key() {
+        assert_eq!(
+            Key::Metadata { node_path: Path::root() }.to_string(),
+            "zarr.json".to_string()
+        );
+        assert_eq!(
+            Key::Metadata { node_path: "/a".try_into().unwrap() }.to_string(),
+            "a/zarr.json".to_string()
+        );
+        assert_eq!(
+            Key::Metadata { node_path: "/a/b/c".try_into().unwrap() }.to_string(),
+            "a/b/c/zarr.json".to_string()
+        );
+        assert_eq!(
+            Key::Chunk { node_path: Path::root(), coords: ChunkIndices(vec![]) }
+                .to_string(),
+            "c".to_string()
+        );
+        assert_eq!(
+            Key::Chunk { node_path: Path::root(), coords: ChunkIndices(vec![0]) }
+                .to_string(),
+            "c/0".to_string()
+        );
+        assert_eq!(
+            Key::Chunk { node_path: Path::root(), coords: ChunkIndices(vec![1, 2]) }
+                .to_string(),
+            "c/1/2".to_string()
+        );
+        assert_eq!(
+            Key::Chunk {
+                node_path: "/a".try_into().unwrap(),
+                coords: ChunkIndices(vec![])
+            }
+            .to_string(),
+            "a/c".to_string()
+        );
+        assert_eq!(
+            Key::Chunk {
+                node_path: "/a".try_into().unwrap(),
+                coords: ChunkIndices(vec![1])
+            }
+            .to_string(),
+            "a/c/1".to_string()
+        );
+        assert_eq!(
+            Key::Chunk {
+                node_path: "/a".try_into().unwrap(),
+                coords: ChunkIndices(vec![1, 2])
+            }
+            .to_string(),
+            "a/c/1/2".to_string()
+        );
+    }
+
+    #[test]
+    fn test_metadata_serialization() {
+        assert!(serde_json::from_str::<GroupMetadata>(
+            r#"{"zarr_format":3, "node_type":"group"}"#
+        )
+        .is_ok());
+        assert!(serde_json::from_str::<GroupMetadata>(
+            r#"{"zarr_format":3, "node_type":"array"}"#
+        )
+        .is_err());
+
+        assert!(serde_json::from_str::<ArrayMetadata>(
+            r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+        )
+        .is_ok());
+        assert!(serde_json::from_str::<ArrayMetadata>(
+            r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+        )
+        .is_err());
+
+        // deserialize with nan
+        assert!(matches!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float16(n) if n.is_nan()
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float32(n) if n.is_nan()
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float64(n) if n.is_nan()
+        ));
+
+        // deserialize with infinity
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float16(f32::INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float32(f32::INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float64(f64::INFINITY)
+        );
+
+        // deserialize with -infinity
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float16(f32::NEG_INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float32(f32::NEG_INFINITY)
+        );
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            ).unwrap().zarr_metadata.fill_value,
+            FillValue::Float64(f64::NEG_INFINITY)
+        );
+
+        // infinity roundtrip
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1, 1, 2],
+            data_type: DataType::Float16,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Float16(f32::NEG_INFINITY),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
+            dimension_names: Some(vec![Some("t".to_string())]),
+        };
+        let zarr_meta = ArrayMetadata::new(None, zarr_meta);
+
+        assert_eq!(
+            serde_json::from_str::<ArrayMetadata>(
+                serde_json::to_string(&zarr_meta).unwrap().as_str()
+            )
+            .unwrap(),
+            zarr_meta,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        assert!(matches!(
+            store.get("zarr.json", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_string() == "/"
+        ));
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+        assert_eq!(
+            store.get("zarr.json", &ByteRange::ALL).await.unwrap(),
+            Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
+        );
+
+        store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
+        assert_eq!(
+            store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
+            Bytes::copy_from_slice(
+                br#"{"zarr_format":3,"node_type":"group","attributes":{"eggs":42,"spam":"ham"}}"#
+            )
+        );
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("a/b/array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            zarr_meta.clone()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
+        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let storage =
+            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+        let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        // delete metadata tests
+        store.delete("array/zarr.json").await.unwrap();
+        assert!(matches!(
+            store.get("array/zarr.json", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
+                if path.to_string() == "/array",
+        ));
+        // Deleting a non-existent key should not fail
+        store.delete("array/zarr.json").await.unwrap();
+
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        assert!(matches!(
+            store.get("array/zarr.json", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
+                if path.to_string() == "/array",
+        ));
+        store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
+        // TODO: turn this test into pure Store operations once we support writes through Zarr
+        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let storage =
+            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            zarr_meta
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::to_offset(5)).await.unwrap(),
+            zarr_meta[..5]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::from_offset(5)).await.unwrap(),
+            zarr_meta[5..]
+        );
+        assert_eq!(
+            store.get("array/zarr.json", &ByteRange::bounded(1, 24)).await.unwrap(),
+            zarr_meta[1..24]
+        );
+
+        // a small inline chunk
+        let small_data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", small_data.clone()).await?;
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            small_data
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::to_offset(2)).await.unwrap(),
+            small_data[0..2]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::from_offset(3)).await.unwrap(),
+            small_data[3..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::bounded(1, 4)).await.unwrap(),
+            small_data[1..4]
+        );
+        // no new chunks written because it was inline
+        // FiXME: add this test
+        //assert!(in_mem_storage.chunk_ids().is_empty());
+
+        // a big chunk
+        let big_data = Bytes::copy_from_slice(b"hello".repeat(512).as_slice());
+        store.set("array/c/0/1/1", big_data.clone()).await?;
+        assert_eq!(store.get("array/c/0/1/1", &ByteRange::ALL).await.unwrap(), big_data);
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::from_offset(512 - 3)).await.unwrap(),
+            big_data[(512 - 3)..]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::to_offset(5)).await.unwrap(),
+            big_data[..5]
+        );
+        assert_eq!(
+            store.get("array/c/0/1/1", &ByteRange::bounded(20, 90)).await.unwrap(),
+            big_data[20..90]
+        );
+        // FiXME: add this test
+        //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
+        //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
+
+        let oid = store.commit("commit").await?;
+
+        let ds = Repository::update(storage, oid).build();
+        let store = Store::from_repository(ds, AccessMode::ReadWrite, None, None);
+        assert_eq!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            small_data
+        );
+        assert_eq!(store.get("array/c/0/1/1", &ByteRange::ALL).await.unwrap(), big_data);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
+        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let storage =
+            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+
+        // delete chunk
+        store.delete("array/c/0/1/0").await.unwrap();
+        // deleting a deleted chunk is allowed
+        store.delete("array/c/0/1/0").await.unwrap();
+        // deleting non-existent chunk is allowed
+        store.delete("array/c/1/1/1").await.unwrap();
+        assert!(matches!(
+            store.get("array/c/0/1/0", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
+                if key == "array/c/0/1/0" && path.to_string() == "/array" && coords == ChunkIndices([0, 1, 0].to_vec())
+        ));
+        assert!(matches!(
+            store.delete("array/foo").await,
+            Err(StoreError::InvalidKey { key }) if key == "array/foo",
+        ));
+        // FIXME: deleting an invalid chunk should not be allowed.
+        store.delete("array/c/10/1/1").await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        assert!(store.is_empty("").await.unwrap());
+        assert!(!store.exists("zarr.json").await.unwrap());
+
+        assert_eq!(all_keys(&store).await.unwrap(), Vec::<String>::new());
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        assert!(!store.is_empty("").await.unwrap());
+        assert!(store.exists("zarr.json").await.unwrap());
+        assert_eq!(all_keys(&store).await.unwrap(), vec!["zarr.json".to_string()]);
+        store
+            .borrow_mut()
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+        assert_eq!(
+            all_keys(&store).await.unwrap(),
+            vec!["group/zarr.json".to_string(), "zarr.json".to_string()]
+        );
+        assert_eq!(
+            keys(&store, "group/").await.unwrap(),
+            vec!["group/zarr.json".to_string()]
+        );
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("group/array/zarr.json", zarr_meta).await?;
+        assert!(!store.is_empty("").await.unwrap());
+        assert!(store.exists("zarr.json").await.unwrap());
+        assert!(store.exists("group/array/zarr.json").await.unwrap());
+        assert!(store.exists("group/zarr.json").await.unwrap());
+        assert_eq!(
+            all_keys(&store).await.unwrap(),
+            vec![
+                "group/array/zarr.json".to_string(),
+                "group/zarr.json".to_string(),
+                "zarr.json".to_string()
+            ]
+        );
+        assert_eq!(
+            keys(&store, "group/").await.unwrap(),
+            vec!["group/array/zarr.json".to_string(), "group/zarr.json".to_string()]
+        );
+        assert_eq!(
+            keys(&store, "group/array/").await.unwrap(),
+            vec!["group/array/zarr.json".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("/array/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(
+            store.get("/array/zarr.json", &ByteRange::ALL).await?,
+            zarr_meta.clone()
+        );
+
+        store.set("0/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(store.get("0/zarr.json", &ByteRange::ALL).await?, zarr_meta.clone());
+
+        store.set("/0/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(store.get("/0/zarr.json", &ByteRange::ALL).await?, zarr_meta);
+
+        // store.set("c/0", zarr_meta.clone()).await?;
+        // assert_eq!(store.get("c/0", &ByteRange::ALL).await?, zarr_meta);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta).await?;
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await?;
+        store.set("array/c/1/1/1", data.clone()).await?;
+
+        assert_eq!(
+            all_keys(&store).await.unwrap(),
+            vec![
+                "array/c/0/1/0".to_string(),
+                "array/c/1/1/1".to_string(),
+                "array/zarr.json".to_string(),
+                "zarr.json".to_string()
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta).await?;
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await?;
+        store.set("array/c/1/1/1", data.clone()).await?;
+
+        assert_eq!(
+            all_keys(&store).await.unwrap(),
+            vec![
+                "array/c/0/1/0".to_string(),
+                "array/c/1/1/1".to_string(),
+                "array/zarr.json".to_string(),
+                "zarr.json".to_string()
+            ]
+        );
+
+        let mut dir = store.list_dir("/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
+
+        let mut dir = store.list_dir_items("/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("array".to_string())
+            ]
+        );
+
+        let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("c".to_string())
+            ]
+        );
+
+        let mut dir = store.list_dir("array/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["c".to_string(), "zarr.json".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Key("zarr.json".to_string()),
+                ListDirItem::Prefix("c".to_string())
+            ]
+        );
+
+        let mut dir = store.list_dir("array/c/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["0".to_string(), "1".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array/c/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(
+            dir,
+            vec![
+                ListDirItem::Prefix("0".to_string()),
+                ListDirItem::Prefix("1".to_string()),
+            ]
+        );
+
+        let mut dir = store.list_dir("array/c/1/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec!["1".to_string()]);
+
+        let mut dir =
+            store.list_dir_items("array/c/1/").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![ListDirItem::Prefix("1".to_string()),]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        store
+            .borrow_mut()
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.borrow_mut().set("group-suffix/zarr.json", zarr_meta).await.unwrap();
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set_if_not_exists("group-suffix/c/0/1/0", data.clone()).await.unwrap();
+
+        assert_eq!(
+            store.list_dir("group/").await?.try_collect::<Vec<_>>().await?,
+            vec!["zarr.json"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
+        let mut store = Store::from_repository(
+            ds,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .borrow_mut()
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[20],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x"]}"#);
+        store.set("array/zarr.json", zarr_meta).await?;
+
+        let key_vals: Vec<_> = (0i32..20)
+            .map(|idx| {
+                (
+                    format!("array/c/{idx}"),
+                    Bytes::copy_from_slice(idx.to_be_bytes().to_owned().as_slice()),
+                )
+            })
+            .collect();
+
+        for (key, value) in key_vals.iter() {
+            store.set(key.as_str(), value.clone()).await?;
+        }
+
+        let key_ranges = key_vals.iter().map(|(k, _)| (k.clone(), ByteRange::ALL));
+
+        assert_eq!(
+            key_vals.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+            store
+                .get_partial_values(key_ranges)
+                .await?
+                .into_iter()
+                .map(|v| v.unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        // let's try in reverse order
+        let key_ranges = key_vals.iter().rev().map(|(k, _)| (k.clone(), ByteRange::ALL));
+
+        assert_eq!(
+            key_vals.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+            store
+                .get_partial_values(key_ranges)
+                .await?
+                .into_iter()
+                .map(|v| v.unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
+
+        let snapshot_id = store.commit("initial commit").await.unwrap();
+
+        let new_data = Bytes::copy_from_slice(b"world");
+        store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
+
+        store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        let new_snapshot_id = store.commit("update").await.unwrap();
+
+        let random_id = SnapshotId::random();
+        let res = store.checkout(VersionInfo::SnapshotId(random_id.clone())).await;
+        assert!(matches!(
+            res,
+            Err(StoreError::RepositoryError(RepositoryError::SnapshotNotFound { .. }))
+        ));
+
+        store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
+        assert_eq!(store.mode, AccessMode::ReadOnly);
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
+
+        store.checkout(VersionInfo::SnapshotId(new_snapshot_id.clone())).await.unwrap();
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        store.tag("tag_0", &new_snapshot_id).await.unwrap();
+        store.checkout(VersionInfo::TagRef("tag_0".to_string())).await.unwrap();
+        assert_eq!(store.mode, AccessMode::ReadOnly);
+
+        store.checkout(VersionInfo::BranchTipRef("main".to_string())).await.unwrap();
+        store.set_mode(AccessMode::ReadWrite);
+        let _newest_data = Bytes::copy_from_slice(b"earth");
+        store.set("array/c/0/1/0", data.clone()).await.unwrap();
+        assert_eq!(store.has_uncommitted_changes().await, true);
+
+        let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
+        assert!(result.is_err());
+
+        store.reset().await?;
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        // Create a new branch and do stuff with it
+        store.new_branch("dev").await?;
+        store.set("array/c/0/1/0", new_data.clone()).await?;
+        let dev_snapshot_id = store.commit("update dev branch").await?;
+        store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
+        assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
+
+        let new_store_from_snapshot = Store::from_repository(
+            Repository::update(Arc::clone(&storage), snapshot_id).build(),
+            AccessMode::ReadWrite,
+            None,
+            None,
+        );
+        assert_eq!(
+            new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
+            data
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let empty: Vec<String> = Vec::new();
+        store.clear().await?;
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        store
+            .set(
+                "group/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let new_data = Bytes::copy_from_slice(b"world");
+        store.set("array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("group/array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("array/c/1/0/0", new_data.clone()).await.unwrap();
+        store.set("group/array/c/1/0/0", new_data.clone()).await.unwrap();
+
+        let _ = store.commit("initial commit").await.unwrap();
+
+        store
+            .set(
+                "group/group2/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+        store.set("group/group2/array/zarr.json", zarr_meta.clone()).await.unwrap();
+        store.set("group/group2/array/c/1/0/0", new_data.clone()).await.unwrap();
+
+        store.clear().await?;
+
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        let empty_snap = store.commit("no content commit").await.unwrap();
+
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        let store = Store::from_repository(
+            Repository::update(Arc::clone(&storage), empty_snap).build(),
+            AccessMode::ReadWrite,
+            None,
+            None,
+        );
+        assert_eq!(
+            store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
+            empty
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite() -> Result<(), Box<dyn std::error::Error>> {
+        // GH347
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        let meta1 = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
+        );
+        let meta2 = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":84}}"#,
+        );
+        let zarr_meta1 = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        let zarr_meta2 = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":84},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+
+        // with no commit in the middle, this tests the changeset
+        store.set("zarr.json", meta1.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
+        store.delete("zarr.json").await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        store.set("zarr.json", meta2.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        assert_eq!(
+            &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            &zarr_meta2
+        );
+
+        // with a commit in the middle, this tests the changeset interaction with snapshot
+        store.set("zarr.json", meta1).await.unwrap();
+        store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
+        store.commit("initial commit").await.unwrap();
+        store.delete("zarr.json").await.unwrap();
+        store.delete("array/zarr.json").await.unwrap();
+        store.set("zarr.json", meta2.clone()).await.unwrap();
+        store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        store.commit("commit 2").await.unwrap();
+        assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
+        assert_eq!(
+            &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
+            &zarr_meta2
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store.commit("root group").await.unwrap();
+
+        store
+            .set(
+                "a/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let prev_snap = store.commit("group a").await?;
+
+        store
+            .set(
+                "b/zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store.commit("group b").await?;
+        assert!(store.exists("a/zarr.json").await?);
+        assert!(store.exists("b/zarr.json").await?);
+
+        store.reset_branch(prev_snap).await?;
+
+        assert!(!store.exists("b/zarr.json").await?);
+        assert!(store.exists("a/zarr.json").await?);
+
+        let (repo, _) =
+            RepositoryConfig::existing(VersionInfo::BranchTipRef("main".to_string()))
+                .make_repository(storage)
+                .await?;
+        let store = Store::from_repository(
+            repo,
+            AccessMode::ReadOnly,
+            Some("main".to_string()),
+            None,
+        );
+        assert!(!store.exists("b/zarr.json").await?);
+        assert!(store.exists("a/zarr.json").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_access_mode() {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let writeable_store =
+            Store::new_from_storage(Arc::clone(&storage)).await.unwrap();
+        assert_eq!(writeable_store.access_mode(), &AccessMode::ReadWrite);
+
+        writeable_store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let readable_store = writeable_store.with_access_mode(AccessMode::ReadOnly);
+        assert_eq!(readable_store.access_mode(), &AccessMode::ReadOnly);
+
+        let result = readable_store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await;
+        let correct_error = matches!(result, Err(StoreError::ReadOnly { .. }));
+        assert!(correct_error);
+
+        readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
+    }
+
+    #[test]
+    fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
+        let expected = ConsolidatedStore {
+            storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
+            repository: RepositoryConfig {
+                inline_chunk_threshold_bytes: Some(128),
+                version: Some(VersionInfo::SnapshotId(SnapshotId::new([
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+                ]))),
+                unsafe_overwrite_refs: Some(true),
+                change_set_bytes: None,
+                virtual_ref_config: None,
+            },
+            config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
+        };
+
+        let json = r#"
+            {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
+             "repository": {
+                "version": {"snapshot_id":"000G40R40M30E209185G"},
+                "inline_chunk_threshold_bytes":128,
+                "unsafe_overwrite_refs":true
+             },
+             "config": {
+                "get_partial_values_concurrency": 100
+             }
+            }
+        "#;
+        assert_eq!(expected, serde_json::from_str(json)?);
+
+        let json = r#"
+            {"storage":
+                {"type": "local_filesystem", "root":"/tmp/test"},
+             "repository": {
+                "version": null,
+                "inline_chunk_threshold_bytes": null,
+                "unsafe_overwrite_refs":null
+             }}
+        "#;
+        assert_eq!(
+            ConsolidatedStore {
+                repository: RepositoryConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
+                },
+                config: None,
+                ..expected.clone()
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":
+                {"type": "local_filesystem", "root":"/tmp/test"},
+             "repository": {}
+            }
+        "#;
+        assert_eq!(
+            ConsolidatedStore {
+                repository: RepositoryConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
+                },
+                config: None,
+                ..expected.clone()
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":{"type": "in_memory", "prefix": "prefix"},
+             "repository": {}
+            }
+        "#;
+        assert_eq!(
+            ConsolidatedStore {
+                repository: RepositoryConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
+                },
+                storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
+                config: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":{"type": "in_memory"},
+             "repository": {}
+            }
+        "#;
+        assert_eq!(
+            ConsolidatedStore {
+                repository: RepositoryConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
+                },
+                storage: StorageConfig::InMemory { prefix: None },
+                config: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+            {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
+             "repository": {}
+            }
+        "#;
+        assert_eq!(
+            ConsolidatedStore {
+                repository: RepositoryConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
+                },
+                storage: StorageConfig::S3ObjectStore {
+                    bucket: String::from("test"),
+                    prefix: String::from("root"),
+                    config: None,
+                },
+                config: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        let json = r#"
+        {"storage":{
+             "type": "s3",
+             "bucket":"test",
+             "prefix":"root",
+             "credentials":{
+                 "type":"static",
+                 "access_key_id":"my-key",
+                 "secret_access_key":"my-secret-key"
+             },
+             "endpoint":"http://localhost:9000",
+             "allow_http": true
+         },
+         "repository": {}
+        }
+    "#;
+        assert_eq!(
+            ConsolidatedStore {
+                repository: RepositoryConfig {
+                    version: None,
+                    inline_chunk_threshold_bytes: None,
+                    unsafe_overwrite_refs: None,
+                    change_set_bytes: None,
+                    virtual_ref_config: None,
+                },
+                storage: StorageConfig::S3ObjectStore {
+                    bucket: String::from("test"),
+                    prefix: String::from("root"),
+                    config: Some(S3Config {
+                        region: None,
+                        endpoint: Some(String::from("http://localhost:9000")),
+                        credentials: S3Credentials::Static(StaticS3Credentials {
+                            access_key_id: String::from("my-key"),
+                            secret_access_key: String::from("my-secret-key"),
+                            session_token: None,
+                        }),
+                        allow_http: true,
+                    })
+                },
+                config: None,
+            },
+            serde_json::from_str(json)?
+        );
+
+        Ok(())
     }
 }

@@ -23,7 +23,6 @@ pub mod format;
 pub mod metadata;
 pub mod ops;
 pub mod refs;
-pub mod repo;
 pub mod repository;
 pub mod session;
 pub mod storage;
@@ -31,10 +30,8 @@ pub mod store;
 #[cfg(test)]
 pub mod strategies;
 pub mod utils;
-pub mod zarr;
 
-pub use repo::RepositoryConfig;
-pub use repository::{Repository, RepositoryBuilder};
+pub use repository::{Repository, RepositoryConfig};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
 pub use store::Store;
 

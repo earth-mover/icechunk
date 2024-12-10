@@ -7,11 +7,12 @@ use proptest::{collection::vec, option, strategy::Strategy};
 
 use crate::format::snapshot::ZarrArrayMetadata;
 use crate::format::Path;
-use crate::metadata::{ArrayShape, DimensionNames};
-use crate::repository::{
-    ChunkKeyEncoding, ChunkShape, Codec, FillValue, StorageTransformer,
+use crate::metadata::{
+    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DimensionNames, FillValue,
+    StorageTransformer,
 };
-use crate::{ObjectStorage, Repository};
+use crate::storage::virtual_ref::ObjectStoreVirtualChunkResolver;
+use crate::{ObjectStorage, Repository, RepositoryConfig};
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
@@ -32,10 +33,9 @@ prop_compose! {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
-        Repository::init(Arc::new(storage), false)
+        Repository::create(RepositoryConfig::default(), Arc::new(storage), Arc::new(ObjectStoreVirtualChunkResolver::new(None)))
             .await
             .expect("Failed to initialize repository")
-            .build()
     })
 }
 }

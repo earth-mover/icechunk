@@ -240,8 +240,7 @@ mod test {
 
     use super::*;
     use crate::{
-        format::{manifest::ChunkInfo, NodeId},
-        repository::{ChunkIndices, ChunkPayload},
+        format::{manifest::{ChunkInfo, ChunkPayload}, ChunkIndices, NodeId},
         storage::{logging::LoggingStorage, ObjectStorage, Storage},
     };
 
