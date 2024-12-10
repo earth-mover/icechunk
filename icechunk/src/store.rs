@@ -1048,10 +1048,18 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
-    use crate::storage::s3::{S3Credentials, StaticS3Credentials};
+    use crate::{repository::VersionInfo, storage::s3::{S3Credentials, StaticS3Credentials}, ObjectStorage, Repository, RepositoryConfig};
 
     use super::*;
     use pretty_assertions::assert_eq;
+
+    async fn create_memory_store_repository() -> Repository {
+        let storage = Arc::new(
+            ObjectStorage::new_in_memory_store(Some("prefix".into()))
+                .expect("failed to create in-memory store"),
+        );
+        Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
+    }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let version1 = keys(store, "/").await?;
@@ -1310,14 +1318,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let mut ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         assert!(matches!(
@@ -1356,16 +1362,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
-        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let storage =
-            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let mut ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
@@ -1404,16 +1406,12 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
-        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let storage =
-            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let mut ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1484,10 +1482,10 @@ mod tests {
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
-        let oid = store.commit("commit").await?;
+        let oid = ds.commit("commit", None).await?;
 
-        let ds = Repository::update(storage, oid).build();
-        let store = Store::from_repository(ds, AccessMode::ReadWrite, None, None);
+        let ds = repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let store = Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
