@@ -555,10 +555,13 @@ impl Session {
     pub async fn rebase(
         &mut self,
         solver: &dyn ConflictSolver,
-        update_branch_name: &str,
     ) -> SessionResult<()> {
+        let Some(branch_name) = &self.branch_name else {
+            return Err(SessionError::ReadOnlySession);
+        };
+
         let ref_data =
-            fetch_branch_tip(self.storage.as_ref(), update_branch_name).await?;
+            fetch_branch_tip(self.storage.as_ref(), branch_name).await?;
 
         if ref_data.snapshot == self.snapshot_id {
             // nothing to do, commit should work without rebasing
@@ -1091,13 +1094,9 @@ mod tests {
     use std::{error::Error, num::NonZeroU64};
 
     use crate::{
-        metadata::{
+        conflicts::{basic_solver::{BasicConflictSolver, VersionSelection}, detector::ConflictDetector}, metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-        },
-        repository::VersionInfo,
-        storage::logging::LoggingStorage,
-        strategies::{empty_writeable_session, node_paths, zarr_array_metadata},
-        ObjectStorage, Repository,
+        }, refs::{fetch_ref, Ref}, repository::VersionInfo, storage::logging::LoggingStorage, strategies::{empty_writeable_session, node_paths, zarr_array_metadata}, ObjectStorage, Repository
     };
 
     use super::*;
@@ -1105,6 +1104,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use test_strategy::proptest;
+    use tokio::sync::Barrier;
 
     async fn create_memory_store_repository() -> Repository {
         let storage = Arc::new(
@@ -1971,5 +1971,1235 @@ mod tests {
         assert!(size_after_chunk_delete < size_after_delete);
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository().await;
+        let storage = Arc::clone(repository.storage());
+        let mut ds = repository.writeable_session("main").await?;
+
+        // add a new array and retrieve its node
+        ds.add_group(Path::root()).await?;
+        let new_snapshot_id = ds.commit("first commit", None).await?;
+        assert_eq!(
+            new_snapshot_id,
+            fetch_ref(storage.as_ref(), "main").await?.1.snapshot
+        );
+        //assert_eq!(&new_snapshot_id, ds.snapshot_id());
+
+        repository.create_tag("v1", &new_snapshot_id).await?;
+        let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
+        assert_eq!(ref_name, Ref::Tag("v1".to_string()));
+        assert_eq!(new_snapshot_id, ref_data.snapshot);
+
+        let mut ds = repository.writeable_session("main").await?;
+        assert!(matches!(
+                ds.get_node(&Path::root()).await.ok(),
+                Some(NodeSnapshot { path, user_attributes, node_data, ..})
+                    if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
+
+        assert!(matches!(
+                ds.get_node(&Path::root()).await.ok(),
+                Some(NodeSnapshot { path, user_attributes, node_data, ..})
+                        if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+        ));
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1, 1, 2],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
+            dimension_names: Some(vec![Some("t".to_string())]),
+        };
+
+        let new_array_path: Path = "/array1".try_into().unwrap();
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 0, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        let new_snapshot_id = ds.commit("second commit", None).await?;
+        let (ref_name, ref_data) =
+            fetch_ref(storage.as_ref(), Ref::DEFAULT_BRANCH).await?;
+        assert_eq!(ref_name, Ref::Branch("main".to_string()));
+        assert_eq!(new_snapshot_id, ref_data.snapshot);
+
+        let parents =
+            repository.ancestry(&new_snapshot_id).await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(parents[0].message, "second commit");
+        assert_eq!(parents[1].message, "first commit");
+        assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
+        itertools::assert_equal(
+            parents.iter().sorted_by_key(|m| m.written_at).rev(),
+            parents.iter(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository().await;
+
+        let mut ds1 = repository.writeable_session("main").await?;
+        let mut ds2 = repository.writeable_session("main").await?;
+
+        ds1.add_group("/a".try_into().unwrap()).await?;
+        ds2.add_group("/b".try_into().unwrap()).await?;
+
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_c = Arc::clone(&barrier);
+        let barrier_cc = Arc::clone(&barrier);
+        let handle1 = tokio::spawn(async move {
+            let _ = barrier_c.wait().await;
+            ds1.commit("from 1", None).await
+        });
+
+        let handle2 = tokio::spawn(async move {
+            let _ = barrier_cc.wait().await;
+            ds2.commit("from 2", None).await
+        });
+
+        let res1 = handle1.await.unwrap();
+        let res2 = handle2.await.unwrap();
+
+        // We check there is one error and one success, and that the error points to the right
+        // conflicting commit
+        let ok = match (&res1, &res2) {
+            (
+                Ok(new_snap),
+                Err(SessionError::Conflict { expected_parent: _, actual_parent }),
+            ) if Some(new_snap) == actual_parent.as_ref() => true,
+            (
+                Err(SessionError::Conflict { expected_parent: _, actual_parent }),
+                Ok(new_snap),
+            ) if Some(new_snap) == actual_parent.as_ref() => true,
+            _ => false,
+        };
+        assert!(ok);
+
+        let ds = repository
+            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?;
+        let parents =
+            repository.ancestry(&ds.snapshot_id).await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(parents.len(), 2);
+        let msg = parents[0].message.as_str();
+        assert!(msg == "from 1" || msg == "from 2");
+
+        assert_eq!(parents[1].message.as_str(), Snapshot::INITIAL_COMMIT_MESSAGE);
+        Ok(())
+    }
+
+    /// Construct two repos on the same storage, with a commit, a group and an array
+    ///
+    /// Group: /foo/bar
+    /// Array: /foo/bar/some-array
+    async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>>
+    {
+        let repository = create_memory_store_repository().await;
+        let mut ds = repository.writeable_session("main").await?;
+        let ds2 = repository.writeable_session("main").await?;
+
+        ds.add_group("/foo/bar".try_into().unwrap()).await?;
+        ds.add_array("/foo/bar/some-array".try_into().unwrap(), basic_meta()).await?;
+        ds.commit("create directory", None).await?;
+
+        let ds = repository.writeable_session("main").await?;
+
+        Ok((ds, ds2))
+    }
+
+    fn basic_meta() -> ZarrArrayMetadata {
+        ZarrArrayMetadata {
+            shape: vec![5],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        }
+    }
+
+    fn assert_has_conflict(conflict: &Conflict, rebase_result: SessionResult<()>) {
+        match rebase_result {
+            Err(SessionError::RebaseFailed { conflicts, .. }) => {
+                assert!(conflicts.contains(conflict));
+            }
+            other => panic!("test failed, expected conflict, got {:?}", other),
+        }
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: add array
+    /// Previous commit: add group on same path
+    async fn test_conflict_detection_node_conflict_with_existing_node(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
+        ds1.add_group(conflict_path.clone()).await?;
+        ds1.commit("create group", None).await?;
+
+        ds2.add_array(conflict_path.clone(), basic_meta()).await?;
+        ds2.commit("create array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: add array
+    /// Previous commit: add array in implicit path to the session array
+    async fn test_conflict_detection_node_conflict_in_path() -> Result<(), Box<dyn Error>>
+    {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
+        ds1.add_array(conflict_path.clone(), basic_meta()).await?;
+        ds1.commit("create array", None).await?;
+
+        let inner_path: Path = "/foo/bar/conflict/inner".try_into().unwrap();
+        ds2.add_array(inner_path.clone(), basic_meta()).await?;
+        ds2.commit("create inner array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::NewNodeInInvalidGroup(conflict_path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: update array metadata
+    /// Previous commit: update array metadata
+    async fn test_conflict_detection_double_zarr_metadata_edit(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1.update_array(path.clone(), basic_meta()).await?;
+        ds1.commit("update array", None).await?;
+
+        ds2.update_array(path.clone(), basic_meta()).await?;
+        ds2.commit("update array again", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::ZarrMetadataDoubleUpdate(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: delete array
+    /// Previous commit: update same array metadata
+    async fn test_conflict_detection_metadata_edit_of_deleted(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1.delete_array(path.clone()).await?;
+        ds1.commit("delete array", None).await?;
+
+        ds2.update_array(path.clone(), basic_meta()).await?;
+        ds2.commit("update array again", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::ZarrMetadataUpdateOfDeletedArray(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: uptade user attributes
+    /// Previous commit: update user attributes
+    async fn test_conflict_detection_double_user_atts_edit() -> Result<(), Box<dyn Error>>
+    {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        ds1.commit("update array", None).await?;
+
+        ds2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        ds2.commit("update array user atts", None).await.unwrap_err();
+        let node_id = ds2.get_array(&path).await?.id;
+        assert_has_conflict(
+            &Conflict::UserAttributesDoubleUpdate { path, node_id },
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: uptade user attributes
+    /// Previous commit: delete same array
+    async fn test_conflict_detection_user_atts_edit_of_deleted(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1.delete_array(path.clone()).await?;
+        ds1.commit("delete array", None).await?;
+
+        ds2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        ds2.commit("update array user atts", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::UserAttributesUpdateOfDeletedNode(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: delete array
+    /// Previous commit: update same array metadata
+    async fn test_conflict_detection_delete_when_array_metadata_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1.update_array(path.clone(), basic_meta()).await?;
+        ds1.commit("update array", None).await?;
+
+        ds2.delete_array(path.clone()).await?;
+        ds2.commit("delete array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedArray(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: delete array
+    /// Previous commit: update same array user attributes
+    async fn test_conflict_detection_delete_when_array_user_atts_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        ds1.commit("update user attributes", None).await?;
+
+        ds2.delete_array(path.clone()).await?;
+        ds2.commit("delete array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedArray(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: delete array
+    /// Previous commit: update same array chunks
+    async fn test_conflict_detection_delete_when_chunks_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        ds1.commit("update chunks", None).await?;
+
+        ds2.delete_array(path.clone()).await?;
+        ds2.commit("delete array", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedArray(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    /// Test conflict detection
+    ///
+    /// This session: delete group
+    /// Previous commit: update same group user attributes
+    async fn test_conflict_detection_delete_when_group_user_atts_updated(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+            )
+            .await?;
+        ds1.commit("update user attributes", None).await?;
+
+        ds2.delete_group(path.clone()).await?;
+        ds2.commit("delete group", None).await.unwrap_err();
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedGroup(path),
+            ds2.rebase(&ConflictDetector).await,
+        );
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+
+        let mut ds = repo.writeable_session("main").await?;
+
+        ds.add_group("/".try_into().unwrap()).await?;
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![5],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let new_array_path: Path = "/array".try_into().unwrap();
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.commit("create array", None).await?;
+
+        // one writer sets chunks
+        // other writer sets the same chunks, generating a conflict
+
+        let mut ds1 = repo.writeable_session("main").await?;
+        let mut ds2 = repo.writeable_session("main").await?;
+
+        ds1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        ds1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        let conflicting_snap =
+            ds1.commit("write two chunks with repo 1", None).await?;
+
+        ds2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+
+        // verify we cannot commit
+        if let Err(SessionError::Conflict { .. }) =
+            ds2.commit("write one chunk with repo2", None).await
+        {
+            // detect conflicts using rebase
+            let result = ds2.rebase(&ConflictDetector).await;
+            // assert the conflict is double chunk update
+            assert!(matches!(
+            result,
+            Err(SessionError::RebaseFailed { snapshot, conflicts, })
+                if snapshot == conflicting_snap &&
+                conflicts.len() == 1 &&
+                matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+                            if path == &new_array_path && chunk_coordinates == &[ChunkIndices(vec![0])].into())
+                ));
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test()]
+    async fn test_rebase_fast_forwarding_over_chunk_writes() -> Result<(), Box<dyn Error>>
+    {
+        let repo = create_memory_store_repository().await;
+
+        let mut ds = repo.writeable_session("main").await?;
+
+        ds.add_group("/".try_into().unwrap()).await?;
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![5],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let new_array_path: Path = "/array".try_into().unwrap();
+        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        let array_created_snap =
+            ds.commit("create array", None).await?;
+
+        let mut ds1 = repo.writeable_session("main").await?;
+
+        ds1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello0".into())),
+            )
+            .await?;
+        ds1
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("hello1".into())),
+            )
+            .await?;
+
+        let new_array_2_path: Path = "/array_2".try_into().unwrap();
+        ds1.add_array(new_array_2_path.clone(), zarr_meta.clone()).await?;
+        ds1
+            .set_chunk_ref(
+                new_array_2_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("bye0".into())),
+            )
+            .await?;
+
+        let conflicting_snap =
+            ds1.commit("write two chunks with repo 1", None).await?;
+
+        // let's try to create a new commit, that conflicts with the previous one but writes to
+        // different chunks
+        let mut ds2 = repo.writeable_session("main").await?;
+        ds2
+            .set_chunk_ref(
+                new_array_path.clone(),
+                ChunkIndices(vec![2]),
+                Some(ChunkPayload::Inline("hello2".into())),
+            )
+            .await?;
+        if let Err(SessionError::Conflict { .. }) =
+            ds2.commit("write one chunk with repo2", None).await
+        {
+            let solver = BasicConflictSolver::default();
+            // different chunks were written so this should fast forward
+            ds2.rebase(&solver).await?;
+            let snapshot = ds2.commit("after conflict", None).await?;
+            let data =
+                ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello2".into())));
+
+            // other chunks written by the conflicting commit are still there
+            let data =
+                ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello0".into())));
+            let data =
+                ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
+
+            // new arrays written by the conflicting commit are still there
+            let data =
+                ds2.get_chunk_ref(&new_array_2_path, &ChunkIndices(vec![0])).await?;
+            assert_eq!(data, Some(ChunkPayload::Inline("bye0".into())));
+
+            let commits = repo.ancestry(&snapshot).await?.try_collect::<Vec<_>>().await?;
+            assert_eq!(commits[0].message, "after conflict");
+            assert_eq!(commits[1].message, "write two chunks with repo 1");
+        } else {
+            panic!("Bad test, it should conflict")
+        }
+
+        // reset the branch to what repo1 wrote
+        let current_snap = fetch_branch_tip(repo.storage().as_ref(), "main").await?.snapshot;
+        update_branch(
+            repo.storage().as_ref(),
+            "main",
+            conflicting_snap.clone(),
+            Some(&current_snap),
+            false,
+        )
+        .await?;
+
+        // TODO: We cant create writeable sessions from arbitrary snapshots anymore so not sure what to do about this?
+        // let's try to create a new commit, that conflicts with the previous one and writes
+        // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
+        // let mut repo2 =
+        //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        // repo2
+        //     .set_chunk_ref(
+        //         new_array_path.clone(),
+        //         ChunkIndices(vec![1]),
+        //         Some(ChunkPayload::Inline("overridden".into())),
+        //     )
+        //     .await?;
+
+        // if let Err(RepositoryError::Conflict { .. }) =
+        //     repo2.commit("main", "write one chunk with repo2", None).await
+        // {
+        //     let solver = BasicConflictSolver {
+        //         on_chunk_conflict: VersionSelection::Fail,
+        //         ..BasicConflictSolver::default()
+        //     };
+
+        //     let res = repo2.rebase(&solver, "main").await;
+        //     assert!(matches!(
+        //     res,
+        //     Err(SessionError::RebaseFailed { snapshot, conflicts, })
+        //         if snapshot == conflicting_snap &&
+        //         conflicts.len() == 1 &&
+        //         matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+        //                     if path == &new_array_path && chunk_coordinates == &[ChunkIndices(vec![1])].into())
+        //         ));
+        // } else {
+        //     panic!("Bad test, it should conflict")
+        // }
+
+        // // reset the branch to what repo1 wrote
+        // let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+        // update_branch(
+        //     storage.as_ref(),
+        //     "main",
+        //     conflicting_snap.clone(),
+        //     Some(&current_snap),
+        //     false,
+        // )
+        // .await?;
+
+        // // let's try to create a new commit, that conflicts with the previous one and writes
+        // // to the same chunk, recovering with "UseOurs" policy
+        // let mut repo2 =
+        //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        // repo2
+        //     .set_chunk_ref(
+        //         new_array_path.clone(),
+        //         ChunkIndices(vec![1]),
+        //         Some(ChunkPayload::Inline("overridden".into())),
+        //     )
+        //     .await?;
+        // if let Err(RepositoryError::Conflict { .. }) =
+        //     repo2.commit("main", "write one chunk with repo2", None).await
+        // {
+        //     let solver = BasicConflictSolver {
+        //         on_chunk_conflict: VersionSelection::UseOurs,
+        //         ..Default::default()
+        //     };
+
+        //     repo2.rebase(&solver, "main").await?;
+        //     repo2.commit("main", "after conflict", None).await?;
+        //     let data =
+        //         repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+        //     assert_eq!(data, Some(ChunkPayload::Inline("overridden".into())));
+        //     let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+        //     assert_eq!(commits[0].message, "after conflict");
+        //     assert_eq!(commits[1].message, "write two chunks with repo 1");
+        // } else {
+        //     panic!("Bad test, it should conflict")
+        // }
+
+        // // reset the branch to what repo1 wrote
+        // let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+        // update_branch(
+        //     storage.as_ref(),
+        //     "main",
+        //     conflicting_snap.clone(),
+        //     Some(&current_snap),
+        //     false,
+        // )
+        // .await?;
+
+        // // let's try to create a new commit, that conflicts with the previous one and writes
+        // // to the same chunk, recovering with "UseTheirs" policy
+        // let mut repo2 =
+        //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+        // repo2
+        //     .set_chunk_ref(
+        //         new_array_path.clone(),
+        //         ChunkIndices(vec![1]),
+        //         Some(ChunkPayload::Inline("overridden".into())),
+        //     )
+        //     .await?;
+        // if let Err(RepositoryError::Conflict { .. }) =
+        //     repo2.commit("main", "write one chunk with repo2", None).await
+        // {
+        //     let solver = BasicConflictSolver {
+        //         on_chunk_conflict: VersionSelection::UseTheirs,
+        //         ..Default::default()
+        //     };
+
+        //     repo2.rebase(&solver, "main").await?;
+        //     repo2.commit("main", "after conflict", None).await?;
+        //     let data =
+        //         repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+        //     assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
+        //     let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+        //     assert_eq!(commits[0].message, "after conflict");
+        //     assert_eq!(commits[1].message, "write two chunks with repo 1");
+        // } else {
+        //     panic!("Bad test, it should conflict")
+        // }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Test conflict resolution with rebase
+    ///
+    /// Two sessions write user attributes to the same array
+    /// We attempt to recover using [`VersionSelection::UseOurs`] policy
+    async fn test_conflict_resolution_double_user_atts_edit_with_ours(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            )
+            .await?;
+        ds1.commit("update array", None).await?;
+
+        ds2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
+            )
+            .await?;
+        ds2.commit("update array user atts", None).await.unwrap_err();
+
+        let solver = BasicConflictSolver {
+            on_user_attributes_conflict: VersionSelection::UseOurs,
+            ..Default::default()
+        };
+
+        ds2.rebase(&solver).await?;
+        ds2.commit("after conflict", None).await?;
+
+        let atts = ds2.get_node(&path).await.unwrap().user_attributes.unwrap();
+        assert_eq!(
+            atts,
+            UserAttributesSnapshot::Inline(
+                UserAttributes::try_new(br#"{"repo":2}"#).unwrap()
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Test conflict resolution with rebase
+    ///
+    /// Two sessions write user attributes to the same array
+    /// We attempt to recover using [`VersionSelection::UseTheirs`] policy
+    async fn test_conflict_resolution_double_user_atts_edit_with_theirs(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            )
+            .await?;
+        ds1.commit("update array", None).await?;
+
+        // we made one extra random change to the repo, because we'll undo the user attributes
+        // update and we cannot commit an empty change
+        ds2.add_group("/baz".try_into().unwrap()).await?;
+
+        ds2
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
+            )
+            .await?;
+        ds2.commit("update array user atts", None).await.unwrap_err();
+
+        let solver = BasicConflictSolver {
+            on_user_attributes_conflict: VersionSelection::UseTheirs,
+            ..Default::default()
+        };
+
+        ds2.rebase(&solver).await?;
+        ds2.commit("after conflict", None).await?;
+
+        let atts = ds2.get_node(&path).await.unwrap().user_attributes.unwrap();
+        assert_eq!(
+            atts,
+            UserAttributesSnapshot::Inline(
+                UserAttributes::try_new(br#"{"repo":1}"#).unwrap()
+            )
+        );
+
+        ds2.get_node(&"/baz".try_into().unwrap()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Test conflict resolution with rebase
+    ///
+    /// One session deletes an array, the other updates its metadata.
+    /// We attempt to recover using the default [`BasicConflictSolver`]
+    /// Array should still be deleted
+    async fn test_conflict_resolution_delete_of_updated_array(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1.update_array(path.clone(), basic_meta()).await?;
+        ds1.commit("update array", None).await?;
+
+        ds2.delete_array(path.clone()).await?;
+        ds2.commit("delete array", None).await.unwrap_err();
+
+        ds2.rebase(&BasicConflictSolver::default()).await?;
+        ds2.commit("after conflict", None).await?;
+
+        assert!(matches!(
+            ds2.get_node(&path).await,
+            Err(SessionError::NodeNotFound { .. })
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Test conflict resolution with rebase
+    ///
+    /// Verify we can rebase over multiple commits if they are all fast-forwardable.
+    /// We have multiple commits with chunk writes, and then a session has to rebase
+    /// writing to the same chunks.
+    async fn test_conflict_resolution_success_through_multiple_commits(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        // write chunks with repo 1
+        for coord in [0u32, 1, 2] {
+            ds1
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![coord]),
+                    Some(ChunkPayload::Inline("repo 1".into())),
+                )
+                .await?;
+            ds1
+                .commit(
+                    format!("update chunk {}", coord).as_str(),
+                    None,
+                )
+                .await?;
+        }
+
+        // write the same chunks with repo 2
+        for coord in [0u32, 1, 2] {
+            ds2
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![coord]),
+                    Some(ChunkPayload::Inline("repo 2".into())),
+                )
+                .await?;
+        }
+
+        ds2
+            .commit("update chunk on repo 2", None)
+            .await
+            .unwrap_err();
+
+        let solver = BasicConflictSolver {
+            on_chunk_conflict: VersionSelection::UseTheirs,
+            ..Default::default()
+        };
+
+        ds2.rebase(&solver).await?;
+        ds2.commit("after conflict", None).await?;
+        for coord in [0, 1, 2] {
+            let payload = ds2.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?;
+            assert_eq!(payload, Some(ChunkPayload::Inline("repo 1".into())));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Rebase over multiple commits with partial failure
+    ///
+    /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
+    async fn test_conflict_resolution_failure_in_multiple_commits(
+    ) -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1
+            .set_user_attributes(
+                path.clone(),
+                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            )
+            .await?;
+        let non_conflicting_snap =
+            ds1.commit("update user atts", None).await?;
+
+        ds1
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("repo 1".into())),
+            )
+            .await?;
+
+        let conflicting_snap =
+            ds1.commit("update chunk ref", None).await?;
+
+        ds2
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("repo 2".into())),
+            )
+            .await?;
+
+        ds2.commit("update chunk ref", None).await.unwrap_err();
+        // we setup a [`ConflictSolver`]` that can recover from the first but not the second
+        // conflict
+        let solver = BasicConflictSolver {
+            on_chunk_conflict: VersionSelection::Fail,
+            ..Default::default()
+        };
+
+        let err = ds2.rebase(&solver).await.unwrap_err();
+
+        assert!(matches!(
+        err,
+        SessionError::RebaseFailed { snapshot, conflicts}
+            if snapshot == conflicting_snap &&
+            conflicts.len() == 1 &&
+            matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+                        if path == path && chunk_coordinates == &[ChunkIndices(vec![0])].into())
+            ));
+
+        // we were able to rebase one commit but not the second one,
+        // so now the parent is the first commit
+        assert_eq!(ds2.snapshot_id(), &non_conflicting_snap);
+
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod state_machine_test {
+        use crate::format::snapshot::NodeData;
+        use crate::format::Path;
+        use crate::ObjectStorage;
+        use crate::Repository;
+        use futures::Future;
+        // use futures::Future;
+        use proptest::prelude::*;
+        use proptest::sample;
+        use proptest::strategy::{BoxedStrategy, Just};
+        use proptest_state_machine::{
+            prop_state_machine, ReferenceStateMachine, StateMachineTest,
+        };
+        use std::collections::HashMap;
+        use std::fmt::Debug;
+        use std::sync::Arc;
+        use tokio::runtime::Runtime;
+
+        use proptest::test_runner::Config;
+
+        use super::ZarrArrayMetadata;
+        use super::{node_paths, zarr_array_metadata};
+
+        #[derive(Clone, Debug)]
+        enum RepositoryTransition {
+            AddArray(Path, ZarrArrayMetadata),
+            UpdateArray(Path, ZarrArrayMetadata),
+            DeleteArray(Option<Path>),
+            AddGroup(Path),
+            DeleteGroup(Option<Path>),
+        }
+
+        /// An empty type used for the `ReferenceStateMachine` implementation.
+        struct RepositoryStateMachine;
+
+        #[derive(Clone, Default, Debug)]
+        struct RepositoryModel {
+            arrays: HashMap<Path, ZarrArrayMetadata>,
+            groups: Vec<Path>,
+        }
+
+        impl ReferenceStateMachine for RepositoryStateMachine {
+            type State = RepositoryModel;
+            type Transition = RepositoryTransition;
+
+            fn init_state() -> BoxedStrategy<Self::State> {
+                Just(Default::default()).boxed()
+            }
+
+            fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
+                // proptest-state-machine generates the transitions first,
+                // *then* applies the preconditions to decide if that transition is valid.
+                // that means we have to make sure that we are not sampling from
+                // parts of the State that are empty.
+                // i.e. we need to apply a precondition here :/
+                let delete_arrays = {
+                    if !state.arrays.is_empty() {
+                        let array_keys: Vec<Path> =
+                            state.arrays.keys().cloned().collect();
+                        sample::select(array_keys)
+                            .prop_map(|p| RepositoryTransition::DeleteArray(Some(p)))
+                            .boxed()
+                    } else {
+                        Just(RepositoryTransition::DeleteArray(None)).boxed()
+                    }
+                };
+
+                let delete_groups = {
+                    if !state.groups.is_empty() {
+                        sample::select(state.groups.clone())
+                            .prop_map(|p| RepositoryTransition::DeleteGroup(Some(p)))
+                            .boxed()
+                    } else {
+                        Just(RepositoryTransition::DeleteGroup(None)).boxed()
+                    }
+                };
+
+                prop_oneof![
+                    (node_paths(), zarr_array_metadata())
+                        .prop_map(|(a, b)| RepositoryTransition::AddArray(a, b)),
+                    (node_paths(), zarr_array_metadata())
+                        .prop_map(|(a, b)| RepositoryTransition::UpdateArray(a, b)),
+                    delete_arrays,
+                    node_paths().prop_map(RepositoryTransition::AddGroup),
+                    delete_groups,
+                ]
+                .boxed()
+            }
+
+            fn apply(
+                mut state: Self::State,
+                transition: &Self::Transition,
+            ) -> Self::State {
+                match transition {
+                    // Array ops
+                    RepositoryTransition::AddArray(path, metadata) => {
+                        let res = state.arrays.insert(path.clone(), metadata.clone());
+                        assert!(res.is_none());
+                    }
+                    RepositoryTransition::UpdateArray(path, metadata) => {
+                        state
+                            .arrays
+                            .insert(path.clone(), metadata.clone())
+                            .expect("(postcondition) insertion failed");
+                    }
+                    RepositoryTransition::DeleteArray(path) => {
+                        let path = path.clone().unwrap();
+                        state
+                            .arrays
+                            .remove(&path)
+                            .expect("(postcondition) deletion failed");
+                    }
+
+                    // Group ops
+                    RepositoryTransition::AddGroup(path) => {
+                        state.groups.push(path.clone());
+                        // TODO: postcondition
+                    }
+                    RepositoryTransition::DeleteGroup(Some(path)) => {
+                        let index =
+                            state.groups.iter().position(|x| x == path).expect(
+                                "Attempting to delete a non-existent path: {path}",
+                            );
+                        state.groups.swap_remove(index);
+                        state.groups.retain(|group| !group.starts_with(path));
+                        state.arrays.retain(|array, _| !array.starts_with(path));
+                    }
+                    _ => panic!(),
+                }
+                state
+            }
+
+            fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
+                match transition {
+                    RepositoryTransition::AddArray(path, _) => {
+                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    }
+                    RepositoryTransition::UpdateArray(path, _) => {
+                        state.arrays.contains_key(path)
+                    }
+                    RepositoryTransition::DeleteArray(path) => path.is_some(),
+                    RepositoryTransition::AddGroup(path) => {
+                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    }
+                    RepositoryTransition::DeleteGroup(p) => p.is_some(),
+                }
+            }
+        }
+
+        struct TestRepository {
+            repository: Repository,
+            runtime: Runtime,
+        }
+        trait BlockOnUnwrap {
+            fn unwrap<F, T, E>(&self, future: F) -> T
+            where
+                F: Future<Output = Result<T, E>>,
+                E: Debug;
+        }
+        impl BlockOnUnwrap for Runtime {
+            fn unwrap<F, T, E>(&self, future: F) -> T
+            where
+                F: Future<Output = Result<T, E>>,
+                E: Debug,
+            {
+                self.block_on(future).unwrap()
+            }
+        }
+
+        impl StateMachineTest for TestRepository {
+            type SystemUnderTest = Self;
+            type Reference = RepositoryStateMachine;
+
+            fn init_test(
+                _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+            ) -> Self::SystemUnderTest {
+                let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
+                let init_repository =
+                    tokio::runtime::Runtime::new().unwrap().block_on(async {
+                        let storage = Arc::new(storage);
+                        Repository::init(storage, false).await.unwrap()
+                    });
+                TestRepository {
+                    repository: init_repository.build(),
+                    runtime: Runtime::new().unwrap(),
+                }
+            }
+
+            fn apply(
+                mut state: Self::SystemUnderTest,
+                _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+                transition: RepositoryTransition,
+            ) -> Self::SystemUnderTest {
+                let runtime = &state.runtime;
+                let repository = &mut state.repository;
+                match transition {
+                    RepositoryTransition::AddArray(path, metadata) => {
+                        runtime.unwrap(repository.add_array(path, metadata))
+                    }
+                    RepositoryTransition::UpdateArray(path, metadata) => {
+                        runtime.unwrap(repository.update_array(path, metadata))
+                    }
+                    RepositoryTransition::DeleteArray(Some(path)) => {
+                        runtime.unwrap(repository.delete_array(path))
+                    }
+                    RepositoryTransition::AddGroup(path) => {
+                        runtime.unwrap(repository.add_group(path))
+                    }
+                    RepositoryTransition::DeleteGroup(Some(path)) => {
+                        runtime.unwrap(repository.delete_group(path))
+                    }
+                    _ => panic!(),
+                }
+                state
+            }
+
+            fn check_invariants(
+                state: &Self::SystemUnderTest,
+                ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+            ) {
+                let runtime = &state.runtime;
+                for (path, metadata) in ref_state.arrays.iter() {
+                    let node = runtime.unwrap(state.repository.get_array(path));
+                    let actual_metadata = match node.node_data {
+                        NodeData::Array(metadata, _) => Ok(metadata),
+                        _ => Err("foo"),
+                    }
+                    .unwrap();
+                    assert_eq!(metadata, &actual_metadata);
+                }
+
+                for path in ref_state.groups.iter() {
+                    let node = runtime.unwrap(state.repository.get_group(path));
+                    match node.node_data {
+                        NodeData::Group => Ok(()),
+                        _ => Err("foo"),
+                    }
+                    .unwrap();
+                }
+            }
+        }
+
+        prop_state_machine! {
+            #![proptest_config(Config {
+            verbose: 0,
+            .. Config::default()
+        })]
+
+        #[test]
+        fn run_repository_state_machine_test(
+            // This is a macro's keyword - only `sequential` is currently supported.
+            sequential
+            // The number of transitions to be generated for each case. This can
+            // be a single numerical value or a range as in here.
+            1..20
+            // Macro's boilerplate to separate the following identifier.
+            =>
+            // The name of the type that implements `StateMachineTest`.
+            TestRepository
+        );
+        }
     }
 }
