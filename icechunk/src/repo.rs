@@ -3,17 +3,18 @@ use std::{iter, sync::Arc};
 use futures::Stream;
 use itertools::Either;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
-    format::{snapshot::{Snapshot, SnapshotMetadata}, SnapshotId},
+    format::{snapshot::{Snapshot, SnapshotMetadata}, IcechunkFormatError, SnapshotId},
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags,
         update_branch, BranchVersion, Ref, RefError,
     },
-    repository::{raise_if_invalid_snapshot_id, RepositoryError, RepositoryResult},
+    repository::raise_if_invalid_snapshot_id,
     session::Session,
     storage::virtual_ref::VirtualChunkResolver,
-    MemCachingStorage, Storage,
+    MemCachingStorage, Storage, StorageError,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,6 +45,30 @@ pub enum VersionInfo {
     BranchTipRef(String),
 }
 
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RepositoryError {
+    #[error("error contacting storage {0}")]
+    StorageError(#[from] StorageError),
+    #[error("snapshot not found: `{id}`")]
+    SnapshotNotFound { id: SnapshotId },
+    #[error("error in icechunk file")]
+    FormatError(#[from] IcechunkFormatError),
+    #[error("ref error: `{0}`")]
+    Ref(#[from] RefError),
+    #[error("tag error: `{0}`")]
+    Tag(String),
+    #[error("the repository has been initialized already (default branch exists)")]
+    AlreadyInitialized,
+    #[error("error in repository serialization `{0}`")]
+    SerializationError(#[from] rmp_serde::encode::Error),
+    #[error("error in repository deserialization `{0}`")]
+    DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
+    Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+}
+
+pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {

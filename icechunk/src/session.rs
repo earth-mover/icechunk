@@ -14,14 +14,15 @@ use thiserror::Error;
 
 use crate::{
     change_set::ChangeSet,
-    conflicts::{ConflictResolution, ConflictSolver},
+    conflicts::{Conflict, ConflictResolution, ConflictSolver},
     format::{
         manifest::{
-            ChunkInfo, ChunkRef, Manifest, ManifestExtents, ManifestRef, VirtualChunkRef,
+            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
+            VirtualChunkRef, VirtualReferenceError,
         },
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, Snapshot,
-            SnapshotProperties, UserAttributesSnapshot,
+            SnapshotProperties, UserAttributesSnapshot, ZarrArrayMetadata,
         },
         transaction_log::TransactionLog,
         ByteRange, ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path,
@@ -29,11 +30,10 @@ use crate::{
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError},
-    repo::RepositoryConfig,
-    repository::{ChunkPayload, RepositoryError, RepositoryResult, ZarrArrayMetadata},
+    repo::{RepositoryConfig, RepositoryError},
     storage::virtual_ref::{construct_valid_byte_range, VirtualChunkResolver},
     zarr::ObjectId,
-    Storage,
+    Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -43,6 +43,38 @@ pub enum SessionError {
     ReadOnlySession,
     #[error("Repository error: {0}")]
     RepositoryError(#[from] RepositoryError),
+    #[error("error contacting storage {0}")]
+    StorageError(#[from] StorageError),
+    #[error("snapshot not found: `{id}`")]
+    SnapshotNotFound { id: SnapshotId },
+    #[error("error in icechunk file")]
+    FormatError(#[from] IcechunkFormatError),
+    #[error("node not found at `{path}`: {message}")]
+    NodeNotFound { path: Path, message: String },
+    #[error("there is not an array at `{node:?}`: {message}")]
+    NotAnArray { node: NodeSnapshot, message: String },
+    #[error("there is not a group at `{node:?}`: {message}")]
+    NotAGroup { node: NodeSnapshot, message: String },
+    #[error("node already exists at `{node:?}`: {message}")]
+    AlreadyExists { node: NodeSnapshot, message: String },
+    #[error("cannot commit, no changes made to the session")]
+    NoChangesToCommit,
+    #[error("unknown flush error")]
+    OtherFlushError,
+    #[error("ref error: `{0}`")]
+    Ref(#[from] RefError),
+    #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
+    Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+    #[error("cannot rebase snapshot {snapshot} on top of the branch")]
+    RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
+    #[error("error when handling virtual reference {0}")]
+    VirtualReferenceError(#[from] VirtualReferenceError),
+    #[error("error in session serialization `{0}`")]
+    SerializationError(#[from] rmp_serde::encode::Error),
+    #[error("error in session deserialization `{0}`")]
+    DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
+    ConflictingPathNotFound(NodeId),
 }
 
 pub type SessionResult<T> = Result<T, SessionError>;
@@ -95,15 +127,15 @@ impl Session {
         self.branch_name.is_none()
     }
 
-    pub async fn get_node(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
+    pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         get_node(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
     }
 
-    pub async fn get_array(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
+    pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         get_array(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
     }
 
-    pub async fn get_group(&self, path: &Path) -> RepositoryResult<NodeSnapshot> {
+    pub async fn get_group(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         get_group(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
     }
 
@@ -111,7 +143,7 @@ impl Session {
         &self,
         path: &Path,
         coords: &ChunkIndices,
-    ) -> RepositoryResult<Option<ChunkPayload>> {
+    ) -> SessionResult<Option<ChunkPayload>> {
         get_chunk_ref(
             self.storage.as_ref(),
             &self.snapshot_id,
@@ -151,9 +183,8 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> RepositoryResult<
-        Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>,
-    > {
+    ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
+    {
         get_chunk_reader(
             &self.storage,
             &self.virtual_resolver,
@@ -171,22 +202,21 @@ impl Session {
         node: NodeId,
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
-    ) -> RepositoryResult<Option<ChunkPayload>> {
+    ) -> SessionResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
         get_old_chunk(self.storage.as_ref(), node, manifests, coords).await
     }
 
     pub async fn list_nodes(
         &self,
-    ) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + '_> {
+    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
         updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
             .await
     }
 
     pub async fn all_chunks(
         &self,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + '_>
-    {
+    ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
         all_chunks(self.storage.as_ref(), &self.change_set, &self.snapshot_id).await
     }
 
@@ -199,12 +229,12 @@ impl Session {
         }
 
         match self.get_node(&path).await {
-            Err(RepositoryError::NodeNotFound { .. }) => {
+            Err(SessionError::NodeNotFound { .. }) => {
                 let id = NodeId::random();
                 self.change_set.add_group(path.clone(), id);
                 Ok(())
             }
-            Ok(node) => Err(RepositoryError::AlreadyExists {
+            Ok(node) => Err(SessionError::AlreadyExists {
                 node,
                 message: "trying to add group".to_string(),
             }),
@@ -226,7 +256,7 @@ impl Session {
             Ok(node) => {
                 self.change_set.delete_group(node.path, &node.id);
             }
-            Err(RepositoryError::NodeNotFound { .. }) => {}
+            Err(SessionError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
         }
         Ok(())
@@ -245,12 +275,12 @@ impl Session {
         }
 
         match self.get_node(&path).await {
-            Err(RepositoryError::NodeNotFound { .. }) => {
+            Err(SessionError::NodeNotFound { .. }) => {
                 let id = NodeId::random();
                 self.change_set.add_array(path, id, metadata);
                 Ok(())
             }
-            Ok(node) => Err(RepositoryError::AlreadyExists {
+            Ok(node) => Err(SessionError::AlreadyExists {
                 node,
                 message: "trying to add array".to_string(),
             }),
@@ -289,7 +319,7 @@ impl Session {
             Ok(node) => {
                 self.change_set.delete_array(node.path, &node.id);
             }
-            Err(RepositoryError::NodeNotFound { .. }) => {}
+            Err(SessionError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
         }
         Ok(())
@@ -348,7 +378,7 @@ impl Session {
         impl FnOnce(
             Bytes,
         )
-            -> Pin<Box<dyn Future<Output = RepositoryResult<ChunkPayload>> + Send>>,
+            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>,
     > {
         if self.read_only() {
             return Err(SessionError::ReadOnlySession);
@@ -434,7 +464,7 @@ impl Session {
             Ok(ref_data) => {
                 // we can detect there will be a conflict before generating the new snapshot
                 if ref_data.snapshot != self.snapshot_id {
-                    Err(RepositoryError::Conflict {
+                    Err(SessionError::Conflict {
                         expected_parent: Some(self.snapshot_id.clone()),
                         actual_parent: Some(ref_data.snapshot.clone()),
                     })
@@ -461,7 +491,7 @@ impl Session {
     ///
     /// When [`Repository::commit`] method is called, the system validates that the tip of the
     /// passed branch is exactly the same as the `snapshot_id` for the current session. If that
-    /// is not the case, the commit operation fails with [`RepositoryError::Conflict`].
+    /// is not the case, the commit operation fails with [`SessionError::Conflict`].
     ///
     /// In that situation, the user has two options:
     /// 1. Abort the session and start a new one with using the new branch tip as a parent.
@@ -523,7 +553,7 @@ impl Session {
         &mut self,
         solver: &dyn ConflictSolver,
         update_branch_name: &str,
-    ) -> RepositoryResult<()> {
+    ) -> SessionResult<()> {
         let ref_data =
             fetch_branch_tip(self.storage.as_ref(), update_branch_name).await?;
 
@@ -564,7 +594,7 @@ impl Session {
                     }
                     ConflictResolution::Unsolvable { reason, unmodified } => {
                         self.change_set = unmodified;
-                        return Err(RepositoryError::RebaseFailed {
+                        return Err(SessionError::RebaseFailed {
                             snapshot: snap_id,
                             conflicts: reason,
                         });
@@ -582,7 +612,7 @@ pub async fn updated_nodes<'a>(
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
     manifest_id: Option<&'a ManifestId>,
-) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
     Ok(updated_existing_nodes(storage, change_set, parent_id, manifest_id)
         .await?
         .chain(change_set.new_nodes_iterator(manifest_id)))
@@ -593,7 +623,7 @@ async fn updated_existing_nodes<'a>(
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
     manifest_id: Option<&'a ManifestId>,
-) -> RepositoryResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
     let manifest_refs = manifest_id.map(|mid| {
         vec![ManifestRef { object_id: mid.clone(), extents: ManifestExtents(vec![]) }]
     });
@@ -616,10 +646,10 @@ async fn get_node<'a>(
     snapshot_id: &SnapshotId,
     change_set: &'a ChangeSet,
     path: &Path,
-) -> RepositoryResult<NodeSnapshot> {
+) -> SessionResult<NodeSnapshot> {
     // We need to look for nodes in self.change_set and the snapshot file
     if change_set.is_deleted(path) {
-        return Err(RepositoryError::NodeNotFound {
+        return Err(SessionError::NodeNotFound {
             path: path.clone(),
             message: "getting node".to_string(),
         });
@@ -629,7 +659,7 @@ async fn get_node<'a>(
         None => {
             let node = get_existing_node(storage, change_set, snapshot_id, path).await?;
             if change_set.is_deleted(&node.path) {
-                Err(RepositoryError::NodeNotFound {
+                Err(SessionError::NodeNotFound {
                     path: path.clone(),
                     message: "getting node".to_string(),
                 })
@@ -645,18 +675,18 @@ async fn get_existing_node<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
-) -> RepositoryResult<NodeSnapshot> {
+) -> SessionResult<NodeSnapshot> {
     // An existing node is one that is present in a Snapshot file on storage
     let snapshot = storage.fetch_snapshot(snapshot_id).await?;
 
     let node = snapshot.get_node(path).map_err(|err| match err {
         // A missing node here is not really a format error, so we need to
         // generate the correct error for repositories
-        IcechunkFormatError::NodeNotFound { path } => RepositoryError::NodeNotFound {
+        IcechunkFormatError::NodeNotFound { path } => SessionError::NodeNotFound {
             path,
             message: "existing node not found".to_string(),
         },
-        err => RepositoryError::FormatError(err),
+        err => SessionError::FormatError(err),
     })?;
     let session_atts = change_set
         .get_user_attributes(&node.id)
@@ -684,7 +714,7 @@ pub async fn all_chunks<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
-) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + 'a> {
+) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let existing_array_chunks =
         updated_chunk_iterator(storage, change_set, snapshot_id).await?;
     let new_array_chunks =
@@ -697,7 +727,7 @@ async fn updated_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
-) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + 'a> {
+) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = storage.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
     let res = nodes.then(move |node| async move {
@@ -715,7 +745,7 @@ async fn node_chunk_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
-) -> impl Stream<Item = RepositoryResult<ChunkInfo>> + 'a {
+) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match get_node(storage, snapshot_id, change_set, path).await {
         Ok(node) => futures::future::Either::Left(
             verified_node_chunk_iterator(storage, change_set, node).await,
@@ -729,7 +759,7 @@ async fn verified_node_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
     node: NodeSnapshot,
-) -> impl Stream<Item = RepositoryResult<ChunkInfo>> + 'a {
+) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
         NodeData::Array(_, manifests) => {
@@ -790,7 +820,7 @@ async fn verified_node_chunk_iterator<'a>(
                                     // single error value.
                                     Err(err) => futures::future::Either::Right(
                                         futures::stream::once(ready(Err(
-                                            RepositoryError::StorageError(err),
+                                            SessionError::StorageError(err),
                                         ))),
                                     ),
                                 }
@@ -806,7 +836,7 @@ async fn verified_node_chunk_iterator<'a>(
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
-) -> RepositoryResult<ChunkPayload> {
+) -> SessionResult<ChunkPayload> {
     let new_id = ObjectId::random();
     storage.write_chunk(new_id.clone(), data.clone()).await?;
     Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
@@ -822,9 +852,9 @@ async fn flush(
     parent_id: &SnapshotId,
     message: &str,
     properties: SnapshotProperties,
-) -> RepositoryResult<SnapshotId> {
+) -> SessionResult<SnapshotId> {
     if change_set.is_empty() {
-        return Err(RepositoryError::NoChangesToCommit);
+        return Err(SessionError::NoChangesToCommit);
     }
 
     let chunks = all_chunks(storage, change_set, parent_id)
@@ -878,7 +908,7 @@ async fn get_old_chunk(
     node: NodeId,
     manifests: &[ManifestRef],
     coords: &ChunkIndices,
-) -> RepositoryResult<Option<ChunkPayload>> {
+) -> SessionResult<Option<ChunkPayload>> {
     // FIXME: use manifest extents
     for manifest in manifests {
         let manifest_structure = storage.fetch_manifests(&manifest.object_id).await?;
@@ -899,18 +929,27 @@ async fn get_chunk_ref(
     change_set: &ChangeSet,
     path: &Path,
     coords: &ChunkIndices,
-) -> RepositoryResult<Option<ChunkPayload>> {
+) -> SessionResult<Option<ChunkPayload>> {
     let node = get_node(storage, snapshot_id, change_set, path).await?;
     // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
     // get_array should return the array data, not a node
     match node.node_data {
-        NodeData::Group => Err(RepositoryError::NotAnArray {
+        NodeData::Group => Err(SessionError::NotAnArray {
             node,
             message: "getting chunk reference".to_string(),
         }),
         NodeData::Array(_, manifests) => {
             get_old_chunk(storage, node.id, manifests.as_slice(), coords).await
         }
+    }
+}
+
+pub async fn get_chunk(
+    reader: Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
+) -> SessionResult<Option<Bytes>> {
+    match reader {
+        Some(reader) => Ok(Some(reader.await?)),
+        None => Ok(None),
     }
 }
 
@@ -946,8 +985,7 @@ async fn get_chunk_reader(
     path: &Path,
     coords: &ChunkIndices,
     byte_range: &ByteRange,
-) -> RepositoryResult<Option<Pin<Box<dyn Future<Output = RepositoryResult<Bytes>> + Send>>>>
-{
+) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>> {
     match get_chunk_ref(storage.as_ref(), snapshot_id, change_set, path, coords).await? {
         Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
             let storage = Arc::clone(storage);
@@ -985,10 +1023,10 @@ async fn get_array(
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
     path: &Path,
-) -> RepositoryResult<NodeSnapshot> {
+) -> SessionResult<NodeSnapshot> {
     match get_node(storage, snapshot_id, change_set, path).await {
         res @ Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => res,
-        Ok(node @ NodeSnapshot { .. }) => Err(RepositoryError::NotAnArray {
+        Ok(node @ NodeSnapshot { .. }) => Err(SessionError::NotAnArray {
             node,
             message: "getting an array".to_string(),
         }),
@@ -1001,13 +1039,12 @@ async fn get_group(
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
     path: &Path,
-) -> RepositoryResult<NodeSnapshot> {
+) -> SessionResult<NodeSnapshot> {
     match get_node(storage, snapshot_id, change_set, path).await {
         res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
-        Ok(node @ NodeSnapshot { .. }) => Err(RepositoryError::NotAGroup {
-            node,
-            message: "getting a group".to_string(),
-        }),
+        Ok(node @ NodeSnapshot { .. }) => {
+            Err(SessionError::NotAGroup { node, message: "getting a group".to_string() })
+        }
         other => other,
     }
 }
@@ -1020,7 +1057,7 @@ async fn do_commit(
     change_set: &ChangeSet,
     message: &str,
     properties: Option<SnapshotProperties>,
-) -> RepositoryResult<SnapshotId> {
+) -> SessionResult<SnapshotId> {
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let new_snapshot =
@@ -1037,7 +1074,7 @@ async fn do_commit(
     {
         Ok(_) => Ok(new_snapshot),
         Err(RefError::Conflict { expected_parent, actual_parent }) => {
-            Err(RepositoryError::Conflict { expected_parent, actual_parent })
+            Err(SessionError::Conflict { expected_parent, actual_parent })
         }
         Err(err) => Err(err.into()),
     }?;

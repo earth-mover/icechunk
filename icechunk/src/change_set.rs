@@ -9,12 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
-        manifest::{ChunkInfo, ManifestExtents, ManifestRef},
-        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot},
-        ManifestId, NodeId,
+        manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestRef}, snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata}, ChunkIndices, ManifestId, NodeId, Path
     },
-    metadata::UserAttributes,
-    repository::{ChunkIndices, ChunkPayload, Path, RepositoryResult, ZarrArrayMetadata},
+    metadata::UserAttributes, session::SessionResult,
 };
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -319,14 +316,14 @@ impl ChangeSet {
     /// Serialize this ChangeSet
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
-    pub fn export_to_bytes(&self) -> RepositoryResult<Vec<u8>> {
+    pub fn export_to_bytes(&self) -> SessionResult<Vec<u8>> {
         Ok(rmp_serde::to_vec(self)?)
     }
 
     /// Deserialize a ChangeSet
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
-    pub fn import_from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
+    pub fn import_from_bytes(bytes: &[u8]) -> SessionResult<Self> {
         Ok(rmp_serde::from_slice(bytes)?)
     }
 

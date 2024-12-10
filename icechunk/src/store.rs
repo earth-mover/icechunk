@@ -20,14 +20,13 @@ use tokio::sync::RwLock;
 
 use crate::{
     format::{
-        manifest::VirtualChunkRef,
-        snapshot::{NodeData, UserAttributesSnapshot},
+        manifest::{ChunkPayload, VirtualChunkRef},
+        snapshot::{NodeData, UserAttributesSnapshot, ZarrArrayMetadata},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
     }, metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, StorageTransformer, UserAttributes,
-    }, refs::RefError, repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata}, session::{Session, SessionError},
-    utils::serde::arc_rwlock_serde,
+    }, refs::RefError, repo::RepositoryError, session::{get_chunk, Session, SessionError}, utils::serde::arc_rwlock_serde
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -313,11 +312,11 @@ impl Store {
                 let node = guard.get_node(&node_path).await;
 
                 // When there is no node at the given key, we don't consider it an error, instead we just do nothing
-                if let Err(RepositoryError::NodeNotFound { path: _, message: _ }) = node {
+                if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
                     return Ok(());
                 };
 
-                let node = node.map_err(StoreError::RepositoryError)?;
+                let node = node.map_err(StoreError::SessionError)?;
                 match node.node_data {
                     NodeData::Array(_, _) => Ok(guard.delete_array(node_path).await?),
                     NodeData::Group => Ok(guard.delete_group(node_path).await?),
@@ -327,9 +326,7 @@ impl Store {
                 let mut guard = self.session.write().await;
                 match guard.set_chunk_ref(node_path, coords, None).await {
                     Ok(_) => Ok(()),
-                    Err(SessionError::RepositoryError(
-                        RepositoryError::NodeNotFound { path: _, message: _ },
-                    )) => {
+                    Err(SessionError::NodeNotFound { path: _, message: _ }) => {
                         // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
                         Ok(())
                     }
@@ -510,7 +507,7 @@ impl Store {
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
             let guard = self.session.read().await;
-            for await maybe_path_chunk in guard.all_chunks().await.map_err(StoreError::RepositoryError)? {
+            for await maybe_path_chunk in guard.all_chunks().await.map_err(StoreError::SessionError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
                     Ok((path,chunk)) => {
@@ -632,7 +629,7 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
     match get_key(key, &ByteRange::ALL, session).await {
         Ok(_) => Ok(true),
         Err(StoreError::NotFound(_)) => Ok(false),
-        Err(StoreError::RepositoryError(RepositoryError::NodeNotFound {
+        Err(StoreError::SessionError(SessionError::NodeNotFound {
             path: _,
             message: _,
         })) => Ok(false),

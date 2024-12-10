@@ -123,48 +123,7 @@ impl RepositoryBuilder {
     }
 }
 
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum RepositoryError {
-    #[error("error contacting storage {0}")]
-    StorageError(#[from] StorageError),
-    #[error("snapshot not found: `{id}`")]
-    SnapshotNotFound { id: SnapshotId },
-    #[error("error in icechunk file")]
-    FormatError(#[from] IcechunkFormatError),
-    #[error("node not found at `{path}`: {message}")]
-    NodeNotFound { path: Path, message: String },
-    #[error("there is not an array at `{node:?}`: {message}")]
-    NotAnArray { node: NodeSnapshot, message: String },
-    #[error("there is not a group at `{node:?}`: {message}")]
-    NotAGroup { node: NodeSnapshot, message: String },
-    #[error("node already exists at `{node:?}`: {message}")]
-    AlreadyExists { node: NodeSnapshot, message: String },
-    #[error("cannot commit, no changes made to the repository")]
-    NoChangesToCommit,
-    #[error("unknown flush error")]
-    OtherFlushError,
-    #[error("ref error: `{0}`")]
-    Ref(#[from] RefError),
-    #[error("tag error: `{0}`")]
-    Tag(String),
-    #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
-    Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
-    #[error("cannot rebase snapshot {snapshot} on top of the branch")]
-    RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
-    #[error("the repository has been initialized already (default branch exists)")]
-    AlreadyInitialized,
-    #[error("error when handling virtual reference {0}")]
-    VirtualReferenceError(#[from] VirtualReferenceError),
-    #[error("error in repository serialization `{0}`")]
-    SerializationError(#[from] rmp_serde::encode::Error),
-    #[error("error in repository deserialization `{0}`")]
-    DeserializationError(#[from] rmp_serde::decode::Error),
-    #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
-    ConflictingPathNotFound(NodeId),
-}
 
-pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
 // FIXME: what do we want to do with implicit groups?
 //
