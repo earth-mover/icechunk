@@ -8,7 +8,6 @@ use aws_sdk_s3::{
     primitives::ByteStreamError,
 };
 use chrono::{DateTime, Utc};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use std::{ffi::OsString, sync::Arc};
@@ -85,7 +84,8 @@ const TRANSACTION_PREFIX: &str = "transactions/";
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage<'de>: fmt::Debug + private::Sealed + Serialize + Deserialize<'de> {
+#[typetag::serde(tag = "type")]
+pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,

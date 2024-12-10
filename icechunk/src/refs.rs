@@ -360,7 +360,8 @@ mod tests {
         mut f: F,
     ) -> ((Arc<ObjectStorage>, R), (Arc<ObjectStorage>, R, TempDir)) {
         let prefix: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 10);
-        let mem_storage = Arc::new(ObjectStorage::new_in_memory_store(Some(prefix)));
+        let mem_storage =
+            Arc::new(ObjectStorage::new_in_memory_store(Some(prefix)).unwrap());
         let res1 = f(Arc::clone(&mem_storage) as Arc<dyn Storage + Send + Sync>).await;
 
         let dir = tempdir().expect("cannot create temp dir");

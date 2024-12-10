@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     format::{snapshot::{Snapshot, SnapshotMetadata}, SnapshotId},
     refs::{
-        create_tag, fetch_branch_tip, fetch_ref, fetch_tag, list_branches, list_tags,
+        create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags,
         update_branch, BranchVersion, Ref, RefError,
     },
     repository::{raise_if_invalid_snapshot_id, RepositoryError, RepositoryResult},

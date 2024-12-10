@@ -282,7 +282,8 @@ impl<'de> Deserialize<'de> for S3Storage {
 }
 
 #[async_trait]
-impl Storage<'_> for S3Storage {
+#[typetag::serde]
+impl Storage for S3Storage {
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>> {
         let key = self.get_snapshot_path(id)?;
         let bytes = self.get_object(key.as_str()).await?;

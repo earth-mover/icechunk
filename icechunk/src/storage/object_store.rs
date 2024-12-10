@@ -1,6 +1,8 @@
 use crate::{
     format::{
-        attributes::AttributesTable, format_constants, manifest::Manifest, snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, Path, SnapshotId
+        attributes::AttributesTable, format_constants, manifest::Manifest,
+        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
+        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
     },
     private,
 };
@@ -11,12 +13,10 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, parse_url, path::Path as ObjectPath,
-    Attribute, AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutPayload,
+    parse_url, path::Path as ObjectPath, Attribute, AttributeValue, Attributes,
+    GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
 };
 use serde::{Deserialize, Serialize};
-use url::Url;
 use std::{
     fs::create_dir_all,
     future::ready,
@@ -27,6 +27,7 @@ use std::{
         Arc,
     },
 };
+use url::Url;
 
 use super::{
     ListInfo, Storage, StorageError, StorageResult, CHUNK_PREFIX, MANIFEST_PREFIX,
@@ -81,11 +82,14 @@ impl ObjectStorage {
         create_dir_all(prefix).map_err(|e| e.to_string())?;
         let prefix = prefix.display().to_string();
         let url = format!("file://{prefix}");
-       Ok(Self::from_url(&url, vec![])?)
+        Ok(Self::from_url(&url, vec![])?)
     }
 
     /// Create an ObjectStore client from a URL and provided options
-    pub fn from_url(url: &str, options: Vec<(String, String)>) -> Result<ObjectStorage, String> {
+    pub fn from_url(
+        url: &str,
+        options: Vec<(String, String)>,
+    ) -> Result<ObjectStorage, String> {
         let url: Url = Url::parse(url).map_err(|e| e.to_string())?;
         let (store, path) = parse_url(&url).map_err(|e| e.to_string())?;
         let store: Arc<dyn ObjectStore> = Arc::from(store);
@@ -158,7 +162,12 @@ impl ObjectStorage {
 
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
         // ObjectPath knows how to deal with empty path parts: bar//foo
-        ObjectPath::from(format!("{}/{}/{}", self.config.prefix.as_str(), REF_PREFIX, ref_key))
+        ObjectPath::from(format!(
+            "{}/{}/{}",
+            self.config.prefix.as_str(),
+            REF_PREFIX,
+            ref_key
+        ))
     }
 
     async fn do_ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
@@ -192,18 +201,20 @@ impl ObjectStorage {
 
 impl private::Sealed for ObjectStorage {}
 
-impl <'de> serde::Deserialize<'de> for ObjectStorage {
+impl<'de> serde::Deserialize<'de> for ObjectStorage {
     fn deserialize<D>(deserializer: D) -> Result<ObjectStorage, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let config = ObjectStorageConfig::deserialize(deserializer)?;
-        ObjectStorage::from_url(&config.url, config.options).map_err(serde::de::Error::custom)
+        ObjectStorage::from_url(&config.url, config.options)
+            .map_err(serde::de::Error::custom)
     }
 }
 
 #[async_trait]
-impl Storage<'_> for ObjectStorage {
+#[typetag::serde]
+impl Storage for ObjectStorage {
     async fn fetch_snapshot(
         &self,
         id: &SnapshotId,
@@ -433,11 +444,7 @@ impl Storage<'_> for ObjectStorage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.ref_key(ref_key);
-        let mode = if overwrite_refs {
-            PutMode::Overwrite
-        } else {
-            PutMode::Create
-        };
+        let mode = if overwrite_refs { PutMode::Overwrite } else { PutMode::Create };
         let opts = PutOptions { mode, ..PutOptions::default() };
 
         self.store
@@ -456,7 +463,8 @@ impl Storage<'_> for ObjectStorage {
         &'a self,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let prefix = ObjectPath::from(format!("{}/{}", self.config.prefix.as_str(), prefix));
+        let prefix =
+            ObjectPath::from(format!("{}/{}", self.config.prefix.as_str(), prefix));
         let stream = self
             .store
             .list(Some(&prefix))

@@ -3,7 +3,6 @@ use std::{
     fmt::Display,
     iter,
     num::NonZeroU64,
-    ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -122,7 +121,7 @@ impl Store {
     }
 
     pub async fn clear(&self) -> StoreResult<()> {
-        let mut guard = self.session.write().await.clear().await?;
+        self.session.write().await.clear().await?;
         Ok(())
     }
 
