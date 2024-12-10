@@ -29,10 +29,10 @@ use crate::{
     },
     refs::{update_branch, BranchVersion, Ref, RefError},
     repository::{
-        get_chunk, raise_if_invalid_snapshot_id, ArrayShape, ChunkIndices,
-        ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType, DimensionNames,
-        FillValue, Path, RepositoryError, RepositoryResult, StorageTransformer,
-        UserAttributes, ZarrArrayMetadata,
+        get_chunk, is_prefix_match, raise_if_invalid_snapshot_id, ArrayShape,
+        ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
+        DimensionNames, FillValue, Path, RepositoryError, RepositoryResult,
+        StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
     storage::{
         s3::{S3Config, S3Storage},
@@ -300,20 +300,6 @@ pub enum StoreError {
     UncommittedChanges,
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
-}
-
-fn is_prefix_match(key: &str, prefix: &str) -> bool {
-    match key.strip_prefix(prefix) {
-        None => false,
-        Some(rest) => {
-            // we have a few cases
-            prefix.is_empty()   // if prefix was empty anything matches
-                || rest.is_empty()  // if stripping prefix left empty we have a match
-                || rest.starts_with('/') // next component so we match
-                                         // what we don't include is other matches,
-                                         // we want to catch prefix/foo but not prefix-foo
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -925,10 +911,10 @@ impl Store {
             let repository = Arc::clone(&self.repository).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in  repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
+            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
-                    Ok((path,chunk)) => {
+                    Ok((path, chunk)) => {
                         let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
                         if is_prefix_match(&chunk_key, prefix) {
                             yield chunk_key;

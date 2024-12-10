@@ -355,8 +355,22 @@ impl Repository {
     /// Deletes of non existing groups will succeed.
     pub async fn delete_group(&mut self, path: Path) -> RepositoryResult<()> {
         match self.get_group(&path).await {
-            Ok(node) => {
-                self.change_set.delete_group(node.path, &node.id);
+            Ok(parent) => {
+                let nodes_iter: Vec<NodeSnapshot> = self
+                    .list_nodes()
+                    .await?
+                    .filter(|node| node.path.starts_with(&parent.path))
+                    .collect();
+                for node in nodes_iter {
+                    match node.node_type() {
+                        NodeType::Group => {
+                            self.change_set.delete_group(node.path, &node.id)
+                        }
+                        NodeType::Array => {
+                            self.change_set.delete_array(node.path, &node.id)
+                        }
+                    }
+                }
             }
             Err(RepositoryError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
@@ -597,6 +611,7 @@ impl Repository {
     }
 
     pub async fn clear(&mut self) -> RepositoryResult<()> {
+        // TODO: can this be a delete_group("/") instead?
         let to_delete: Vec<(NodeType, Path)> =
             self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
 
@@ -909,6 +924,22 @@ impl From<Repository> for ChangeSet {
     }
 }
 
+pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
+    let tomatch =
+        if prefix != String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
+    match tomatch {
+        None => false,
+        Some(rest) => {
+            // we have a few cases
+            prefix.is_empty()   // if prefix was empty anything matches
+                || rest.is_empty()  // if stripping prefix left empty we have a match
+                || rest.starts_with('/') // next component so we match
+                                         // what we don't include is other matches,
+                                         // we want to catch prefix/foo but not prefix-foo
+        }
+    }
+}
+
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
@@ -931,6 +962,7 @@ pub async fn get_chunk(
     }
 }
 
+/// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
@@ -954,6 +986,8 @@ async fn updated_existing_nodes<'a>(
     Ok(updated_nodes)
 }
 
+/// Yields nodes with the snapshot, applying any relevant updates in the changeset,
+/// *and* new nodes in the changeset
 async fn updated_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
@@ -971,18 +1005,11 @@ async fn get_node<'a>(
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> RepositoryResult<NodeSnapshot> {
-    // We need to look for nodes in self.change_set and the snapshot file
-    if change_set.is_deleted(path) {
-        return Err(RepositoryError::NodeNotFound {
-            path: path.clone(),
-            message: "getting node".to_string(),
-        });
-    }
     match change_set.get_new_node(path) {
         Some(node) => Ok(node),
         None => {
             let node = get_existing_node(storage, change_set, snapshot_id, path).await?;
-            if change_set.is_deleted(&node.path) {
+            if change_set.is_deleted(&node.path, &node.id) {
                 Err(RepositoryError::NodeNotFound {
                     path: path.clone(),
                     message: "getting node".to_string(),
@@ -2504,10 +2531,11 @@ mod tests {
         repo1.update_array(path.clone(), basic_meta()).await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update array", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
@@ -2531,10 +2559,11 @@ mod tests {
             .await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update user attributes", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
@@ -2559,10 +2588,11 @@ mod tests {
             .await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update chunks", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_array(path.clone()).await?;
         repo2.commit("main", "delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
@@ -2586,10 +2616,11 @@ mod tests {
             .await?;
         repo1.commit(Ref::DEFAULT_BRANCH, "update user attributes", None).await?;
 
+        let node = repo2.get_node(&path).await.unwrap();
         repo2.delete_group(path.clone()).await?;
         repo2.commit("main", "delete group", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedGroup(path),
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
             repo2.rebase(&ConflictDetector, "main").await,
         );
         Ok(())
