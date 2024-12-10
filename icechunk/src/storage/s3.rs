@@ -10,11 +10,14 @@ use std::{
 
 use async_stream::try_stream;
 use async_trait::async_trait;
-use aws_config::{meta::region::RegionProviderChain, AppName, BehaviorVersion};
+use aws_config::{
+    meta::region::RegionProviderChain, retry::ProvideErrorKind, AppName, BehaviorVersion,
+};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{
     config::{Builder, Region},
-    error::ProvideErrorMetadata,
+    error::SdkError,
+    operation::put_object::PutObjectError,
     primitives::ByteStream,
     types::{Delete, Object, ObjectIdentifier},
     Client,
@@ -39,8 +42,8 @@ use crate::{
 };
 
 use super::{
-    ListInfo, StorageResult, CHUNK_PREFIX, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
-    TRANSACTION_PREFIX,
+    ETag, ListInfo, StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX,
+    REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug)]
@@ -144,6 +147,10 @@ impl S3Storage {
     ) -> StorageResult<String> {
         // we serialize the url using crockford
         self.get_path_str(file_prefix, id.to_string().as_str())
+    }
+
+    fn get_config_path(&self) -> StorageResult<String> {
+        self.get_path_str("", CONFIG_PATH)
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> StorageResult<String> {
@@ -265,6 +272,76 @@ impl private::Sealed for S3Storage {}
 
 #[async_trait]
 impl Storage for S3Storage {
+    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+        let key = self.get_config_path()?;
+        let res =
+            self.client.get_object().bucket(self.bucket.clone()).key(key).send().await;
+
+        match res {
+            Ok(output) => match output.e_tag {
+                Some(etag) => Ok(Some((output.body.collect().await?.into_bytes(), etag))),
+                None => Err(StorageError::Other("No ETag found for config".to_string())),
+            },
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(e) if e.is_no_such_key() => Ok(None),
+                _ => Err(sdk_err.into()),
+            },
+        }
+    }
+
+    async fn update_config(
+        &self,
+        config: Bytes,
+        etag: Option<&str>,
+    ) -> StorageResult<ETag> {
+        let key = self.get_config_path()?;
+        let mut req = self
+            .client
+            .put_object()
+            .bucket(self.bucket.clone())
+            .key(key)
+            .content_type("application/yaml")
+            .body(config.into());
+
+        if let Some(etag) = etag {
+            req = req.if_match(etag)
+        } else {
+            req = req.if_none_match("*")
+        }
+
+        let res = req.send().await;
+
+        match res {
+            Ok(out) => {
+                let etag = out.e_tag().ok_or(StorageError::Other(
+                    "Config object should have an etag".to_string(),
+                ))?;
+                Ok(etag.to_string())
+            }
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                if err.err().meta().code() == Some("PreconditionFailed") {
+                    Err(StorageError::ConfigUpdateConflict)
+                } else {
+                    Err(StorageError::from(SdkError::<PutObjectError>::ServiceError(err)))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Err(StorageError::ConfigUpdateConflict)
+                } else {
+                    Err(StorageError::from(SdkError::<PutObjectError>::ResponseError(
+                        err,
+                    )))
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>> {
         let key = self.get_snapshot_path(id)?;
         let bytes = self.get_object(key.as_str()).await?;

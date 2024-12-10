@@ -209,7 +209,7 @@ ds.flush("a message", Default::default()).await?;
 
     println!("## Creating a new Repository instance @ latest version");
 
-    let mut ds = Repository::update(Arc::clone(&storage), v2_id.clone()).build();
+    let mut ds = Repository::update(Arc::clone(&storage), v2_id.clone()).await?.build();
 
     println!(
         r#"
@@ -261,7 +261,7 @@ ds.flush("commit", Default::default()).await?;
     );
 
     println!("Creating a new Repository instance, on the previous version");
-    let ds = Repository::update(Arc::clone(&storage), v2_id.clone()).build();
+    let ds = Repository::update(Arc::clone(&storage), v2_id.clone()).await?.build();
 
     println!(
         r#"

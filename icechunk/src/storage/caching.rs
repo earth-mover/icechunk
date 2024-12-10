@@ -14,7 +14,7 @@ use crate::{
     private,
 };
 
-use super::{ListInfo, Storage, StorageError, StorageResult};
+use super::{ETag, ListInfo, Storage, StorageError, StorageResult};
 
 #[derive(Debug)]
 pub struct MemCachingStorage {
@@ -50,6 +50,17 @@ impl private::Sealed for MemCachingStorage {}
 
 #[async_trait]
 impl Storage for MemCachingStorage {
+    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+        self.backend.fetch_config().await
+    }
+    async fn update_config(
+        &self,
+        config: Bytes,
+        etag: Option<&str>,
+    ) -> StorageResult<ETag> {
+        self.backend.update_config(config, etag).await
+    }
+
     async fn fetch_snapshot(
         &self,
         id: &SnapshotId,

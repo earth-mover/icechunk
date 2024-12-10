@@ -1,7 +1,7 @@
 let
-  # Pinned nixpkgs, deterministic. Last updated to nixos-unstable as of: 2024-10-06
+  # Pinned nixpkgs, deterministic. Last updated to nixos-unstable as of: 2024-12-10
   pkgs = import (fetchTarball
-    "https://github.com/NixOS/nixpkgs/archive/7d49afd36b5590f023ec56809c02e05d8164fbc4.tar.gz")
+    "https://github.com/NixOS/nixpkgs/archive/22c3f2cf41a0e70184334a958e6b124fb0ce3e01.tar.gz")
     { };
 
   # Rolling updates, not deterministic.
@@ -29,6 +29,7 @@ in pkgs.mkShell.override {
     just # script launcher with a make flavor
     alejandra # nix code formatter
     markdownlint-cli2
+    python3
   ];
 
   shellHook = ''

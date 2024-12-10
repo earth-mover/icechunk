@@ -24,15 +24,19 @@ use crate::{
         manifest::VirtualReferenceError, snapshot::ManifestFileInfo,
         transaction_log::TransactionLog, ManifestId, SnapshotId,
     },
-    storage::virtual_ref::{
-        construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
-        VirtualChunkResolver,
+    storage::{
+        virtual_ref::{
+            construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
+            VirtualChunkResolver,
+        },
+        ETag,
     },
 };
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{future::ready, Future, FutureExt, Stream, StreamExt, TryStreamExt};
 use itertools::Either;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -54,7 +58,7 @@ use crate::{
     MemCachingStorage, Storage, StorageError,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepositoryConfig {
     // Chunks smaller than this will be stored inline in the manifst
     pub inline_chunk_threshold_bytes: u16,
@@ -74,6 +78,7 @@ impl Default for RepositoryConfig {
 #[derive(Debug)]
 pub struct Repository {
     config: RepositoryConfig,
+    config_etag: Option<ETag>,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
@@ -83,6 +88,7 @@ pub struct Repository {
 #[derive(Debug, Clone)]
 pub struct RepositoryBuilder {
     config: RepositoryConfig,
+    config_etag: Option<ETag>,
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
     change_set: Option<ChangeSet>,
@@ -90,9 +96,15 @@ pub struct RepositoryBuilder {
 }
 
 impl RepositoryBuilder {
-    fn new(storage: Arc<dyn Storage + Send + Sync>, snapshot_id: SnapshotId) -> Self {
+    fn new(
+        storage: Arc<dyn Storage + Send + Sync>,
+        snapshot_id: SnapshotId,
+        config: RepositoryConfig,
+        config_etag: Option<ETag>,
+    ) -> Self {
         Self {
-            config: RepositoryConfig::default(),
+            config,
+            config_etag,
             snapshot_id,
             storage,
             change_set: None,
@@ -107,11 +119,6 @@ impl RepositoryBuilder {
 
     pub fn with_unsafe_overwrite_refs(&mut self, value: bool) -> &mut Self {
         self.config.unsafe_overwrite_refs = value;
-        self
-    }
-
-    pub fn with_config(&mut self, config: RepositoryConfig) -> &mut Self {
-        self.config = config;
         self
     }
 
@@ -131,6 +138,7 @@ impl RepositoryBuilder {
     pub fn build(&self) -> Repository {
         Repository::new(
             self.config.clone(),
+            self.config_etag.clone(),
             self.storage.clone(),
             self.snapshot_id.clone(),
             self.change_set.clone(),
@@ -178,18 +186,60 @@ pub enum RepositoryError {
     DeserializationError(#[from] rmp_serde::decode::Error),
     #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
     ConflictingPathNotFound(NodeId),
+    #[error("error in config deserialization `{0}`")]
+    ConfigDeserializationError(#[from] serde_yml::Error),
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
-// FIXME: what do we want to do with implicit groups?
-//
 impl Repository {
-    pub fn update(
+    pub async fn fetch_config(
+        storage: &(dyn Storage + Send + Sync),
+    ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
+        match storage.fetch_config().await? {
+            Some((bytes, etag)) => {
+                let config = serde_yml::from_slice(&bytes)?;
+                Ok(Some((config, etag)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn update(
         storage: Arc<dyn Storage + Send + Sync>,
         previous_version_snapshot_id: SnapshotId,
-    ) -> RepositoryBuilder {
-        RepositoryBuilder::new(storage, previous_version_snapshot_id)
+    ) -> RepositoryResult<RepositoryBuilder> {
+        let storage_c1 = Arc::clone(&storage);
+        let storage_c2 = Arc::clone(&storage);
+
+        let snap_id = previous_version_snapshot_id.clone();
+        let h1 = tokio::spawn(async move { storage_c1.fetch_snapshot(&snap_id).await });
+        let h2 =
+            tokio::spawn(async move { Self::fetch_config(storage_c2.as_ref()).await });
+
+        // Fail if the snapshot id cannot be found
+        #[allow(clippy::expect_used)]
+        let _must_exist = h1
+            .await
+            .expect("Error fetching config. Perhaps thread died unexpectedly.")?;
+        #[allow(clippy::expect_used)]
+        match h2
+            .await
+            .expect("Error fetching config. Perhaps thread died unexpectedly.")?
+        {
+            Some((config, etag)) => Ok(RepositoryBuilder::new(
+                storage,
+                previous_version_snapshot_id,
+                config,
+                Some(etag),
+            )),
+            None => Ok(RepositoryBuilder::new(
+                storage,
+                previous_version_snapshot_id,
+                RepositoryConfig::default(),
+                None,
+            )),
+        }
     }
 
     pub async fn from_branch_tip(
@@ -197,7 +247,7 @@ impl Repository {
         branch_name: &str,
     ) -> RepositoryResult<RepositoryBuilder> {
         let snapshot_id = fetch_branch_tip(storage.as_ref(), branch_name).await?.snapshot;
-        Ok(Self::update(storage, snapshot_id))
+        Self::update(storage, snapshot_id).await
     }
 
     pub async fn from_tag(
@@ -205,7 +255,7 @@ impl Repository {
         tag_name: &str,
     ) -> RepositoryResult<RepositoryBuilder> {
         let ref_data = fetch_tag(storage.as_ref(), tag_name).await?;
-        Ok(Self::update(storage, ref_data.snapshot))
+        Self::update(storage, ref_data.snapshot).await
     }
 
     /// Initialize a new repository with a single empty commit to the main branch.
@@ -233,7 +283,12 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        Ok(RepositoryBuilder::new(storage, new_snapshot_id))
+        Ok(RepositoryBuilder::new(
+            storage,
+            new_snapshot_id,
+            RepositoryConfig::default(),
+            None,
+        ))
     }
 
     pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
@@ -255,6 +310,7 @@ impl Repository {
 
     fn new(
         config: RepositoryConfig,
+        config_etag: Option<ETag>,
         storage: Arc<dyn Storage + Send + Sync>,
         snapshot_id: SnapshotId,
         change_set: Option<ChangeSet>,
@@ -263,6 +319,7 @@ impl Repository {
         Repository {
             snapshot_id,
             config,
+            config_etag,
             storage,
             change_set: change_set.unwrap_or_default(),
             virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::new(
@@ -273,6 +330,12 @@ impl Repository {
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    pub async fn update_config(&self) -> RepositoryResult<ETag> {
+        let bytes = Bytes::from(serde_yml::to_string(self.config())?);
+        let res = self.storage.update_config(bytes, self.config_etag.as_deref()).await?;
+        Ok(res)
     }
 
     pub(crate) fn set_snapshot_id(&mut self, snapshot_id: SnapshotId) {
@@ -842,6 +905,7 @@ impl Repository {
                 let tx_log = self.storage.fetch_transaction_log(&snap_id).await?;
                 let repo = Repository {
                     config: self.config().clone(),
+                    config_etag: self.config_etag.clone(),
                     storage: self.storage.clone(),
                     snapshot_id: snap_id.clone(),
                     change_set: ChangeSet::default(),
@@ -1466,6 +1530,7 @@ mod tests {
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
         let mut ds = Repository::update(Arc::new(storage), snapshot_id)
+            .await?
             .with_inline_threshold_bytes(512)
             .build();
 
@@ -1843,7 +1908,7 @@ mod tests {
         .await?;
 
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
-        let ds = Repository::update(Arc::clone(&storage), snapshot_id).build();
+        let ds = Repository::update(Arc::clone(&storage), snapshot_id).await?.build();
 
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
@@ -1869,7 +1934,8 @@ mod tests {
         assert!(logging.fetch_operations().is_empty());
 
         //test the previous version is still alive
-        let ds = Repository::update(Arc::clone(&storage), previous_snapshot_id).build();
+        let ds =
+            Repository::update(Arc::clone(&storage), previous_snapshot_id).await?.build();
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -2178,7 +2244,7 @@ mod tests {
         )
         .await?;
         let snapshot_id = ds.flush("commit", SnapshotProperties::default()).await?;
-        let ds = Repository::update(Arc::clone(&storage), snapshot_id).build();
+        let ds = Repository::update(Arc::clone(&storage), snapshot_id).await?.build();
         let coords = ds
             .all_chunks()
             .await?
@@ -2761,7 +2827,9 @@ mod tests {
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks
         let mut repo2 =
-            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+            Repository::update(Arc::clone(&storage), array_created_snap.clone())
+                .await?
+                .build();
         repo2
             .set_chunk_ref(
                 new_array_path.clone(),
@@ -2814,7 +2882,9 @@ mod tests {
         // let's try to create a new commit, that conflicts with the previous one and writes
         // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
         let mut repo2 =
-            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+            Repository::update(Arc::clone(&storage), array_created_snap.clone())
+                .await?
+                .build();
         repo2
             .set_chunk_ref(
                 new_array_path.clone(),
@@ -2858,7 +2928,9 @@ mod tests {
         // let's try to create a new commit, that conflicts with the previous one and writes
         // to the same chunk, recovering with "UseOurs" policy
         let mut repo2 =
-            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+            Repository::update(Arc::clone(&storage), array_created_snap.clone())
+                .await?
+                .build();
         repo2
             .set_chunk_ref(
                 new_array_path.clone(),
@@ -2900,7 +2972,9 @@ mod tests {
         // let's try to create a new commit, that conflicts with the previous one and writes
         // to the same chunk, recovering with "UseTheirs" policy
         let mut repo2 =
-            Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+            Repository::update(Arc::clone(&storage), array_created_snap.clone())
+                .await?
+                .build();
         repo2
             .set_chunk_ref(
                 new_array_path.clone(),
@@ -3172,6 +3246,51 @@ mod tests {
         // so now the parent is the first commit
         assert_eq!(repo2.snapshot_id(), &non_conflicting_snap);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+
+        let repo = Repository::init(Arc::clone(&storage), false).await?.build();
+
+        // initializing a repo doesn't create the config file
+        assert!(Repository::fetch_config(storage.as_ref()).await?.is_none());
+        // it inits with the default config
+        assert_eq!(repo.config(), &RepositoryConfig::default());
+        // updating the persistent config create a new file with default values
+        let etag = repo.update_config().await?;
+        assert_ne!(etag, "");
+        assert_eq!(
+            Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
+            RepositoryConfig::default()
+        );
+
+        // reload the repo changing config
+        let repo = Repository::from_branch_tip(storage.clone(), "main")
+            .await?
+            .with_inline_threshold_bytes(42)
+            .build();
+
+        assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+
+        // update the persistent config
+        let etag = repo.update_config().await?;
+        assert_ne!(etag, "");
+        assert_eq!(
+            Repository::fetch_config(storage.as_ref())
+                .await?
+                .unwrap()
+                .0
+                .inline_chunk_threshold_bytes,
+            42
+        );
+
+        // verify loading againg gets the value from persistent config
+        let repo = Repository::from_branch_tip(storage.clone(), "main").await?.build();
+        assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
         Ok(())
     }
 

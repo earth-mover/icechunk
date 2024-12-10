@@ -15,7 +15,7 @@ use futures::{
 use object_store::{
     local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute,
     AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
-    PutOptions, PutPayload,
+    PutOptions, PutPayload, UpdateVersion,
 };
 use std::{
     fs::create_dir_all,
@@ -29,8 +29,8 @@ use std::{
 };
 
 use super::{
-    ListInfo, Storage, StorageError, StorageResult, CHUNK_PREFIX, MANIFEST_PREFIX,
-    REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    ETag, ListInfo, Storage, StorageError, StorageResult, CHUNK_PREFIX, CONFIG_PATH,
+    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 // Get Range is object_store specific, keep it with this module
@@ -118,6 +118,10 @@ impl ObjectStorage {
         self.get_path_str(file_prefix, id.to_string().as_str())
     }
 
+    fn get_config_path(&self) -> ObjectPath {
+        self.get_path_str("", CONFIG_PATH)
+    }
+
     fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
         self.get_path(SNAPSHOT_PREFIX, id)
     }
@@ -176,6 +180,59 @@ impl private::Sealed for ObjectStorage {}
 
 #[async_trait]
 impl Storage for ObjectStorage {
+    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+        let path = self.get_config_path();
+        let response = self.store.get(&path).await;
+
+        match response {
+            Ok(result) => match result.meta.e_tag.clone() {
+                Some(etag) => Ok(Some((result.bytes().await?, etag))),
+                None => Err(StorageError::Other("No ETag found for config".to_string())),
+            },
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+    async fn update_config(
+        &self,
+        config: Bytes,
+        etag: Option<&str>,
+    ) -> StorageResult<ETag> {
+        let path = self.get_config_path();
+        let attributes = if self.supports_metadata {
+            Attributes::from_iter(vec![(
+                Attribute::ContentType,
+                AttributeValue::from("application/yaml"),
+            )])
+        } else {
+            Attributes::new()
+        };
+
+        let mode = if let Some(etag) = etag {
+            PutMode::Update(UpdateVersion {
+                e_tag: Some(etag.to_string()),
+                version: None,
+            })
+        } else {
+            PutMode::Create
+        };
+
+        let options = PutOptions { mode, attributes, ..PutOptions::default() };
+        let res = self.store.put_opts(&path, config.into(), options).await;
+        match res {
+            Ok(res) => {
+                let etag = res.e_tag.ok_or(StorageError::Other(
+                    "Config object should have an etag".to_string(),
+                ))?;
+                Ok(etag)
+            }
+            Err(object_store::Error::Precondition { .. }) => {
+                Err(StorageError::ConfigUpdateConflict)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
     async fn fetch_snapshot(
         &self,
         id: &SnapshotId,
