@@ -12,7 +12,6 @@ use crate::metadata::{
     StorageTransformer,
 };
 use crate::session::Session;
-use crate::storage::virtual_ref::ObjectStoreVirtualChunkResolver;
 use crate::{ObjectStorage, Repository, RepositoryConfig};
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
@@ -34,7 +33,7 @@ prop_compose! {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
-        Repository::create(RepositoryConfig::default(), Arc::new(storage), Arc::new(ObjectStoreVirtualChunkResolver::new(None)))
+        Repository::create(RepositoryConfig::default(), Arc::new(storage), None)
             .await
             .expect("Failed to initialize repository")
     })

@@ -449,6 +449,8 @@ impl ChangeSet {
 mod tests {
     use std::num::NonZeroU64;
 
+    use itertools::Itertools;
+
     use super::ChangeSet;
 
     use crate::{
