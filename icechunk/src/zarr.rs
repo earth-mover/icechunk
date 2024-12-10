@@ -22,6 +22,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     change_set::ChangeSet,
+    conflicts::ConflictSolver,
     format::{
         manifest::VirtualChunkRef,
         snapshot::{NodeData, UserAttributesSnapshot},
@@ -490,6 +491,18 @@ impl Store {
 
     pub async fn merge(&self, changes: ChangeSet) {
         self.repository.write().await.merge(changes).await;
+    }
+
+    /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
+    /// the tip of the current branch. If the store is not currently on a branch, this will return
+    /// an error.
+    pub async fn rebase(&self, solver: &dyn ConflictSolver) -> StoreResult<()> {
+        let Some(branch) = &self.current_branch else {
+            return Err(StoreError::NotOnBranch);
+        };
+
+        self.repository.write().await.rebase(solver, branch).await?;
+        Ok(())
     }
 
     /// Commit the current changes to the current branch. If the store is not currently
