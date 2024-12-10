@@ -28,7 +28,7 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = ObjectStorage::new_in_memory_store(None);
+    let storage = ObjectStorage::new_in_memory_store(None).unwrap();
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
