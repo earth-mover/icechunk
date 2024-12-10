@@ -1259,11 +1259,17 @@ async fn updated_chunk_iterator<'a>(
 ) -> RepositoryResult<impl Stream<Item = RepositoryResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = storage.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        let path = node.path.clone();
-        node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
-            .await
-            .map_ok(move |ci| (path.clone(), ci))
+    let res = nodes.filter_map(move |node| async move {
+        if change_set.is_deleted(&node.path, &node.id) {
+            None
+        } else {
+            let path = node.path.clone();
+            Some(
+                node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
+                    .await
+                    .map_ok(move |ci| (path.clone(), ci)),
+            )
+        }
     });
     Ok(res.flatten())
 }
