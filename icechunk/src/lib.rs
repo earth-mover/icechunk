@@ -30,6 +30,7 @@ pub mod storage;
 pub mod store;
 #[cfg(test)]
 pub mod strategies;
+pub mod utils;
 pub mod zarr;
 
 pub use repo::RepositoryConfig;

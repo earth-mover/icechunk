@@ -26,7 +26,8 @@ use crate::{
     }, metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, StorageTransformer, UserAttributes,
-    }, refs::RefError, repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata}, session::{Session, SessionError}
+    }, refs::RefError, repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata}, session::{Session, SessionError},
+    utils::serde::arc_rwlock_serde,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -99,8 +100,9 @@ impl Default for StoreOptions {
     }
 }
 
-
+#[derive(Serialize, Deserialize)]
 pub struct Store {
+    #[serde(with = "arc_rwlock_serde")]
     session: Arc<RwLock<Session>>,
     config: StoreOptions,
     read_only: bool,

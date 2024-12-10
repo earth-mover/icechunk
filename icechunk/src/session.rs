@@ -9,6 +9,7 @@ use std::{
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -46,6 +47,7 @@ pub enum SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
+#[derive(Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
