@@ -434,7 +434,7 @@ mod tests {
 
         let ref2 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(
-                "s3://noaa-nos-ofs-pds/dbofs/netcdf/202410/dbofs.t00z.20241009.fields.f030.nc",
+                "s3://noaa-nos-ofs-pds/dbofs/netcdf/202412/dbofs.t00z.20241209.fields.f030.nc",
             )?,
             offset: 119339,
             length: 80,
