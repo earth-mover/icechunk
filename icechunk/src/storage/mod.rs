@@ -84,7 +84,8 @@ const TRANSACTION_PREFIX: &str = "transactions/";
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage: fmt::Debug + private::Sealed {
+#[typetag::serde(tag = "type")]
+pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,

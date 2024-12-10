@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use serde::{Deserialize, Serialize};
 
 use super::{ListInfo, Storage, StorageError, StorageResult};
 use crate::{
@@ -13,7 +14,7 @@ use crate::{
     private,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct LoggingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     fetch_log: Mutex<Vec<(String, Vec<u8>)>>,
@@ -33,7 +34,17 @@ impl LoggingStorage {
 
 impl private::Sealed for LoggingStorage {}
 
+impl<'de> Deserialize<'de> for LoggingStorage {
+    fn deserialize<D>(_deserializer: D) -> Result<LoggingStorage, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Err(serde::de::Error::custom("LoggingStorage cannot be deserialized directly"))
+    }
+}
+
 #[async_trait]
+#[typetag::serde]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
     async fn fetch_snapshot(
