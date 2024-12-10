@@ -12,7 +12,7 @@ use crate::{
         update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
-    storage::virtual_ref::VirtualChunkResolver,
+    storage::virtual_ref::{ObjectStoreVirtualChunkResolver, VirtualChunkResolver},
     MemCachingStorage, Storage, StorageError,
 };
 
@@ -80,7 +80,7 @@ impl Repository {
     pub async fn create(
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+        virtual_resolver: Option<Arc<dyn VirtualChunkResolver + Send + Sync>>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
             return Err(RepositoryError::AlreadyInitialized);
@@ -101,17 +101,25 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
+        let virtual_resolver = virtual_resolver.unwrap_or_else(|| {
+            Arc::new(ObjectStoreVirtualChunkResolver::new(None))
+        });
+
         Ok(Self { config, storage, virtual_resolver })
     }
 
     pub async fn open(
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+        virtual_resolver: Option<Arc<dyn VirtualChunkResolver + Send + Sync>>,
     ) -> RepositoryResult<Self> {
         if !Self::exists(storage.as_ref()).await? {
             return Err(RepositoryError::AlreadyInitialized);
         }
+
+        let virtual_resolver = virtual_resolver.unwrap_or_else(|| {
+            Arc::new(ObjectStoreVirtualChunkResolver::new(None))
+        });
 
         Ok(Self { config, storage, virtual_resolver })
     }
@@ -119,7 +127,7 @@ impl Repository {
     pub async fn open_or_create(
         config: RepositoryConfig,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+        virtual_resolver: Option<Arc<dyn VirtualChunkResolver + Send + Sync>>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
             Self::open(config, storage, virtual_resolver).await
@@ -308,428 +316,12 @@ mod tests {
     use test_strategy::proptest;
     use tokio::sync::Barrier;
 
-    #[proptest(async = "tokio")]
-    async fn test_add_delete_group(
-        #[strategy(node_paths())] path: Path,
-        #[strategy(empty_repositories())] mut repository: Repository,
-    ) {
-        // getting any path from an empty repository must fail
-        prop_assert!(repository.get_node(&path).await.is_err());
 
-        // adding a new group must succeed
-        prop_assert!(repository.add_group(path.clone()).await.is_ok());
 
-        // Getting a group just added must succeed
-        let node = repository.get_node(&path).await;
-        prop_assert!(node.is_ok());
 
-        // Getting the group twice must be equal
-        prop_assert_eq!(node.unwrap(), repository.get_node(&path).await.unwrap());
 
-        // adding an existing group fails
-        let matches = matches!(
-            repository.add_group(path.clone()).await.unwrap_err(),
-            RepositoryError::AlreadyExists{node, ..} if node.path == path
-        );
-        prop_assert!(matches);
 
-        // deleting the added group must succeed
-        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
 
-        // deleting twice must succeed
-        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
-
-        // getting a deleted group must fail
-        prop_assert!(repository.get_node(&path).await.is_err());
-
-        // adding again must succeed
-        prop_assert!(repository.add_group(path.clone()).await.is_ok());
-
-        // deleting again must succeed
-        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
-    }
-
-    #[proptest(async = "tokio")]
-    async fn test_add_delete_array(
-        #[strategy(node_paths())] path: Path,
-        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(empty_repositories())] mut repository: Repository,
-    ) {
-        // new array must always succeed
-        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
-
-        // adding to the same path must fail
-        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_err());
-
-        // first delete must succeed
-        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
-
-        // deleting twice must succeed
-        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
-
-        // adding again must succeed
-        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
-
-        // deleting again must succeed
-        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
-    }
-
-    #[proptest(async = "tokio")]
-    async fn test_add_array_group_clash(
-        #[strategy(node_paths())] path: Path,
-        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(empty_repositories())] mut repository: Repository,
-    ) {
-        // adding a group at an existing array node must fail
-        prop_assert!(repository.add_array(path.clone(), metadata.clone()).await.is_ok());
-        let matches = matches!(
-            repository.add_group(path.clone()).await.unwrap_err(),
-            RepositoryError::AlreadyExists{node, ..} if node.path == path
-        );
-        prop_assert!(matches);
-
-        let matches = matches!(
-            repository.delete_group(path.clone()).await.unwrap_err(),
-            RepositoryError::NotAGroup{node, ..} if node.path == path
-        );
-        prop_assert!(matches);
-        prop_assert!(repository.delete_array(path.clone()).await.is_ok());
-
-        // adding an array at an existing group node must fail
-        prop_assert!(repository.add_group(path.clone()).await.is_ok());
-        let matches = matches!(
-            repository.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
-            RepositoryError::AlreadyExists{node, ..} if node.path == path
-        );
-        prop_assert!(matches);
-        let matches = matches!(
-            repository.delete_array(path.clone()).await.unwrap_err(),
-            RepositoryError::NotAnArray{node, ..} if node.path == path
-        );
-        prop_assert!(matches);
-        prop_assert!(repository.delete_group(path.clone()).await.is_ok());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
-
-        let array_id = NodeId::random();
-        let chunk1 = ChunkInfo {
-            node: array_id.clone(),
-            coord: ChunkIndices(vec![0, 0, 0]),
-            payload: ChunkPayload::Ref(ChunkRef {
-                id: ObjectId::random(),
-                offset: 0,
-                length: 4,
-            }),
-        };
-
-        let chunk2 = ChunkInfo {
-            node: array_id.clone(),
-            coord: ChunkIndices(vec![0, 0, 1]),
-            payload: ChunkPayload::Inline("hello".into()),
-        };
-
-        let manifest =
-            Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
-        let manifest_id = ObjectId::random();
-        storage.write_manifests(manifest_id.clone(), Arc::clone(&manifest)).await?;
-
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![2, 2, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
-        let manifest_ref = ManifestRef {
-            object_id: manifest_id.clone(),
-            extents: ManifestExtents(vec![]),
-        };
-        let array1_path: Path = "/array1".try_into().unwrap();
-        let node_id = NodeId::random();
-        let nodes = vec![
-            NodeSnapshot {
-                path: Path::root(),
-                id: node_id,
-                user_attributes: None,
-                node_data: NodeData::Group,
-            },
-            NodeSnapshot {
-                path: array1_path.clone(),
-                id: array_id.clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
-                )),
-                node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
-            },
-        ];
-
-        let initial = Snapshot::empty();
-        let manifests = vec![ManifestFileInfo {
-            id: manifest_id.clone(),
-            format_version: manifest.icechunk_manifest_format_version,
-        }];
-        let snapshot = Arc::new(Snapshot::from_iter(
-            &initial,
-            None,
-            manifests,
-            vec![],
-            nodes.iter().cloned(),
-        ));
-        let snapshot_id = ObjectId::random();
-        storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-        let mut ds = Repository::update(Arc::new(storage), snapshot_id)
-            .with_inline_threshold_bytes(512)
-            .build();
-
-        // retrieve the old array node
-        let node = ds.get_node(&array1_path).await?;
-        assert_eq!(nodes.get(1).unwrap(), &node);
-
-        let group_name = "/tbd-group".to_string();
-        ds.add_group(group_name.clone().try_into().unwrap()).await?;
-        ds.delete_group(group_name.clone().try_into().unwrap()).await?;
-        // deleting non-existing is no-op
-        assert!(ds.delete_group(group_name.clone().try_into().unwrap()).await.is_ok());
-        assert!(ds.get_node(&group_name.try_into().unwrap()).await.is_err());
-
-        // add a new array and retrieve its node
-        ds.add_group("/group".try_into().unwrap()).await?;
-
-        let zarr_meta2 = ZarrArrayMetadata {
-            shape: vec![3],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
-
-        let new_array_path: Path = "/group/array2".to_string().try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
-
-        ds.delete_array(new_array_path.clone()).await?;
-        // Delete a non-existent array is no-op
-        assert!(ds.delete_array(new_array_path.clone()).await.is_ok());
-        assert!(ds.get_node(&new_array_path.clone()).await.is_err());
-
-        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
-
-        let node = ds.get_node(&new_array_path).await;
-        assert!(matches!(
-            node.ok(),
-            Some(NodeSnapshot {path, user_attributes, node_data,..})
-                if path== new_array_path.clone() && user_attributes.is_none() && node_data == NodeData::Array(zarr_meta2.clone(), vec![])
-        ));
-
-        // set user attributes for the new array and retrieve them
-        ds.set_user_attributes(
-            new_array_path.clone(),
-            Some(UserAttributes::try_new(br#"{"n":42}"#).unwrap()),
-        )
-        .await?;
-        let node = ds.get_node(&new_array_path).await;
-        assert!(matches!(
-            node.ok(),
-            Some(NodeSnapshot {path, user_attributes, node_data, ..})
-                if path == "/group/array2".try_into().unwrap() &&
-                    user_attributes ==  Some(UserAttributesSnapshot::Inline(
-                        UserAttributes::try_new(br#"{"n":42}"#).unwrap()
-                    )) &&
-                    node_data == NodeData::Array(zarr_meta2.clone(), vec![])
-        ));
-
-        let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
-        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
-            .await?;
-
-        let chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
-        assert_eq!(chunk, Some(ChunkPayload::Inline("foo".into())));
-
-        // retrieve a non initialized chunk of the new array
-        let non_chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
-        assert_eq!(non_chunk, None);
-
-        // update old array use attributes and check them
-        ds.set_user_attributes(
-            array1_path.clone(),
-            Some(UserAttributes::try_new(br#"{"updated": true}"#).unwrap()),
-        )
-        .await?;
-        let node = ds.get_node(&array1_path).await.unwrap();
-        assert_eq!(
-            node.user_attributes,
-            Some(UserAttributesSnapshot::Inline(
-                UserAttributes::try_new(br#"{"updated": true}"#).unwrap()
-            ))
-        );
-
-        // update old array zarr metadata and check it
-        let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
-        ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
-        let node = ds.get_node(&array1_path).await;
-        if let Ok(NodeSnapshot {
-            node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
-            ..
-        }) = &node
-        {
-            assert_eq!(shape, &vec![2, 2, 3]);
-        } else {
-            panic!("Failed to update zarr metadata");
-        }
-
-        // set old array chunk and check them
-        let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
-        ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0, 0, 0]), Some(payload))
-            .await?;
-
-        let chunk = get_chunk(
-            ds.get_chunk_reader(
-                &array1_path,
-                &ChunkIndices(vec![0, 0, 0]),
-                &ByteRange::ALL,
-            )
-            .await
-            .unwrap(),
-        )
-        .await?;
-        assert_eq!(chunk, Some(data));
-
-        let path: Path = "/group/array2".try_into().unwrap();
-        let node = ds.get_node(&path).await;
-        assert!(ds.change_set.has_updated_attributes(&node.as_ref().unwrap().id));
-        assert!(ds.delete_array(path.clone()).await.is_ok());
-        assert!(!ds.change_set.has_updated_attributes(&node?.id));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_new_arrays_chunk_iterator() {
-        let mut change_set = ChangeSet::default();
-        assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
-
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![2, 2, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
-
-        let node_id1 = NodeId::random();
-        let node_id2 = NodeId::random();
-        change_set.add_array(
-            "/foo/bar".try_into().unwrap(),
-            node_id1.clone(),
-            zarr_meta.clone(),
-        );
-        change_set.add_array("/foo/baz".try_into().unwrap(), node_id2.clone(), zarr_meta);
-        assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
-
-        change_set.set_chunk_ref(node_id1.clone(), ChunkIndices(vec![0, 1]), None);
-        assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
-
-        change_set.set_chunk_ref(
-            node_id1.clone(),
-            ChunkIndices(vec![1, 0]),
-            Some(ChunkPayload::Inline("bar1".into())),
-        );
-        change_set.set_chunk_ref(
-            node_id1.clone(),
-            ChunkIndices(vec![1, 1]),
-            Some(ChunkPayload::Inline("bar2".into())),
-        );
-        change_set.set_chunk_ref(
-            node_id2.clone(),
-            ChunkIndices(vec![0]),
-            Some(ChunkPayload::Inline("baz1".into())),
-        );
-        change_set.set_chunk_ref(
-            node_id2.clone(),
-            ChunkIndices(vec![1]),
-            Some(ChunkPayload::Inline("baz2".into())),
-        );
-
-        {
-            let all_chunks: Vec<_> = change_set
-                .new_arrays_chunk_iterator()
-                .sorted_by_key(|c| c.1.coord.clone())
-                .collect();
-            let expected_chunks: Vec<_> = [
-                (
-                    "/foo/baz".try_into().unwrap(),
-                    ChunkInfo {
-                        node: node_id2.clone(),
-                        coord: ChunkIndices(vec![0]),
-                        payload: ChunkPayload::Inline("baz1".into()),
-                    },
-                ),
-                (
-                    "/foo/baz".try_into().unwrap(),
-                    ChunkInfo {
-                        node: node_id2.clone(),
-                        coord: ChunkIndices(vec![1]),
-                        payload: ChunkPayload::Inline("baz2".into()),
-                    },
-                ),
-                (
-                    "/foo/bar".try_into().unwrap(),
-                    ChunkInfo {
-                        node: node_id1.clone(),
-                        coord: ChunkIndices(vec![1, 0]),
-                        payload: ChunkPayload::Inline("bar1".into()),
-                    },
-                ),
-                (
-                    "/foo/bar".try_into().unwrap(),
-                    ChunkInfo {
-                        node: node_id1.clone(),
-                        coord: ChunkIndices(vec![1, 1]),
-                        payload: ChunkPayload::Inline("bar2".into()),
-                    },
-                ),
-            ]
-            .into();
-            assert_eq!(all_chunks, expected_chunks);
-        }
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {

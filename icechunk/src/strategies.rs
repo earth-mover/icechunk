@@ -11,6 +11,7 @@ use crate::metadata::{
     ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DimensionNames, FillValue,
     StorageTransformer,
 };
+use crate::session::Session;
 use crate::storage::virtual_ref::ObjectStoreVirtualChunkResolver;
 use crate::{ObjectStorage, Repository, RepositoryConfig};
 
@@ -39,6 +40,26 @@ prop_compose! {
     })
 }
 }
+
+prop_compose! {
+    #[allow(clippy::expect_used)]
+    pub fn empty_writeable_session()(_id in any::<u32>()) -> Session {
+    // _id is used as a hack to avoid using prop_oneof![Just(repository)]
+    // Using Just requires Repository impl Clone, which we do not want
+
+    // FIXME: add storages strategy
+    let storage = ObjectStorage::new_in_memory_store(None).unwrap();
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+    runtime.block_on(async {
+        let repository = Repository::create(RepositoryConfig::default(), Arc::new(storage), None)
+            .await
+            .expect("Failed to initialize repository");
+        repository.writeable_session("main").await.expect("Failed to create session")
+    })
+}
+}
+
 
 pub fn codecs() -> impl Strategy<Value = Vec<Codec>> {
     prop_oneof![Just(vec![Codec { name: "mycodec".to_string(), configuration: None }]),]

@@ -14,7 +14,7 @@ use crate::{
     private,
 };
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     fetch_log: Mutex<Vec<(String, Vec<u8>)>>,
@@ -33,15 +33,6 @@ impl LoggingStorage {
 }
 
 impl private::Sealed for LoggingStorage {}
-
-impl<'de> Deserialize<'de> for LoggingStorage {
-    fn deserialize<D>(_deserializer: D) -> Result<LoggingStorage, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Err(serde::de::Error::custom("LoggingStorage cannot be deserialized directly"))
-    }
-}
 
 #[async_trait]
 #[typetag::serde]
