@@ -220,7 +220,12 @@ impl Storage for ObjectStorage {
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         let res = self.store.put_opts(&path, config.into(), options).await;
         match res {
-            Ok(res) => Ok(res.e_tag.expect("Object should have an etag")),
+            Ok(res) => {
+                let etag = res.e_tag.ok_or(StorageError::Other(
+                    "Config object should have an etag".to_string(),
+                ))?;
+                Ok(etag)
+            }
             Err(object_store::Error::Precondition { .. }) => {
                 Err(StorageError::ConfigUpdateConflict)
             }

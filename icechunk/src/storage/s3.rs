@@ -312,7 +312,12 @@ impl Storage for S3Storage {
         let res = req.send().await;
 
         match res {
-            Ok(out) => Ok(out.e_tag().expect("Object should have an etag").to_string()),
+            Ok(out) => {
+                let etag = out.e_tag().ok_or(StorageError::Other(
+                    "Config object should have an etag".to_string(),
+                ))?;
+                Ok(etag.to_string())
+            }
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
                 if err.err().meta().code() == Some("PreconditionFailed") {
