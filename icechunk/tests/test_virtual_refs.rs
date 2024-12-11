@@ -10,9 +10,9 @@ mod tests {
         repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
         storage::{
             s3::{mk_client, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
-            virtual_ref::ObjectStoreVirtualChunkResolverConfig,
             ObjectStorage,
         },
+        virtual_chunks::{ObjectStorePlatform, VirtualChunkContainer},
         zarr::AccessMode,
         Repository, Storage, Store,
     };
@@ -39,25 +39,14 @@ mod tests {
         }
     }
 
-    fn anon_s3_config() -> S3Config {
-        S3Config {
-            region: Some("us-east-1".to_string()),
-            endpoint: None,
-            credentials: S3Credentials::Anonymous,
-            allow_http: false,
-        }
-    }
-
     async fn create_repository(
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_s3_config: S3Config,
+        virtual_chukn_containers: Vec<VirtualChunkContainer>,
     ) -> Repository {
         Repository::init(storage, true)
             .await
             .expect("building repository failed")
-            .with_virtual_ref_config(ObjectStoreVirtualChunkResolverConfig::S3(
-                virtual_s3_config,
-            ))
+            .with_virtual_chunk_containers(virtual_chukn_containers)
             .build()
     }
 
@@ -79,15 +68,32 @@ mod tests {
                 .expect(&format!("putting chunk to {} failed", &path));
         }
     }
-    async fn create_local_repository(
-        path: &StdPath,
-        virtual_s3_config: S3Config,
-    ) -> Repository {
+    async fn create_local_repository(path: &StdPath) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
         );
 
-        create_repository(storage, virtual_s3_config).await
+        let containers = vec![
+            VirtualChunkContainer {
+                name: "file".to_string(),
+                object_store: ObjectStorePlatform::LocalFileSystem,
+                region: None,
+                prefix: "file://".to_string(),
+                endpoint_url: None,
+                anonymous: true,
+                allow_http: true,
+            },
+            VirtualChunkContainer {
+                name: "s3".to_string(),
+                object_store: ObjectStorePlatform::S3,
+                region: Some("us-east-1".to_string()),
+                prefix: "s3://".to_string(),
+                endpoint_url: None,
+                anonymous: true,
+                allow_http: false,
+            },
+        ];
+        create_repository(storage, containers).await
     }
 
     async fn create_minio_repository() -> Repository {
@@ -101,7 +107,17 @@ mod tests {
             .expect("Creating minio storage failed"),
         );
 
-        create_repository(storage, minino_s3_config()).await
+        let containers = vec![VirtualChunkContainer {
+            name: "minio".to_string(),
+            object_store: ObjectStorePlatform::S3,
+            region: None,
+            prefix: "s3://".to_string(),
+            endpoint_url: Some("http://localhost:9000".to_string()),
+            anonymous: false,
+            allow_http: true,
+        }];
+
+        create_repository(storage, containers).await
     }
 
     async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
@@ -138,7 +154,7 @@ mod tests {
         write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
         let repo_dir = TempDir::new()?;
-        let mut ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
+        let mut ds = create_local_repository(repo_dir.path()).await;
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
@@ -420,7 +436,7 @@ mod tests {
     async fn test_zarr_store_virtual_refs_from_public_s3(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let repo_dir = TempDir::new()?;
-        let ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
+        let ds = create_local_repository(repo_dir.path()).await;
 
         let mut store = Store::from_repository(
             ds,

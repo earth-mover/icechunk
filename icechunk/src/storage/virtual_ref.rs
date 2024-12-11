@@ -142,9 +142,8 @@ impl VirtualChunkResolver for ObjectStoreVirtualChunkResolver {
         location: &VirtualChunkLocation,
         range: &ByteRange,
     ) -> Result<Bytes, VirtualReferenceError> {
-        let VirtualChunkLocation::Absolute(location) = location;
-        let parsed =
-            url::Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
+        let parsed = url::Url::parse(location.0.as_str())
+            .map_err(VirtualReferenceError::CannotParseUrl)?;
         let scheme = parsed.scheme();
 
         match scheme {

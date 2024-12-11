@@ -23,6 +23,8 @@ pub struct ManifestRef {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceError {
+    #[error("no virtual chunk container can handle the chunk location ({0})")]
+    NoContainerForUrl(String),
     #[error("error parsing virtual ref URL {0}")]
     CannotParseUrl(#[from] url::ParseError),
     #[error("virtual reference has no path segments {0}")]
@@ -38,11 +40,7 @@ pub enum VirtualReferenceError {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum VirtualChunkLocation {
-    Absolute(String),
-    // Relative(prefix_id, String)
-}
+pub struct VirtualChunkLocation(pub String);
 
 impl VirtualChunkLocation {
     pub fn from_absolute_path(
@@ -69,7 +67,7 @@ impl VirtualChunkLocation {
 
         let location = format!("{}://{}/{}", scheme, host, new_path,);
 
-        Ok(VirtualChunkLocation::Absolute(location))
+        Ok(VirtualChunkLocation(location))
     }
 }
 

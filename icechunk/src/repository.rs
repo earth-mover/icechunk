@@ -24,12 +24,10 @@ use crate::{
         manifest::VirtualReferenceError, snapshot::ManifestFileInfo,
         transaction_log::TransactionLog, ManifestId, SnapshotId,
     },
-    storage::{
-        virtual_ref::{
-            construct_valid_byte_range, ObjectStoreVirtualChunkResolverConfig,
-            VirtualChunkResolver,
-        },
-        ETag,
+    storage::{virtual_ref::construct_valid_byte_range, ETag},
+    virtual_chunks::{
+        mk_default_containers, sort_containers, VirtualChunkContainer,
+        VirtualChunkResolver,
     },
 };
 use bytes::Bytes;
@@ -54,7 +52,6 @@ use crate::{
         create_tag, fetch_branch_tip, fetch_tag, update_branch, BranchVersion, Ref,
         RefError,
     },
-    storage::virtual_ref::ObjectStoreVirtualChunkResolver,
     MemCachingStorage, Storage, StorageError,
 };
 
@@ -67,11 +64,34 @@ pub struct RepositoryConfig {
     // the possibility of race conditions if this variable is set to true and there are concurrent
     // commit attempts.
     pub unsafe_overwrite_refs: bool,
+
+    virtual_chunk_containers: Vec<VirtualChunkContainer>,
 }
 
 impl Default for RepositoryConfig {
     fn default() -> Self {
-        Self { inline_chunk_threshold_bytes: 512, unsafe_overwrite_refs: false }
+        let mut containers = mk_default_containers();
+        sort_containers(&mut containers);
+        Self {
+            inline_chunk_threshold_bytes: 512,
+            unsafe_overwrite_refs: false,
+            virtual_chunk_containers: containers,
+        }
+    }
+}
+
+impl RepositoryConfig {
+    fn add_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
+        self.virtual_chunk_containers.push(cont);
+        sort_containers(&mut self.virtual_chunk_containers);
+    }
+
+    pub fn virtual_chunk_containers(&self) -> &Vec<VirtualChunkContainer> {
+        &self.virtual_chunk_containers
+    }
+
+    pub fn clear_virtual_chunk_containers(&mut self) {
+        self.virtual_chunk_containers.clear();
     }
 }
 
@@ -82,7 +102,7 @@ pub struct Repository {
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
-    virtual_resolver: Arc<dyn VirtualChunkResolver + Send + Sync>,
+    virtual_resolver: Arc<VirtualChunkResolver>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +112,6 @@ pub struct RepositoryBuilder {
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
     change_set: Option<ChangeSet>,
-    virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
 impl RepositoryBuilder {
@@ -102,14 +121,7 @@ impl RepositoryBuilder {
         config: RepositoryConfig,
         config_etag: Option<ETag>,
     ) -> Self {
-        Self {
-            config,
-            config_etag,
-            snapshot_id,
-            storage,
-            change_set: None,
-            virtual_ref_config: None,
-        }
+        Self { config, config_etag, snapshot_id, storage, change_set: None }
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
@@ -122,11 +134,23 @@ impl RepositoryBuilder {
         self
     }
 
-    pub fn with_virtual_ref_config(
+    pub fn with_virtual_chunk_container(
         &mut self,
-        config: ObjectStoreVirtualChunkResolverConfig,
+        cont: VirtualChunkContainer,
     ) -> &mut Self {
-        self.virtual_ref_config = Some(config);
+        // TODO: validate the container: valid container, no duplicate names, no duplicate prefixes
+        self.config.add_virtual_chunk_container(cont);
+        self
+    }
+
+    pub fn with_virtual_chunk_containers(
+        &mut self,
+        containers: Vec<VirtualChunkContainer>,
+    ) -> &mut Self {
+        self.config.clear_virtual_chunk_containers();
+        for cont in containers {
+            self.config.add_virtual_chunk_container(cont)
+        }
         self
     }
 
@@ -142,7 +166,6 @@ impl RepositoryBuilder {
             self.storage.clone(),
             self.snapshot_id.clone(),
             self.change_set.clone(),
-            self.virtual_ref_config.clone(),
         )
     }
 }
@@ -318,17 +341,15 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         snapshot_id: SnapshotId,
         change_set: Option<ChangeSet>,
-        virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
     ) -> Self {
+        let containers = config.virtual_chunk_containers.clone();
         Repository {
             snapshot_id,
             config,
             config_etag,
             storage,
             change_set: change_set.unwrap_or_default(),
-            virtual_resolver: Arc::new(ObjectStoreVirtualChunkResolver::new(
-                virtual_ref_config,
-            )),
+            virtual_resolver: Arc::new(VirtualChunkResolver::new(containers)),
         }
     }
 
@@ -643,7 +664,7 @@ impl Repository {
                 Ok(Some(
                     async move {
                         resolver
-                            .fetch_chunk(&location, &byte_range)
+                            .fetch_chunk(location.0.as_str(), &byte_range)
                             .await
                             .map_err(|e| e.into())
                     }

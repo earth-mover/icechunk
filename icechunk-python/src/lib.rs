@@ -998,11 +998,8 @@ async fn do_set_virtual_ref(
     offset: ChunkOffset,
     length: ChunkLength,
 ) -> PyResult<()> {
-    let virtual_ref = VirtualChunkRef {
-        location: VirtualChunkLocation::Absolute(location),
-        offset,
-        length,
-    };
+    let virtual_ref =
+        VirtualChunkRef { location: VirtualChunkLocation(location), offset, length };
     let mut store = store.write().await;
     store.set_virtual_ref(&key, virtual_ref).await.map_err(PyIcechunkStoreError::from)?;
     Ok(())

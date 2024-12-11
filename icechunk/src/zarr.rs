@@ -191,7 +191,8 @@ impl RepositoryConfig {
             builder.with_unsafe_overwrite_refs(value);
         }
         if let Some(config) = &self.virtual_ref_config {
-            builder.with_virtual_ref_config(config.clone());
+            //FIXME:
+            // builder.with_virtual_ref_config(config.clone());
         }
         if let Some(change_set_bytes) = &self.change_set_bytes {
             let change_set = ChangeSet::import_from_bytes(change_set_bytes)
