@@ -101,6 +101,7 @@ impl From<&PyS3Config> for S3Config {
 }
 
 #[pyclass(name = "StorageConfig")]
+#[derive(Clone, Debug)]
 pub enum PyStorageConfig {
     InMemory { prefix: Option<String> },
     LocalFileSystem { root: PathBuf },
