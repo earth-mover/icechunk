@@ -213,6 +213,29 @@ impl Repository {
         Ok(branches)
     }
 
+    /// Get the snapshot id of the tip of a branch
+    pub async fn branch_tip(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+        let branch_version = fetch_branch_tip(self.storage.as_ref(), branch).await?;
+        Ok(branch_version.snapshot)
+    }
+
+    /// Make a branch point to the specified snapshot.
+    /// After execution, history of the branch will be altered, and the current
+    /// store will point to a different base snapshot_id
+    pub async fn reset_branch(&self, branch: &str, snapshot_id: &SnapshotId) -> RepositoryResult<BranchVersion> {
+        raise_if_invalid_snapshot_id(self.storage.as_ref(), &snapshot_id).await?;
+        let branch_tip = self.branch_tip(branch).await?;
+        let version = update_branch(
+            self.storage.as_ref(),
+            branch,
+            snapshot_id.clone(),
+            Some(&branch_tip),
+            self.config.unsafe_overwrite_refs,
+        ).await?;
+
+        Ok(version)
+    }
+
     /// Create a new tag in the repository at the given snapshot id
     pub async fn create_tag(
         &self,

@@ -444,7 +444,7 @@ impl Session {
     }
 
     pub async fn commit(
-        self,
+        &mut self,
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
@@ -489,6 +489,12 @@ impl Session {
                 }
             }
         }?;
+
+        // if the commit was successful, we update the session to be
+        // a read only session pointed at the new snapshot
+        self.change_set = ChangeSet::default();
+        self.snapshot_id = id.clone();
+        self.branch_name = None;
 
         Ok(id)
     }
@@ -1121,7 +1127,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_group(
         #[strategy(node_paths())] path: Path,
-        #[strategy(empty_writeable_session())] session: Session,
+        #[strategy(empty_writeable_session())] mut session: Session,
     ) {
         // getting any path from an empty repository must fail
         prop_assert!(session.get_node(&path).await.is_err());
@@ -1595,7 +1601,7 @@ mod tests {
         )
         .await?;
 
-        let snapshot_id = ds.commit("commit", None).await?;
+        let _snapshot_id = ds.commit("commit", None).await?;
 
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -1905,7 +1911,7 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = storage.fetch_manifests(&manifest_id).await?;
+        let manifest = in_mem_storage.fetch_manifests(&manifest_id).await?;
         let initial_size = manifest.len();
 
         ds.delete_array(a2path).await?;
@@ -1930,7 +1936,7 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = storage.fetch_manifests(&manifest_id).await?;
+        let manifest = in_mem_storage.fetch_manifests(&manifest_id).await?;
         let size_after_delete = manifest.len();
 
         assert!(size_after_delete < initial_size);
@@ -1970,7 +1976,7 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = storage.fetch_manifests(&manifest_id).await?;
+        let manifest = in_mem_storage.fetch_manifests(&manifest_id).await?;
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 
@@ -2494,7 +2500,7 @@ mod tests {
 
         let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
-        let array_created_snap =
+        let _array_created_snap =
             ds.commit("create array", None).await?;
 
         let mut ds1 = repo.writeable_session("main").await?;

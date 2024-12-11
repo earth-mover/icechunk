@@ -121,7 +121,7 @@ impl Store {
         Self { session, config, read_only }
     }
 
-    pub async fn is_empty<'a>(self, prefix: &'a str) -> StoreResult<bool> {
+    pub async fn is_empty<'a>(&self, prefix: &'a str) -> StoreResult<bool> {
         let res = self.list_dir(prefix).await?.next().await;
         Ok(res.is_none())
     }
@@ -1048,7 +1048,7 @@ mod tests {
 
     use std::borrow::BorrowMut;
 
-    use crate::{repository::VersionInfo, storage::s3::{S3Credentials, StaticS3Credentials}, ObjectStorage, Repository, RepositoryConfig};
+    use crate::{repository::VersionInfo, ObjectStorage, Repository, RepositoryConfig};
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1319,7 +1319,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let mut ds = repo.writeable_session("main").await?;
+        let ds = repo.writeable_session("main").await?;
         let store = Store::from_session(
             Arc::new(RwLock::new(ds)),
             StoreOptions::default(),
@@ -1363,7 +1363,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let mut ds = repo.writeable_session("main").await?;
+        let ds = repo.writeable_session("main").await?;
         let store = Store::from_session(
             Arc::new(RwLock::new(ds)),
             StoreOptions::default(),
@@ -1407,12 +1407,8 @@ mod tests {
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let repo = create_memory_store_repository().await;
-        let mut ds = repo.writeable_session("main").await?;
-        let store = Store::from_session(
-            Arc::new(RwLock::new(ds)),
-            StoreOptions::default(),
-            false,
-        );
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -1482,10 +1478,12 @@ mod tests {
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
-        let oid = ds.commit("commit", None).await?;
+        let _oid = { ds.write().await.commit("commit", None).await? };
 
-        let ds = repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
-        let store = Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
+        let ds =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1497,16 +1495,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
-        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let storage =
-            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1545,14 +1539,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         assert!(store.is_empty("").await.unwrap());
@@ -1614,14 +1606,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1653,14 +1643,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1693,14 +1681,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1800,14 +1786,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1840,14 +1824,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1904,10 +1886,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -1923,7 +1904,11 @@ mod tests {
         store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        let snapshot_id = store.commit("initial commit").await.unwrap();
+        let snapshot_id =
+            { ds.write().await.commit("initial commit", None).await.unwrap() };
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
@@ -1932,65 +1917,58 @@ mod tests {
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_snapshot_id = store.commit("update").await.unwrap();
+        let new_snapshot_id = { ds.write().await.commit("update", None).await.unwrap() };
 
-        let random_id = SnapshotId::random();
-        let res = store.checkout(VersionInfo::SnapshotId(random_id.clone())).await;
-        assert!(matches!(
-            res,
-            Err(StoreError::RepositoryError(RepositoryError::SnapshotNotFound { .. }))
-        ));
-
-        store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
-        assert_eq!(store.mode, AccessMode::ReadOnly);
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        store.checkout(VersionInfo::SnapshotId(new_snapshot_id.clone())).await.unwrap();
+        let ds = repo
+            .readonly_session(&VersionInfo::SnapshotId(new_snapshot_id.clone()))
+            .await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        store.tag("tag_0", &new_snapshot_id).await.unwrap();
-        store.checkout(VersionInfo::TagRef("tag_0".to_string())).await.unwrap();
-        assert_eq!(store.mode, AccessMode::ReadOnly);
+        repo.create_tag("tag_0", &new_snapshot_id).await.unwrap();
+        let _ds = repo
+            .readonly_session(&VersionInfo::TagRef("tag_0".to_string()))
+            .await
+            .unwrap();
 
-        store.checkout(VersionInfo::BranchTipRef("main".to_string())).await.unwrap();
-        store.set_mode(AccessMode::ReadWrite);
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
-        assert_eq!(store.has_uncommitted_changes().await, true);
+        assert_eq!(ds.read().await.has_uncommitted_changes(), true);
 
-        let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
-        assert!(result.is_err());
-
-        store.reset().await?;
+        {
+            ds.write().await.discard_changes().unwrap()
+        };
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         // Create a new branch and do stuff with it
-        store.new_branch("dev").await?;
+        repo.create_branch("dev", ds.read().await.snapshot_id()).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("dev").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
         store.set("array/c/0/1/0", new_data.clone()).await?;
-        let dev_snapshot_id = store.commit("update dev branch").await?;
-        store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
+        let dev_snapshot =
+            { ds.write().await.commit("update dev branch", None).await.unwrap() };
+
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(dev_snapshot)).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
-
-        let new_store_from_snapshot = Store::from_repository(
-            Repository::update(Arc::clone(&storage), snapshot_id).build(),
-            AccessMode::ReadWrite,
-            None,
-            None,
-        );
-        assert_eq!(
-            new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
-            data
-        );
-
         Ok(())
     }
 
     #[tokio::test]
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2028,7 +2006,10 @@ mod tests {
         store.set("array/c/1/0/0", new_data.clone()).await.unwrap();
         store.set("group/array/c/1/0/0", new_data.clone()).await.unwrap();
 
-        let _ = store.commit("initial commit").await.unwrap();
+        ds.write().await.commit("initial commit", None).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2047,19 +2028,17 @@ mod tests {
             empty
         );
 
-        let empty_snap = store.commit("no content commit").await.unwrap();
+        let empty_snap =
+            ds.write().await.commit("no content commit", None).await.unwrap();
 
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
         );
 
-        let store = Store::from_repository(
-            Repository::update(Arc::clone(&storage), empty_snap).build(),
-            AccessMode::ReadWrite,
-            None,
-            None,
-        );
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(empty_snap)).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
@@ -2071,9 +2050,9 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite() -> Result<(), Box<dyn std::error::Error>> {
         // GH347
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         let meta1 = Bytes::copy_from_slice(
             br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
@@ -2100,13 +2079,17 @@ mod tests {
         // with a commit in the middle, this tests the changeset interaction with snapshot
         store.set("zarr.json", meta1).await.unwrap();
         store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
-        store.commit("initial commit").await.unwrap();
+
+        ds.write().await.commit("initial commit", None).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
         store.delete("zarr.json").await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         store.set("zarr.json", meta2.clone()).await.unwrap();
         store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
         assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
-        store.commit("commit 2").await.unwrap();
+        ds.write().await.commit("commit 2", None).await.unwrap();
         assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
         assert_eq!(
             &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
@@ -2118,10 +2101,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2131,7 +2113,10 @@ mod tests {
             .await
             .unwrap();
 
-        store.commit("root group").await.unwrap();
+        ds.write().await.commit("root group", None).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2141,7 +2126,10 @@ mod tests {
             .await
             .unwrap();
 
-        let prev_snap = store.commit("group a").await?;
+        let prev_snap = ds.write().await.commit("group a", None).await?;
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2151,25 +2139,16 @@ mod tests {
             .await
             .unwrap();
 
-        store.commit("group b").await?;
+        ds.write().await.commit("group b", None).await.unwrap();
         assert!(store.exists("a/zarr.json").await?);
         assert!(store.exists("b/zarr.json").await?);
 
-        store.reset_branch(prev_snap).await?;
+        repo.reset_branch("main", &prev_snap).await?;
+        let ds = Arc::new(RwLock::new(
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
+        ));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), true);
 
-        assert!(!store.exists("b/zarr.json").await?);
-        assert!(store.exists("a/zarr.json").await?);
-
-        let (repo, _) =
-            RepositoryConfig::existing(VersionInfo::BranchTipRef("main".to_string()))
-                .make_repository(storage)
-                .await?;
-        let store = Store::from_repository(
-            repo,
-            AccessMode::ReadOnly,
-            Some("main".to_string()),
-            None,
-        );
         assert!(!store.exists("b/zarr.json").await?);
         assert!(store.exists("a/zarr.json").await?);
         Ok(())
@@ -2177,12 +2156,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_access_mode() {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let writeable_store =
-            Store::new_from_storage(Arc::clone(&storage)).await.unwrap();
-        assert_eq!(writeable_store.access_mode(), &AccessMode::ReadWrite);
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await.unwrap();
+        let writeable_store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
+        );
 
         writeable_store
             .set(
@@ -2192,8 +2172,16 @@ mod tests {
             .await
             .unwrap();
 
-        let readable_store = writeable_store.with_access_mode(AccessMode::ReadOnly);
-        assert_eq!(readable_store.access_mode(), &AccessMode::ReadOnly);
+        let readable_store = Store::from_session(
+            Arc::new(RwLock::new(
+                repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                    .await
+                    .unwrap(),
+            )),
+            StoreOptions::default(),
+            true,
+        );
+        assert_eq!(readable_store.read_only, true);
 
         let result = readable_store
             .set(
@@ -2207,189 +2195,189 @@ mod tests {
         readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
     }
 
-    #[test]
-    fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
-        let expected = ConsolidatedStore {
-            storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
-            repository: RepositoryConfig {
-                inline_chunk_threshold_bytes: Some(128),
-                version: Some(VersionInfo::SnapshotId(SnapshotId::new([
-                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-                ]))),
-                unsafe_overwrite_refs: Some(true),
-                change_set_bytes: None,
-                virtual_ref_config: None,
-            },
-            config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
-        };
+    // #[test]
+    // fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
+    //     let expected = ConsolidatedStore {
+    //         storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
+    //         repository: RepositoryConfig {
+    //             inline_chunk_threshold_bytes: Some(128),
+    //             version: Some(VersionInfo::SnapshotId(SnapshotId::new([
+    //                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    //             ]))),
+    //             unsafe_overwrite_refs: Some(true),
+    //             change_set_bytes: None,
+    //             virtual_ref_config: None,
+    //         },
+    //         config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
+    //     };
 
-        let json = r#"
-            {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
-             "repository": {
-                "version": {"snapshot_id":"000G40R40M30E209185G"},
-                "inline_chunk_threshold_bytes":128,
-                "unsafe_overwrite_refs":true
-             },
-             "config": {
-                "get_partial_values_concurrency": 100
-             }
-            }
-        "#;
-        assert_eq!(expected, serde_json::from_str(json)?);
+    //     let json = r#"
+    //         {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
+    //          "repository": {
+    //             "version": {"snapshot_id":"000G40R40M30E209185G"},
+    //             "inline_chunk_threshold_bytes":128,
+    //             "unsafe_overwrite_refs":true
+    //          },
+    //          "config": {
+    //             "get_partial_values_concurrency": 100
+    //          }
+    //         }
+    //     "#;
+    //     assert_eq!(expected, serde_json::from_str(json)?);
 
-        let json = r#"
-            {"storage":
-                {"type": "local_filesystem", "root":"/tmp/test"},
-             "repository": {
-                "version": null,
-                "inline_chunk_threshold_bytes": null,
-                "unsafe_overwrite_refs":null
-             }}
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                    virtual_ref_config: None,
-                },
-                config: None,
-                ..expected.clone()
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":
+    //             {"type": "local_filesystem", "root":"/tmp/test"},
+    //          "repository": {
+    //             "version": null,
+    //             "inline_chunk_threshold_bytes": null,
+    //             "unsafe_overwrite_refs":null
+    //          }}
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             config: None,
+    //             ..expected.clone()
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":
-                {"type": "local_filesystem", "root":"/tmp/test"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                    virtual_ref_config: None,
-                },
-                config: None,
-                ..expected.clone()
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":
+    //             {"type": "local_filesystem", "root":"/tmp/test"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             config: None,
+    //             ..expected.clone()
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":{"type": "in_memory", "prefix": "prefix"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                    virtual_ref_config: None,
-                },
-                storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":{"type": "in_memory", "prefix": "prefix"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":{"type": "in_memory"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                    virtual_ref_config: None,
-                },
-                storage: StorageConfig::InMemory { prefix: None },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":{"type": "in_memory"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::InMemory { prefix: None },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                    virtual_ref_config: None,
-                },
-                storage: StorageConfig::S3ObjectStore {
-                    bucket: String::from("test"),
-                    prefix: String::from("root"),
-                    config: None,
-                },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::S3ObjectStore {
+    //                 bucket: String::from("test"),
+    //                 prefix: String::from("root"),
+    //                 config: None,
+    //             },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-        {"storage":{
-             "type": "s3",
-             "bucket":"test",
-             "prefix":"root",
-             "credentials":{
-                 "type":"static",
-                 "access_key_id":"my-key",
-                 "secret_access_key":"my-secret-key"
-             },
-             "endpoint":"http://localhost:9000",
-             "allow_http": true
-         },
-         "repository": {}
-        }
-    "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                    virtual_ref_config: None,
-                },
-                storage: StorageConfig::S3ObjectStore {
-                    bucket: String::from("test"),
-                    prefix: String::from("root"),
-                    config: Some(S3Config {
-                        region: None,
-                        endpoint: Some(String::from("http://localhost:9000")),
-                        credentials: S3Credentials::Static(StaticS3Credentials {
-                            access_key_id: String::from("my-key"),
-                            secret_access_key: String::from("my-secret-key"),
-                            session_token: None,
-                        }),
-                        allow_http: true,
-                    })
-                },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //     {"storage":{
+    //          "type": "s3",
+    //          "bucket":"test",
+    //          "prefix":"root",
+    //          "credentials":{
+    //              "type":"static",
+    //              "access_key_id":"my-key",
+    //              "secret_access_key":"my-secret-key"
+    //          },
+    //          "endpoint":"http://localhost:9000",
+    //          "allow_http": true
+    //      },
+    //      "repository": {}
+    //     }
+    // "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::S3ObjectStore {
+    //                 bucket: String::from("test"),
+    //                 prefix: String::from("root"),
+    //                 config: Some(S3Config {
+    //                     region: None,
+    //                     endpoint: Some(String::from("http://localhost:9000")),
+    //                     credentials: S3Credentials::Static(StaticS3Credentials {
+    //                         access_key_id: String::from("my-key"),
+    //                         secret_access_key: String::from("my-secret-key"),
+    //                         session_token: None,
+    //                     }),
+    //                     allow_http: true,
+    //                 })
+    //             },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }

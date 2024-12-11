@@ -3,19 +3,19 @@
 mod tests {
     use icechunk::{
         format::{
-            manifest::{VirtualChunkLocation, VirtualChunkRef},
-            ByteRange, ChunkId, ChunkIndices, Path,
-        },
-        metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-        repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
-        storage::{
-            s3::{mk_client, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
-            virtual_ref::ObjectStoreVirtualChunkResolverConfig,
+            manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef}, snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path
+        }, metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue}, session::get_chunk, storage::{
+            s3::{
+                mk_client, S3ClientOptions, S3Config, S3Credentials, S3Storage,
+                StaticS3Credentials,
+            },
+            virtual_ref::{
+                ObjectStoreVirtualChunkResolver, ObjectStoreVirtualChunkResolverConfig,
+            },
             ObjectStorage,
-        },
-        zarr::AccessMode,
-        Repository, Storage, Store,
+        }, store::StoreOptions, Repository, RepositoryConfig, Storage, Store
     };
+    use tokio::sync::RwLock;
     use std::{error::Error, num::NonZeroU64};
     use std::{path::Path as StdPath, sync::Arc};
     use tempfile::TempDir;
@@ -26,8 +26,8 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
 
-    fn minino_s3_config() -> S3Config {
-        S3Config {
+    fn minino_s3_config() -> S3ClientOptions {
+        S3ClientOptions {
             region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
             credentials: S3Credentials::Static(StaticS3Credentials {
@@ -39,8 +39,8 @@ mod tests {
         }
     }
 
-    fn anon_s3_config() -> S3Config {
-        S3Config {
+    fn anon_s3_config() -> S3ClientOptions {
+        S3ClientOptions {
             region: Some("us-east-1".to_string()),
             endpoint: None,
             credentials: S3Credentials::Anonymous,
@@ -50,15 +50,14 @@ mod tests {
 
     async fn create_repository(
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_s3_config: S3Config,
+        virtual_s3_config: S3ClientOptions,
     ) -> Repository {
-        Repository::init(storage, true)
+        let virtual_resolver = Arc::new(ObjectStoreVirtualChunkResolver::new(Some(
+            ObjectStoreVirtualChunkResolverConfig::S3(virtual_s3_config),
+        )));
+        Repository::create(RepositoryConfig::default(), storage, Some(virtual_resolver))
             .await
-            .expect("building repository failed")
-            .with_virtual_ref_config(ObjectStoreVirtualChunkResolverConfig::S3(
-                virtual_s3_config,
-            ))
-            .build()
+            .expect("Failed to initialize repository")
     }
 
     async fn write_chunks_to_store(
@@ -81,7 +80,7 @@ mod tests {
     }
     async fn create_local_repository(
         path: &StdPath,
-        virtual_s3_config: S3Config,
+        virtual_s3_config: S3ClientOptions,
     ) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
@@ -93,9 +92,11 @@ mod tests {
     async fn create_minio_repository() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             S3Storage::new_s3_store(
-                "testbucket".to_string(),
-                format!("{:?}", ChunkId::random()),
-                Some(&minino_s3_config()),
+                &S3Config {
+                    bucket: "testbucket".to_string(),
+                    prefix: format!("{:?}", ChunkId::random()),
+                    options: Some(minino_s3_config()),
+                }
             )
             .await
             .expect("Creating minio storage failed"),
@@ -138,8 +139,8 @@ mod tests {
         write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
         let repo_dir = TempDir::new()?;
-        let mut ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
-
+        let repo = create_local_repository(repo_dir.path(), anon_s3_config()).await;
+        let mut ds = repo.writeable_session("main").await.unwrap();
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
@@ -248,7 +249,8 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let mut ds = create_minio_repository().await;
+        let repo = create_minio_repository().await;
+        let mut ds = repo.writeable_session("main").await.unwrap();
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
@@ -359,12 +361,12 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let ds = create_minio_repository().await;
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_minio_repository().await;
+        let ds = repo.writeable_session("main").await.unwrap();
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -412,13 +414,13 @@ mod tests {
     async fn test_zarr_store_virtual_refs_from_public_s3(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let repo_dir = TempDir::new()?;
-        let ds = create_local_repository(repo_dir.path(), anon_s3_config()).await;
+        let repo = create_local_repository(repo_dir.path(), anon_s3_config()).await;
+        let ds = repo.writeable_session("main").await.unwrap();
 
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
