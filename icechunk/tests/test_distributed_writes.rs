@@ -126,8 +126,8 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
         shape: vec![SIZE as u64, SIZE as u64],
         data_type: DataType::Float64,
         chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(2).unwrap(),
-            NonZeroU64::new(2).unwrap(),
+            NonZeroU64::new(1).unwrap(),
+            NonZeroU64::new(1).unwrap(),
         ]),
         chunk_key_encoding: ChunkKeyEncoding::Slash,
         fill_value: FillValue::Float64(f64::NAN),
