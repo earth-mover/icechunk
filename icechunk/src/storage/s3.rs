@@ -291,8 +291,13 @@ impl<'de> Deserialize<'de> for S3Storage {
 impl Storage for S3Storage {
     async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
         let key = self.get_config_path()?;
-        let res =
-            self.client.get_object().bucket(self.config.bucket.clone()).key(key).send().await;
+        let res = self
+            .client
+            .get_object()
+            .bucket(self.config.bucket.clone())
+            .key(key)
+            .send()
+            .await;
 
         match res {
             Ok(output) => match output.e_tag {

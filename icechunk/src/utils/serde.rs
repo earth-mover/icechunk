@@ -1,6 +1,6 @@
 pub mod arc_rwlock_serde {
     use serde::de::Deserializer;
-    use serde::ser::Serializer;
+    use serde::ser::Serializer; // codespell:ignore
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
     use tokio::sync::RwLock;

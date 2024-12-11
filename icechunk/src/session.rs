@@ -2609,7 +2609,7 @@ mod tests {
         )
         .await?;
 
-        // TODO: We cant create writeable sessions from arbitrary snapshots anymore so not sure what to do about this?
+        // TODO: We can't create writeable sessions from arbitrary snapshots anymore so not sure what to do about this?
         // let's try to create a new commit, that conflicts with the previous one and writes
         // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
         // let mut repo2 =
