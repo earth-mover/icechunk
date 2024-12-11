@@ -1,4 +1,5 @@
 mod errors;
+mod repository;
 mod storage;
 mod streams;
 
