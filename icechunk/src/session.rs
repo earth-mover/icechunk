@@ -2156,13 +2156,13 @@ mod tests {
     async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writeable_session("main").await?;
-        let ds2 = repository.writeable_session("main").await?;
 
         ds.add_group("/foo/bar".try_into().unwrap()).await?;
         ds.add_array("/foo/bar/some-array".try_into().unwrap(), basic_meta()).await?;
         ds.commit("create directory", None).await?;
 
         let ds = repository.writeable_session("main").await?;
+        let ds2 = repository.writeable_session("main").await?;
 
         Ok((ds, ds2))
     }
