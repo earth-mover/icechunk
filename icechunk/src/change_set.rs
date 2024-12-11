@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
-        manifest::{ChunkInfo, ManifestExtents, ManifestRef},
-        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot},
-        ManifestId, NodeId,
+        manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestRef},
+        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
+        ChunkIndices, ManifestId, NodeId, Path,
     },
     metadata::UserAttributes,
-    repository::{ChunkIndices, ChunkPayload, Path, RepositoryResult, ZarrArrayMetadata},
+    session::SessionResult,
 };
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -308,14 +308,14 @@ impl ChangeSet {
     /// Serialize this ChangeSet
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
-    pub fn export_to_bytes(&self) -> RepositoryResult<Vec<u8>> {
+    pub fn export_to_bytes(&self) -> SessionResult<Vec<u8>> {
         Ok(rmp_serde::to_vec(self)?)
     }
 
     /// Deserialize a ChangeSet
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
-    pub fn import_from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
+    pub fn import_from_bytes(bytes: &[u8]) -> SessionResult<Self> {
         Ok(rmp_serde::from_slice(bytes)?)
     }
 
@@ -431,5 +431,130 @@ impl ChangeSet {
 
     pub fn undo_user_attributes_update(&mut self, node_id: &NodeId) {
         self.updated_attributes.remove(node_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use itertools::Itertools;
+
+    use super::ChangeSet;
+
+    use crate::{
+        format::{
+            manifest::{ChunkInfo, ChunkPayload},
+            snapshot::ZarrArrayMetadata,
+            ChunkIndices, NodeId,
+        },
+        metadata::{
+            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+        },
+    };
+
+    #[test]
+    fn test_new_arrays_chunk_iterator() {
+        let mut change_set = ChangeSet::default();
+        assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
+
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![2, 2, 2],
+            data_type: DataType::Int32,
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+            ]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Int32(0),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
+            dimension_names: Some(vec![
+                Some("x".to_string()),
+                Some("y".to_string()),
+                Some("t".to_string()),
+            ]),
+        };
+
+        let node_id1 = NodeId::random();
+        let node_id2 = NodeId::random();
+        change_set.add_array(
+            "/foo/bar".try_into().unwrap(),
+            node_id1.clone(),
+            zarr_meta.clone(),
+        );
+        change_set.add_array("/foo/baz".try_into().unwrap(), node_id2.clone(), zarr_meta);
+        assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
+
+        change_set.set_chunk_ref(node_id1.clone(), ChunkIndices(vec![0, 1]), None);
+        assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
+
+        change_set.set_chunk_ref(
+            node_id1.clone(),
+            ChunkIndices(vec![1, 0]),
+            Some(ChunkPayload::Inline("bar1".into())),
+        );
+        change_set.set_chunk_ref(
+            node_id1.clone(),
+            ChunkIndices(vec![1, 1]),
+            Some(ChunkPayload::Inline("bar2".into())),
+        );
+        change_set.set_chunk_ref(
+            node_id2.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("baz1".into())),
+        );
+        change_set.set_chunk_ref(
+            node_id2.clone(),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline("baz2".into())),
+        );
+
+        {
+            let all_chunks: Vec<_> = change_set
+                .new_arrays_chunk_iterator()
+                .sorted_by_key(|c| c.1.coord.clone())
+                .collect();
+            let expected_chunks: Vec<_> = [
+                (
+                    "/foo/baz".try_into().unwrap(),
+                    ChunkInfo {
+                        node: node_id2.clone(),
+                        coord: ChunkIndices(vec![0]),
+                        payload: ChunkPayload::Inline("baz1".into()),
+                    },
+                ),
+                (
+                    "/foo/baz".try_into().unwrap(),
+                    ChunkInfo {
+                        node: node_id2.clone(),
+                        coord: ChunkIndices(vec![1]),
+                        payload: ChunkPayload::Inline("baz2".into()),
+                    },
+                ),
+                (
+                    "/foo/bar".try_into().unwrap(),
+                    ChunkInfo {
+                        node: node_id1.clone(),
+                        coord: ChunkIndices(vec![1, 0]),
+                        payload: ChunkPayload::Inline("bar1".into()),
+                    },
+                ),
+                (
+                    "/foo/bar".try_into().unwrap(),
+                    ChunkInfo {
+                        node: node_id1.clone(),
+                        coord: ChunkIndices(vec![1, 1]),
+                        payload: ChunkPayload::Inline("bar2".into()),
+                    },
+                ),
+            ]
+            .into();
+            assert_eq!(all_chunks, expected_chunks);
+        }
     }
 }

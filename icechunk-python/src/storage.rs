@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use icechunk::{
-    storage::s3::{S3Config, S3Credentials, StaticS3Credentials},
+    storage::s3::{S3ClientOptions, S3Config, S3Credentials, StaticS3Credentials},
     zarr::StorageConfig,
 };
 use pyo3::{prelude::*, types::PyType};
@@ -92,7 +92,7 @@ impl PyStorageConfig {
         allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        let config = S3Config {
+        let config: S3ClientOptions = S3ClientOptions {
             region,
             endpoint: endpoint_url,
             allow_http,
@@ -119,7 +119,7 @@ impl PyStorageConfig {
         allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        let config = S3Config {
+        let config = S3ClientOptions {
             region,
             endpoint: endpoint_url,
             allow_http,
@@ -144,7 +144,7 @@ impl PyStorageConfig {
         allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        let config = S3Config {
+        let config = S3ClientOptions {
             region,
             endpoint: endpoint_url,
             allow_http,

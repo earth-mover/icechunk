@@ -88,14 +88,14 @@ pub type ETag = String;
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-pub trait Storage: fmt::Debug + private::Sealed {
+#[typetag::serde(tag = "type")]
+pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>>;
     async fn update_config(
         &self,
         config: Bytes,
         etag: Option<&str>,
     ) -> StorageResult<ETag>;
-
     async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,

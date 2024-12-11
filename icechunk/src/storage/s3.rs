@@ -28,17 +28,15 @@ use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     format::{
         attributes::AttributesTable, format_constants, manifest::Manifest,
         snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, FileTypeTag, ManifestId, SnapshotId,
+        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
     },
-    private,
-    zarr::ObjectId,
-    Storage, StorageError,
+    private, Storage, StorageError,
 };
 
 use super::{
@@ -46,11 +44,11 @@ use super::{
     REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct S3Storage {
+    #[serde(skip)]
     client: Arc<Client>,
-    prefix: String,
-    bucket: String,
+    config: S3Config,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -73,23 +71,31 @@ pub enum S3Credentials {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Config {
+pub struct S3ClientOptions {
     pub region: Option<String>,
     pub endpoint: Option<String>,
     pub credentials: S3Credentials,
     pub allow_http: bool,
 }
 
-pub async fn mk_client(config: Option<&S3Config>) -> Client {
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct S3Config {
+    pub bucket: String,
+    pub prefix: String,
+    pub options: Option<S3ClientOptions>,
+}
+
+pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
     let region = config
+        .as_ref()
         .and_then(|c| c.region.as_ref())
         .map(|r| RegionProviderChain::first_try(Some(Region::new(r.clone()))))
         .unwrap_or_else(RegionProviderChain::default_provider);
 
-    let endpoint = config.and_then(|c| c.endpoint.clone());
-    let allow_http = config.map(|c| c.allow_http).unwrap_or(false);
+    let endpoint = config.as_ref().and_then(|c| c.endpoint.clone());
+    let allow_http = config.as_ref().map(|c| c.allow_http).unwrap_or(false);
     let credentials =
-        config.map(|c| c.credentials.clone()).unwrap_or(S3Credentials::FromEnv);
+        config.as_ref().map(|c| c.credentials.clone()).unwrap_or(S3Credentials::FromEnv);
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
@@ -126,17 +132,13 @@ pub async fn mk_client(config: Option<&S3Config>) -> Client {
 }
 
 impl S3Storage {
-    pub async fn new_s3_store(
-        bucket_name: impl Into<String>,
-        prefix: impl Into<String>,
-        config: Option<&S3Config>,
-    ) -> Result<S3Storage, StorageError> {
-        let client = Arc::new(mk_client(config).await);
-        Ok(S3Storage { client, prefix: prefix.into(), bucket: bucket_name.into() })
+    pub async fn new_s3_store(config: &S3Config) -> Result<S3Storage, StorageError> {
+        let client = Arc::new(mk_client(config.options.as_ref()).await);
+        Ok(S3Storage { client, config: config.clone() })
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
+        let path = PathBuf::from_iter([self.config.prefix.as_str(), file_prefix, id]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
@@ -170,7 +172,7 @@ impl S3Storage {
     }
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
+        let path = PathBuf::from_iter([self.config.prefix.as_str(), REF_PREFIX, ref_key]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
@@ -178,7 +180,7 @@ impl S3Storage {
         Ok(self
             .client
             .get_object()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .key(key)
             .send()
             .await?
@@ -193,7 +195,7 @@ impl S3Storage {
         key: &str,
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
-        let mut b = self.client.get_object().bucket(self.bucket.clone()).key(key);
+        let mut b = self.client.get_object().bucket(self.config.bucket.clone()).key(key);
 
         if let Some(header) = range_to_header(range) {
             b = b.range(header)
@@ -211,7 +213,7 @@ impl S3Storage {
         metadata: I,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
-        let mut b = self.client.put_object().bucket(self.bucket.clone()).key(key);
+        let mut b = self.client.put_object().bucket(self.config.bucket.clone()).key(key);
 
         if let Some(ct) = content_type {
             b = b.content_type(ct)
@@ -248,7 +250,7 @@ impl S3Storage {
         let res = self
             .client
             .delete_objects()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .delete(delete)
             .send()
             .await?;
@@ -270,12 +272,27 @@ pub fn range_to_header(range: &ByteRange) -> Option<String> {
 
 impl private::Sealed for S3Storage {}
 
+impl<'de> Deserialize<'de> for S3Storage {
+    fn deserialize<D>(deserializer: D) -> Result<S3Storage, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let config = S3Config::deserialize(deserializer)?;
+        #[allow(clippy::expect_used)]
+        let runtime =
+            tokio::runtime::Runtime::new().expect("Could not create tokio runtime");
+        let client = Arc::new(runtime.block_on(mk_client(config.options.as_ref())));
+        Ok(S3Storage { client, config })
+    }
+}
+
 #[async_trait]
+#[typetag::serde]
 impl Storage for S3Storage {
     async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
         let key = self.get_config_path()?;
         let res =
-            self.client.get_object().bucket(self.bucket.clone()).key(key).send().await;
+            self.client.get_object().bucket(self.config.bucket.clone()).key(key).send().await;
 
         match res {
             Ok(output) => match output.e_tag {
@@ -298,7 +315,7 @@ impl Storage for S3Storage {
         let mut req = self
             .client
             .put_object()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .key(key)
             .content_type("application/yaml")
             .body(config.into());
@@ -466,7 +483,7 @@ impl Storage for S3Storage {
         let res = self
             .client
             .get_object()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .key(key.clone())
             .send()
             .await;
@@ -490,7 +507,7 @@ impl Storage for S3Storage {
         let mut paginator = self
             .client
             .list_objects_v2()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .prefix(prefix.clone())
             .delimiter("/")
             .into_paginator()
@@ -522,7 +539,7 @@ impl Storage for S3Storage {
         let mut paginator = self
             .client
             .list_objects_v2()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .prefix(prefix.clone())
             .into_paginator()
             .send();
@@ -548,7 +565,7 @@ impl Storage for S3Storage {
     ) -> StorageResult<()> {
         let key = self.ref_key(ref_key)?;
         let mut builder =
-            self.client.put_object().bucket(self.bucket.clone()).key(key.clone());
+            self.client.put_object().bucket(self.config.bucket.clone()).key(key.clone());
 
         if !overwrite_refs {
             builder = builder.if_none_match("*")
@@ -575,14 +592,14 @@ impl Storage for S3Storage {
         &'a self,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
+        let prefix = PathBuf::from_iter([self.config.prefix.as_str(), prefix])
             .into_os_string()
             .into_string()
             .map_err(StorageError::BadPrefix)?;
         let stream = self
             .client
             .list_objects_v2()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .prefix(prefix)
             .into_paginator()
             .send()

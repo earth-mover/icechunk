@@ -5,8 +5,7 @@ use async_trait::async_trait;
 use crate::{
     change_set::ChangeSet,
     format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path},
-    repository::RepositoryResult,
-    Repository,
+    session::{Session, SessionResult},
 };
 
 pub mod basic_solver;
@@ -59,8 +58,8 @@ pub trait ConflictSolver {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
-        previous_repo: &Repository,
+        previous_repo: &Session,
         current_changes: ChangeSet,
-        current_repo: &Repository,
-    ) -> RepositoryResult<ConflictResolution>;
+        current_repo: &Session,
+    ) -> SessionResult<ConflictResolution>;
 }

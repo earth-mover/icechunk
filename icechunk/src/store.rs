@@ -4,7 +4,6 @@ use std::{
     iter,
     num::NonZeroU64,
     ops::{Deref, DerefMut},
-    path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -21,228 +20,20 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    change_set::ChangeSet,
     format::{
-        manifest::VirtualChunkRef,
-        snapshot::{NodeData, UserAttributesSnapshot},
-        ByteRange, ChunkOffset, IcechunkFormatError, SnapshotId,
+        manifest::{ChunkPayload, VirtualChunkRef},
+        snapshot::{NodeData, UserAttributesSnapshot, ZarrArrayMetadata},
+        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
     },
-    refs::{update_branch, BranchVersion, Ref, RefError},
-    repository::{
-        get_chunk, is_prefix_match, raise_if_invalid_snapshot_id, ArrayShape,
-        ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
-        DimensionNames, FillValue, Path, RepositoryError, RepositoryResult,
-        StorageTransformer, UserAttributes, ZarrArrayMetadata,
+    metadata::{
+        ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
+        FillValue, StorageTransformer, UserAttributes,
     },
-    storage::s3::{S3Config, S3Storage},
-    ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
+    refs::RefError,
+    repository::RepositoryError,
+    session::{get_chunk, is_prefix_match, Session, SessionError},
+    utils::serde::arc_rwlock_serde,
 };
-
-pub use crate::format::ObjectId;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum StorageConfig {
-    #[serde(rename = "in_memory")]
-    InMemory { prefix: Option<String> },
-
-    #[serde(rename = "local_filesystem")]
-    LocalFileSystem { root: PathBuf },
-
-    #[serde(rename = "s3")]
-    S3ObjectStore {
-        bucket: String,
-        prefix: String,
-        #[serde(flatten)]
-        config: Option<S3Config>,
-    },
-}
-
-impl StorageConfig {
-    pub async fn make_storage(&self) -> Result<Arc<dyn Storage + Send + Sync>, String> {
-        match self {
-            StorageConfig::InMemory { prefix } => {
-                Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())))
-            }
-            StorageConfig::LocalFileSystem { root } => {
-                let storage = ObjectStorage::new_local_store(root)
-                    .map_err(|e| format!("Error creating storage: {e}"))?;
-                Ok(Arc::new(storage))
-            }
-            StorageConfig::S3ObjectStore { bucket, prefix, config } => {
-                let storage = S3Storage::new_s3_store(bucket, prefix, config.as_ref())
-                    .await
-                    .map_err(|e| format!("Error creating storage: {e}"))?;
-                Ok(Arc::new(storage))
-            }
-        }
-    }
-
-    pub async fn make_cached_storage(
-        &self,
-    ) -> Result<Arc<dyn Storage + Send + Sync>, String> {
-        let storage = self.make_storage().await?;
-        let cached_storage = Repository::add_in_mem_asset_caching(storage);
-        Ok(cached_storage)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum VersionInfo {
-    #[serde(rename = "snapshot_id")]
-    SnapshotId(SnapshotId),
-    #[serde(rename = "tag")]
-    TagRef(String),
-    #[serde(rename = "branch")]
-    BranchTipRef(String),
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct RepositoryConfig {
-    pub version: Option<VersionInfo>,
-    pub inline_chunk_threshold_bytes: Option<u16>,
-    pub unsafe_overwrite_refs: Option<bool>,
-    pub change_set_bytes: Option<Vec<u8>>,
-}
-
-impl RepositoryConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn existing(version: VersionInfo) -> Self {
-        Self { version: Some(version), ..Self::default() }
-    }
-
-    pub fn with_version(mut self, version: VersionInfo) -> Self {
-        self.version = Some(version);
-        self
-    }
-
-    pub fn with_inline_chunk_threshold_bytes(mut self, threshold: u16) -> Self {
-        self.inline_chunk_threshold_bytes = Some(threshold);
-        self
-    }
-
-    pub fn with_unsafe_overwrite_refs(mut self, unsafe_overwrite_refs: bool) -> Self {
-        self.unsafe_overwrite_refs = Some(unsafe_overwrite_refs);
-        self
-    }
-
-    // pub fn with_virtual_ref_credentials(
-    //     mut self,
-    //     config: ObjectStoreVirtualChunkResolverConfig,
-    // ) -> Self {
-    //     self.virtual_ref_config = Some(config);
-    //     self
-    // }
-
-    pub fn with_change_set_bytes(mut self, change_set_bytes: Vec<u8>) -> Self {
-        self.change_set_bytes = Some(change_set_bytes);
-        self
-    }
-
-    pub async fn make_repository(
-        &self,
-        storage: Arc<dyn Storage + Send + Sync>,
-    ) -> Result<(Repository, Option<String>), String> {
-        let (mut builder, branch): (RepositoryBuilder, Option<String>) =
-            match &self.version {
-                None => {
-                    let builder = Repository::init(
-                        storage,
-                        self.unsafe_overwrite_refs.unwrap_or(false),
-                    )
-                    .await
-                    .map_err(|err| format!("Error initializing repository: {err}"))?;
-                    (builder, Some(String::from(Ref::DEFAULT_BRANCH)))
-                }
-                Some(VersionInfo::SnapshotId(sid)) => {
-                    let builder = Repository::update(storage, sid.clone())
-                        .await
-                        .map_err(|err| format!("Error initializing repository: {err}"))?;
-                    (builder, None)
-                }
-                Some(VersionInfo::TagRef(tag)) => {
-                    let builder = Repository::from_tag(storage, tag)
-                        .await
-                        .map_err(|err| format!("Error fetching tag: {err}"))?;
-                    (builder, None)
-                }
-                Some(VersionInfo::BranchTipRef(branch)) => {
-                    let builder = Repository::from_branch_tip(storage, branch)
-                        .await
-                        .map_err(|err| format!("Error fetching branch: {err}"))?;
-                    (builder, Some(branch.clone()))
-                }
-            };
-
-        if let Some(inline_theshold) = self.inline_chunk_threshold_bytes {
-            builder.with_inline_threshold_bytes(inline_theshold);
-        }
-        if let Some(value) = self.unsafe_overwrite_refs {
-            builder.with_unsafe_overwrite_refs(value);
-        }
-        //if let Some(config) = &self.virtual_ref_config {
-        //    builder.with_virtual_ref_config(config.clone());
-        //}
-        if let Some(change_set_bytes) = &self.change_set_bytes {
-            let change_set = ChangeSet::import_from_bytes(change_set_bytes)
-                .map_err(|err| format!("Error parsing change set: {err}"))?;
-            builder.with_change_set(change_set);
-        }
-
-        // TODO: add error checking, does the previous version exist?
-        Ok((builder.build(), branch))
-    }
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StoreOptions {
-    pub get_partial_values_concurrency: u16,
-}
-
-impl Default for StoreOptions {
-    fn default() -> Self {
-        Self { get_partial_values_concurrency: 10 }
-    }
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConsolidatedStore {
-    pub storage: StorageConfig,
-    pub repository: RepositoryConfig,
-    pub config: Option<StoreOptions>,
-}
-
-impl ConsolidatedStore {
-    pub fn with_version(mut self, version: VersionInfo) -> Self {
-        self.repository.version = Some(version);
-        self
-    }
-
-    pub fn with_change_set_bytes(
-        mut self,
-        change_set: Vec<u8>,
-    ) -> RepositoryResult<Self> {
-        self.repository.change_set_bytes = Some(change_set);
-        Ok(self)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AccessMode {
-    #[serde(rename = "r")]
-    ReadOnly,
-    #[serde(rename = "rw")]
-    ReadWrite,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ListDirItem {
@@ -272,6 +63,8 @@ pub enum StoreError {
     NotAllowed(String),
     #[error("object not found: `{0}`")]
     NotFound(#[from] KeyNotFoundError),
+    #[error("unsuccessful session operation: `{0}`")]
+    SessionError(#[from] SessionError),
     #[error("unsuccessful repository operation: `{0}`")]
     RepositoryError(#[from] RepositoryError),
     #[error("error merging stores: `{0}`")]
@@ -300,229 +93,33 @@ pub enum StoreError {
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[derive(Debug)]
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoreOptions {
+    pub get_partial_values_concurrency: u16,
+}
+
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self { get_partial_values_concurrency: 10 }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct Store {
-    repository: Arc<RwLock<Repository>>,
-    mode: AccessMode,
-    current_branch: Option<String>,
+    #[serde(with = "arc_rwlock_serde")]
+    session: Arc<RwLock<Session>>,
     config: StoreOptions,
+    read_only: bool,
 }
 
 impl Store {
-    pub async fn from_consolidated(
-        consolidated: &ConsolidatedStore,
-        mode: AccessMode,
-    ) -> Result<Self, String> {
-        let storage = consolidated.storage.make_cached_storage().await?;
-        let (repository, branch) =
-            consolidated.repository.make_repository(storage).await?;
-        Ok(Self::from_repository(repository, mode, branch, consolidated.config.clone()))
-    }
-
-    pub async fn from_json(json: &[u8], mode: AccessMode) -> Result<Self, String> {
-        let config: ConsolidatedStore =
-            serde_json::from_slice(json).map_err(|e| e.to_string())?;
-        Self::from_consolidated(&config, mode).await
-    }
-
-    pub async fn new_from_storage(
-        storage: Arc<dyn Storage + Send + Sync>,
-    ) -> Result<Self, String> {
-        let (repository, branch) =
-            RepositoryConfig::default().make_repository(storage).await?;
-        Ok(Self::from_repository(repository, AccessMode::ReadWrite, branch, None))
-    }
-
-    pub fn from_repository(
-        repository: Repository,
-        mode: AccessMode,
-        current_branch: Option<String>,
-        config: Option<StoreOptions>,
+    pub fn from_session(
+        session: Arc<RwLock<Session>>,
+        config: StoreOptions,
+        read_only: bool,
     ) -> Self {
-        Store {
-            repository: Arc::new(RwLock::new(repository)),
-            mode,
-            current_branch,
-            config: config.unwrap_or_default(),
-        }
-    }
-
-    pub fn set_mode(&mut self, mode: AccessMode) {
-        self.mode = mode;
-    }
-
-    /// Creates a new clone of the store with the given access mode.
-    pub fn with_access_mode(&self, mode: AccessMode) -> Self {
-        Store {
-            repository: self.repository.clone(),
-            mode,
-            current_branch: self.current_branch.clone(),
-            config: self.config.clone(),
-        }
-    }
-
-    pub fn access_mode(&self) -> &AccessMode {
-        &self.mode
-    }
-
-    pub fn current_branch(&self) -> &Option<String> {
-        &self.current_branch
-    }
-
-    pub async fn snapshot_id(&self) -> SnapshotId {
-        self.repository.read().await.snapshot_id().clone()
-    }
-
-    pub async fn current_version(&self) -> VersionInfo {
-        if let Some(branch) = &self.current_branch {
-            VersionInfo::BranchTipRef(branch.clone())
-        } else {
-            VersionInfo::SnapshotId(self.snapshot_id().await)
-        }
-    }
-
-    pub async fn has_uncommitted_changes(&self) -> bool {
-        self.repository.read().await.has_uncommitted_changes()
-    }
-
-    /// Resets the store to the head commit state. If there are any uncommitted changes, they will
-    /// be lost.
-    pub async fn reset(&mut self) -> StoreResult<ChangeSet> {
-        Ok(self.repository.write().await.discard_changes())
-    }
-
-    /// Checkout a specific version of the repository. This can be a snapshot id, a tag, or a branch tip.
-    ///
-    /// If the version is a branch tip, the branch will be set as the current branch.
-    /// The current [`AccessMode`] will be unchanged.
-    ///
-    /// If the version is a tag or snapshot id, the current branch will be unset and the store
-    /// will be in detached state. No commits are allowed in this state. Further the store will
-    /// be set to [`AccessMode::ReadOnly`] mode so that any attempts to modify the store will fail.
-    ///
-    /// If there are uncommitted changes, this method will return an error.
-    pub async fn checkout(&mut self, version: VersionInfo) -> StoreResult<()> {
-        let mut repo = self.repository.write().await;
-
-        // Checking out is not allowed if there are uncommitted changes
-        if repo.has_uncommitted_changes() {
-            return Err(StoreError::UncommittedChanges);
-        }
-
-        match version {
-            VersionInfo::SnapshotId(sid) => {
-                self.current_branch = None;
-                raise_if_invalid_snapshot_id(repo.storage().as_ref(), &sid).await?;
-                repo.set_snapshot_id(sid);
-                self.mode = AccessMode::ReadOnly;
-            }
-            VersionInfo::TagRef(tag) => {
-                self.current_branch = None;
-                repo.set_snapshot_from_tag(tag.as_str()).await?;
-                self.mode = AccessMode::ReadOnly;
-            }
-            VersionInfo::BranchTipRef(branch) => {
-                self.current_branch = Some(branch.clone());
-                repo.set_snapshot_from_branch(&branch).await?
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Switch to a new branch and commit the current snapshot to it. This fails if there is uncommitted changes,
-    /// or if the branch already exists (because this would cause a conflict).
-    pub async fn new_branch(
-        &mut self,
-        branch: &str,
-    ) -> StoreResult<(SnapshotId, BranchVersion)> {
-        // this needs to be done carefully to avoid deadlocks and race conditions
-        let guard = self.repository.write().await;
-        if guard.has_uncommitted_changes() {
-            return Err(StoreError::UncommittedChanges);
-        }
-        let version = guard.new_branch(branch).await?;
-        let snapshot_id = guard.snapshot_id().clone();
-
-        self.current_branch = Some(branch.to_string());
-
-        Ok((snapshot_id, version))
-    }
-
-    /// Make the current branch point to the given snapshot.
-    /// This fails if there are uncommitted changes, or if the branch has been updated
-    /// since checkout.
-    /// After execution, history of the repo branch will be altered, and the current
-    /// store will point to a different base snapshot_id
-    pub async fn reset_branch(
-        &mut self,
-        to_snapshot: SnapshotId,
-    ) -> StoreResult<BranchVersion> {
-        // TODO: this should check the snapshot exists
-        let mut guard = self.repository.write().await;
-        if guard.has_uncommitted_changes() {
-            return Err(StoreError::UncommittedChanges);
-        }
-        match self.current_branch() {
-            None => Err(StoreError::NotOnBranch),
-            Some(branch) => {
-                let storage = guard.storage();
-                raise_if_invalid_snapshot_id(storage.as_ref(), &to_snapshot).await?;
-                let old_snapshot = guard.snapshot_id();
-                let overwrite = guard.config().unsafe_overwrite_refs;
-                let version = update_branch(
-                    storage.as_ref(),
-                    branch.as_str(),
-                    to_snapshot.clone(),
-                    Some(old_snapshot),
-                    overwrite,
-                )
-                .await?;
-                guard.set_snapshot_id(to_snapshot);
-                Ok(version)
-            }
-        }
-    }
-
-    pub async fn merge(&self, changes: ChangeSet) {
-        self.repository.write().await.merge(changes).await;
-    }
-
-    /// Commit the current changes to the current branch. If the store is not currently
-    /// on a branch, this will return an error.
-    pub async fn commit(&self, message: &str) -> StoreResult<SnapshotId> {
-        let Some(branch) = &self.current_branch else {
-            return Err(StoreError::NotOnBranch);
-        };
-
-        let result = self
-            .repository
-            .write()
-            .await
-            .deref_mut()
-            .commit(branch, message, None)
-            .await?;
-        Ok(result)
-    }
-
-    /// Tag the given snapshot with a specified tag
-    pub async fn tag(&self, tag: &str, snapshot_id: &SnapshotId) -> StoreResult<()> {
-        self.repository.write().await.deref_mut().tag(tag, snapshot_id).await?;
-        Ok(())
-    }
-
-    /// Returns the sequence of parents of the current session, in order of latest first.
-    pub async fn ancestry(
-        &self,
-    ) -> StoreResult<impl Stream<Item = StoreResult<SnapshotMetadata>> + Send> {
-        let repository = Arc::clone(&self.repository).read_owned().await;
-        // FIXME: in memory realization to avoid maintaining a lock on the repository
-        let all = repository.ancestry().await?.err_into().collect::<Vec<_>>().await;
-        Ok(futures::stream::iter(all))
-    }
-
-    pub async fn change_set_bytes(&self) -> StoreResult<Vec<u8>> {
-        Ok(self.repository.read().await.change_set_bytes()?)
+        Self { session, config, read_only }
     }
 
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
@@ -531,13 +128,13 @@ impl Store {
     }
 
     pub async fn clear(&mut self) -> StoreResult<()> {
-        let mut repo = self.repository.write().await;
+        let mut repo = self.session.write().await;
         Ok(repo.clear().await?)
     }
 
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
-        let repo = self.repository.read().await;
-        get_key(key, byte_range, repo.deref()).await
+        let repo = self.session.read().await;
+        get_key(key, byte_range, &repo).await
     }
 
     /// Get all the requested keys concurrently.
@@ -602,7 +199,7 @@ impl Store {
     }
 
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
-        let guard = self.repository.read().await;
+        let guard = self.session.read().await;
         exists(key, guard.deref()).await
     }
 
@@ -622,9 +219,9 @@ impl Store {
         &self,
         key: &str,
         value: Bytes,
-        locked_repo: Option<&mut Repository>,
+        locked_repo: Option<&mut Session>,
     ) -> StoreResult<()> {
-        if self.mode == AccessMode::ReadOnly {
+        if self.read_only {
             return Err(StoreError::ReadOnly);
         }
 
@@ -650,11 +247,11 @@ impl Store {
                     }
                     None => {
                         // we only lock the repository to get the writer
-                        let writer = self.repository.read().await.get_chunk_writer();
+                        let writer = self.session.read().await.get_chunk_writer();
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
-                        self.repository
+                        self.session
                             .write()
                             .await
                             .set_chunk_ref(node_path, coords, Some(payload))
@@ -670,7 +267,7 @@ impl Store {
     }
 
     pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
-        let mut guard = self.repository.write().await;
+        let mut guard = self.session.write().await;
         if exists(key, guard.deref()).await? {
             Ok(())
         } else {
@@ -684,13 +281,13 @@ impl Store {
         key: &str,
         reference: VirtualChunkRef,
     ) -> StoreResult<()> {
-        if self.mode == AccessMode::ReadOnly {
+        if self.read_only {
             return Err(StoreError::ReadOnly);
         }
 
         match Key::parse(key)? {
             Key::Chunk { node_path, coords } => {
-                self.repository
+                self.session
                     .write()
                     .await
                     .set_chunk_ref(
@@ -708,7 +305,7 @@ impl Store {
     }
 
     pub async fn delete(&self, key: &str) -> StoreResult<()> {
-        if self.mode == AccessMode::ReadOnly {
+        if self.read_only {
             return Err(StoreError::ReadOnly);
         }
 
@@ -717,15 +314,15 @@ impl Store {
                 // we need to hold the lock while we do the node search and the write
                 // to avoid race conditions with other writers
                 // (remember this method takes &self and not &mut self)
-                let mut guard = self.repository.write().await;
+                let mut guard = self.session.write().await;
                 let node = guard.get_node(&node_path).await;
 
                 // When there is no node at the given key, we don't consider it an error, instead we just do nothing
-                if let Err(RepositoryError::NodeNotFound { path: _, message: _ }) = node {
+                if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
                     return Ok(());
                 };
 
-                let node = node.map_err(StoreError::RepositoryError)?;
+                let node = node.map_err(StoreError::SessionError)?;
                 match node.node_data {
                     NodeData::Array(_, _) => {
                         Ok(guard.deref_mut().delete_array(node_path).await?)
@@ -736,15 +333,15 @@ impl Store {
                 }
             }
             Key::Chunk { node_path, coords } => {
-                let mut guard = self.repository.write().await;
-                let repository = guard.deref_mut();
-                match repository.set_chunk_ref(node_path, coords, None).await {
+                let mut guard = self.session.write().await;
+                let session = guard.deref_mut();
+                match session.set_chunk_ref(node_path, coords, None).await {
                     Ok(_) => Ok(()),
-                    Err(RepositoryError::NodeNotFound { path: _, message: _ }) => {
+                    Err(SessionError::NodeNotFound { path: _, message: _ }) => {
                         // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
                         Ok(())
                     }
-                    Err(err) => Err(StoreError::RepositoryError(err)),
+                    Err(err) => Err(StoreError::SessionError(err)),
                 }
             }
             Key::ZarrV2(_) => Ok(()),
@@ -759,7 +356,7 @@ impl Store {
         &self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
-        if self.mode == AccessMode::ReadOnly {
+        if self.read_only {
             return Err(StoreError::ReadOnly);
         }
 
@@ -840,7 +437,7 @@ impl Store {
         &self,
         path: Path,
         array_meta: ArrayMetadata,
-        locked_repo: Option<&mut Repository>,
+        locked_repo: Option<&mut Session>,
     ) -> Result<(), StoreError> {
         match locked_repo {
             Some(repo) => set_array_meta(path, array_meta, repo).await,
@@ -855,7 +452,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
-        let mut guard = self.repository.write().await;
+        let mut guard = self.session.write().await;
         set_array_meta(path, array_meta, guard.deref_mut()).await
     }
 
@@ -863,7 +460,7 @@ impl Store {
         &self,
         path: Path,
         group_meta: GroupMetadata,
-        locked_repo: Option<&mut Repository>,
+        locked_repo: Option<&mut Session>,
     ) -> Result<(), StoreError> {
         match locked_repo {
             Some(repo) => set_group_meta(path, group_meta, repo).await,
@@ -878,7 +475,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
-        let mut guard = self.repository.write().await;
+        let mut guard = self.session.write().await;
         set_group_meta(path, group_meta, guard.deref_mut()).await
     }
 
@@ -888,7 +485,7 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let repository = Arc::clone(&self.repository).read_owned().await;
+            let repository = Arc::clone(&self.session).read_owned().await;
             for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
@@ -906,10 +503,10 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let repository = Arc::clone(&self.repository).read_owned().await;
+            let repository = Arc::clone(&self.session).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::RepositoryError)? {
+            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::SessionError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
                     Ok((path, chunk)) => {
@@ -929,7 +526,7 @@ impl Store {
 async fn set_array_meta(
     path: Path,
     array_meta: ArrayMetadata,
-    repo: &mut Repository,
+    repo: &mut Session,
 ) -> Result<(), StoreError> {
     if repo.get_array(&path).await.is_ok() {
         // TODO: we don't necessarily need to update both
@@ -946,7 +543,7 @@ async fn set_array_meta(
 async fn set_group_meta(
     path: Path,
     group_meta: GroupMetadata,
-    repo: &mut Repository,
+    repo: &mut Session,
 ) -> Result<(), StoreError> {
     // we need to hold the lock while we search the group and do the update to avoid race
     // conditions with other writers (notice we don't take &mut self)
@@ -965,7 +562,7 @@ async fn get_metadata(
     _key: &str,
     path: &Path,
     range: &ByteRange,
-    repo: &Repository,
+    repo: &Session,
 ) -> StoreResult<Bytes> {
     let node = repo.get_node(path).await.map_err(|_| {
         StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
@@ -994,7 +591,7 @@ async fn get_chunk_bytes(
     path: Path,
     coords: ChunkIndices,
     byte_range: &ByteRange,
-    repo: &Repository,
+    repo: &Session,
 ) -> StoreResult<Bytes> {
     let reader = repo.get_chunk_reader(&path, &coords, byte_range).await?;
 
@@ -1010,7 +607,7 @@ async fn get_chunk_bytes(
 async fn get_key(
     key: &str,
     byte_range: &ByteRange,
-    repo: &Repository,
+    repo: &Session,
 ) -> StoreResult<Bytes> {
     let bytes = match Key::parse(key)? {
         Key::Metadata { node_path } => {
@@ -1027,11 +624,11 @@ async fn get_key(
     Ok(bytes)
 }
 
-async fn exists(key: &str, repo: &Repository) -> StoreResult<bool> {
+async fn exists(key: &str, repo: &Session) -> StoreResult<bool> {
     match get_key(key, &ByteRange::ALL, repo).await {
         Ok(_) => Ok(true),
         Err(StoreError::NotFound(_)) => Ok(false),
-        Err(StoreError::RepositoryError(RepositoryError::NodeNotFound {
+        Err(StoreError::SessionError(SessionError::NodeNotFound {
             path: _,
             message: _,
         })) => Ok(false),
@@ -1443,12 +1040,30 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::borrow::BorrowMut;
+    use std::{borrow::BorrowMut, collections::HashMap};
 
-    use crate::storage::s3::{S3Credentials, StaticS3Credentials};
+    use crate::{repository::VersionInfo, ObjectStorage, Repository};
 
     use super::*;
     use pretty_assertions::assert_eq;
+
+    async fn create_memory_store_repository() -> Repository {
+        let storage = Arc::new(
+            ObjectStorage::new_in_memory_store(Some("prefix".into()))
+                .expect("failed to create in-memory store"),
+        );
+        Repository::create(None, None, storage, HashMap::new()).await.unwrap()
+    }
+
+    // async fn create_local_store_repository() -> Repository {
+    //     let dir = StdPath::new("/Users/matthew.earthmover/Developer/icechunk/testing-chunks");
+    //     println!("{:?}", dir);
+    //     let storage = Arc::new(
+    //         ObjectStorage::new_local_store(&dir)
+    //             .expect("failed to create local store"),
+    //     );
+    //     Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
+    // }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let version1 = keys(store, "/").await?;
@@ -1707,14 +1322,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         assert!(matches!(
@@ -1753,16 +1366,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
-        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let storage =
-            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
@@ -1801,17 +1410,9 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
-        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let storage =
-            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
-        );
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -1881,10 +1482,12 @@ mod tests {
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
-        let oid = store.commit("commit").await?;
+        let _oid = { ds.write().await.commit("commit", None).await? };
 
-        let ds = Repository::update(storage, oid).await?.build();
-        let store = Store::from_repository(ds, AccessMode::ReadWrite, None, None);
+        let ds =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1896,16 +1499,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
-        let in_mem_storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let storage =
-            Arc::clone(&(in_mem_storage.clone() as Arc<dyn Storage + Send + Sync>));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -1939,7 +1538,7 @@ mod tests {
 
         assert!(matches!(
             store.delete("array/c/10/1/1").await,
-            Err(StoreError::RepositoryError(RepositoryError::InvalidIndex { coords, path }))
+            Err(StoreError::SessionError(SessionError::InvalidIndex { coords, path }))
                 if path.to_string() == "/array" && coords == ChunkIndices([10, 1, 1].to_vec())
         ));
 
@@ -1948,14 +1547,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         assert!(store.is_empty("").await.unwrap());
@@ -2017,14 +1614,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -2056,14 +1651,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -2096,14 +1689,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -2203,14 +1794,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -2243,14 +1832,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let ds = Repository::init(Arc::clone(&storage), false).await?.build();
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -2307,10 +1894,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2326,7 +1912,11 @@ mod tests {
         store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        let snapshot_id = store.commit("initial commit").await.unwrap();
+        let snapshot_id =
+            { ds.write().await.commit("initial commit", None).await.unwrap() };
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
@@ -2335,65 +1925,59 @@ mod tests {
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_snapshot_id = store.commit("update").await.unwrap();
+        let new_snapshot_id = { ds.write().await.commit("update", None).await.unwrap() };
 
-        let random_id = SnapshotId::random();
-        let res = store.checkout(VersionInfo::SnapshotId(random_id.clone())).await;
-        assert!(matches!(
-            res,
-            Err(StoreError::RepositoryError(RepositoryError::SnapshotNotFound { .. }))
-        ));
-
-        store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await.unwrap();
-        assert_eq!(store.mode, AccessMode::ReadOnly);
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        store.checkout(VersionInfo::SnapshotId(new_snapshot_id.clone())).await.unwrap();
+        let ds = repo
+            .readonly_session(&VersionInfo::SnapshotId(new_snapshot_id.clone()))
+            .await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        store.tag("tag_0", &new_snapshot_id).await.unwrap();
-        store.checkout(VersionInfo::TagRef("tag_0".to_string())).await.unwrap();
-        assert_eq!(store.mode, AccessMode::ReadOnly);
+        repo.create_tag("tag_0", &new_snapshot_id).await.unwrap();
+        let _ds = repo
+            .readonly_session(&VersionInfo::TagRef("tag_0".to_string()))
+            .await
+            .unwrap();
 
-        store.checkout(VersionInfo::BranchTipRef("main".to_string())).await.unwrap();
-        store.set_mode(AccessMode::ReadWrite);
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
-        assert_eq!(store.has_uncommitted_changes().await, true);
+        assert_eq!(ds.read().await.has_uncommitted_changes(), true);
 
-        let result = store.checkout(VersionInfo::SnapshotId(snapshot_id.clone())).await;
-        assert!(result.is_err());
-
-        store.reset().await?;
+        {
+            ds.write().await.discard_changes()
+        };
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         // Create a new branch and do stuff with it
-        store.new_branch("dev").await?;
+        repo.create_branch("dev", ds.read().await.snapshot_id()).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("dev").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
         store.set("array/c/0/1/0", new_data.clone()).await?;
-        let dev_snapshot_id = store.commit("update dev branch").await?;
-        store.checkout(VersionInfo::SnapshotId(dev_snapshot_id)).await?;
+        let dev_snapshot =
+            { ds.write().await.commit("update dev branch", None).await.unwrap() };
+
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(dev_snapshot)).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
-
-        let new_store_from_snapshot = Store::from_repository(
-            Repository::update(Arc::clone(&storage), snapshot_id).await?.build(),
-            AccessMode::ReadWrite,
-            None,
-            None,
-        );
-        assert_eq!(
-            new_store_from_snapshot.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
-            data
-        );
-
         Ok(())
     }
 
     #[tokio::test]
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let mut store =
+            Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2431,7 +2015,11 @@ mod tests {
         store.set("array/c/1/0/0", new_data.clone()).await.unwrap();
         store.set("group/array/c/1/0/0", new_data.clone()).await.unwrap();
 
-        let _ = store.commit("initial commit").await.unwrap();
+        ds.write().await.commit("initial commit", None).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let mut store =
+            Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2450,19 +2038,17 @@ mod tests {
             empty
         );
 
-        let empty_snap = store.commit("no content commit").await.unwrap();
+        let empty_snap =
+            ds.write().await.commit("no content commit", None).await.unwrap();
 
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
         );
 
-        let store = Store::from_repository(
-            Repository::update(Arc::clone(&storage), empty_snap).await?.build(),
-            AccessMode::ReadWrite,
-            None,
-            None,
-        );
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(empty_snap)).await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreOptions::default(), true);
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
@@ -2474,9 +2060,9 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite() -> Result<(), Box<dyn std::error::Error>> {
         // GH347
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-        let store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         let meta1 = Bytes::copy_from_slice(
             br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
@@ -2503,13 +2089,17 @@ mod tests {
         // with a commit in the middle, this tests the changeset interaction with snapshot
         store.set("zarr.json", meta1).await.unwrap();
         store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
-        store.commit("initial commit").await.unwrap();
+
+        ds.write().await.commit("initial commit", None).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
         store.delete("zarr.json").await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         store.set("zarr.json", meta2.clone()).await.unwrap();
         store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
         assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
-        store.commit("commit 2").await.unwrap();
+        ds.write().await.commit("commit 2", None).await.unwrap();
         assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
         assert_eq!(
             &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
@@ -2521,10 +2111,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let mut store = Store::new_from_storage(Arc::clone(&storage)).await?;
+        let repo = create_memory_store_repository().await;
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2534,7 +2123,10 @@ mod tests {
             .await
             .unwrap();
 
-        store.commit("root group").await.unwrap();
+        ds.write().await.commit("root group", None).await.unwrap();
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2544,7 +2136,10 @@ mod tests {
             .await
             .unwrap();
 
-        let prev_snap = store.commit("group a").await?;
+        let prev_snap = ds.write().await.commit("group a", None).await?;
+
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2554,25 +2149,16 @@ mod tests {
             .await
             .unwrap();
 
-        store.commit("group b").await?;
+        ds.write().await.commit("group b", None).await.unwrap();
         assert!(store.exists("a/zarr.json").await?);
         assert!(store.exists("b/zarr.json").await?);
 
-        store.reset_branch(prev_snap).await?;
+        repo.reset_branch("main", &prev_snap).await?;
+        let ds = Arc::new(RwLock::new(
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
+        ));
+        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), true);
 
-        assert!(!store.exists("b/zarr.json").await?);
-        assert!(store.exists("a/zarr.json").await?);
-
-        let (repo, _) =
-            RepositoryConfig::existing(VersionInfo::BranchTipRef("main".to_string()))
-                .make_repository(storage)
-                .await?;
-        let store = Store::from_repository(
-            repo,
-            AccessMode::ReadOnly,
-            Some("main".to_string()),
-            None,
-        );
         assert!(!store.exists("b/zarr.json").await?);
         assert!(store.exists("a/zarr.json").await?);
         Ok(())
@@ -2580,12 +2166,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_access_mode() {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-
-        let writeable_store =
-            Store::new_from_storage(Arc::clone(&storage)).await.unwrap();
-        assert_eq!(writeable_store.access_mode(), &AccessMode::ReadWrite);
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writeable_session("main").await.unwrap();
+        let writeable_store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
+        );
 
         writeable_store
             .set(
@@ -2595,8 +2182,16 @@ mod tests {
             .await
             .unwrap();
 
-        let readable_store = writeable_store.with_access_mode(AccessMode::ReadOnly);
-        assert_eq!(readable_store.access_mode(), &AccessMode::ReadOnly);
+        let readable_store = Store::from_session(
+            Arc::new(RwLock::new(
+                repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                    .await
+                    .unwrap(),
+            )),
+            StoreOptions::default(),
+            true,
+        );
+        assert_eq!(readable_store.read_only, true);
 
         let result = readable_store
             .set(
@@ -2606,186 +2201,191 @@ mod tests {
             .await;
         let correct_error = matches!(result, Err(StoreError::ReadOnly { .. }));
         assert!(correct_error);
-
-        readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
     }
 
-    #[test]
-    fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
-        let expected = ConsolidatedStore {
-            storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
-            repository: RepositoryConfig {
-                inline_chunk_threshold_bytes: Some(128),
-                version: Some(VersionInfo::SnapshotId(SnapshotId::new([
-                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-                ]))),
-                unsafe_overwrite_refs: Some(true),
-                change_set_bytes: None,
-            },
-            config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
-        };
+    // #[test]
+    // fn test_store_config_deserialization() -> Result<(), Box<dyn std::error::Error>> {
+    //     let expected = ConsolidatedStore {
+    //         storage: StorageConfig::LocalFileSystem { root: "/tmp/test".into() },
+    //         repository: RepositoryConfig {
+    //             inline_chunk_threshold_bytes: Some(128),
+    //             version: Some(VersionInfo::SnapshotId(SnapshotId::new([
+    //                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    //             ]))),
+    //             unsafe_overwrite_refs: Some(true),
+    //             change_set_bytes: None,
+    //             virtual_ref_config: None,
+    //         },
+    //         config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
+    //     };
 
-        let json = r#"
-            {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
-             "repository": {
-                "version": {"snapshot_id":"000G40R40M30E209185G"},
-                "inline_chunk_threshold_bytes":128,
-                "unsafe_overwrite_refs":true
-             },
-             "config": {
-                "get_partial_values_concurrency": 100
-             }
-            }
-        "#;
-        assert_eq!(expected, serde_json::from_str(json)?);
+    //     let json = r#"
+    //         {"storage": {"type": "local_filesystem", "root":"/tmp/test"},
+    //          "repository": {
+    //             "version": {"snapshot_id":"000G40R40M30E209185G"},
+    //             "inline_chunk_threshold_bytes":128,
+    //             "unsafe_overwrite_refs":true
+    //          },
+    //          "config": {
+    //             "get_partial_values_concurrency": 100
+    //          }
+    //         }
+    //     "#;
+    //     assert_eq!(expected, serde_json::from_str(json)?);
 
-        let json = r#"
-            {"storage":
-                {"type": "local_filesystem", "root":"/tmp/test"},
-             "repository": {
-                "version": null,
-                "inline_chunk_threshold_bytes": null,
-                "unsafe_overwrite_refs":null
-             }}
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                },
-                config: None,
-                ..expected.clone()
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":
+    //             {"type": "local_filesystem", "root":"/tmp/test"},
+    //          "repository": {
+    //             "version": null,
+    //             "inline_chunk_threshold_bytes": null,
+    //             "unsafe_overwrite_refs":null
+    //          }}
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             config: None,
+    //             ..expected.clone()
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":
-                {"type": "local_filesystem", "root":"/tmp/test"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                },
-                config: None,
-                ..expected.clone()
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":
+    //             {"type": "local_filesystem", "root":"/tmp/test"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             config: None,
+    //             ..expected.clone()
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":{"type": "in_memory", "prefix": "prefix"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                },
-                storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":{"type": "in_memory", "prefix": "prefix"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":{"type": "in_memory"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                },
-                storage: StorageConfig::InMemory { prefix: None },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":{"type": "in_memory"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::InMemory { prefix: None },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-            {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
-             "repository": {}
-            }
-        "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                },
-                storage: StorageConfig::S3ObjectStore {
-                    bucket: String::from("test"),
-                    prefix: String::from("root"),
-                    config: None,
-                },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //         {"storage":{"type": "s3", "bucket":"test", "prefix":"root"},
+    //          "repository": {}
+    //         }
+    //     "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::S3ObjectStore {
+    //                 bucket: String::from("test"),
+    //                 prefix: String::from("root"),
+    //                 config: None,
+    //             },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        let json = r#"
-        {"storage":{
-             "type": "s3",
-             "bucket":"test",
-             "prefix":"root",
-             "credentials":{
-                 "type":"static",
-                 "access_key_id":"my-key",
-                 "secret_access_key":"my-secret-key"
-             },
-             "endpoint":"http://localhost:9000",
-             "allow_http": true
-         },
-         "repository": {}
-        }
-    "#;
-        assert_eq!(
-            ConsolidatedStore {
-                repository: RepositoryConfig {
-                    version: None,
-                    inline_chunk_threshold_bytes: None,
-                    unsafe_overwrite_refs: None,
-                    change_set_bytes: None,
-                },
-                storage: StorageConfig::S3ObjectStore {
-                    bucket: String::from("test"),
-                    prefix: String::from("root"),
-                    config: Some(S3Config {
-                        region: None,
-                        endpoint: Some(String::from("http://localhost:9000")),
-                        credentials: S3Credentials::Static(StaticS3Credentials {
-                            access_key_id: String::from("my-key"),
-                            secret_access_key: String::from("my-secret-key"),
-                            session_token: None,
-                        }),
-                        allow_http: true,
-                    })
-                },
-                config: None,
-            },
-            serde_json::from_str(json)?
-        );
+    //     let json = r#"
+    //     {"storage":{
+    //          "type": "s3",
+    //          "bucket":"test",
+    //          "prefix":"root",
+    //          "credentials":{
+    //              "type":"static",
+    //              "access_key_id":"my-key",
+    //              "secret_access_key":"my-secret-key"
+    //          },
+    //          "endpoint":"http://localhost:9000",
+    //          "allow_http": true
+    //      },
+    //      "repository": {}
+    //     }
+    // "#;
+    //     assert_eq!(
+    //         ConsolidatedStore {
+    //             repository: RepositoryConfig {
+    //                 version: None,
+    //                 inline_chunk_threshold_bytes: None,
+    //                 unsafe_overwrite_refs: None,
+    //                 change_set_bytes: None,
+    //                 virtual_ref_config: None,
+    //             },
+    //             storage: StorageConfig::S3ObjectStore {
+    //                 bucket: String::from("test"),
+    //                 prefix: String::from("root"),
+    //                 config: Some(S3Config {
+    //                     region: None,
+    //                     endpoint: Some(String::from("http://localhost:9000")),
+    //                     credentials: S3Credentials::Static(StaticS3Credentials {
+    //                         access_key_id: String::from("my-key"),
+    //                         secret_access_key: String::from("my-secret-key"),
+    //                         session_token: None,
+    //                     }),
+    //                     allow_http: true,
+    //                 })
+    //             },
+    //             config: None,
+    //         },
+    //         serde_json::from_str(json)?
+    //     );
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }

@@ -11,7 +11,7 @@ use icechunk::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
     storage::{
-        s3::{S3Config, S3Credentials, S3Storage, StaticS3Credentials},
+        s3::{S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
         StorageResult,
     },
     ObjectStorage, Storage, StorageError,
@@ -19,10 +19,10 @@ use icechunk::{
 use pretty_assertions::{assert_eq, assert_ne};
 
 async fn mk_storage() -> StorageResult<S3Storage> {
-    S3Storage::new_s3_store(
-        "testbucket",
-        "test_s3_storage__".to_string() + Utc::now().to_rfc3339().as_str(),
-        Some(&S3Config {
+    S3Storage::new_s3_store(&S3Config {
+        bucket: "testbucket".to_string(),
+        prefix: "test_s3_storage__".to_string() + Utc::now().to_rfc3339().as_str(),
+        options: Some(S3ClientOptions {
             region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
             credentials: S3Credentials::Static(StaticS3Credentials {
@@ -32,12 +32,13 @@ async fn mk_storage() -> StorageResult<S3Storage> {
             }),
             allow_http: true,
         }),
-    )
+    })
     .await
 }
 
 fn mk_in_memory_storage() -> ObjectStorage {
-    ObjectStorage::new_in_memory_store(Some("prefix".to_string()))
+    #![allow(clippy::unwrap_used)]
+    ObjectStorage::new_in_memory_store(Some("prefix".to_string())).unwrap()
 }
 
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>

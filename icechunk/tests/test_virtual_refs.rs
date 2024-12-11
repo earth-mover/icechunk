@@ -3,27 +3,29 @@
 mod tests {
     use icechunk::{
         format::{
-            manifest::{
-                Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
-                VirtualReferenceError,
-            },
+            manifest::{Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError},
+            snapshot::ZarrArrayMetadata,
             ByteRange, ChunkId, ChunkIndices, Path,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-        repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata},
+        session::{get_chunk, SessionError},
         storage::{
-            s3::{mk_client, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
+            s3::{
+                mk_client, S3ClientOptions, S3Config, S3Credentials, S3Storage,
+                StaticS3Credentials,
+            },
             ObjectStorage,
         },
+        store::{StoreError, StoreOptions},
         virtual_chunks::{
             ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer,
         },
-        zarr::{AccessMode, StoreError},
-        Repository, Storage, Store,
+        Repository, RepositoryConfig, Storage, Store,
     };
-    use std::{error::Error, num::NonZeroU64};
+    use std::{collections::HashMap, error::Error, num::NonZeroU64, vec};
     use std::{path::Path as StdPath, sync::Arc};
     use tempfile::TempDir;
+    use tokio::sync::RwLock;
 
     use bytes::Bytes;
     use object_store::{
@@ -31,8 +33,8 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
 
-    fn minino_s3_config() -> S3Config {
-        S3Config {
+    fn minino_s3_config() -> S3ClientOptions {
+        S3ClientOptions {
             region: Some("us-east-1".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
             credentials: S3Credentials::Static(StaticS3Credentials {
@@ -46,17 +48,22 @@ mod tests {
 
     async fn create_repository(
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chukn_containers: Vec<VirtualChunkContainer>,
+        virtual_chunk_containers: Vec<VirtualChunkContainer>,
         s3_credentials: Option<ObjectStoreCredentials>,
     ) -> Repository {
-        let mut builder =
-            Repository::init(storage, true).await.expect("building repository failed");
-
-        builder.with_virtual_chunk_containers(virtual_chukn_containers);
-        if let Some(cred) = s3_credentials {
-            builder.with_virtual_chunk_credentials("s3", cred);
+        let mut creds = HashMap::new();
+        if let Some(s3_credentials) = s3_credentials {
+            creds.insert("s3".to_string(), s3_credentials);
         }
-        builder.build()
+
+        Repository::create(
+            Some(RepositoryConfig { virtual_chunk_containers, ..Default::default() }),
+            None,
+            storage,
+            creds,
+        )
+        .await
+        .expect("Failed to initialize repository")
     }
 
     async fn write_chunks_to_store(
@@ -107,11 +114,11 @@ mod tests {
 
     async fn create_minio_repository() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-            S3Storage::new_s3_store(
-                "testbucket".to_string(),
-                format!("{:?}", ChunkId::random()),
-                Some(&minino_s3_config()),
-            )
+            S3Storage::new_s3_store(&S3Config {
+                bucket: "testbucket".to_string(),
+                prefix: format!("{:?}", ChunkId::random()),
+                options: Some(minino_s3_config()),
+            })
             .await
             .expect("Creating minio storage failed"),
         );
@@ -169,8 +176,8 @@ mod tests {
         write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
         let repo_dir = TempDir::new()?;
-        let mut ds = create_local_repository(repo_dir.path()).await;
-
+        let repo = create_local_repository(repo_dir.path()).await;
+        let mut ds = repo.writeable_session("main").await.unwrap();
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
@@ -285,7 +292,8 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let mut ds = create_minio_repository().await;
+        let repo = create_minio_repository().await;
+        let mut ds = repo.writeable_session("main").await.unwrap();
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
@@ -402,12 +410,12 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let ds = create_minio_repository().await;
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let repo = create_minio_repository().await;
+        let ds = repo.writeable_session("main").await.unwrap();
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -457,13 +465,13 @@ mod tests {
     async fn test_zarr_store_virtual_refs_from_public_s3(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let repo_dir = TempDir::new()?;
-        let ds = create_local_repository(repo_dir.path()).await;
+        let repo = create_local_repository(repo_dir.path()).await;
+        let ds = repo.writeable_session("main").await.unwrap();
 
-        let mut store = Store::from_repository(
-            ds,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -507,57 +515,62 @@ mod tests {
         // local filesystem chunks and one for chunks in a public S3 bucket.
 
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-            S3Storage::new_s3_store(
-                "testbucket".to_string(),
-                format!("{:?}", ChunkId::random()),
-                Some(&minino_s3_config()),
-            )
+            S3Storage::new_s3_store(&S3Config {
+                bucket: "testbucket".to_string(),
+                prefix: format!("{:?}", ChunkId::random()),
+                options: Some(minino_s3_config()),
+            })
             .await
             .expect("Creating minio storage failed"),
         );
 
-        let mut builder =
-            Repository::init(storage, true).await.expect("building repository failed");
-
-        builder.with_virtual_chunk_container(VirtualChunkContainer {
-            name: "s3".to_string(),
-            object_store: ObjectStorePlatform::S3,
-            region: Some(String::from("us-east-1")),
-            prefix: "s3://".to_string(),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            anonymous: false,
-            allow_http: true,
-        });
-
-        builder.with_virtual_chunk_container(VirtualChunkContainer {
-            name: "file".to_string(),
-            object_store: ObjectStorePlatform::LocalFileSystem,
-            region: None,
-            prefix: "file://".to_string(),
-            endpoint_url: None,
-            anonymous: true,
-            allow_http: true,
-        });
-        builder.with_virtual_chunk_container(VirtualChunkContainer {
-            name: "public".to_string(),
-            object_store: ObjectStorePlatform::S3,
-            region: Some(String::from("us-east-1")),
-            prefix: "s3://earthmover-sample-data".to_string(),
-            endpoint_url: None,
-            anonymous: true,
-            allow_http: false,
-        });
-
-        builder.with_virtual_chunk_credentials(
-            "s3",
-            ObjectStoreCredentials::Static {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
-                session_token: None,
+        let containers = vec![
+            VirtualChunkContainer {
+                name: "s3".to_string(),
+                object_store: ObjectStorePlatform::S3,
+                region: Some(String::from("us-east-1")),
+                prefix: "s3://".to_string(),
+                endpoint_url: Some("http://localhost:9000".to_string()),
+                anonymous: false,
+                allow_http: true,
             },
-        );
+            VirtualChunkContainer {
+                name: "file".to_string(),
+                object_store: ObjectStorePlatform::LocalFileSystem,
+                region: None,
+                prefix: "file://".to_string(),
+                endpoint_url: None,
+                anonymous: true,
+                allow_http: true,
+            },
+            VirtualChunkContainer {
+                name: "public".to_string(),
+                object_store: ObjectStorePlatform::S3,
+                region: Some(String::from("us-east-1")),
+                prefix: "s3://earthmover-sample-data".to_string(),
+                endpoint_url: None,
+                anonymous: true,
+                allow_http: false,
+            },
+        ];
 
-        let repo = builder.build();
+        let virtual_creds = HashMap::from([
+            (
+                "s3".to_string(),
+                ObjectStoreCredentials::Static {
+                    access_key_id: "minio123".to_string(),
+                    secret_access_key: "minio123".to_string(),
+                    session_token: None,
+                },
+            ),
+        ]);
+            
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                virtual_chunk_containers: containers,
+                ..Default::default()
+            }), None, storage, virtual_creds).await?;
+
         let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 
         let minio_bytes1 = Bytes::copy_from_slice(b"first");
@@ -570,11 +583,11 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let mut store = Store::from_repository(
-            repo,
-            AccessMode::ReadWrite,
-            Some("main".to_string()),
-            None,
+        let ds = repo.writeable_session("main").await?;
+        let mut store = Store::from_session(
+            Arc::new(RwLock::new(ds)),
+            StoreOptions::default(),
+            false,
         );
 
         store
@@ -700,7 +713,7 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/0/0", &ByteRange::ALL).await,
-            Err(StoreError::RepositoryError(RepositoryError::VirtualReferenceError(
+            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
                 VirtualReferenceError::ObjectModified(location)
             ))) if location == "s3://testbucket/path/to/chunk-3"
         ));
@@ -714,7 +727,7 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/0/1", &ByteRange::ALL).await,
-            Err(StoreError::RepositoryError(RepositoryError::VirtualReferenceError(
+            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
                 VirtualReferenceError::ObjectModified(location)
             ))) if location.contains("chunk-3")
         ));
@@ -732,7 +745,7 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/1/2", &ByteRange::ALL).await,
-            Err(StoreError::RepositoryError(RepositoryError::VirtualReferenceError(
+            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
                 VirtualReferenceError::ObjectModified(location)
             ))) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
         ));
