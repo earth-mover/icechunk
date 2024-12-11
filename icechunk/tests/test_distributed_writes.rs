@@ -62,7 +62,7 @@ async fn write_chunks(
                 .chain(fy.to_le_bytes().into_iter())
                 .collect();
             let payload =
-                ds.get_chunk_writer()?(Bytes::copy_from_slice(bytes.as_slice())).await?;
+                ds.get_chunk_writer()(Bytes::copy_from_slice(bytes.as_slice())).await?;
             ds.set_chunk_ref(
                 "/array".try_into().unwrap(),
                 ChunkIndices(vec![x, y]),
@@ -165,13 +165,13 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
 
     // We recover our repo instances (the may be numbered in a different order, doesn't matter)
     let mut ds1 = write_results.pop().unwrap().unwrap();
-    let mut ds2 = write_results.pop().unwrap().unwrap();
-    let mut ds3 = write_results.pop().unwrap().unwrap();
-    let mut ds4 = write_results.pop().unwrap().unwrap();
+    let ds2 = write_results.pop().unwrap().unwrap();
+    let ds3 = write_results.pop().unwrap().unwrap();
+    let ds4 = write_results.pop().unwrap().unwrap();
 
     // We get the ChangeSet from repos 2, 3 and 4, by converting them into bytes.
     // This simulates a marshalling  operation from a remote writer.
-    let change_sets: Vec<ChangeSet> = vec![ds2.discard_changes()?, ds3.discard_changes()?, ds4.discard_changes()?];
+    let change_sets: Vec<ChangeSet> = vec![ds2.into(), ds3.into(), ds4.into()];
     let change_sets_bytes = change_sets.iter().map(|cs| cs.export_to_bytes().unwrap());
     let change_sets = change_sets_bytes
         .map(|bytes| ChangeSet::import_from_bytes(bytes.as_slice()).unwrap());

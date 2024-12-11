@@ -39,21 +39,21 @@ impl ConflictSolver for BasicConflictSolver {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
-        previous_session: &Session,
+        previous_repo: &Session,
         current_changes: ChangeSet,
-        current_session: &Session,
+        current_repo: &Session,
     ) -> SessionResult<ConflictResolution> {
         match ConflictDetector
-            .solve(previous_change, previous_session, current_changes, current_session)
+            .solve(previous_change, previous_repo, current_changes, current_repo)
             .await?
         {
             res @ ConflictResolution::Patched(_) => Ok(res),
             ConflictResolution::Unsolvable { reason, unmodified } => {
                 self.solve_conflicts(
                     previous_change,
-                    previous_session,
+                    previous_repo,
                     unmodified,
-                    current_session,
+                    current_repo,
                     reason,
                 )
                 .await
@@ -66,9 +66,9 @@ impl BasicConflictSolver {
     async fn solve_conflicts(
         &self,
         _previous_change: &TransactionLog,
-        _previous_session: &Session,
+        _previous_repo: &Session,
         current_changes: ChangeSet,
-        _current_session: &Session,
+        _current_repo: &Session,
         conflicts: Vec<Conflict>,
     ) -> SessionResult<ConflictResolution> {
         use Conflict::*;
@@ -91,10 +91,10 @@ impl BasicConflictSolver {
                     ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
                 ) ||
                 matches!(conflict,
-                    DeleteOfUpdatedArray(_) if self.fail_on_delete_of_updated_array
+                    DeleteOfUpdatedArray{..} if self.fail_on_delete_of_updated_array
                 ) ||
                 matches!(conflict,
-                    DeleteOfUpdatedGroup(_) if self.fail_on_delete_of_updated_group
+                    DeleteOfUpdatedGroup{..} if self.fail_on_delete_of_updated_group
                 )
             },
         );
@@ -137,11 +137,11 @@ impl BasicConflictSolver {
                         VersionSelection::Fail => panic!("Bug in conflict resolution: UserAttributesDoubleUpdate flagged as unrecoverable")
                     }
                 }
-                DeleteOfUpdatedArray(_) => {
+                DeleteOfUpdatedArray { .. } => {
                     assert!(!self.fail_on_delete_of_updated_array);
                     // this is a no-op, the solution is to still delete the array
                 }
-                DeleteOfUpdatedGroup(_) => {
+                DeleteOfUpdatedGroup { .. } => {
                     assert!(!self.fail_on_delete_of_updated_group);
                     // this is a no-op, the solution is to still delete the group
                 }

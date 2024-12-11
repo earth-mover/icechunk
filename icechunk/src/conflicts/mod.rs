@@ -3,9 +3,7 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 
 use crate::{
-    change_set::ChangeSet,
-    format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path},
-    session::{Session, SessionResult},
+    change_set::ChangeSet, format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path}, session::{Session, SessionResult}
 };
 
 pub mod basic_solver;
@@ -35,8 +33,14 @@ pub enum Conflict {
         path: Path,
         node_id: NodeId,
     },
-    DeleteOfUpdatedArray(Path),
-    DeleteOfUpdatedGroup(Path),
+    DeleteOfUpdatedArray {
+        path: Path,
+        node_id: NodeId,
+    },
+    DeleteOfUpdatedGroup {
+        path: Path,
+        node_id: NodeId,
+    },
     // FIXME: we are missing the case of current change deleting a group and previous change
     // creating something new under it
 }
@@ -52,8 +56,8 @@ pub trait ConflictSolver {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
-        previous_session: &Session,
+        previous_repo: &Session,
         current_changes: ChangeSet,
-        current_session: &Session,
+        current_repo: &Session,
     ) -> SessionResult<ConflictResolution>;
 }

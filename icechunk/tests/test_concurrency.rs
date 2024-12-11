@@ -91,7 +91,7 @@ async fn write_task(ds: Arc<RwLock<Session>>, x: u32, y: u32) {
 
     let payload = {
         let guard = ds.read().await;
-        let writer = guard.get_chunk_writer().unwrap();
+        let writer = guard.get_chunk_writer();
         writer(bytes).await.expect("Failed to write chunk")
     };
 

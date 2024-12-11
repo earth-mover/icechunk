@@ -22,15 +22,15 @@ impl ConflictSolver for ConflictDetector {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
-        previous_session: &Session,
+        previous_repo: &Session,
         current_changes: ChangeSet,
-        current_session: &Session,
+        current_repo: &Session,
     ) -> SessionResult<ConflictResolution> {
         let new_nodes_explicit_conflicts = stream::iter(
             current_changes.new_nodes().map(Ok),
         )
         .try_filter_map(|(path, _)| async {
-            match previous_session.get_node(path).await {
+            match previous_repo.get_node(path).await {
                 Ok(_) => {
                     Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
                 }
@@ -44,7 +44,7 @@ impl ConflictSolver for ConflictDetector {
         )
         .try_filter_map(|(path, _)| async {
             for parent in path.ancestors().skip(1) {
-                match previous_session.get_array(&parent).await {
+                match previous_repo.get_array(&parent).await {
                     Ok(_) => return Ok(Some(Conflict::NewNodeInInvalidGroup(parent))),
                     Err(SessionError::NodeNotFound { .. })
                     | Err(SessionError::NotAnArray { .. }) => {}
@@ -54,7 +54,7 @@ impl ConflictSolver for ConflictDetector {
             Ok(None)
         });
 
-        let path_finder = PathFinder::new(current_session.list_nodes().await?);
+        let path_finder = PathFinder::new(current_repo.list_nodes().await?);
 
         let updated_arrays_already_updated = current_changes
             .zarr_updated_arrays()
@@ -168,8 +168,8 @@ impl ConflictSolver for ConflictDetector {
         let deletes_of_updated_arrays = stream::iter(
             current_changes.deleted_arrays().map(Ok),
         )
-        .try_filter_map(|path| async {
-            let id = match previous_session.get_node(path).await {
+        .try_filter_map(|(path, _node_id)| async {
+            let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(SessionError::NodeNotFound { .. }) => None,
                 Err(err) => Err(err)?,
@@ -180,7 +180,10 @@ impl ConflictSolver for ConflictDetector {
                     || previous_change.updated_user_attributes.contains(&node_id)
                     || previous_change.updated_chunks.contains_key(&node_id)
                 {
-                    Ok(Some(Conflict::DeleteOfUpdatedArray(path.clone())))
+                    Ok(Some(Conflict::DeleteOfUpdatedArray {
+                        path: path.clone(),
+                        node_id: node_id.clone(),
+                    }))
                 } else {
                     Ok(None)
                 }
@@ -192,8 +195,8 @@ impl ConflictSolver for ConflictDetector {
         let deletes_of_updated_groups = stream::iter(
             current_changes.deleted_groups().map(Ok),
         )
-        .try_filter_map(|path| async {
-            let id = match previous_session.get_node(path).await {
+        .try_filter_map(|(path, _node_id)| async {
+            let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
                 Err(SessionError::NodeNotFound { .. }) => None,
                 Err(err) => Err(err)?,
@@ -201,7 +204,10 @@ impl ConflictSolver for ConflictDetector {
 
             if let Some(node_id) = id {
                 if previous_change.updated_user_attributes.contains(&node_id) {
-                    Ok(Some(Conflict::DeleteOfUpdatedGroup(path.clone())))
+                    Ok(Some(Conflict::DeleteOfUpdatedGroup {
+                        path: path.clone(),
+                        node_id: node_id.clone(),
+                    }))
                 } else {
                     Ok(None)
                 }

@@ -134,16 +134,150 @@ impl Session {
         !self.change_set.is_empty()
     }
 
+    /// Add a group to the store.
+    ///
+    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
+    pub async fn add_group(&mut self, path: Path) -> SessionResult<()> {
+        match self.get_node(&path).await {
+            Err(SessionError::NodeNotFound { .. }) => {
+                let id = NodeId::random();
+                self.change_set.add_group(path.clone(), id);
+                Ok(())
+            }
+            Ok(node) => Err(SessionError::AlreadyExists {
+                node,
+                message: "trying to add group".to_string(),
+            }),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Delete a group in the hierarchy
+    ///
+    /// Deletes of non existing groups will succeed.
+    pub async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
+        match self.get_group(&path).await {
+            Ok(parent) => {
+                let nodes_iter: Vec<NodeSnapshot> = self
+                    .list_nodes()
+                    .await?
+                    .filter(|node| node.path.starts_with(&parent.path))
+                    .collect();
+                for node in nodes_iter {
+                    match node.node_type() {
+                        NodeType::Group => {
+                            self.change_set.delete_group(node.path, &node.id)
+                        }
+                        NodeType::Array => {
+                            self.change_set.delete_array(node.path, &node.id)
+                        }
+                    }
+                }
+            }
+            Err(SessionError::NodeNotFound { .. }) => {}
+            Err(err) => Err(err)?,
+        }
+        Ok(())
+    }
+
+    /// Add an array to the store.
+    ///
+    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
+    pub async fn add_array(
+        &mut self,
+        path: Path,
+        metadata: ZarrArrayMetadata,
+    ) -> SessionResult<()> {
+        match self.get_node(&path).await {
+            Err(SessionError::NodeNotFound { .. }) => {
+                let id = NodeId::random();
+                self.change_set.add_array(path, id, metadata);
+                Ok(())
+            }
+            Ok(node) => Err(SessionError::AlreadyExists {
+                node,
+                message: "trying to add array".to_string(),
+            }),
+            Err(err) => Err(err),
+        }
+    }
+
+    // Updates an array Zarr metadata
+    ///
+    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
+    pub async fn update_array(
+        &mut self,
+        path: Path,
+        metadata: ZarrArrayMetadata,
+    ) -> SessionResult<()> {
+        self.get_array(&path)
+            .await
+            .map(|node| self.change_set.update_array(node.id, metadata))
+    }
+
+    /// Delete an array in the hierarchy
+    ///
+    /// Deletes of non existing array will succeed.
+    pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
+        match self.get_array(&path).await {
+            Ok(node) => {
+                self.change_set.delete_array(node.path, &node.id);
+            }
+            Err(SessionError::NodeNotFound { .. }) => {}
+            Err(err) => Err(err)?,
+        }
+        Ok(())
+    }
+
+    /// Record the write or delete of user attributes to array or group
+    pub async fn set_user_attributes(
+        &mut self,
+        path: Path,
+        atts: Option<UserAttributes>,
+    ) -> SessionResult<()> {
+        let node = self.get_node(&path).await?;
+        self.change_set.update_user_attributes(node.id, atts);
+        Ok(())
+    }
+
+    // Record the write, referenceing or delete of a chunk
+    //
+    // Caller has to write the chunk before calling this.
+    pub async fn set_chunk_ref(
+        &mut self,
+        path: Path,
+        coord: ChunkIndices,
+        data: Option<ChunkPayload>,
+    ) -> SessionResult<()> {
+        self.get_array(&path)
+            .await
+            .map(|node: NodeSnapshot| self.change_set.set_chunk_ref(node.id, coord, data))
+    }
+
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_node(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+        get_node(self.storage.as_ref(), &self.change_set, self.snapshot_id(), path).await
     }
 
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_array(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+        match self.get_node(path).await {
+            res @ Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => res,
+            Ok(node @ NodeSnapshot { .. }) => Err(SessionError::NotAnArray {
+                node,
+                message: "getting an array".to_string(),
+            }),
+            other => other,
+        }
     }
 
     pub async fn get_group(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_group(self.storage.as_ref(), &self.snapshot_id, &self.change_set, path).await
+        match self.get_node(path).await {
+            res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
+            Ok(node @ NodeSnapshot { .. }) => Err(SessionError::NotAGroup {
+                node,
+                message: "getting a group".to_string(),
+            }),
+            other => other,
+        }
     }
 
     pub async fn get_chunk_ref(
@@ -151,14 +285,32 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
     ) -> SessionResult<Option<ChunkPayload>> {
-        get_chunk_ref(
-            self.storage.as_ref(),
-            &self.snapshot_id,
-            &self.change_set,
-            path,
-            coords,
-        )
-        .await
+        let node = self.get_node(path).await?;
+        // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
+        // get_array should return the array data, not a node
+        match node.node_data {
+            NodeData::Group => Err(SessionError::NotAnArray {
+                node,
+                message: "getting chunk reference".to_string(),
+            }),
+            NodeData::Array(_, manifests) => {
+                // check the chunks modified in this session first
+                // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
+                let session_chunk =
+                    self.change_set.get_chunk_ref(&node.id, coords).cloned();
+
+                // If session_chunk is not None we have to return it, because is the update the
+                // user made in the current session
+                // If session_chunk == None, user hasn't modified the chunk in this session and we
+                // need to fallback to fetching the manifests
+                match session_chunk {
+                    Some(res) => Ok(res),
+                    None => {
+                        self.get_old_chunk(node.id, manifests.as_slice(), coords).await
+                    }
+                }
+            }
+        }
     }
 
     /// Get a future that reads the the payload of a chunk from object store
@@ -192,178 +344,36 @@ impl Session {
         byte_range: &ByteRange,
     ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
     {
-        get_chunk_reader(
-            &self.storage,
-            &self.virtual_resolver,
-            &self.snapshot_id,
-            &self.change_set,
-            path,
-            coords,
-            byte_range,
-        )
-        .await
-    }
-
-    pub async fn get_old_chunk(
-        &self,
-        node: NodeId,
-        manifests: &[ManifestRef],
-        coords: &ChunkIndices,
-    ) -> SessionResult<Option<ChunkPayload>> {
-        // FIXME: use manifest extents
-        get_old_chunk(self.storage.as_ref(), node, manifests, coords).await
-    }
-
-    pub async fn list_nodes(
-        &self,
-    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
-            .await
-    }
-
-    pub async fn all_chunks(
-        &self,
-    ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
-        all_chunks(self.storage.as_ref(), &self.change_set, &self.snapshot_id).await
-    }
-
-    /// Add a group to the store.
-    ///
-    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_group(&mut self, path: Path) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
-        match self.get_node(&path).await {
-            Err(SessionError::NodeNotFound { .. }) => {
-                let id = NodeId::random();
-                self.change_set.add_group(path.clone(), id);
-                Ok(())
+        match self.get_chunk_ref(path, coords).await? {
+            Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
+                let storage = Arc::clone(&self.storage);
+                let byte_range = byte_range.clone();
+                Ok(Some(
+                    async move {
+                        // TODO: we don't have a way to distinguish if we want to pass a range or not
+                        storage.fetch_chunk(&id, &byte_range).await.map_err(|e| e.into())
+                    }
+                    .boxed(),
+                ))
             }
-            Ok(node) => Err(SessionError::AlreadyExists {
-                node,
-                message: "trying to add group".to_string(),
-            }),
-            Err(err) => Err(err),
-        }?;
-
-        Ok(())
-    }
-
-    /// Delete a group in the hierarchy
-    ///
-    /// Deletes of non existing groups will succeed.
-    pub async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
-        match self.get_group(&path).await {
-            Ok(node) => {
-                self.change_set.delete_group(node.path, &node.id);
+            Some(ChunkPayload::Inline(bytes)) => {
+                Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
             }
-            Err(SessionError::NodeNotFound { .. }) => {}
-            Err(err) => Err(err)?,
-        }
-        Ok(())
-    }
-
-    /// Add an array to the store.
-    ///
-    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn add_array(
-        &mut self,
-        path: Path,
-        metadata: ZarrArrayMetadata,
-    ) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
-        match self.get_node(&path).await {
-            Err(SessionError::NodeNotFound { .. }) => {
-                let id = NodeId::random();
-                self.change_set.add_array(path, id, metadata);
-                Ok(())
+            Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
+                let byte_range = construct_valid_byte_range(byte_range, offset, length);
+                let resolver = Arc::clone(&self.virtual_resolver);
+                Ok(Some(
+                    async move {
+                        resolver
+                            .fetch_chunk(&location, &byte_range)
+                            .await
+                            .map_err(|e| e.into())
+                    }
+                    .boxed(),
+                ))
             }
-            Ok(node) => Err(SessionError::AlreadyExists {
-                node,
-                message: "trying to add array".to_string(),
-            }),
-            Err(err) => Err(err),
-        }?;
-
-        Ok(())
-    }
-
-    // Updates an array Zarr metadata
-    ///
-    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    pub async fn update_array(
-        &mut self,
-        path: Path,
-        metadata: ZarrArrayMetadata,
-    ) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
+            None => Ok(None),
         }
-
-        let node = self.get_array(&path).await?;
-        self.change_set.update_array(node.id, metadata);
-        Ok(())
-    }
-
-    /// Delete an array in the hierarchy
-    ///
-    /// Deletes of non existing array will succeed.
-    pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
-        match self.get_array(&path).await {
-            Ok(node) => {
-                self.change_set.delete_array(node.path, &node.id);
-            }
-            Err(SessionError::NodeNotFound { .. }) => {}
-            Err(err) => Err(err)?,
-        }
-        Ok(())
-    }
-
-    /// Record the write or delete of user attributes to array or group
-    pub async fn set_user_attributes(
-        &mut self,
-        path: Path,
-        atts: Option<UserAttributes>,
-    ) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
-        let node = self.get_node(&path).await?;
-        self.change_set.update_user_attributes(node.id, atts);
-        Ok(())
-    }
-
-    // Record the write, referenceing or delete of a chunk
-    //
-    // Caller has to write the chunk before calling this.
-    pub async fn set_chunk_ref(
-        &mut self,
-        path: Path,
-        coord: ChunkIndices,
-        data: Option<ChunkPayload>,
-    ) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
-        let node = self.get_array(&path).await?;
-        self.change_set.set_chunk_ref(node.id, coord, data);
-
-        Ok(())
     }
 
     /// Returns a function that can be used to asynchronously write chunk bytes to object store
@@ -381,19 +391,11 @@ impl Session {
     /// As shown, the result of the returned function must be awaited to finish the upload.
     pub fn get_chunk_writer(
         &self,
-    ) -> SessionResult<
-        impl FnOnce(
-            Bytes,
-        )
-            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>,
-    > {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
+    ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+    {
         let threshold = self.config.inline_chunk_threshold_bytes as usize;
         let storage = Arc::clone(&self.storage);
-        let closure = move |data: Bytes| {
+        move |data: Bytes| {
             async move {
                 let payload = if data.len() > threshold {
                     new_materialized_chunk(storage.as_ref(), data).await?
@@ -403,16 +405,11 @@ impl Session {
                 Ok(payload)
             }
             .boxed()
-        };
-
-        Ok(closure)
+        }
     }
 
     pub async fn clear(&mut self) -> SessionResult<()> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
-        }
-
+        // TODO: can this be a delete_group("/") instead?
         let to_delete: Vec<(NodeType, Path)> =
             self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
 
@@ -425,13 +422,43 @@ impl Session {
         Ok(())
     }
 
-    /// Discard all uncommitted changes and return them as a `ChangeSet`
-    pub fn discard_changes(&mut self) -> SessionResult<ChangeSet> {
-        if self.read_only() {
-            return Err(SessionError::ReadOnlySession);
+    async fn get_old_chunk(
+        &self,
+        node: NodeId,
+        manifests: &[ManifestRef],
+        coords: &ChunkIndices,
+    ) -> SessionResult<Option<ChunkPayload>> {
+        // FIXME: use manifest extents
+        for manifest in manifests {
+            let manifest_structure =
+                self.storage.fetch_manifests(&manifest.object_id).await?;
+            match manifest_structure.get_chunk_payload(&node, coords.clone()) {
+                Ok(payload) => {
+                    return Ok(Some(payload.clone()));
+                }
+                Err(IcechunkFormatError::ChunkCoordinatesNotFound { .. }) => {}
+                Err(err) => return Err(err.into()),
+            }
         }
+        Ok(None)
+    }
 
-        Ok(std::mem::take(&mut self.change_set))
+    pub async fn list_nodes(
+        &self,
+    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
+        updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
+            .await
+    }
+
+    pub async fn all_chunks(
+        &self,
+    ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
+        all_chunks(self.storage.as_ref(), &self.change_set, self.snapshot_id()).await
+    }
+
+    /// Discard all uncommitted changes and return them as a `ChangeSet`
+    pub fn discard_changes(&mut self) -> ChangeSet {
+        std::mem::take(&mut self.change_set)
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
@@ -562,16 +589,12 @@ impl Session {
     /// If at some point it finds a conflict it cannot recover from, `rebase` leaves the
     /// `Repository` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
-    pub async fn rebase(
-        &mut self,
-        solver: &dyn ConflictSolver,
-    ) -> SessionResult<()> {
+    pub async fn rebase(&mut self, solver: &dyn ConflictSolver) -> SessionResult<()> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionError::ReadOnlySession);
         };
 
-        let ref_data =
-            fetch_branch_tip(self.storage.as_ref(), branch_name).await?;
+        let ref_data = fetch_branch_tip(self.storage.as_ref(), branch_name).await?;
 
         if ref_data.snapshot == self.snapshot_id {
             // nothing to do, commit should work without rebasing
@@ -623,121 +646,6 @@ impl Session {
     }
 }
 
-pub async fn updated_nodes<'a>(
-    storage: &(dyn Storage + Send + Sync),
-    change_set: &'a ChangeSet,
-    parent_id: &SnapshotId,
-    manifest_id: Option<&'a ManifestId>,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
-    Ok(updated_existing_nodes(storage, change_set, parent_id, manifest_id)
-        .await?
-        .chain(change_set.new_nodes_iterator(manifest_id)))
-}
-
-async fn updated_existing_nodes<'a>(
-    storage: &(dyn Storage + Send + Sync),
-    change_set: &'a ChangeSet,
-    parent_id: &SnapshotId,
-    manifest_id: Option<&'a ManifestId>,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
-    let manifest_refs = manifest_id.map(|mid| {
-        vec![ManifestRef { object_id: mid.clone(), extents: ManifestExtents(vec![]) }]
-    });
-    let updated_nodes =
-        storage.fetch_snapshot(parent_id).await?.iter_arc().filter_map(move |node| {
-            let new_manifests = if node.node_type() == NodeType::Array {
-                //FIXME: it could be none for empty arrays
-                manifest_refs.clone()
-            } else {
-                None
-            };
-            change_set.update_existing_node(node, new_manifests)
-        });
-
-    Ok(updated_nodes)
-}
-
-async fn get_node<'a>(
-    storage: &(dyn Storage + Send + Sync),
-    snapshot_id: &SnapshotId,
-    change_set: &'a ChangeSet,
-    path: &Path,
-) -> SessionResult<NodeSnapshot> {
-    // We need to look for nodes in self.change_set and the snapshot file
-    if change_set.is_deleted(path) {
-        return Err(SessionError::NodeNotFound {
-            path: path.clone(),
-            message: "getting node".to_string(),
-        });
-    }
-    match change_set.get_new_node(path) {
-        Some(node) => Ok(node),
-        None => {
-            let node = get_existing_node(storage, change_set, snapshot_id, path).await?;
-            if change_set.is_deleted(&node.path) {
-                Err(SessionError::NodeNotFound {
-                    path: path.clone(),
-                    message: "getting node".to_string(),
-                })
-            } else {
-                Ok(node)
-            }
-        }
-    }
-}
-
-async fn get_existing_node<'a>(
-    storage: &(dyn Storage + Send + Sync),
-    change_set: &'a ChangeSet,
-    snapshot_id: &SnapshotId,
-    path: &Path,
-) -> SessionResult<NodeSnapshot> {
-    // An existing node is one that is present in a Snapshot file on storage
-    let snapshot = storage.fetch_snapshot(snapshot_id).await?;
-
-    let node = snapshot.get_node(path).map_err(|err| match err {
-        // A missing node here is not really a format error, so we need to
-        // generate the correct error for repositories
-        IcechunkFormatError::NodeNotFound { path } => SessionError::NodeNotFound {
-            path,
-            message: "existing node not found".to_string(),
-        },
-        err => SessionError::FormatError(err),
-    })?;
-    let session_atts = change_set
-        .get_user_attributes(&node.id)
-        .cloned()
-        .map(|a| a.map(UserAttributesSnapshot::Inline));
-    let res = NodeSnapshot {
-        user_attributes: session_atts.unwrap_or_else(|| node.user_attributes.clone()),
-        ..node.clone()
-    };
-    if let Some(session_meta) = change_set.get_updated_zarr_metadata(&node.id).cloned() {
-        if let NodeData::Array(_, manifests) = res.node_data {
-            Ok(NodeSnapshot {
-                node_data: NodeData::Array(session_meta, manifests),
-                ..res
-            })
-        } else {
-            Ok(res)
-        }
-    } else {
-        Ok(res)
-    }
-}
-
-pub async fn all_chunks<'a>(
-    storage: &'a (dyn Storage + Send + Sync),
-    change_set: &'a ChangeSet,
-    snapshot_id: &'a SnapshotId,
-) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
-    let existing_array_chunks =
-        updated_chunk_iterator(storage, change_set, snapshot_id).await?;
-    let new_array_chunks =
-        futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
-    Ok(existing_array_chunks.chain(new_array_chunks))
-}
-
 /// Warning: The presence of a single error may mean multiple missing items
 async fn updated_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
@@ -762,7 +670,7 @@ async fn node_chunk_iterator<'a>(
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
-    match get_node(storage, snapshot_id, change_set, path).await {
+    match get_node(storage, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
             verified_node_chunk_iterator(storage, change_set, node).await,
         ),
@@ -849,6 +757,28 @@ async fn verified_node_chunk_iterator<'a>(
     }
 }
 
+impl From<Session> for ChangeSet {
+    fn from(val: Session) -> Self {
+        val.change_set
+    }
+}
+
+pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
+    let tomatch =
+        if prefix != String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
+    match tomatch {
+        None => false,
+        Some(rest) => {
+            // we have a few cases
+            prefix.is_empty()   // if prefix was empty anything matches
+                || rest.is_empty()  // if stripping prefix left empty we have a match
+                || rest.starts_with('/') // next component so we match
+                                         // what we don't include is other matches,
+                                         // we want to catch prefix/foo but not prefix-foo
+        }
+    }
+}
+
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
     data: Bytes,
@@ -860,6 +790,137 @@ async fn new_materialized_chunk(
 
 fn new_inline_chunk(data: Bytes) -> ChunkPayload {
     ChunkPayload::Inline(data)
+}
+
+pub async fn get_chunk(
+    reader: Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
+) -> SessionResult<Option<Bytes>> {
+    match reader {
+        Some(reader) => Ok(Some(reader.await?)),
+        None => Ok(None),
+    }
+}
+
+/// Yields nodes in the base snapshot, applying any relevant updates in the changeset
+async fn updated_existing_nodes<'a>(
+    storage: &(dyn Storage + Send + Sync),
+    change_set: &'a ChangeSet,
+    parent_id: &SnapshotId,
+    manifest_id: Option<&'a ManifestId>,
+) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+    let manifest_refs = manifest_id.map(|mid| {
+        vec![ManifestRef { object_id: mid.clone(), extents: ManifestExtents(vec![]) }]
+    });
+    let updated_nodes =
+        storage.fetch_snapshot(parent_id).await?.iter_arc().filter_map(move |node| {
+            let new_manifests = if node.node_type() == NodeType::Array {
+                //FIXME: it could be none for empty arrays
+                manifest_refs.clone()
+            } else {
+                None
+            };
+            change_set.update_existing_node(node, new_manifests)
+        });
+
+    Ok(updated_nodes)
+}
+
+/// Yields nodes with the snapshot, applying any relevant updates in the changeset,
+/// *and* new nodes in the changeset
+async fn updated_nodes<'a>(
+    storage: &(dyn Storage + Send + Sync),
+    change_set: &'a ChangeSet,
+    parent_id: &SnapshotId,
+    manifest_id: Option<&'a ManifestId>,
+) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+    Ok(updated_existing_nodes(storage, change_set, parent_id, manifest_id)
+        .await?
+        .chain(change_set.new_nodes_iterator(manifest_id)))
+}
+
+async fn get_node<'a>(
+    storage: &(dyn Storage + Send + Sync),
+    change_set: &'a ChangeSet,
+    snapshot_id: &SnapshotId,
+    path: &Path,
+) -> SessionResult<NodeSnapshot> {
+    match change_set.get_new_node(path) {
+        Some(node) => Ok(node),
+        None => {
+            let node = get_existing_node(storage, change_set, snapshot_id, path).await?;
+            if change_set.is_deleted(&node.path, &node.id) {
+                Err(SessionError::NodeNotFound {
+                    path: path.clone(),
+                    message: "getting node".to_string(),
+                })
+            } else {
+                Ok(node)
+            }
+        }
+    }
+}
+
+async fn get_existing_node<'a>(
+    storage: &(dyn Storage + Send + Sync),
+    change_set: &'a ChangeSet,
+    snapshot_id: &SnapshotId,
+    path: &Path,
+) -> SessionResult<NodeSnapshot> {
+    // An existing node is one that is present in a Snapshot file on storage
+    let snapshot = storage.fetch_snapshot(snapshot_id).await?;
+
+    let node = snapshot.get_node(path).map_err(|err| match err {
+        // A missing node here is not really a format error, so we need to
+        // generate the correct error for repositories
+        IcechunkFormatError::NodeNotFound { path } => SessionError::NodeNotFound {
+            path,
+            message: "existing node not found".to_string(),
+        },
+        err => SessionError::FormatError(err),
+    })?;
+    let session_atts = change_set
+        .get_user_attributes(&node.id)
+        .cloned()
+        .map(|a| a.map(UserAttributesSnapshot::Inline));
+    let res = NodeSnapshot {
+        user_attributes: session_atts.unwrap_or_else(|| node.user_attributes.clone()),
+        ..node.clone()
+    };
+    if let Some(session_meta) = change_set.get_updated_zarr_metadata(&node.id).cloned() {
+        if let NodeData::Array(_, manifests) = res.node_data {
+            Ok(NodeSnapshot {
+                node_data: NodeData::Array(session_meta, manifests),
+                ..res
+            })
+        } else {
+            Ok(res)
+        }
+    } else {
+        Ok(res)
+    }
+}
+
+async fn all_chunks<'a>(
+    storage: &'a (dyn Storage + Send + Sync),
+    change_set: &'a ChangeSet,
+    snapshot_id: &'a SnapshotId,
+) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
+    let existing_array_chunks =
+        updated_chunk_iterator(storage, change_set, snapshot_id).await?;
+    let new_array_chunks =
+        futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
+    Ok(existing_array_chunks.chain(new_array_chunks))
+}
+
+pub async fn raise_if_invalid_snapshot_id(
+    storage: &(dyn Storage + Send + Sync),
+    snapshot_id: &SnapshotId,
+) -> SessionResult<()> {
+    storage
+        .fetch_snapshot(snapshot_id)
+        .await
+        .map_err(|_| RepositoryError::SnapshotNotFound { id: snapshot_id.clone() })?;
+    Ok(())
 }
 
 async fn flush(
@@ -919,152 +980,6 @@ async fn flush(
     Ok(new_snapshot_id.clone())
 }
 
-async fn get_old_chunk(
-    storage: &(dyn Storage + Send + Sync),
-    node: NodeId,
-    manifests: &[ManifestRef],
-    coords: &ChunkIndices,
-) -> SessionResult<Option<ChunkPayload>> {
-    // FIXME: use manifest extents
-    for manifest in manifests {
-        let manifest_structure = storage.fetch_manifests(&manifest.object_id).await?;
-        match manifest_structure.get_chunk_payload(&node, coords.clone()) {
-            Ok(payload) => {
-                return Ok(Some(payload.clone()));
-            }
-            Err(IcechunkFormatError::ChunkCoordinatesNotFound { .. }) => {}
-            Err(err) => return Err(err.into()),
-        }
-    }
-    Ok(None)
-}
-
-async fn get_chunk_ref(
-    storage: &(dyn Storage + Send + Sync),
-    snapshot_id: &SnapshotId,
-    change_set: &ChangeSet,
-    path: &Path,
-    coords: &ChunkIndices,
-) -> SessionResult<Option<ChunkPayload>> {
-    let node = get_node(storage, snapshot_id, change_set, path).await?;
-    // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
-    // get_array should return the array data, not a node
-    match node.node_data {
-        NodeData::Group => Err(SessionError::NotAnArray {
-            node,
-            message: "getting chunk reference".to_string(),
-        }),
-        NodeData::Array(_, manifests) => {
-            get_old_chunk(storage, node.id, manifests.as_slice(), coords).await
-        }
-    }
-}
-
-pub async fn get_chunk(
-    reader: Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
-) -> SessionResult<Option<Bytes>> {
-    match reader {
-        Some(reader) => Ok(Some(reader.await?)),
-        None => Ok(None),
-    }
-}
-
-/// Get a future that reads the the payload of a chunk from object store
-///
-/// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
-/// than needed. We want the bytes to be pulled from object store without holding a ref to the
-/// [`Repository`], that way, writes can happen concurrently.
-///
-/// The result of calling this function is None, if the chunk reference is not present in the
-/// repository, or a [`Future`] that will fetch the bytes, possibly failing.
-///
-/// Example usage:
-/// ```ignore
-/// get_chunk(
-///     ds.get_chunk_reader(
-///         &path,
-///         &ChunkIndices(vec![0, 0, 0]),
-///         &ByteRange::ALL,
-///     )
-///     .await
-///     .unwrap(),
-/// ).await?
-/// ```
-///
-/// The helper function [`get_chunk`] manages the pattern matching of the result and returns
-/// the bytes.
-async fn get_chunk_reader(
-    storage: &Arc<dyn Storage + Send + Sync>,
-    virtual_resolver: &Arc<dyn VirtualChunkResolver + Send + Sync>,
-    snapshot_id: &SnapshotId,
-    change_set: &ChangeSet,
-    path: &Path,
-    coords: &ChunkIndices,
-    byte_range: &ByteRange,
-) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>> {
-    match get_chunk_ref(storage.as_ref(), snapshot_id, change_set, path, coords).await? {
-        Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
-            let storage = Arc::clone(storage);
-            let byte_range = byte_range.clone();
-            Ok(Some(
-                async move {
-                    // TODO: we don't have a way to distinguish if we want to pass a range or not
-                    storage.fetch_chunk(&id, &byte_range).await.map_err(|e| e.into())
-                }
-                .boxed(),
-            ))
-        }
-        Some(ChunkPayload::Inline(bytes)) => {
-            Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
-        }
-        Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
-            let byte_range = construct_valid_byte_range(byte_range, offset, length);
-            let resolver = Arc::clone(virtual_resolver);
-            Ok(Some(
-                async move {
-                    resolver
-                        .fetch_chunk(&location, &byte_range)
-                        .await
-                        .map_err(|e| e.into())
-                }
-                .boxed(),
-            ))
-        }
-        None => Ok(None),
-    }
-}
-
-async fn get_array(
-    storage: &(dyn Storage + Send + Sync),
-    snapshot_id: &SnapshotId,
-    change_set: &ChangeSet,
-    path: &Path,
-) -> SessionResult<NodeSnapshot> {
-    match get_node(storage, snapshot_id, change_set, path).await {
-        res @ Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => res,
-        Ok(node @ NodeSnapshot { .. }) => Err(SessionError::NotAnArray {
-            node,
-            message: "getting an array".to_string(),
-        }),
-        other => other,
-    }
-}
-
-async fn get_group(
-    storage: &(dyn Storage + Send + Sync),
-    snapshot_id: &SnapshotId,
-    change_set: &ChangeSet,
-    path: &Path,
-) -> SessionResult<NodeSnapshot> {
-    match get_node(storage, snapshot_id, change_set, path).await {
-        res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
-        Ok(node @ NodeSnapshot { .. }) => {
-            Err(SessionError::NotAGroup { node, message: "getting a group".to_string() })
-        }
-        other => other,
-    }
-}
-
 async fn do_commit(
     config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
@@ -1104,9 +1019,18 @@ mod tests {
     use std::{error::Error, num::NonZeroU64};
 
     use crate::{
-        conflicts::{basic_solver::{BasicConflictSolver, VersionSelection}, detector::ConflictDetector}, metadata::{
+        conflicts::{
+            basic_solver::{BasicConflictSolver, VersionSelection},
+            detector::ConflictDetector,
+        },
+        metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-        }, refs::{fetch_ref, Ref}, repository::VersionInfo, storage::logging::LoggingStorage, strategies::{empty_writeable_session, node_paths, zarr_array_metadata}, ObjectStorage, Repository
+        },
+        refs::{fetch_ref, Ref},
+        repository::VersionInfo,
+        storage::logging::LoggingStorage,
+        strategies::{empty_writeable_session, node_paths, zarr_array_metadata},
+        ObjectStorage, Repository,
     };
 
     use super::*;
@@ -1377,8 +1301,7 @@ mod tests {
                     node_data == NodeData::Array(zarr_meta2.clone(), vec![])
         ));
 
-        let payload =
-            ds.get_chunk_writer().unwrap()(Bytes::copy_from_slice(b"foo")).await?;
+        let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -1419,7 +1342,7 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer().unwrap()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()(data.clone()).await?;
         ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0, 0, 0]), Some(payload))
             .await?;
 
@@ -1518,7 +1441,7 @@ mod tests {
         ds.add_array(new_new_array_path.clone(), zarr_meta.clone()).await?;
 
         assert!(ds.has_uncommitted_changes());
-        let changes = ds.discard_changes()?;
+        let changes = ds.discard_changes();
         assert!(!changes.is_empty());
         assert!(!ds.has_uncommitted_changes());
 
@@ -2114,8 +2037,7 @@ mod tests {
     ///
     /// Group: /foo/bar
     /// Array: /foo/bar/some-array
-    async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>>
-    {
+    async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writeable_session("main").await?;
         let ds2 = repository.writeable_session("main").await?;
@@ -2250,20 +2172,18 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-            )
-            .await?;
+        ds1.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+        )
+        .await?;
         ds1.commit("update array", None).await?;
 
-        ds2
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-            )
-            .await?;
+        ds2.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+        )
+        .await?;
         ds2.commit("update array user atts", None).await.unwrap_err();
         let node_id = ds2.get_array(&path).await?.id;
         assert_has_conflict(
@@ -2286,12 +2206,11 @@ mod tests {
         ds1.delete_array(path.clone()).await?;
         ds1.commit("delete array", None).await?;
 
-        ds2
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-            )
-            .await?;
+        ds2.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+        )
+        .await?;
         ds2.commit("update array user atts", None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::UserAttributesUpdateOfDeletedNode(path),
@@ -2313,10 +2232,11 @@ mod tests {
         ds1.update_array(path.clone(), basic_meta()).await?;
         ds1.commit("update array", None).await?;
 
+        let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
         ds2.commit("delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
         );
         Ok(())
@@ -2332,18 +2252,18 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-            )
-            .await?;
+        ds1.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+        )
+        .await?;
         ds1.commit("update user attributes", None).await?;
 
+        let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
         ds2.commit("delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
         );
         Ok(())
@@ -2359,19 +2279,19 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1
-            .set_chunk_ref(
-                path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("hello".into())),
-            )
-            .await?;
+        ds1.set_chunk_ref(
+            path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
         ds1.commit("update chunks", None).await?;
 
+        let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
         ds2.commit("delete array", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray(path),
+            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
         );
         Ok(())
@@ -2387,18 +2307,18 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar".try_into().unwrap();
-        ds1
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-            )
-            .await?;
+        ds1.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
+        )
+        .await?;
         ds1.commit("update user attributes", None).await?;
 
+        let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
         ds2.commit("delete group", None).await.unwrap_err();
         assert_has_conflict(
-            &Conflict::DeleteOfUpdatedGroup(path),
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
         );
         Ok(())
@@ -2432,30 +2352,26 @@ mod tests {
         let mut ds1 = repo.writeable_session("main").await?;
         let mut ds2 = repo.writeable_session("main").await?;
 
-        ds1
-            .set_chunk_ref(
-                new_array_path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("hello".into())),
-            )
-            .await?;
-        ds1
-            .set_chunk_ref(
-                new_array_path.clone(),
-                ChunkIndices(vec![1]),
-                Some(ChunkPayload::Inline("hello".into())),
-            )
-            .await?;
-        let conflicting_snap =
-            ds1.commit("write two chunks with repo 1", None).await?;
+        ds1.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        ds1.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        let conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
 
-        ds2
-            .set_chunk_ref(
-                new_array_path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("hello".into())),
-            )
-            .await?;
+        ds2.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
 
         // verify we cannot commit
         if let Err(SessionError::Conflict { .. }) =
@@ -2500,49 +2416,43 @@ mod tests {
 
         let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
-        let _array_created_snap =
-            ds.commit("create array", None).await?;
+        let _array_created_snap = ds.commit("create array", None).await?;
 
         let mut ds1 = repo.writeable_session("main").await?;
 
-        ds1
-            .set_chunk_ref(
-                new_array_path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("hello0".into())),
-            )
-            .await?;
-        ds1
-            .set_chunk_ref(
-                new_array_path.clone(),
-                ChunkIndices(vec![1]),
-                Some(ChunkPayload::Inline("hello1".into())),
-            )
-            .await?;
+        ds1.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("hello0".into())),
+        )
+        .await?;
+        ds1.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline("hello1".into())),
+        )
+        .await?;
 
         let new_array_2_path: Path = "/array_2".try_into().unwrap();
         ds1.add_array(new_array_2_path.clone(), zarr_meta.clone()).await?;
-        ds1
-            .set_chunk_ref(
-                new_array_2_path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("bye0".into())),
-            )
-            .await?;
+        ds1.set_chunk_ref(
+            new_array_2_path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("bye0".into())),
+        )
+        .await?;
 
-        let conflicting_snap =
-            ds1.commit("write two chunks with repo 1", None).await?;
+        let conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
 
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks
         let mut ds2 = repo.writeable_session("main").await?;
-        ds2
-            .set_chunk_ref(
-                new_array_path.clone(),
-                ChunkIndices(vec![2]),
-                Some(ChunkPayload::Inline("hello2".into())),
-            )
-            .await?;
+        ds2.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![2]),
+            Some(ChunkPayload::Inline("hello2".into())),
+        )
+        .await?;
         if let Err(SessionError::Conflict { .. }) =
             ds2.commit("write one chunk with repo2", None).await
         {
@@ -2550,16 +2460,13 @@ mod tests {
             // different chunks were written so this should fast forward
             ds2.rebase(&solver).await?;
             let snapshot = ds2.commit("after conflict", None).await?;
-            let data =
-                ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
+            let data = ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
             assert_eq!(data, Some(ChunkPayload::Inline("hello2".into())));
 
             // other chunks written by the conflicting commit are still there
-            let data =
-                ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
+            let data = ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0])).await?;
             assert_eq!(data, Some(ChunkPayload::Inline("hello0".into())));
-            let data =
-                ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+            let data = ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
             assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
 
             // new arrays written by the conflicting commit are still there
@@ -2575,7 +2482,8 @@ mod tests {
         }
 
         // reset the branch to what repo1 wrote
-        let current_snap = fetch_branch_tip(repo.storage().as_ref(), "main").await?.snapshot;
+        let current_snap =
+            fetch_branch_tip(repo.storage().as_ref(), "main").await?.snapshot;
         update_branch(
             repo.storage().as_ref(),
             "main",
@@ -2716,20 +2624,18 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
-            )
-            .await?;
+        ds1.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+        )
+        .await?;
         ds1.commit("update array", None).await?;
 
-        ds2
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
-            )
-            .await?;
+        ds2.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
+        )
+        .await?;
         ds2.commit("update array user atts", None).await.unwrap_err();
 
         let solver = BasicConflictSolver {
@@ -2760,24 +2666,22 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
-            )
-            .await?;
+        ds1.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+        )
+        .await?;
         ds1.commit("update array", None).await?;
 
         // we made one extra random change to the repo, because we'll undo the user attributes
         // update and we cannot commit an empty change
         ds2.add_group("/baz".try_into().unwrap()).await?;
 
-        ds2
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
-            )
-            .await?;
+        ds2.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
+        )
+        .await?;
         ds2.commit("update array user atts", None).await.unwrap_err();
 
         let solver = BasicConflictSolver {
@@ -2841,36 +2745,26 @@ mod tests {
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         // write chunks with repo 1
         for coord in [0u32, 1, 2] {
-            ds1
-                .set_chunk_ref(
-                    path.clone(),
-                    ChunkIndices(vec![coord]),
-                    Some(ChunkPayload::Inline("repo 1".into())),
-                )
-                .await?;
-            ds1
-                .commit(
-                    format!("update chunk {}", coord).as_str(),
-                    None,
-                )
-                .await?;
+            ds1.set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![coord]),
+                Some(ChunkPayload::Inline("repo 1".into())),
+            )
+            .await?;
+            ds1.commit(format!("update chunk {}", coord).as_str(), None).await?;
         }
 
         // write the same chunks with repo 2
         for coord in [0u32, 1, 2] {
-            ds2
-                .set_chunk_ref(
-                    path.clone(),
-                    ChunkIndices(vec![coord]),
-                    Some(ChunkPayload::Inline("repo 2".into())),
-                )
-                .await?;
+            ds2.set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![coord]),
+                Some(ChunkPayload::Inline("repo 2".into())),
+            )
+            .await?;
         }
 
-        ds2
-            .commit("update chunk on repo 2", None)
-            .await
-            .unwrap_err();
+        ds2.commit("update chunk on repo 2", None).await.unwrap_err();
 
         let solver = BasicConflictSolver {
             on_chunk_conflict: VersionSelection::UseTheirs,
@@ -2895,33 +2789,28 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1
-            .set_user_attributes(
-                path.clone(),
-                Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
-            )
-            .await?;
-        let non_conflicting_snap =
-            ds1.commit("update user atts", None).await?;
+        ds1.set_user_attributes(
+            path.clone(),
+            Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+        )
+        .await?;
+        let non_conflicting_snap = ds1.commit("update user atts", None).await?;
 
-        ds1
-            .set_chunk_ref(
-                path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("repo 1".into())),
-            )
-            .await?;
+        ds1.set_chunk_ref(
+            path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("repo 1".into())),
+        )
+        .await?;
 
-        let conflicting_snap =
-            ds1.commit("update chunk ref", None).await?;
+        let conflicting_snap = ds1.commit("update chunk ref", None).await?;
 
-        ds2
-            .set_chunk_ref(
-                path.clone(),
-                ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline("repo 2".into())),
-            )
-            .await?;
+        ds2.set_chunk_ref(
+            path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("repo 2".into())),
+        )
+        .await?;
 
         ds2.commit("update chunk ref", None).await.unwrap_err();
         // we setup a [`ConflictSolver`]` that can recover from the first but not the second

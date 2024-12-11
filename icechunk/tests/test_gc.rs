@@ -72,7 +72,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     // we write more than 1k chunks to go beyond the chunk size for object listing and delete
     for idx in 0..1100 {
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
-        let payload = ds.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = ds.get_chunk_writer()(bytes.clone()).await?;
         ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
@@ -85,7 +85,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     // overwrite 10 chunks
     for idx in 0..10 {
         let bytes = Bytes::copy_from_slice(&0i8.to_be_bytes());
-        let payload = ds.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = ds.get_chunk_writer()(bytes.clone()).await?;
         ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }

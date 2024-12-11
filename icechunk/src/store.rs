@@ -241,14 +241,14 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 match locked_session {
                     Some(session) => {
-                        let writer = session.get_chunk_writer()?;
+                        let writer = session.get_chunk_writer();
                         let payload = writer(value).await?;
                         session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                     None => {
                         let mut session = self.session.write().await;
                         // we only lock the session to get the writer
-                        let writer = session.get_chunk_writer()?;
+                        let writer = session.get_chunk_writer();
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
@@ -1550,7 +1550,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
-        let repo = create_memory_store_repository().await;
+        let repo = create_local_store_repository().await;
         let ds = repo.writeable_session("main").await?;
         let mut store = Store::from_session(
             Arc::new(RwLock::new(ds)),
@@ -1955,7 +1955,7 @@ mod tests {
         assert_eq!(ds.read().await.has_uncommitted_changes(), true);
 
         {
-            ds.write().await.discard_changes().unwrap()
+            ds.write().await.discard_changes()
         };
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
