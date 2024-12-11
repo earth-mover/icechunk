@@ -71,7 +71,7 @@ impl ObjectStorage {
         let prefix =
             prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
 
-        let url = format!("memory://{prefix}");
+        let url = format!("memory:/{prefix}");
         Ok(Self::from_url(&url, vec![])?)
     }
 
