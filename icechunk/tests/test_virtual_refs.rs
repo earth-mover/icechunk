@@ -3,8 +3,13 @@
 mod tests {
     use icechunk::{
         format::{
-            manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef}, snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path
-        }, metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue}, session::get_chunk, storage::{
+            manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
+            snapshot::ZarrArrayMetadata,
+            ByteRange, ChunkId, ChunkIndices, Path,
+        },
+        metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+        session::get_chunk,
+        storage::{
             s3::{
                 mk_client, S3ClientOptions, S3Config, S3Credentials, S3Storage,
                 StaticS3Credentials,
@@ -13,12 +18,14 @@ mod tests {
                 ObjectStoreVirtualChunkResolver, ObjectStoreVirtualChunkResolverConfig,
             },
             ObjectStorage,
-        }, store::StoreOptions, Repository, RepositoryConfig, Storage, Store
+        },
+        store::StoreOptions,
+        Repository, RepositoryConfig, Storage, Store,
     };
-    use tokio::sync::RwLock;
     use std::{error::Error, num::NonZeroU64};
     use std::{path::Path as StdPath, sync::Arc};
     use tempfile::TempDir;
+    use tokio::sync::RwLock;
 
     use bytes::Bytes;
     use object_store::{
@@ -91,13 +98,11 @@ mod tests {
 
     async fn create_minio_repository() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-            S3Storage::new_s3_store(
-                &S3Config {
-                    bucket: "testbucket".to_string(),
-                    prefix: format!("{:?}", ChunkId::random()),
-                    options: Some(minino_s3_config()),
-                }
-            )
+            S3Storage::new_s3_store(&S3Config {
+                bucket: "testbucket".to_string(),
+                prefix: format!("{:?}", ChunkId::random()),
+                options: Some(minino_s3_config()),
+            })
             .await
             .expect("Creating minio storage failed"),
         );
@@ -363,7 +368,7 @@ mod tests {
 
         let repo = create_minio_repository().await;
         let ds = repo.writeable_session("main").await.unwrap();
-        let store = Store::from_session(
+        let mut store = Store::from_session(
             Arc::new(RwLock::new(ds)),
             StoreOptions::default(),
             false,
@@ -417,7 +422,7 @@ mod tests {
         let repo = create_local_repository(repo_dir.path(), anon_s3_config()).await;
         let ds = repo.writeable_session("main").await.unwrap();
 
-        let store = Store::from_session(
+        let mut store = Store::from_session(
             Arc::new(RwLock::new(ds)),
             StoreOptions::default(),
             false,

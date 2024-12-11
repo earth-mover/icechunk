@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
     iter,
     num::NonZeroU64,
+    ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -30,7 +31,7 @@ use crate::{
     },
     refs::RefError,
     repository::RepositoryError,
-    session::{get_chunk, Session, SessionError},
+    session::{get_chunk, is_prefix_match, Session, SessionError},
     utils::serde::arc_rwlock_serde,
 };
 
@@ -121,19 +122,19 @@ impl Store {
         Self { session, config, read_only }
     }
 
-    pub async fn is_empty<'a>(&self, prefix: &'a str) -> StoreResult<bool> {
+    pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
         let res = self.list_dir(prefix).await?.next().await;
         Ok(res.is_none())
     }
 
-    pub async fn clear(&self) -> StoreResult<()> {
-        self.session.write().await.clear().await?;
-        Ok(())
+    pub async fn clear(&mut self) -> StoreResult<()> {
+        let mut repo = self.session.write().await;
+        Ok(repo.clear().await?)
     }
 
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
-        let guard = self.session.read().await;
-        get_key(key, byte_range, &guard).await
+        let repo = self.session.read().await;
+        get_key(key, byte_range, &repo).await
     }
 
     /// Get all the requested keys concurrently.
@@ -199,7 +200,7 @@ impl Store {
 
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
         let guard = self.session.read().await;
-        exists(key, &guard).await
+        exists(key, guard.deref()).await
     }
 
     pub fn supports_writes(&self) -> StoreResult<bool> {
@@ -218,7 +219,7 @@ impl Store {
         &self,
         key: &str,
         value: Bytes,
-        locked_session: Option<&mut Session>,
+        locked_repo: Option<&mut Session>,
     ) -> StoreResult<()> {
         if self.read_only {
             return Err(StoreError::ReadOnly);
@@ -227,33 +228,34 @@ impl Store {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
-                    self.set_array_meta(node_path, array_meta, locked_session).await
+                    self.set_array_meta(node_path, array_meta, locked_repo).await
                 } else {
                     match serde_json::from_slice(value.as_ref()) {
                         Ok(group_meta) => {
-                            self.set_group_meta(node_path, group_meta, locked_session)
-                                .await
+                            self.set_group_meta(node_path, group_meta, locked_repo).await
                         }
                         Err(err) => Err(StoreError::BadMetadata(err)),
                     }
                 }
             }
             Key::Chunk { node_path, coords } => {
-                match locked_session {
-                    Some(session) => {
-                        let writer = session.get_chunk_writer();
+                match locked_repo {
+                    Some(repo) => {
+                        let writer = repo.get_chunk_writer();
                         let payload = writer(value).await?;
-                        session.set_chunk_ref(node_path, coords, Some(payload)).await?
+                        repo.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                     None => {
-                        let mut session = self.session.write().await;
-                        // we only lock the session to get the writer
-                        let writer = session.get_chunk_writer();
+                        // we only lock the repository to get the writer
+                        let writer = self.session.read().await.get_chunk_writer();
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
-                        println!("{node_path}, {:?}: {:?}", coords, payload);
-                        session.set_chunk_ref(node_path, coords, Some(payload)).await?
+                        self.session
+                            .write()
+                            .await
+                            .set_chunk_ref(node_path, coords, Some(payload))
+                            .await?
                     }
                 }
                 Ok(())
@@ -265,19 +267,17 @@ impl Store {
     }
 
     pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
-        // we use a write lock to check if the key exists and then to set it, so we dont have race conditions
-        // between the check and the set
         let mut guard = self.session.write().await;
-        if exists(key, &guard).await? {
+        if exists(key, guard.deref()).await? {
             Ok(())
         } else {
-            self.set_with_optional_locking(key, value, Some(&mut guard)).await
+            self.set_with_optional_locking(key, value, Some(guard.deref_mut())).await
         }
     }
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
     pub async fn set_virtual_ref(
-        &self,
+        &mut self,
         key: &str,
         reference: VirtualChunkRef,
     ) -> StoreResult<()> {
@@ -324,13 +324,18 @@ impl Store {
 
                 let node = node.map_err(StoreError::SessionError)?;
                 match node.node_data {
-                    NodeData::Array(_, _) => Ok(guard.delete_array(node_path).await?),
-                    NodeData::Group => Ok(guard.delete_group(node_path).await?),
+                    NodeData::Array(_, _) => {
+                        Ok(guard.deref_mut().delete_array(node_path).await?)
+                    }
+                    NodeData::Group => {
+                        Ok(guard.deref_mut().delete_group(node_path).await?)
+                    }
                 }
             }
             Key::Chunk { node_path, coords } => {
                 let mut guard = self.session.write().await;
-                match guard.set_chunk_ref(node_path, coords, None).await {
+                let session = guard.deref_mut();
+                match session.set_chunk_ref(node_path, coords, None).await {
                     Ok(_) => Ok(()),
                     Err(SessionError::NodeNotFound { path: _, message: _ }) => {
                         // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
@@ -368,9 +373,9 @@ impl Store {
         self.list_prefix("/").await
     }
 
-    pub async fn list_prefix<'a>(
+    pub async fn list_prefix(
         &self,
-        prefix: &'a str,
+        prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -381,9 +386,9 @@ impl Store {
         Ok(futures::stream::iter(meta.chain(chunks).collect::<Vec<_>>().await))
     }
 
-    pub async fn list_dir<'a>(
+    pub async fn list_dir(
         &self,
-        prefix: &'a str,
+        prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -397,9 +402,9 @@ impl Store {
         Ok(res)
     }
 
-    pub async fn list_dir_items<'a>(
+    pub async fn list_dir_items(
         &self,
-        prefix: &'a str,
+        prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
@@ -432,10 +437,10 @@ impl Store {
         &self,
         path: Path,
         array_meta: ArrayMetadata,
-        locked_session: Option<&mut Session>,
+        locked_repo: Option<&mut Session>,
     ) -> Result<(), StoreError> {
-        match locked_session {
-            Some(session) => set_array_meta(path, array_meta, session).await,
+        match locked_repo {
+            Some(repo) => set_array_meta(path, array_meta, repo).await,
             None => self.set_array_meta_locking(path, array_meta).await,
         }
     }
@@ -448,17 +453,17 @@ impl Store {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         let mut guard = self.session.write().await;
-        set_array_meta(path, array_meta, &mut guard).await
+        set_array_meta(path, array_meta, guard.deref_mut()).await
     }
 
     async fn set_group_meta(
         &self,
         path: Path,
         group_meta: GroupMetadata,
-        locked_session: Option<&mut Session>,
+        locked_repo: Option<&mut Session>,
     ) -> Result<(), StoreError> {
-        match locked_session {
-            Some(session) => set_group_meta(path, group_meta, session).await,
+        match locked_repo {
+            Some(repo) => set_group_meta(path, group_meta, repo).await,
             None => self.set_group_meta_locking(path, group_meta).await,
         }
     }
@@ -471,7 +476,7 @@ impl Store {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         let mut guard = self.session.write().await;
-        set_group_meta(path, group_meta, &mut guard).await
+        set_group_meta(path, group_meta, guard.deref_mut()).await
     }
 
     async fn list_metadata_prefix<'a, 'b: 'a>(
@@ -480,24 +485,12 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let guard = self.session.read().await;
-            for node in guard.list_nodes().await? {
+            let repository = Arc::clone(&self.session).read_owned().await;
+            for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
-                    match meta_key.strip_prefix(prefix) {
-                        None => {}
-                        Some(rest) => {
-                            // we have a few cases
-                            if prefix.is_empty()   // if prefix was empty anything matches
-                               || rest.is_empty()  // if stripping prefix left empty we have a match
-                               || rest.starts_with('/') // next component so we match
-                               // what we don't include is other matches,
-                               // we want to catch prefix/foo but not prefix-foo
-                            {
-                                yield meta_key;
-                            }
-
-                    }
+                if is_prefix_match(&meta_key, prefix) {
+                    yield meta_key;
                 }
             }
         };
@@ -510,15 +503,15 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
+            let repository = Arc::clone(&self.session).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            let guard = self.session.read().await;
-            for await maybe_path_chunk in guard.all_chunks().await.map_err(StoreError::SessionError)? {
+            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::SessionError)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
-                    Ok((path,chunk)) => {
+                    Ok((path, chunk)) => {
                         let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
-                        if chunk_key.starts_with(prefix) {
+                        if is_prefix_match(&chunk_key, prefix) {
                             yield chunk_key;
                         }
                     }
@@ -533,16 +526,16 @@ impl Store {
 async fn set_array_meta(
     path: Path,
     array_meta: ArrayMetadata,
-    session: &mut Session,
+    repo: &mut Session,
 ) -> Result<(), StoreError> {
-    if session.get_array(&path).await.is_ok() {
+    if repo.get_array(&path).await.is_ok() {
         // TODO: we don't necessarily need to update both
-        session.set_user_attributes(path.clone(), array_meta.attributes).await?;
-        session.update_array(path, array_meta.zarr_metadata).await?;
+        repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
+        repo.update_array(path, array_meta.zarr_metadata).await?;
         Ok(())
     } else {
-        session.add_array(path.clone(), array_meta.zarr_metadata).await?;
-        session.set_user_attributes(path, array_meta.attributes).await?;
+        repo.add_array(path.clone(), array_meta.zarr_metadata).await?;
+        repo.set_user_attributes(path, array_meta.attributes).await?;
         Ok(())
     }
 }
@@ -550,17 +543,17 @@ async fn set_array_meta(
 async fn set_group_meta(
     path: Path,
     group_meta: GroupMetadata,
-    session: &mut Session,
+    repo: &mut Session,
 ) -> Result<(), StoreError> {
     // we need to hold the lock while we search the group and do the update to avoid race
     // conditions with other writers (notice we don't take &mut self)
     //
-    if session.get_group(&path).await.is_ok() {
-        session.set_user_attributes(path, group_meta.attributes).await?;
+    if repo.get_group(&path).await.is_ok() {
+        repo.set_user_attributes(path, group_meta.attributes).await?;
         Ok(())
     } else {
-        session.add_group(path.clone()).await?;
-        session.set_user_attributes(path, group_meta.attributes).await?;
+        repo.add_group(path.clone()).await?;
+        repo.set_user_attributes(path, group_meta.attributes).await?;
         Ok(())
     }
 }
@@ -569,9 +562,9 @@ async fn get_metadata(
     _key: &str,
     path: &Path,
     range: &ByteRange,
-    session: &Session,
+    repo: &Session,
 ) -> StoreResult<Bytes> {
-    let node = session.get_node(path).await.map_err(|_| {
+    let node = repo.get_node(path).await.map_err(|_| {
         StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
     })?;
     let user_attributes = match node.user_attributes {
@@ -598,9 +591,9 @@ async fn get_chunk_bytes(
     path: Path,
     coords: ChunkIndices,
     byte_range: &ByteRange,
-    session: &Session,
+    repo: &Session,
 ) -> StoreResult<Bytes> {
-    let reader = session.get_chunk_reader(&path, &coords, byte_range).await?;
+    let reader = repo.get_chunk_reader(&path, &coords, byte_range).await?;
 
     // then we can fetch the bytes without holding the lock
     let chunk = get_chunk(reader).await?;
@@ -614,14 +607,14 @@ async fn get_chunk_bytes(
 async fn get_key(
     key: &str,
     byte_range: &ByteRange,
-    session: &Session,
+    repo: &Session,
 ) -> StoreResult<Bytes> {
     let bytes = match Key::parse(key)? {
         Key::Metadata { node_path } => {
-            get_metadata(key, &node_path, byte_range, session).await
+            get_metadata(key, &node_path, byte_range, repo).await
         }
         Key::Chunk { node_path, coords } => {
-            get_chunk_bytes(key, node_path, coords, byte_range, session).await
+            get_chunk_bytes(key, node_path, coords, byte_range, repo).await
         }
         Key::ZarrV2(key) => {
             Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
@@ -631,8 +624,8 @@ async fn get_key(
     Ok(bytes)
 }
 
-async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
-    match get_key(key, &ByteRange::ALL, session).await {
+async fn exists(key: &str, repo: &Session) -> StoreResult<bool> {
+    match get_key(key, &ByteRange::ALL, repo).await {
         Ok(_) => Ok(true),
         Err(StoreError::NotFound(_)) => Ok(false),
         Err(StoreError::SessionError(SessionError::NodeNotFound {
@@ -1047,7 +1040,7 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::{borrow::BorrowMut, path::Path as StdPath};
+    use std::borrow::BorrowMut;
 
     use crate::{repository::VersionInfo, ObjectStorage, Repository, RepositoryConfig};
 
@@ -1062,15 +1055,15 @@ mod tests {
         Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
     }
 
-    async fn create_local_store_repository() -> Repository {
-        let dir = StdPath::new("/Users/matthew.earthmover/Developer/icechunk/testing-chunks");
-        println!("{:?}", dir);
-        let storage = Arc::new(
-            ObjectStorage::new_local_store(&dir)
-                .expect("failed to create local store"),
-        );
-        Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
-    }
+    // async fn create_local_store_repository() -> Repository {
+    //     let dir = StdPath::new("/Users/matthew.earthmover/Developer/icechunk/testing-chunks");
+    //     println!("{:?}", dir);
+    //     let storage = Arc::new(
+    //         ObjectStorage::new_local_store(&dir)
+    //             .expect("failed to create local store"),
+    //     );
+    //     Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
+    // }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let version1 = keys(store, "/").await?;
@@ -1417,7 +1410,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
-        let repo = create_local_store_repository().await;
+        let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
@@ -1550,7 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
-        let repo = create_local_store_repository().await;
+        let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
         let mut store = Store::from_session(
             Arc::new(RwLock::new(ds)),
@@ -1979,7 +1972,8 @@ mod tests {
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
+        let mut store =
+            Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(
@@ -2020,7 +2014,8 @@ mod tests {
         ds.write().await.commit("initial commit", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
+        let mut store =
+            Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
         store
             .set(

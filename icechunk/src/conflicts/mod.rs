@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 
 use crate::{
-    change_set::ChangeSet, format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path}, session::{Session, SessionResult}
+    change_set::ChangeSet,
+    format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path},
+    session::{Session, SessionResult},
 };
 
 pub mod basic_solver;

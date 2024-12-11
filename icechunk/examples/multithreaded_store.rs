@@ -41,9 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         set.spawn(async move {
             let mut attempts = 0u64;
             loop {
-                if let Ok(value) = store
-                    .get(format!("array/c/{i}").as_str(), &ByteRange::ALL)
-                    .await
+                if let Ok(value) =
+                    store.get(format!("array/c/{i}").as_str(), &ByteRange::ALL).await
                 {
                     println!("Got {value:?} in {attempts} attempts");
                     return value;

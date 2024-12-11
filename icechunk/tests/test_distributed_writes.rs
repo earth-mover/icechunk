@@ -4,9 +4,15 @@ use std::{num::NonZeroU64, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    change_set::ChangeSet, format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId}, metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue}, repository::VersionInfo, session::{get_chunk, Session}, storage::s3::{
+    change_set::ChangeSet,
+    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId},
+    metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+    repository::VersionInfo,
+    session::{get_chunk, Session},
+    storage::s3::{
         S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials,
-    }, Repository, RepositoryConfig, Storage
+    },
+    Repository, RepositoryConfig, Storage,
 };
 use tokio::task::JoinSet;
 
@@ -74,9 +80,7 @@ async fn write_chunks(
     Ok(ds)
 }
 
-async fn verify(
-    ds: Session,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for x in 0..(SIZE / 2) as u32 {
         for y in 0..(SIZE / 2) as u32 {
             let bytes = get_chunk(
@@ -191,7 +195,8 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
     // To be safe, we create a new instance of the storage and repo, and verify again
     let storage = mk_storage(prefix.as_str()).await?;
     let repo = mk_repo(storage, false).await?;
-    let ds = repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+    let ds =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
     verify(ds).await?;
 
     Ok(())

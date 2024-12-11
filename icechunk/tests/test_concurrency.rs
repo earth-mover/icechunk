@@ -1,7 +1,12 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path}, metadata::{ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer}, session::{get_chunk, Session}, ObjectStorage, Repository, RepositoryConfig, Storage
+    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path},
+    metadata::{
+        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+    },
+    session::{get_chunk, Session},
+    ObjectStorage, Repository, RepositoryConfig, Storage,
 };
 use pretty_assertions::assert_eq;
 use rand::{thread_rng, Rng};

@@ -2,7 +2,15 @@
 use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{
-    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path}, metadata::{ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer, UserAttributes}, repository::VersionInfo, session::{Session, SessionError}, storage::ObjectStorage, Repository, RepositoryConfig, Storage
+    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
+    metadata::{
+        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+        UserAttributes,
+    },
+    repository::VersionInfo,
+    session::{Session, SessionError},
+    storage::ObjectStorage,
+    Repository, RepositoryConfig, Storage,
 };
 use itertools::Itertools;
 

@@ -13,7 +13,8 @@ use crate::{
         snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
         ChunkIndices, ManifestId, NodeId, Path,
     },
-    metadata::UserAttributes, session::SessionResult
+    metadata::UserAttributes,
+    session::SessionResult,
 };
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]

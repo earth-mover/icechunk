@@ -59,7 +59,6 @@ prop_compose! {
 }
 }
 
-
 pub fn codecs() -> impl Strategy<Value = Vec<Codec>> {
     prop_oneof![Just(vec![Codec { name: "mycodec".to_string(), configuration: None }]),]
 }

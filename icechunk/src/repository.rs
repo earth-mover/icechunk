@@ -6,10 +6,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    format::{snapshot::{Snapshot, SnapshotMetadata}, IcechunkFormatError, SnapshotId},
+    format::{
+        snapshot::{Snapshot, SnapshotMetadata},
+        IcechunkFormatError, SnapshotId,
+    },
     refs::{
-        create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags,
-        update_branch, BranchVersion, Ref, RefError,
+        create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
+        BranchVersion, Ref, RefError,
     },
     session::Session,
     storage::virtual_ref::{ObjectStoreVirtualChunkResolver, VirtualChunkResolver},
@@ -103,9 +106,8 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        let virtual_resolver = virtual_resolver.unwrap_or_else(|| {
-            Arc::new(ObjectStoreVirtualChunkResolver::new(None))
-        });
+        let virtual_resolver = virtual_resolver
+            .unwrap_or_else(|| Arc::new(ObjectStoreVirtualChunkResolver::new(None)));
 
         Ok(Self { config, storage, virtual_resolver })
     }
@@ -119,9 +121,8 @@ impl Repository {
             return Err(RepositoryError::RepositoryDoesntExist);
         }
 
-        let virtual_resolver = virtual_resolver.unwrap_or_else(|| {
-            Arc::new(ObjectStoreVirtualChunkResolver::new(None))
-        });
+        let virtual_resolver = virtual_resolver
+            .unwrap_or_else(|| Arc::new(ObjectStoreVirtualChunkResolver::new(None)));
 
         Ok(Self { config, storage, virtual_resolver })
     }
@@ -224,7 +225,11 @@ impl Repository {
     /// Make a branch point to the specified snapshot.
     /// After execution, history of the branch will be altered, and the current
     /// store will point to a different base snapshot_id
-    pub async fn reset_branch(&self, branch: &str, snapshot_id: &SnapshotId) -> RepositoryResult<BranchVersion> {
+    pub async fn reset_branch(
+        &self,
+        branch: &str,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<BranchVersion> {
         raise_if_invalid_snapshot_id(self.storage.as_ref(), &snapshot_id).await?;
         let branch_tip = self.branch_tip(branch).await?;
         let version = update_branch(
@@ -233,7 +238,8 @@ impl Repository {
             snapshot_id.clone(),
             Some(&branch_tip),
             self.config.unsafe_overwrite_refs,
-        ).await?;
+        )
+        .await?;
 
         Ok(version)
     }
