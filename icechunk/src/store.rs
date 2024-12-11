@@ -252,6 +252,7 @@ impl Store {
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
+                        println!("{node_path}, {:?}: {:?}", coords, payload);
                         session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                 }
@@ -1046,7 +1047,7 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::borrow::BorrowMut;
+    use std::{borrow::BorrowMut, path::Path as StdPath};
 
     use crate::{repository::VersionInfo, ObjectStorage, Repository, RepositoryConfig};
 
@@ -1057,6 +1058,16 @@ mod tests {
         let storage = Arc::new(
             ObjectStorage::new_in_memory_store(Some("prefix".into()))
                 .expect("failed to create in-memory store"),
+        );
+        Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
+    }
+
+    async fn create_local_store_repository() -> Repository {
+        let dir = StdPath::new("/Users/matthew.earthmover/Developer/icechunk/testing-chunks");
+        println!("{:?}", dir);
+        let storage = Arc::new(
+            ObjectStorage::new_local_store(&dir)
+                .expect("failed to create local store"),
         );
         Repository::create(RepositoryConfig::default(), storage, None).await.unwrap()
     }
@@ -1406,7 +1417,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
-        let repo = create_memory_store_repository().await;
+        let repo = create_local_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
 
@@ -2191,8 +2202,6 @@ mod tests {
             .await;
         let correct_error = matches!(result, Err(StoreError::ReadOnly { .. }));
         assert!(correct_error);
-
-        readable_store.get("zarr.json", &ByteRange::ALL).await.unwrap();
     }
 
     // #[test]

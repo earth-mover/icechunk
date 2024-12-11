@@ -59,6 +59,8 @@ pub enum RepositoryError {
     Tag(String),
     #[error("the repository has been initialized already (default branch exists)")]
     AlreadyInitialized,
+    #[error("the repository doesn't exist")]
+    RepositoryDoesntExist,
     #[error("error in repository serialization `{0}`")]
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("error in repository deserialization `{0}`")]
@@ -114,7 +116,7 @@ impl Repository {
         virtual_resolver: Option<Arc<dyn VirtualChunkResolver + Send + Sync>>,
     ) -> RepositoryResult<Self> {
         if !Self::exists(storage.as_ref()).await? {
-            return Err(RepositoryError::AlreadyInitialized);
+            return Err(RepositoryError::RepositoryDoesntExist);
         }
 
         let virtual_resolver = virtual_resolver.unwrap_or_else(|| {

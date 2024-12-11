@@ -13,8 +13,9 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use object_store::{
-    parse_url, path::Path as ObjectPath, Attribute, AttributeValue, Attributes,
-    GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
+    local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath, Attribute,
+    AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
+    PutOptions, PutPayload,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -91,7 +92,23 @@ impl ObjectStorage {
         options: Vec<(String, String)>,
     ) -> Result<ObjectStorage, String> {
         let url: Url = Url::parse(url).map_err(|e| e.to_string())?;
-        let (store, path) = parse_url(&url).map_err(|e| e.to_string())?;
+        if url.scheme() == "file" {
+            let path = url.path();
+            let store = Arc::new(
+                LocalFileSystem::new_with_prefix(path).map_err(|e| e.to_string())?,
+            );
+            return Ok(ObjectStorage {
+                store,
+                config: ObjectStorageConfig {
+                    url: url.to_string(),
+                    prefix: "".to_string(),
+                    options,
+                },
+            });
+        }
+
+        let (store, path) =
+            parse_url_opts(&url, options.clone()).map_err(|e| e.to_string())?;
         let store: Arc<dyn ObjectStore> = Arc::from(store);
         Ok(ObjectStorage {
             store,
@@ -106,12 +123,12 @@ impl ObjectStorage {
     /// We need this because object_store's local file implementation doesn't sort refs. Since this
     /// implementation is used only for tests, it's OK to sort in memory.
     pub fn artificially_sort_refs_in_mem(&self) -> bool {
-        self.config.url.starts_with("file://")
+        self.config.url.starts_with("file:")
     }
 
     /// We need this because object_store's local file implementation doesn't support metadata.
     pub fn supports_metadata(&self) -> bool {
-        self.config.url.starts_with("file://")
+        self.config.url.starts_with("file:")
     }
 
     /// Return all keys in the store
