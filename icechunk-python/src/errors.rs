@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use icechunk::{
-    format::IcechunkFormatError, repository::RepositoryError, session::SessionError, store::StoreError
+    format::IcechunkFormatError, repository::RepositoryError, session::SessionError, store::StoreError, StorageError
 };
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
@@ -18,6 +18,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub(crate) enum PyIcechunkStoreError {
+    #[error("storage error: {0}")]
+    StorageError(StorageError),
     #[error("store error: {0}")]
     StoreError(StoreError),
     #[error("repository error: {0}")]

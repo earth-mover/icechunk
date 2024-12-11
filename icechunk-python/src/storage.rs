@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use icechunk::{
-    storage::s3::{S3ClientOptions, S3Config, S3Credentials, StaticS3Credentials},
-    zarr::StorageConfig,
+    storage::s3::{
+        S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials,
+    },
+    ObjectStorage, Storage, StorageError,
 };
 use pyo3::{prelude::*, types::PyType};
 
@@ -60,20 +62,72 @@ impl PyS3Credentials {
     }
 }
 
+#[pyclass(name = "S3ClientOptions")]
+#[derive(Clone, Debug)]
+pub struct PyS3ClientOptions {
+    pub region: Option<String>,
+    pub endpoint: Option<String>,
+    pub credentials: S3Credentials,
+    pub allow_http: bool,
+}
+
+impl From<&PyS3ClientOptions> for S3ClientOptions {
+    fn from(options: &PyS3ClientOptions) -> Self {
+        S3ClientOptions {
+            region: options.region.clone(),
+            endpoint: options.endpoint.clone(),
+            credentials: options.credentials.clone(),
+            allow_http: options.allow_http,
+        }
+    }
+}
+
+#[pyclass(name = "S3Config")]
+#[derive(Clone, Debug)]
+pub struct PyS3Config {
+    pub bucket: String,
+    pub prefix: String,
+    pub config: Option<PyS3ClientOptions>,
+}
+
+impl From<&PyS3Config> for S3Config {
+    fn from(config: &PyS3Config) -> Self {
+        S3Config {
+            bucket: config.bucket.clone(),
+            prefix: config.prefix.clone(),
+            options: config.config.as_ref().map(|c| c.into()),
+        }
+    }
+}
+
 #[pyclass(name = "StorageConfig")]
-pub struct PyStorageConfig(StorageConfig);
+pub enum PyStorageConfig {
+    InMemory { prefix: Option<String> },
+    LocalFileSystem { root: PathBuf },
+    ObjectStore { url: String, options: Vec<(String, String)> },
+    S3(PyS3Config),
+}
 
 #[pymethods]
 impl PyStorageConfig {
     #[classmethod]
     #[pyo3(signature = (prefix = None))]
     fn memory(_cls: &Bound<'_, PyType>, prefix: Option<String>) -> Self {
-        Self(StorageConfig::InMemory { prefix })
+        Self::InMemory { prefix }
     }
 
     #[classmethod]
     fn filesystem(_cls: &Bound<'_, PyType>, root: PathBuf) -> Self {
-        Self(StorageConfig::LocalFileSystem { root })
+        Self::LocalFileSystem { root }
+    }
+
+    #[classmethod]
+    fn object_store(
+        _cls: &Bound<'_, PyType>,
+        url: String,
+        options: Vec<(String, String)>,
+    ) -> Self {
+        Self::ObjectStore { url, options }
     }
 
     #[classmethod]
@@ -92,13 +146,13 @@ impl PyStorageConfig {
         allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        let config: S3ClientOptions = S3ClientOptions {
+        let config = PyS3ClientOptions {
             region,
             endpoint: endpoint_url,
             allow_http,
             credentials: mk_credentials(None, false),
         };
-        Self(StorageConfig::S3ObjectStore { bucket, prefix, config: Some(config) })
+        Self::S3(PyS3Config { bucket, prefix, config: Some(config) })
     }
 
     #[classmethod]
@@ -119,13 +173,13 @@ impl PyStorageConfig {
         allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        let config = S3ClientOptions {
+        let config = PyS3ClientOptions {
             region,
             endpoint: endpoint_url,
             allow_http,
-            credentials: credentials.into(),
+            credentials: mk_credentials(Some(&credentials), false),
         };
-        Self(StorageConfig::S3ObjectStore { bucket, prefix, config: Some(config) })
+        Self::S3(PyS3Config { bucket, prefix, config: Some(config) })
     }
 
     #[classmethod]
@@ -144,13 +198,33 @@ impl PyStorageConfig {
         allow_http: bool,
         region: Option<String>,
     ) -> Self {
-        let config = S3ClientOptions {
+        let config = PyS3ClientOptions {
             region,
             endpoint: endpoint_url,
             allow_http,
             credentials: mk_credentials(None, true),
         };
-        Self(StorageConfig::S3ObjectStore { bucket, prefix, config: Some(config) })
+        Self::S3(PyS3Config { bucket, prefix, config: Some(config) })
+    }
+}
+
+impl PyStorageConfig {
+    pub async fn create_storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
+        match self {
+            PyStorageConfig::InMemory { prefix } => {
+                Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())?))
+            }
+            PyStorageConfig::LocalFileSystem { root } => {
+                Ok(Arc::new(ObjectStorage::new_local_store(root.clone().as_path())?))
+            }
+            PyStorageConfig::ObjectStore { url, options } => {
+                Ok(Arc::new(ObjectStorage::from_url(url, options.clone())?))
+            }
+            PyStorageConfig::S3(config) => {
+                let config = config.into();
+                Ok(Arc::new(S3Storage::new_s3_store(&config).await?))
+            }
+        }
     }
 }
 
@@ -165,47 +239,22 @@ fn mk_credentials(config: Option<&PyS3Credentials>, anon: bool) -> S3Credentials
     }
 }
 
-impl From<PyStorageConfig> for StorageConfig {
-    fn from(storage: PyStorageConfig) -> Self {
-        storage.0
-    }
-}
-
-impl From<&PyStorageConfig> for StorageConfig {
-    fn from(storage: &PyStorageConfig) -> Self {
-        storage.0.clone()
-    }
-}
-
-impl AsRef<StorageConfig> for PyStorageConfig {
-    fn as_ref(&self) -> &StorageConfig {
-        &self.0
-    }
-}
-
 #[pyclass(name = "VirtualRefConfig")]
 #[derive(Clone, Debug)]
 pub enum PyVirtualRefConfig {
-    S3 {
-        credentials: Option<PyS3Credentials>,
-        endpoint_url: Option<String>,
-        allow_http: Option<bool>,
-        region: Option<String>,
-        anon: bool,
-    },
+    S3(PyS3ClientOptions),
 }
 
 #[pymethods]
 impl PyVirtualRefConfig {
     #[classmethod]
     fn s3_from_env(_cls: &Bound<'_, PyType>) -> Self {
-        PyVirtualRefConfig::S3 {
-            credentials: None,
-            endpoint_url: None,
-            allow_http: None,
+        PyVirtualRefConfig::S3(PyS3ClientOptions {
             region: None,
-            anon: false,
-        }
+            endpoint: None,
+            credentials: S3Credentials::FromEnv,
+            allow_http: false,
+        })
     }
 
     #[classmethod]
@@ -224,13 +273,12 @@ impl PyVirtualRefConfig {
         region: Option<String>,
         anon: Option<bool>,
     ) -> Self {
-        PyVirtualRefConfig::S3 {
-            credentials: Some(credentials),
-            endpoint_url,
-            allow_http,
+        PyVirtualRefConfig::S3(PyS3ClientOptions {
             region,
-            anon: anon.unwrap_or(false),
-        }
+            endpoint: endpoint_url,
+            credentials: mk_credentials(Some(&credentials), anon.unwrap_or(false)),
+            allow_http: allow_http.unwrap_or(false),
+        })
     }
 
     #[classmethod]
@@ -245,12 +293,21 @@ impl PyVirtualRefConfig {
         allow_http: Option<bool>,
         region: Option<String>,
     ) -> Self {
-        PyVirtualRefConfig::S3 {
-            credentials: None,
-            endpoint_url,
-            allow_http,
+        PyVirtualRefConfig::S3(PyS3ClientOptions {
             region,
-            anon: true,
-        }
+            endpoint: endpoint_url,
+            credentials: S3Credentials::Anonymous,
+            allow_http: allow_http.unwrap_or(false),
+        })
     }
 }
+
+// impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {
+//     fn from(config: &PyVirtualRefConfig) -> Self {
+//         match config {
+//             PyVirtualRefConfig::S3(options) => {
+//                 ObjectStoreVirtualChunkResolverConfig::S3(options.into())
+//             }
+//         }
+//     }
+// }

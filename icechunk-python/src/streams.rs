@@ -1,7 +1,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use futures::{Stream, StreamExt};
-use icechunk::zarr::StoreError;
+use icechunk::store::StoreError;
 use pyo3::{exceptions::PyStopAsyncIteration, prelude::*};
 use tokio::sync::Mutex;
 

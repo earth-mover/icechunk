@@ -67,7 +67,9 @@ impl ObjectStorage {
     /// Create an in memory Storage implementation
     ///
     /// This implementation should not be used in production code.
-    pub fn new_in_memory_store(prefix: Option<String>) -> Result<ObjectStorage, String> {
+    pub fn new_in_memory_store(
+        prefix: Option<String>,
+    ) -> Result<ObjectStorage, StorageError> {
         #[allow(clippy::expect_used)]
         let prefix =
             prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
@@ -79,8 +81,8 @@ impl ObjectStorage {
     /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
-    pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, String> {
-        create_dir_all(prefix).map_err(|e| e.to_string())?;
+    pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, StorageError> {
+        create_dir_all(prefix).map_err(|e| StorageError::Other(e.to_string()))?;
         let prefix = prefix.display().to_string();
         let url = format!("file://{prefix}");
         Ok(Self::from_url(&url, vec![])?)
@@ -90,13 +92,11 @@ impl ObjectStorage {
     pub fn from_url(
         url: &str,
         options: Vec<(String, String)>,
-    ) -> Result<ObjectStorage, String> {
-        let url: Url = Url::parse(url).map_err(|e| e.to_string())?;
+    ) -> Result<ObjectStorage, StorageError> {
+        let url: Url = Url::parse(url).map_err(|e| StorageError::Other(e.to_string()))?;
         if url.scheme() == "file" {
             let path = url.path();
-            let store = Arc::new(
-                LocalFileSystem::new_with_prefix(path).map_err(|e| e.to_string())?,
-            );
+            let store = Arc::new(LocalFileSystem::new_with_prefix(path)?);
             return Ok(ObjectStorage {
                 store,
                 config: ObjectStorageConfig {
@@ -107,8 +107,8 @@ impl ObjectStorage {
             });
         }
 
-        let (store, path) =
-            parse_url_opts(&url, options.clone()).map_err(|e| e.to_string())?;
+        let (store, path) = parse_url_opts(&url, options.clone())
+            .map_err(|e| StorageError::Other(e.to_string()))?;
         let store: Arc<dyn ObjectStore> = Arc::from(store);
         Ok(ObjectStorage {
             store,
