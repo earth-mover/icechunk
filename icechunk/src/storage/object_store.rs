@@ -123,12 +123,12 @@ impl ObjectStorage {
     /// We need this because object_store's local file implementation doesn't sort refs. Since this
     /// implementation is used only for tests, it's OK to sort in memory.
     pub fn artificially_sort_refs_in_mem(&self) -> bool {
-        self.config.url.starts_with("file:")
+        self.config.url.starts_with("file")
     }
 
     /// We need this because object_store's local file implementation doesn't support metadata.
     pub fn supports_metadata(&self) -> bool {
-        self.config.url.starts_with("file:")
+        !self.config.url.starts_with("file")
     }
 
     /// Return all keys in the store
