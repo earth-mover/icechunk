@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use errors::{PyIcechunkStoreError, PyIcechunkStoreResult};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
-    format::{manifest::VirtualChunkRef, ChunkLength},
+    format::{
+        manifest::{Checksum, SecondsSinceEpoch, VirtualChunkRef},
+        ChunkLength,
+    },
     refs::Ref,
     repository::{ChangeSet, VirtualChunkLocation},
     zarr::{
@@ -113,6 +116,31 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
             id: val.id.to_string(),
             written_at: val.written_at,
             message: val.message,
+        }
+    }
+}
+
+#[derive(FromPyObject)]
+enum ChecksumArgument {
+    #[pyo3(transparent, annotation = "str")]
+    String(String),
+    #[pyo3(transparent, annotation = "int")]
+    Int(u32),
+    #[pyo3(transparent, annotation = "int")]
+    Datetime(chrono::DateTime<Utc>),
+}
+
+impl From<ChecksumArgument> for Checksum {
+    fn from(value: ChecksumArgument) -> Self {
+        match value {
+            ChecksumArgument::String(etag) => Checksum::ETag(etag),
+            ChecksumArgument::Int(seconds) => {
+                Checksum::LastModified(SecondsSinceEpoch(seconds))
+            }
+
+            ChecksumArgument::Datetime(date_time) => {
+                Checksum::LastModified(SecondsSinceEpoch(date_time.timestamp() as u32))
+            }
         }
     }
 }
@@ -758,6 +786,7 @@ impl PyIcechunkStore {
         })
     }
 
+    #[pyo3(signature = (key, location, offset, length, checksum = None))]
     fn async_set_virtual_ref<'py>(
         &'py self,
         py: Python<'py>,
@@ -765,23 +794,42 @@ impl PyIcechunkStore {
         location: String,
         offset: ChunkOffset,
         length: ChunkLength,
+        checksum: Option<ChecksumArgument>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            do_set_virtual_ref(store, key, location, offset, length).await
+            do_set_virtual_ref(
+                store,
+                key,
+                location,
+                offset,
+                length,
+                checksum.map(|c| c.into()),
+            )
+            .await
         })
     }
 
+    #[pyo3(signature = (key, location, offset, length, checksum = None))]
     fn set_virtual_ref(
         &self,
         key: String,
         location: String,
         offset: ChunkOffset,
         length: ChunkLength,
+        checksum: Option<ChecksumArgument>,
     ) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.store);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            do_set_virtual_ref(store, key, location, offset, length).await?;
+            do_set_virtual_ref(
+                store,
+                key,
+                location,
+                offset,
+                length,
+                checksum.map(|c| c.into()),
+            )
+            .await?;
             Ok(())
         })
     }
@@ -992,9 +1040,14 @@ async fn do_set_virtual_ref(
     location: String,
     offset: ChunkOffset,
     length: ChunkLength,
+    checksum: Option<Checksum>,
 ) -> PyResult<()> {
-    let virtual_ref =
-        VirtualChunkRef { location: VirtualChunkLocation(location), offset, length };
+    let virtual_ref = VirtualChunkRef {
+        location: VirtualChunkLocation(location),
+        offset,
+        length,
+        checksum,
+    };
     let mut store = store.write().await;
     store.set_virtual_ref(&key, virtual_ref).await.map_err(PyIcechunkStoreError::from)?;
     Ok(())

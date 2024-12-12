@@ -681,13 +681,22 @@ impl Repository {
             Some(ChunkPayload::Inline(bytes)) => {
                 Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
             }
-            Some(ChunkPayload::Virtual(VirtualChunkRef { location, offset, length })) => {
+            Some(ChunkPayload::Virtual(VirtualChunkRef {
+                location,
+                offset,
+                length,
+                checksum,
+            })) => {
                 let byte_range = construct_valid_byte_range(byte_range, offset, length);
                 let resolver = Arc::clone(&self.virtual_resolver);
                 Ok(Some(
                     async move {
                         resolver
-                            .fetch_chunk(location.0.as_str(), &byte_range)
+                            .fetch_chunk(
+                                location.0.as_str(),
+                                &byte_range,
+                                checksum.as_ref(),
+                            )
                             .await
                             .map_err(|e| e.into())
                     }

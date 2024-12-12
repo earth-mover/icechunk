@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError, Client};
 use bytes::Bytes;
 use object_store::{
     local::LocalFileSystem, path::Path, GetOptions, GetRange, ObjectStore,
@@ -11,7 +11,10 @@ use tokio::sync::RwLock;
 use url::Url;
 
 use crate::{
-    format::{manifest::VirtualReferenceError, ByteRange},
+    format::{
+        manifest::{Checksum, SecondsSinceEpoch, VirtualReferenceError},
+        ByteRange,
+    },
     private,
     storage::s3::{
         mk_client, range_to_header, S3Config, S3Credentials, StaticS3Credentials,
@@ -108,6 +111,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
         &self,
         chunk_location: &str,
         range: &ByteRange,
+        checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError>;
 }
 
@@ -182,9 +186,10 @@ impl VirtualChunkResolver {
         &self,
         chunk_location: &str,
         range: &ByteRange,
+        checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let fetcher = self.get_fetcher(chunk_location).await?;
-        fetcher.fetch_chunk(chunk_location, range).await
+        fetcher.fetch_chunk(chunk_location, range, checksum).await
     }
 
     async fn mk_fetcher_for(
@@ -260,6 +265,7 @@ impl ChunkFetcher for S3Fetcher {
         &self,
         location: &str,
         range: &ByteRange,
+        checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let url = Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
 
@@ -279,14 +285,53 @@ impl ChunkFetcher for S3Fetcher {
             b = b.range(header)
         };
 
-        Ok(b.send()
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
-            .body
-            .collect()
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
-            .into_bytes())
+        match checksum {
+            Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                b = b.if_unmodified_since(aws_sdk_s3::primitives::DateTime::from_secs(
+                    *seconds as i64,
+                ))
+            }
+            Some(Checksum::ETag(etag)) => {
+                b = b.if_match(etag);
+            }
+            None => {}
+        }
+
+        match b.send().await {
+            Ok(out) => Ok(out
+                .body
+                .collect()
+                .await
+                .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
+                .into_bytes()),
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                if err.err().meta().code() == Some("PreconditionFailed") {
+                    Err(VirtualReferenceError::ObjectModified(location.to_string()))
+                } else {
+                    Err(VirtualReferenceError::FetchError(Box::new(SdkError::<
+                        GetObjectError,
+                    >::ServiceError(
+                        err
+                    ))))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Err(VirtualReferenceError::ObjectModified(location.to_string()))
+                } else {
+                    Err(VirtualReferenceError::FetchError(Box::new(SdkError::<
+                        GetObjectError,
+                    >::ResponseError(
+                        err
+                    ))))
+                }
+            }
+            Err(err) => Err(VirtualReferenceError::FetchError(Box::new(err))),
+        }
     }
 }
 
@@ -309,19 +354,36 @@ impl ChunkFetcher for LocalFSFetcher {
         &self,
         location: &str,
         range: &ByteRange,
+        checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let url = Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
-        let options =
+        let mut options =
             GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+
+        match checksum {
+            Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                // We can unwrap here because u32 values can always construct a DateTime
+                #[allow(clippy::expect_used)]
+                let d = chrono::DateTime::from_timestamp(*seconds as i64, 0)
+                    .expect("Bad last modified field in virtual chunk reference");
+                options.if_unmodified_since = Some(d);
+            }
+            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.clone()),
+            None => {}
+        }
+
         let path = Path::parse(url.path())
             .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
 
-        self.client
-            .get_opts(&path, options)
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
-            .bytes()
-            .await
-            .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))
+        match self.client.get_opts(&path, options).await {
+            Ok(res) => res
+                .bytes()
+                .await
+                .map_err(|e| VirtualReferenceError::FetchError(Box::new(e))),
+            Err(object_store::Error::Precondition { .. }) => {
+                Err(VirtualReferenceError::ObjectModified(location.to_string()))
+            }
+            Err(err) => Err(VirtualReferenceError::FetchError(Box::new(err))),
+        }
     }
 }

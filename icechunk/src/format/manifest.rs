@@ -6,6 +6,8 @@ use thiserror::Error;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::storage::ETag;
+
 use super::{
     format_constants, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
     IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
@@ -35,6 +37,8 @@ pub enum VirtualReferenceError {
     CannotParseBucketName(String),
     #[error("error fetching virtual reference {0}")]
     FetchError(Box<dyn std::error::Error + Send + Sync>),
+    #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
+    ObjectModified(String),
     #[error("error parsing virtual reference {0}")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -72,10 +76,20 @@ impl VirtualChunkLocation {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SecondsSinceEpoch(pub u32);
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Checksum {
+    LastModified(SecondsSinceEpoch),
+    ETag(ETag),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkRef {
     pub location: VirtualChunkLocation,
     pub offset: ChunkOffset,
     pub length: ChunkLength,
+    pub checksum: Option<Checksum>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

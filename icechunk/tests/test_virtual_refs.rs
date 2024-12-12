@@ -3,11 +3,14 @@
 mod tests {
     use icechunk::{
         format::{
-            manifest::{VirtualChunkLocation, VirtualChunkRef},
+            manifest::{
+                Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
+                VirtualReferenceError,
+            },
             ByteRange, ChunkId, ChunkIndices, Path,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-        repository::{get_chunk, ChunkPayload, ZarrArrayMetadata},
+        repository::{get_chunk, ChunkPayload, RepositoryError, ZarrArrayMetadata},
         storage::{
             s3::{mk_client, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
             ObjectStorage,
@@ -15,7 +18,7 @@ mod tests {
         virtual_chunks::{
             ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer,
         },
-        zarr::AccessMode,
+        zarr::{AccessMode, StoreError},
         Repository, Storage, Store,
     };
     use std::{error::Error, num::NonZeroU64};
@@ -190,6 +193,7 @@ mod tests {
             ))?,
             offset: 0,
             length: 5,
+            checksum: None,
         });
         let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
@@ -198,6 +202,7 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
+            checksum: None,
         });
 
         let new_array_path: Path = "/array".try_into().unwrap();
@@ -304,6 +309,7 @@ mod tests {
             ))?,
             offset: 0,
             length: 5,
+            checksum: None,
         });
         let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
@@ -312,6 +318,7 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
+            checksum: None,
         });
 
         let new_array_path: Path = "/array".try_into().unwrap();
@@ -424,6 +431,7 @@ mod tests {
             ))?,
             offset: 0,
             length: 5,
+            checksum: None,
         };
         let ref2 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
@@ -432,6 +440,7 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
+            checksum: None,
         };
         store.set_virtual_ref("array/c/0/0/0", ref1).await?;
         store.set_virtual_ref("array/c/0/0/1", ref2).await?;
@@ -474,6 +483,7 @@ mod tests {
             )?,
             offset: 22306,
             length: 288,
+            checksum: None,
         };
 
         store.set_virtual_ref("year/c/0", ref2).await?;
@@ -548,12 +558,15 @@ mod tests {
         );
 
         let repo = builder.build();
+        let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 
         let minio_bytes1 = Bytes::copy_from_slice(b"first");
         let minio_bytes2 = Bytes::copy_from_slice(b"second0000");
+        let minio_bytes3 = Bytes::copy_from_slice(b"modified");
         let chunks = [
             ("/path/to/chunk-1".into(), minio_bytes1.clone()),
             ("/path/to/chunk-2".into(), minio_bytes2.clone()),
+            ("/path/to/chunk-3".into(), minio_bytes3.clone()),
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
@@ -582,6 +595,7 @@ mod tests {
             ))?,
             offset: 0,
             length: 5,
+            checksum: None,
         };
         let ref2 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
@@ -590,19 +604,35 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
+            checksum: None,
+        };
+        let ref3 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                "s3://testbucket/{}",
+                chunks[2].0
+            ))?,
+            offset: 1,
+            length: 5,
+            checksum: Some(Checksum::LastModified(old_timestamp)),
         };
         store.set_virtual_ref("array/c/0/0/0", ref1).await?;
         store.set_virtual_ref("array/c/0/0/1", ref2).await?;
+        store.set_virtual_ref("array/c/1/0/0", ref3).await?;
 
         // set virtual refs in local filesystem
         let chunk_dir = TempDir::new()?;
         let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
         let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
+        let chunk_3 = chunk_dir.path().join("chunk-3").to_str().unwrap().to_owned();
 
         let local_bytes1 = Bytes::copy_from_slice(b"first");
         let local_bytes2 = Bytes::copy_from_slice(b"second0000");
-        let local_chunks =
-            [(chunk_1, local_bytes1.clone()), (chunk_2, local_bytes2.clone())];
+        let local_bytes3 = Bytes::copy_from_slice(b"modified");
+        let local_chunks = [
+            (chunk_1, local_bytes1.clone()),
+            (chunk_2, local_bytes2.clone()),
+            (chunk_3, local_bytes3.clone()),
+        ];
         write_chunks_to_local_fs(local_chunks.iter().cloned()).await;
 
         let ref1 = VirtualChunkRef {
@@ -613,6 +643,7 @@ mod tests {
             ))?,
             offset: 0,
             length: 5,
+            checksum: None,
         };
         let ref2 = VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
@@ -621,10 +652,21 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
+            checksum: None,
+        };
+        let ref3 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                "file://{}",
+                local_chunks[2].0,
+            ))?,
+            offset: 1,
+            length: 5,
+            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
         };
 
         store.set_virtual_ref("array/c/0/0/2", ref1).await?;
         store.set_virtual_ref("array/c/0/0/3", ref2).await?;
+        store.set_virtual_ref("array/c/1/0/1", ref3).await?;
 
         // set a virtual ref in a public bucket
         let public_ref = VirtualChunkRef {
@@ -633,9 +675,19 @@ mod tests {
             )?,
             offset: 22306,
             length: 288,
+            checksum: None,
+        };
+        let public_modified_ref = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
+            )?,
+            offset: 22306,
+            length: 288,
+            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
         };
 
         store.set_virtual_ref("array/c/1/1/1", public_ref).await?;
+        store.set_virtual_ref("array/c/1/1/2", public_modified_ref).await?;
 
         // assert we can find all the virtual chunks
 
@@ -645,6 +697,13 @@ mod tests {
             store.get("array/c/0/0/1", &ByteRange::ALL).await?,
             Bytes::copy_from_slice(&minio_bytes2[1..6]),
         );
+        // try to fetch the modified chunk
+        assert!(matches!(
+            store.get("array/c/1/0/0", &ByteRange::ALL).await,
+            Err(StoreError::RepositoryError(RepositoryError::VirtualReferenceError(
+                VirtualReferenceError::ObjectModified(location)
+            ))) if location == "s3://testbucket/path/to/chunk-3"
+        ));
 
         // these are the local file chunks
         assert_eq!(store.get("array/c/0/0/2", &ByteRange::ALL).await?, local_bytes1,);
@@ -652,6 +711,13 @@ mod tests {
             store.get("array/c/0/0/3", &ByteRange::ALL).await?,
             Bytes::copy_from_slice(&local_bytes2[1..6]),
         );
+        // try to fetch the modified chunk
+        assert!(matches!(
+            store.get("array/c/1/0/1", &ByteRange::ALL).await,
+            Err(StoreError::RepositoryError(RepositoryError::VirtualReferenceError(
+                VirtualReferenceError::ObjectModified(location)
+            ))) if location.contains("chunk-3")
+        ));
 
         // these are the public bucket chunks
         let chunk = store.get("array/c/1/1/1", &ByteRange::ALL).await.unwrap();
@@ -662,6 +728,14 @@ mod tests {
 
         let last_year = f32::from_le_bytes(chunk[(288 - 4)..].try_into().unwrap());
         assert!(last_year - 2018.9861 < 0.000001);
+
+        // try to fetch the modified chunk
+        assert!(matches!(
+            store.get("array/c/1/1/2", &ByteRange::ALL).await,
+            Err(StoreError::RepositoryError(RepositoryError::VirtualReferenceError(
+                VirtualReferenceError::ObjectModified(location)
+            ))) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
+        ));
 
         Ok(())
     }
