@@ -15,7 +15,6 @@ class IcechunkStore(Store, SyncMixin):
     def __init__(
         self,
         store: PyStore,
-        read_only: bool = False,
         *args: Any,
         **kwargs: Any,
     ):
@@ -23,7 +22,7 @@ class IcechunkStore(Store, SyncMixin):
 
         This should not be called directly, instead use the `create`, `open_existing` or `open_or_create` class methods.
         """
-        super().__init__(read_only=read_only)
+        super().__init__(read_only=store.read_only)
         if store is None:
             raise ValueError(
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
@@ -49,6 +48,7 @@ class IcechunkStore(Store, SyncMixin):
         _read_only = state["_read_only"]
         store_repr = state["_store"]
         state["_store"] = PyStore.from_bytes(store_repr)
+        state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
 
     @contextlib.contextmanager

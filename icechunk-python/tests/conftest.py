@@ -2,21 +2,25 @@ from typing import Literal
 
 import pytest
 
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import Repository, StorageConfig
+from icechunk._icechunk_python import RepositoryConfig
 
 
-def parse_store(store: Literal["local", "memory"], path: str) -> IcechunkStore:
+def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:
     if store == "local":
-        return IcechunkStore.create(
+        return Repository.create(
+            config=RepositoryConfig(),
             storage=StorageConfig.filesystem(path),
         )
     if store == "memory":
-        return IcechunkStore.create(
+        return Repository.create(
+            config=RepositoryConfig(),
             storage=StorageConfig.memory(path),
         )
 
 
 @pytest.fixture(scope="function")
-def store(request: pytest.FixtureRequest, tmpdir: str) -> IcechunkStore:
+def repo(request: pytest.FixtureRequest, tmpdir: str) -> tuple[Repository, str]:
     param = request.param
-    return parse_store(param, str(tmpdir))
+    repo = parse_repo(param, tmpdir)
+    return repo, tmpdir

@@ -58,6 +58,12 @@ impl PyStore {
         self.0.blocking_read().deref() == other.0.blocking_read().deref()
     }
 
+    #[getter]
+    fn read_only(&self) -> PyIcechunkStoreResult<bool> {
+        let read_only = self.0.blocking_read().read_only();
+        Ok(read_only)
+    }
+
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         // FIXME: Use rmp_serde instead of serde_json to optimize performance
         let serialized = serde_json::to_vec(self.0.blocking_read().deref())

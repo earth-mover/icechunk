@@ -128,6 +128,10 @@ impl Store {
         Self { session, config, read_only }
     }
 
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
         let res = self.list_dir(prefix).await?.next().await;
         Ok(res.is_none())

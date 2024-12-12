@@ -3,10 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use icechunk::{
-    format::{
-        snapshot::{self, SnapshotMetadata},
-        ChunkOffset, SnapshotId,
-    },
+    format::{snapshot::SnapshotMetadata, ChunkOffset, SnapshotId},
     repository::{RepositoryError, VersionInfo},
     storage::virtual_ref::{
         ObjectStoreVirtualChunkResolver, ObjectStoreVirtualChunkResolverConfig,
