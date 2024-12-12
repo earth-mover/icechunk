@@ -13,7 +13,9 @@ use url::Url;
 use crate::{
     format::{manifest::VirtualReferenceError, ByteRange},
     private,
-    storage::s3::{mk_client, range_to_header, S3Config, S3Credentials},
+    storage::s3::{
+        mk_client, range_to_header, S3Config, S3Credentials, StaticS3Credentials,
+    },
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,7 +28,7 @@ pub enum ObjectStorePlatform {
     LocalFileSystem,
 }
 
-type ContainerName = String;
+pub type ContainerName = String;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VirtualChunkContainer {
@@ -37,6 +39,17 @@ pub struct VirtualChunkContainer {
     pub endpoint_url: Option<String>,
     pub anonymous: bool,
     pub allow_http: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub enum ObjectStoreCredentials {
+    FromEnv,
+    Anonymous,
+    Static {
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    },
 }
 
 pub fn mk_default_containers() -> Vec<VirtualChunkContainer> {
@@ -113,12 +126,20 @@ fn find_container<'a>(
 #[derive(Debug)]
 pub struct VirtualChunkResolver {
     containers: Vec<VirtualChunkContainer>,
+    credentials: HashMap<ContainerName, ObjectStoreCredentials>,
     fetchers: RwLock<HashMap<ContainerName, Arc<dyn ChunkFetcher>>>,
 }
 
 impl VirtualChunkResolver {
-    pub fn new(containers: Vec<VirtualChunkContainer>) -> Self {
-        VirtualChunkResolver { containers, fetchers: RwLock::new(HashMap::new()) }
+    pub fn new(
+        containers: Vec<VirtualChunkContainer>,
+        credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+    ) -> Self {
+        VirtualChunkResolver {
+            containers,
+            credentials,
+            fetchers: RwLock::new(HashMap::new()),
+        }
     }
 
     pub async fn get_fetcher(
@@ -137,7 +158,7 @@ impl VirtualChunkResolver {
         // creating the fetcher between unlocking for reads and locking for writes.
         // The end result is not ideal, because every reader needs to wait the whole time while a
         // new fetcher is created (which could be expensive). But we don't expect frequent creation
-        // of fetchers. Better code could could iprove on this.
+        // of fetchers. Better code could could improve on this.
         let fetchers = self.fetchers.read().await;
         match fetchers.get(&cont.name).cloned() {
             Some(fetcher) => Ok(fetcher),
@@ -170,8 +191,12 @@ impl VirtualChunkResolver {
         &self,
         cont: &VirtualChunkContainer,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
+        // FIXME: implement
+        #[allow(clippy::unimplemented)]
         match cont.object_store {
-            ObjectStorePlatform::S3 => Ok(Arc::new(S3Fetcher::new(cont).await)),
+            ObjectStorePlatform::S3 => {
+                Ok(Arc::new(S3Fetcher::new(cont, self.credentials.get(&cont.name)).await))
+            }
             ObjectStorePlatform::GoogleCloudStorage => {
                 unimplemented!("support for virtual chunks on gcs")
             }
@@ -194,20 +219,36 @@ pub struct S3Fetcher {
 }
 
 impl S3Fetcher {
-    pub async fn new(cont: &VirtualChunkContainer) -> Self {
+    pub async fn new(
+        cont: &VirtualChunkContainer,
+        credentials: Option<&ObjectStoreCredentials>,
+    ) -> Self {
         let config = S3Config {
             region: cont.region.clone(),
             endpoint: cont.endpoint_url.clone(),
-            // FIXME: credentials
-            credentials: if cont.anonymous {
-                S3Credentials::Anonymous
-            } else {
-                S3Credentials::FromEnv
+            credentials: match credentials {
+                None => {
+                    if cont.anonymous {
+                        S3Credentials::Anonymous
+                    } else {
+                        S3Credentials::FromEnv
+                    }
+                }
+                Some(ObjectStoreCredentials::FromEnv) => S3Credentials::FromEnv,
+                Some(ObjectStoreCredentials::Static {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                }) => S3Credentials::Static(StaticS3Credentials {
+                    access_key_id: access_key_id.clone(),
+                    secret_access_key: secret_access_key.clone(),
+                    session_token: session_token.clone(),
+                }),
+                Some(ObjectStoreCredentials::Anonymous) => S3Credentials::Anonymous,
             },
             allow_http: cont.allow_http,
         };
-        let client = Arc::new(mk_client(Some(&config)).await);
-        Self { client }
+        Self { client: Arc::new(mk_client(Some(&config)).await) }
     }
 }
 

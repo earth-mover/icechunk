@@ -34,10 +34,7 @@ use crate::{
         DimensionNames, FillValue, Path, RepositoryError, RepositoryResult,
         StorageTransformer, UserAttributes, ZarrArrayMetadata,
     },
-    storage::{
-        s3::{S3Config, S3Storage},
-        virtual_ref::ObjectStoreVirtualChunkResolverConfig,
-    },
+    storage::s3::{S3Config, S3Storage},
     ObjectStorage, Repository, RepositoryBuilder, SnapshotMetadata, Storage,
 };
 
@@ -109,7 +106,6 @@ pub struct RepositoryConfig {
     pub inline_chunk_threshold_bytes: Option<u16>,
     pub unsafe_overwrite_refs: Option<bool>,
     pub change_set_bytes: Option<Vec<u8>>,
-    pub virtual_ref_config: Option<ObjectStoreVirtualChunkResolverConfig>,
 }
 
 impl RepositoryConfig {
@@ -136,13 +132,13 @@ impl RepositoryConfig {
         self
     }
 
-    pub fn with_virtual_ref_credentials(
-        mut self,
-        config: ObjectStoreVirtualChunkResolverConfig,
-    ) -> Self {
-        self.virtual_ref_config = Some(config);
-        self
-    }
+    // pub fn with_virtual_ref_credentials(
+    //     mut self,
+    //     config: ObjectStoreVirtualChunkResolverConfig,
+    // ) -> Self {
+    //     self.virtual_ref_config = Some(config);
+    //     self
+    // }
 
     pub fn with_change_set_bytes(mut self, change_set_bytes: Vec<u8>) -> Self {
         self.change_set_bytes = Some(change_set_bytes);
@@ -190,10 +186,9 @@ impl RepositoryConfig {
         if let Some(value) = self.unsafe_overwrite_refs {
             builder.with_unsafe_overwrite_refs(value);
         }
-        if let Some(config) = &self.virtual_ref_config {
-            //FIXME:
-            // builder.with_virtual_ref_config(config.clone());
-        }
+        //if let Some(config) = &self.virtual_ref_config {
+        //    builder.with_virtual_ref_config(config.clone());
+        //}
         if let Some(change_set_bytes) = &self.change_set_bytes {
             let change_set = ChangeSet::import_from_bytes(change_set_bytes)
                 .map_err(|err| format!("Error parsing change set: {err}"))?;
@@ -2626,7 +2621,6 @@ mod tests {
                 ]))),
                 unsafe_overwrite_refs: Some(true),
                 change_set_bytes: None,
-                virtual_ref_config: None,
             },
             config: Some(StoreOptions { get_partial_values_concurrency: 100 }),
         };
@@ -2661,7 +2655,6 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                     change_set_bytes: None,
-                    virtual_ref_config: None,
                 },
                 config: None,
                 ..expected.clone()
@@ -2682,7 +2675,6 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                     change_set_bytes: None,
-                    virtual_ref_config: None,
                 },
                 config: None,
                 ..expected.clone()
@@ -2702,7 +2694,6 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                     change_set_bytes: None,
-                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: Some("prefix".to_string()) },
                 config: None,
@@ -2722,7 +2713,6 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                     change_set_bytes: None,
-                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::InMemory { prefix: None },
                 config: None,
@@ -2742,7 +2732,6 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                     change_set_bytes: None,
-                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),
@@ -2777,7 +2766,6 @@ mod tests {
                     inline_chunk_threshold_bytes: None,
                     unsafe_overwrite_refs: None,
                     change_set_bytes: None,
-                    virtual_ref_config: None,
                 },
                 storage: StorageConfig::S3ObjectStore {
                     bucket: String::from("test"),

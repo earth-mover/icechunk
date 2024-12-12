@@ -23,7 +23,6 @@ pub mod logging;
 
 pub mod object_store;
 pub mod s3;
-pub mod virtual_ref;
 
 pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;

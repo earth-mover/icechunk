@@ -217,3 +217,22 @@ impl Iterator for PayloadIterator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_chunk_location_bad() {
+        // errors relative chunk location
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("abcdef"),
+            Err(VirtualReferenceError::CannotParseUrl(_)),
+        ));
+        // extra / prevents bucket name detection
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
+            Err(VirtualReferenceError::CannotParseBucketName(_)),
+        ));
+    }
+}

@@ -12,7 +12,9 @@ mod tests {
             s3::{mk_client, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
             ObjectStorage,
         },
-        virtual_chunks::{ObjectStorePlatform, VirtualChunkContainer},
+        virtual_chunks::{
+            ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer,
+        },
         zarr::AccessMode,
         Repository, Storage, Store,
     };
@@ -42,12 +44,16 @@ mod tests {
     async fn create_repository(
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chukn_containers: Vec<VirtualChunkContainer>,
+        s3_credentials: Option<ObjectStoreCredentials>,
     ) -> Repository {
-        Repository::init(storage, true)
-            .await
-            .expect("building repository failed")
-            .with_virtual_chunk_containers(virtual_chukn_containers)
-            .build()
+        let mut builder =
+            Repository::init(storage, true).await.expect("building repository failed");
+
+        builder.with_virtual_chunk_containers(virtual_chukn_containers);
+        if let Some(cred) = s3_credentials {
+            builder.with_virtual_chunk_credentials("s3", cred);
+        }
+        builder.build()
     }
 
     async fn write_chunks_to_store(
@@ -93,7 +99,7 @@ mod tests {
                 allow_http: false,
             },
         ];
-        create_repository(storage, containers).await
+        create_repository(storage, containers, None).await
     }
 
     async fn create_minio_repository() -> Repository {
@@ -108,16 +114,22 @@ mod tests {
         );
 
         let containers = vec![VirtualChunkContainer {
-            name: "minio".to_string(),
+            name: "s3".to_string(),
             object_store: ObjectStorePlatform::S3,
-            region: None,
+            region: Some(String::from("us-east-1")),
             prefix: "s3://".to_string(),
             endpoint_url: Some("http://localhost:9000".to_string()),
             anonymous: false,
             allow_http: true,
         }];
 
-        create_repository(storage, containers).await
+        let credentials = ObjectStoreCredentials::Static {
+            access_key_id: "minio123".to_string(),
+            secret_access_key: "minio123".to_string(),
+            session_token: None,
+        };
+
+        create_repository(storage, containers, Some(credentials)).await
     }
 
     async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
@@ -467,6 +479,182 @@ mod tests {
         store.set_virtual_ref("year/c/0", ref2).await?;
 
         let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
+        assert_eq!(chunk.len(), 288);
+
+        let second_year = f32::from_le_bytes(chunk[4..8].try_into().unwrap());
+        assert!(second_year - 2018.0139 < 0.000001);
+
+        let last_year = f32::from_le_bytes(chunk[(288 - 4)..].try_into().unwrap());
+        assert!(last_year - 2018.9861 < 0.000001);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_zarr_store_with_multiple_virtual_chunk_containers(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
+        // local filesystem chunks and one for chunks in a public S3 bucket.
+
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+            S3Storage::new_s3_store(
+                "testbucket".to_string(),
+                format!("{:?}", ChunkId::random()),
+                Some(&minino_s3_config()),
+            )
+            .await
+            .expect("Creating minio storage failed"),
+        );
+
+        let mut builder =
+            Repository::init(storage, true).await.expect("building repository failed");
+
+        builder.with_virtual_chunk_container(VirtualChunkContainer {
+            name: "s3".to_string(),
+            object_store: ObjectStorePlatform::S3,
+            region: Some(String::from("us-east-1")),
+            prefix: "s3://".to_string(),
+            endpoint_url: Some("http://localhost:9000".to_string()),
+            anonymous: false,
+            allow_http: true,
+        });
+
+        builder.with_virtual_chunk_container(VirtualChunkContainer {
+            name: "file".to_string(),
+            object_store: ObjectStorePlatform::LocalFileSystem,
+            region: None,
+            prefix: "file://".to_string(),
+            endpoint_url: None,
+            anonymous: true,
+            allow_http: true,
+        });
+        builder.with_virtual_chunk_container(VirtualChunkContainer {
+            name: "public".to_string(),
+            object_store: ObjectStorePlatform::S3,
+            region: Some(String::from("us-east-1")),
+            prefix: "s3://earthmover-sample-data".to_string(),
+            endpoint_url: None,
+            anonymous: true,
+            allow_http: false,
+        });
+
+        builder.with_virtual_chunk_credentials(
+            "s3",
+            ObjectStoreCredentials::Static {
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
+                session_token: None,
+            },
+        );
+
+        let repo = builder.build();
+
+        let minio_bytes1 = Bytes::copy_from_slice(b"first");
+        let minio_bytes2 = Bytes::copy_from_slice(b"second0000");
+        let chunks = [
+            ("/path/to/chunk-1".into(), minio_bytes1.clone()),
+            ("/path/to/chunk-2".into(), minio_bytes2.clone()),
+        ];
+        write_chunks_to_minio(chunks.iter().cloned()).await;
+
+        let mut store = Store::from_repository(
+            repo,
+            AccessMode::ReadWrite,
+            Some("main".to_string()),
+            None,
+        );
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[4,4,4],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await?;
+
+        // set virtual refs in minio
+        let ref1 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                // intentional extra '/'
+                "s3://testbucket///{}",
+                chunks[0].0
+            ))?,
+            offset: 0,
+            length: 5,
+        };
+        let ref2 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                "s3://testbucket/{}",
+                chunks[1].0
+            ))?,
+            offset: 1,
+            length: 5,
+        };
+        store.set_virtual_ref("array/c/0/0/0", ref1).await?;
+        store.set_virtual_ref("array/c/0/0/1", ref2).await?;
+
+        // set virtual refs in local filesystem
+        let chunk_dir = TempDir::new()?;
+        let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
+        let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
+
+        let local_bytes1 = Bytes::copy_from_slice(b"first");
+        let local_bytes2 = Bytes::copy_from_slice(b"second0000");
+        let local_chunks =
+            [(chunk_1, local_bytes1.clone()), (chunk_2, local_bytes2.clone())];
+        write_chunks_to_local_fs(local_chunks.iter().cloned()).await;
+
+        let ref1 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                // intentional extra '/'
+                "file://{}",
+                local_chunks[0].0
+            ))?,
+            offset: 0,
+            length: 5,
+        };
+        let ref2 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(&format!(
+                "file://{}",
+                local_chunks[1].0,
+            ))?,
+            offset: 1,
+            length: 5,
+        };
+
+        store.set_virtual_ref("array/c/0/0/2", ref1).await?;
+        store.set_virtual_ref("array/c/0/0/3", ref2).await?;
+
+        // set a virtual ref in a public bucket
+        let public_ref = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
+            )?,
+            offset: 22306,
+            length: 288,
+        };
+
+        store.set_virtual_ref("array/c/1/1/1", public_ref).await?;
+
+        // assert we can find all the virtual chunks
+
+        // these are the minio chunks
+        assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, minio_bytes1,);
+        assert_eq!(
+            store.get("array/c/0/0/1", &ByteRange::ALL).await?,
+            Bytes::copy_from_slice(&minio_bytes2[1..6]),
+        );
+
+        // these are the local file chunks
+        assert_eq!(store.get("array/c/0/0/2", &ByteRange::ALL).await?, local_bytes1,);
+        assert_eq!(
+            store.get("array/c/0/0/3", &ByteRange::ALL).await?,
+            Bytes::copy_from_slice(&local_bytes2[1..6]),
+        );
+
+        // these are the public bucket chunks
+        let chunk = store.get("array/c/1/1/1", &ByteRange::ALL).await.unwrap();
         assert_eq!(chunk.len(), 288);
 
         let second_year = f32::from_le_bytes(chunk[4..8].try_into().unwrap());

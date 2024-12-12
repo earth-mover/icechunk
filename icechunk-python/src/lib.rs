@@ -13,7 +13,6 @@ use icechunk::{
     format::{manifest::VirtualChunkRef, ChunkLength},
     refs::Ref,
     repository::{ChangeSet, VirtualChunkLocation},
-    storage::virtual_ref::ObjectStoreVirtualChunkResolverConfig,
     zarr::{
         ConsolidatedStore, ObjectId, RepositoryConfig, StorageConfig, StoreError,
         StoreOptions, VersionInfo,
@@ -58,10 +57,6 @@ impl From<&PyStoreConfig> for RepositoryConfig {
             inline_chunk_threshold_bytes: config.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: config.unsafe_overwrite_refs,
             change_set_bytes: None,
-            virtual_ref_config: config
-                .virtual_ref_config
-                .as_ref()
-                .map(ObjectStoreVirtualChunkResolverConfig::from),
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::{
-    collections::HashSet,
+    cmp::min,
+    collections::{HashMap, HashSet},
     iter::{self},
     mem::take,
     pin::Pin,
@@ -24,10 +25,10 @@ use crate::{
         manifest::VirtualReferenceError, snapshot::ManifestFileInfo,
         transaction_log::TransactionLog, ManifestId, SnapshotId,
     },
-    storage::{virtual_ref::construct_valid_byte_range, ETag},
+    storage::ETag,
     virtual_chunks::{
-        mk_default_containers, sort_containers, VirtualChunkContainer,
-        VirtualChunkResolver,
+        mk_default_containers, sort_containers, ContainerName, ObjectStoreCredentials,
+        VirtualChunkContainer, VirtualChunkResolver,
     },
 };
 use bytes::Bytes;
@@ -112,6 +113,7 @@ pub struct RepositoryBuilder {
     storage: Arc<dyn Storage + Send + Sync>,
     snapshot_id: SnapshotId,
     change_set: Option<ChangeSet>,
+    virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
 }
 
 impl RepositoryBuilder {
@@ -121,7 +123,14 @@ impl RepositoryBuilder {
         config: RepositoryConfig,
         config_etag: Option<ETag>,
     ) -> Self {
-        Self { config, config_etag, snapshot_id, storage, change_set: None }
+        Self {
+            config,
+            config_etag,
+            snapshot_id,
+            storage,
+            change_set: None,
+            virtual_chunk_credentials: HashMap::new(),
+        }
     }
 
     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
@@ -154,6 +163,15 @@ impl RepositoryBuilder {
         self
     }
 
+    pub fn with_virtual_chunk_credentials(
+        &mut self,
+        container: &str,
+        credentials: ObjectStoreCredentials,
+    ) -> &mut Self {
+        self.virtual_chunk_credentials.insert(container.to_string(), credentials);
+        self
+    }
+
     pub fn with_change_set(&mut self, change_set_bytes: ChangeSet) -> &mut Self {
         self.change_set = Some(change_set_bytes);
         self
@@ -166,6 +184,7 @@ impl RepositoryBuilder {
             self.storage.clone(),
             self.snapshot_id.clone(),
             self.change_set.clone(),
+            self.virtual_chunk_credentials.clone(),
         )
     }
 }
@@ -341,15 +360,19 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         snapshot_id: SnapshotId,
         change_set: Option<ChangeSet>,
+        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
     ) -> Self {
         let containers = config.virtual_chunk_containers.clone();
-        Repository {
+        Self {
             snapshot_id,
             config,
             config_etag,
             storage,
             change_set: change_set.unwrap_or_default(),
-            virtual_resolver: Arc::new(VirtualChunkResolver::new(containers)),
+            virtual_resolver: Arc::new(VirtualChunkResolver::new(
+                containers,
+                virtual_chunk_credentials,
+            )),
         }
     }
 
@@ -1351,6 +1374,34 @@ pub async fn raise_if_invalid_snapshot_id(
         .await
         .map_err(|_| RepositoryError::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
+}
+
+// Converts the requested ByteRange to a valid ByteRange appropriate
+// to the chunk reference of known `offset` and `length`.
+pub fn construct_valid_byte_range(
+    request: &ByteRange,
+    chunk_offset: u64,
+    chunk_length: u64,
+) -> ByteRange {
+    // TODO: error for offset<0
+    // TODO: error if request.start > offset + length
+    match request {
+        ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
+            let new_start =
+                min(chunk_offset + req_start, chunk_offset + chunk_length - 1);
+            let new_end = min(chunk_offset + req_end, chunk_offset + chunk_length);
+            ByteRange::Bounded(new_start..new_end)
+        }
+        ByteRange::From(n) => {
+            let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
+            ByteRange::Bounded(new_start..chunk_offset + chunk_length)
+        }
+        ByteRange::Last(n) => {
+            let new_end = chunk_offset + chunk_length;
+            let new_start = new_end - n;
+            ByteRange::Bounded(new_start..new_end)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3681,5 +3732,47 @@ mod tests {
             TestRepository
         );
         }
+    }
+
+    #[proptest]
+    fn test_properties_construct_valid_byte_range(
+        #[strategy(0..10u64)] offset: u64,
+        // TODO: generate valid offsets using offset, length as input
+        #[strategy(3..100u64)] length: u64,
+        #[strategy(0..=2u64)] request_offset: u64,
+    ) {
+        // no request can go past this
+        let max_end = offset + length;
+
+        // TODO: more property tests:
+        // inputs: (1) chunk_ref: offset, length
+        //         (2) requested_range
+        // properties: output.length() <= actual_range.length()
+        //             output.length() == requested.length()
+        //             output.0 >= chunk_ref.offset
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..length), offset, length,),
+            ByteRange::Bounded(offset..max_end)
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(
+                &ByteRange::Bounded(request_offset..max_end),
+                offset,
+                length
+            ),
+            ByteRange::Bounded(request_offset + offset..max_end)
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::ALL, offset, length),
+            ByteRange::Bounded(offset..offset + length)
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::From(request_offset), offset, length),
+            ByteRange::Bounded(offset + request_offset..offset + length)
+        );
+        prop_assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(request_offset), offset, length),
+            ByteRange::Bounded(offset + length - request_offset..offset + length)
+        );
     }
 }
