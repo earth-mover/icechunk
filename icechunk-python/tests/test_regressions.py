@@ -44,7 +44,9 @@ async def write_minio_virtual_refs():
 
 async def test_issue_418():
     # FIXME
-    pytest.xfail("Temporary flagged as failing while we implement new virtual chunk mechanism")
+    pytest.xfail(
+        "Temporary flagged as failing while we implement new virtual chunk mechanism"
+    )
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
 
