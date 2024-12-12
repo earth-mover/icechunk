@@ -1,15 +1,17 @@
-import icechunk
 import zarr
+from tests.conftest import parse_repo
 
 
 async def test_store_clear() -> None:
-    store = icechunk.IcechunkStore.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
-    )
+    repo = parse_repo("memory", "test")
+    session = repo.writeable_session("main")
+    store = session.store()
 
     zarr.group(store=store)
-    store.commit("created node /")
+    session.commit("created node /")
+
+    session = repo.writeable_session("main")
+    store = session.store()
     await store.clear()
     zarr.group(store=store)
     assert len([_ async for _ in store.list_prefix("/")]) == 1

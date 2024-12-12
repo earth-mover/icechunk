@@ -7,17 +7,21 @@ import zarr
 from zarr.storage import LocalStore
 
 
+def create_local_repo(path: str) -> icechunk.Repository:
+    return icechunk.Repository.create(
+        storage=icechunk.StorageConfig.filesystem(path),
+    )
+
+
 @pytest.fixture(scope="function")
 def tmp_store(tmpdir):
     store_path = f"{tmpdir}"
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.filesystem(store_path),
-        read_only=False,
-    )
+    repo = create_local_repo(store_path)
+
+    session = repo.writeable_session("main")
+    store = session.store()
 
     yield store
-
-    store.close()
 
 
 def test_pickle_read_only(tmp_store):
@@ -58,20 +62,16 @@ async def test_store_equality(tmpdir, tmp_store):
     local_store = await LocalStore.open(f"{tmpdir}/zarr", read_only=False)
     assert tmp_store != local_store
 
-    store2 = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.memory(prefix="test"),
-        read_only=False,
+    memory_repo = icechunk.Repository.open_or_create(
+        config=icechunk.RepositoryConfig(),
+        storage=icechunk.StorageConfig.filesystem("store_path"),
     )
-    assert tmp_store != store2
 
-    store3 = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
-        read_only=False,
-    )
+    memory_session = memory_repo.writeable_session(branch="main")
+    memory_store = memory_session.store()
+    assert tmp_store != memory_store
+
+    repo3 = create_local_repo(f"{tmpdir}/test")
+    session3 = repo3.writeable_session(branch="main")
+    store3 = session3.store()
     assert tmp_store != store3
-
-    store4 = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.filesystem(f"{tmpdir}/test"),
-        read_only=False,
-    )
-    assert store3 == store4

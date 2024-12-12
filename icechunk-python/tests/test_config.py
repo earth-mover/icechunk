@@ -10,8 +10,8 @@ import zarr
 def tmp_store(tmpdir):
     repo_path = f"{tmpdir}"
     repo = icechunk.Repository.open_or_create(
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=5),
         storage=icechunk.StorageConfig.filesystem(repo_path),
+        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=5),
     )
 
     session = repo.writeable_session("main")

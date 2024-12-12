@@ -1,6 +1,11 @@
 from typing import Self
 
-from icechunk._icechunk_python import PyRepository, SnapshotMetadata, StorageConfig
+from icechunk._icechunk_python import (
+    PyRepository,
+    RepositoryConfig,
+    SnapshotMetadata,
+    StorageConfig,
+)
 from icechunk.session import Session
 
 
@@ -11,16 +16,38 @@ class Repository:
         self._repository = repository
 
     @classmethod
-    def create(cls, config, storage, virtual_ref_config=None) -> Self:
-        return cls(PyRepository.create(config, storage, virtual_ref_config))
+    def create(
+        cls, storage, config: RepositoryConfig | None = None, virtual_ref_config=None
+    ) -> Self:
+        return cls(
+            PyRepository.create(
+                storage, config=config, virtual_ref_config=virtual_ref_config
+            )
+        )
 
     @classmethod
-    def open(cls, storage, virtual_ref_config=None) -> Self:
-        return cls(PyRepository.open(storage, virtual_ref_config))
+    def open(
+        cls, storage, *, config: RepositoryConfig | None = None, virtual_ref_config=None
+    ) -> Self:
+        return cls(
+            PyRepository.open(
+                storage, config=config, virtual_ref_config=virtual_ref_config
+            )
+        )
 
     @classmethod
-    def open_or_create(cls, config, storage, virtual_ref_config=None) -> Self:
-        return cls(PyRepository.open_or_create(config, storage, virtual_ref_config))
+    def open_or_create(
+        cls,
+        storage: StorageConfig,
+        *,
+        config: RepositoryConfig | None = None,
+        virtual_ref_config=None,
+    ) -> Self:
+        return cls(
+            PyRepository.open_or_create(
+                storage, config=config, virtual_ref_config=virtual_ref_config
+            )
+        )
 
     @staticmethod
     def exists(storage: StorageConfig) -> bool:

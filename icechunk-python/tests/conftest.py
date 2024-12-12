@@ -3,18 +3,15 @@ from typing import Literal
 import pytest
 
 from icechunk import Repository, StorageConfig
-from icechunk._icechunk_python import RepositoryConfig
 
 
 def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:
     if store == "local":
         return Repository.create(
-            config=RepositoryConfig(),
             storage=StorageConfig.filesystem(path),
         )
     if store == "memory":
         return Repository.create(
-            config=RepositoryConfig(),
             storage=StorageConfig.memory(path),
         )
 

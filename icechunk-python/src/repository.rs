@@ -62,11 +62,11 @@ pub struct PyRepository(Repository);
 #[pymethods]
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (config, storage, virtual_ref_config = None))]
+    #[pyo3(signature = (storage, *, config = None, virtual_ref_config = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
-        config: PyRepositoryConfig,
         storage: PyStorageConfig,
+        config: Option<PyRepositoryConfig>,
         virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> PyResult<Self> {
         let repository =
@@ -93,11 +93,11 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (config, storage, virtual_ref_config = None))]
+    #[pyo3(signature = (storage, *, config = None, virtual_ref_config = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
-        config: PyRepositoryConfig,
         storage: PyStorageConfig,
+        config: Option<PyRepositoryConfig>,
         virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> PyResult<Self> {
         let repository =
@@ -124,11 +124,11 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (config, storage, virtual_ref_config = None))]
+    #[pyo3(signature = (storage, *, config = None, virtual_ref_config = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
-        config: PyRepositoryConfig,
         storage: PyStorageConfig,
+        config: Option<PyRepositoryConfig>,
         virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> PyResult<Self> {
         let repository =

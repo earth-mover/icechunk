@@ -14,21 +14,25 @@ class PyRepository:
     @classmethod
     def create(
         cls,
-        config: RepositoryConfig,
         storage: StorageConfig,
+        *,
+        config: RepositoryConfig | None = None,
         virtual_ref_config: VirtualRefConfig | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
         cls,
         storage: StorageConfig,
+        *,
+        config: RepositoryConfig | None = None,
         virtual_ref_config: VirtualRefConfig | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
         cls,
-        config: RepositoryConfig,
         storage: StorageConfig,
+        *,
+        config: RepositoryConfig | None = None,
         virtual_ref_config: VirtualRefConfig | None = None,
     ) -> PyRepository: ...
     @staticmethod
