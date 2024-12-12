@@ -143,7 +143,11 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![],
@@ -253,7 +257,11 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![],
