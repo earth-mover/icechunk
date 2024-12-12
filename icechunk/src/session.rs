@@ -71,7 +71,7 @@ pub enum SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
     storage: Arc<dyn Storage + Send + Sync>,
@@ -79,6 +79,14 @@ pub struct Session {
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
+}
+
+impl PartialEq for Session {
+    fn eq(&self, other: &Self) -> bool {
+        self.snapshot_id == other.snapshot_id
+            && self.change_set == other.change_set
+            && self.branch_name == other.branch_name
+    }
 }
 
 impl Session {
@@ -115,6 +123,10 @@ impl Session {
         }
     }
 
+    pub fn branch(&self) -> Option<&str> {
+        self.branch_name.as_deref()
+    }
+
     pub fn read_only(&self) -> bool {
         self.branch_name.is_none()
     }
@@ -125,6 +137,10 @@ impl Session {
 
     pub fn has_uncommitted_changes(&self) -> bool {
         !self.change_set.is_empty()
+    }
+
+    pub fn changes(&self) -> &ChangeSet {
+        &self.change_set
     }
 
     /// Add a group to the store.
@@ -1282,9 +1298,17 @@ mod tests {
         ));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
+<<<<<<< HEAD
         let repository =
             Repository::open(None, None, Arc::new(storage), HashMap::new()).await?;
         let mut ds = repository.writeable_session("main").await?;
+=======
+        update_branch(&storage, "main", snapshot_id.clone(), None, true).await?;
+
+        let repo = Repository::open(RepositoryConfig::default(), Arc::new(storage), None)
+            .await?;
+        let mut ds = repo.writeable_session("main").await?;
+>>>>>>> 7c65b01 (First iter of new python api)
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await?;

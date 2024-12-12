@@ -4,7 +4,7 @@ use icechunk::{
     storage::s3::{
         S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials,
     },
-    ObjectStorage, Storage, StorageError,
+    ObjectStorage, Repository, Storage, StorageError,
 };
 use pyo3::{prelude::*, types::PyType};
 
@@ -211,21 +211,33 @@ impl PyStorageConfig {
 
 impl PyStorageConfig {
     pub async fn create_storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
-        match self {
+        let storage: Arc<dyn Storage> = match self {
             PyStorageConfig::InMemory { prefix } => {
-                Ok(Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())?))
+                let storage: Arc<dyn Storage> =
+                    Arc::new(ObjectStorage::new_in_memory_store(prefix.clone())?);
+                Ok::<_, StorageError>(storage)
             }
             PyStorageConfig::LocalFileSystem { root } => {
-                Ok(Arc::new(ObjectStorage::new_local_store(root.clone().as_path())?))
+                let storage: Arc<dyn Storage> =
+                    Arc::new(ObjectStorage::new_local_store(root.clone().as_path())?);
+                Ok(storage)
             }
             PyStorageConfig::ObjectStore { url, options } => {
-                Ok(Arc::new(ObjectStorage::from_url(url, options.clone())?))
+                let storage: Arc<dyn Storage> =
+                    Arc::new(ObjectStorage::from_url(url, options.clone())?);
+                Ok(storage)
             }
             PyStorageConfig::S3(config) => {
                 let config = config.into();
-                Ok(Arc::new(S3Storage::new_s3_store(&config).await?))
+                let storage: Arc<dyn Storage> =
+                    Arc::new(S3Storage::new_s3_store(&config).await?);
+                Ok(storage)
             }
-        }
+        }?;
+
+        // default memory cached storage for usage in python
+        let storage = Repository::add_in_mem_asset_caching(storage);
+        Ok(storage)
     }
 }
 

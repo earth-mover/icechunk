@@ -1,7 +1,8 @@
 use std::convert::Infallible;
 
 use icechunk::{
-    format::IcechunkFormatError, repository::RepositoryError, session::SessionError, store::StoreError, StorageError
+    format::IcechunkFormatError, repository::RepositoryError, session::SessionError,
+    store::StoreError, StorageError,
 };
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
@@ -48,10 +49,9 @@ impl From<StoreError> for PyIcechunkStoreError {
     fn from(error: StoreError) -> Self {
         match error {
             StoreError::NotFound(e) => PyIcechunkStoreError::PyKeyError(e.to_string()),
-            StoreError::SessionError(SessionError::NodeNotFound {
-                path,
-                message: _,
-            }) => PyIcechunkStoreError::PyKeyError(format!("{}", path)),
+            StoreError::SessionError(SessionError::NodeNotFound { path, message: _ }) => {
+                PyIcechunkStoreError::PyKeyError(format!("{}", path))
+            }
             _ => PyIcechunkStoreError::StoreError(error),
         }
     }

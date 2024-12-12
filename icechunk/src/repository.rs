@@ -82,6 +82,8 @@ pub enum RepositoryError {
     StorageError(#[from] StorageError),
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
+    #[error("invalid snapshot id: `{0}`")]
+    InvalidSnapshotId(String),
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
     #[error("ref error: `{0}`")]

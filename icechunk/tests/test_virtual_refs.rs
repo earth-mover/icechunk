@@ -16,10 +16,7 @@ mod tests {
             },
             ObjectStorage,
         },
-        store::{StoreError, StoreOptions},
-        virtual_chunks::{
-            ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer,
-        },
+        store::StoreConfig,
         Repository, RepositoryConfig, Storage, Store,
     };
     use std::{collections::HashMap, error::Error, num::NonZeroU64, vec};
@@ -412,11 +409,8 @@ mod tests {
 
         let repo = create_minio_repository().await;
         let ds = repo.writeable_session("main").await.unwrap();
-        let mut store = Store::from_session(
-            Arc::new(RwLock::new(ds)),
-            StoreOptions::default(),
-            false,
-        );
+        let mut store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default(), false);
 
         store
             .set(
@@ -468,11 +462,8 @@ mod tests {
         let repo = create_local_repository(repo_dir.path()).await;
         let ds = repo.writeable_session("main").await.unwrap();
 
-        let mut store = Store::from_session(
-            Arc::new(RwLock::new(ds)),
-            StoreOptions::default(),
-            false,
-        );
+        let mut store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default(), false);
 
         store
             .set(

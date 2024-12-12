@@ -3,7 +3,7 @@ use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures::StreamExt;
 use icechunk::{
-    format::ByteRange, store::StoreOptions, ObjectStorage, Repository, RepositoryConfig,
+    format::ByteRange, store::StoreConfig, ObjectStorage, Repository, RepositoryConfig,
     Store,
 };
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
-    let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
+    let store = Store::from_session(Arc::clone(&ds), StoreConfig::default(), false);
 
     store
         .set(
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initially this will loop, because no chunks are written.
     let mut set = JoinSet::new();
     for i in 500..600 {
-        let store = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
+        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default(), false);
         set.spawn(async move {
             let mut attempts = 0u64;
             loop {
@@ -76,8 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // We start two tasks that write all the needed chunks, sleeping between writes.
-    let store1 = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
-    let store2 = Store::from_session(Arc::clone(&ds), StoreOptions::default(), false);
+    let store1 = Store::from_session(Arc::clone(&ds), StoreConfig::default(), false);
+    let store2 = Store::from_session(Arc::clone(&ds), StoreConfig::default(), false);
 
     let writer1 = tokio::spawn(async move { writer("1", 500..550, &store1).await });
     let writer2 = tokio::spawn(async move { writer("2", 550..600, &store2).await });
