@@ -1,5 +1,7 @@
 import pytest
 
+from icechunk.repository import Repository
+
 pytest.importorskip("xarray")
 
 import contextlib
@@ -10,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 import xarray as xr
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import StorageConfig
 from icechunk.xarray import to_icechunk
 from xarray.testing import assert_identical
 
@@ -50,7 +52,9 @@ def create_test_data(
 @contextlib.contextmanager
 def roundtrip(data: xr.Dataset, preserve_read_only: bool = False) -> xr.Dataset:
     with tempfile.TemporaryDirectory() as tmpdir:
-        store = IcechunkStore.create(StorageConfig.filesystem(tmpdir))
+        repo = Repository.create(StorageConfig.filesystem(tmpdir))
+        session = repo.writeable_session("main")
+        store = session.store()
         if preserve_read_only:
             with store.preserve_read_only():
                 to_icechunk(data, store=store, mode="w")
