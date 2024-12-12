@@ -188,8 +188,10 @@ pub enum RepositoryError {
     ConflictingPathNotFound(NodeId),
     #[error("error in config deserialization `{0}`")]
     ConfigDeserializationError(#[from] serde_yml::Error),
-    #[error("invalid chunk index: coordinates {coords:?} are not valid for array at {path}")]
-    InvalidIndex { coords: ChunkIndices, path: Path }
+    #[error(
+        "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
+    )]
+    InvalidIndex { coords: ChunkIndices, path: Path },
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
