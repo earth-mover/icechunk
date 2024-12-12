@@ -1,6 +1,6 @@
+import pytest
 from object_store import ClientOptions, ObjectStore
 
-import pytest
 import zarr
 from icechunk import (
     IcechunkStore,
