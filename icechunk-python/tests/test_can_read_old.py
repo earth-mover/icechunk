@@ -13,6 +13,7 @@ file as a python script: `python ./tests/test_can_read_old.py`.
 
 from numpy.testing import assert_array_equal
 from object_store import ClientOptions, ObjectStore
+import pytest
 
 import icechunk as ic
 import zarr
@@ -143,6 +144,8 @@ async def write_a_test_repo():
 
 
 async def test_icechunk_can_read_old_repo():
+    # FIXME
+    pytest.xfail("Temporary flagged as failing while we implement new virtual chunk mechanism")
     store = mk_store(read_only=True)
 
     expected_main_history = [

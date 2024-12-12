@@ -254,22 +254,3 @@ impl PyVirtualRefConfig {
         }
     }
 }
-
-// impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {
-//     fn from(config: &PyVirtualRefConfig) -> Self {
-//         match config {
-//             PyVirtualRefConfig::S3 {
-//                 credentials,
-//                 endpoint_url,
-//                 allow_http,
-//                 region,
-//                 anon,
-//             } => ObjectStoreVirtualChunkResolverConfig::S3(S3Config {
-//                 region: region.clone(),
-//                 endpoint: endpoint_url.clone(),
-//                 credentials: mk_credentials(credentials.as_ref(), *anon),
-//                 allow_http: allow_http.unwrap_or(false),
-//             }),
-//         }
-//     }
-// }
