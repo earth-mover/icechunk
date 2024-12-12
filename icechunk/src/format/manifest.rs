@@ -136,8 +136,9 @@ impl Manifest {
     pub fn iter(
         self: Arc<Self>,
         node: NodeId,
+        ndim: usize,
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
-        PayloadIterator { manifest: self, for_node: node, last_key: None }
+        PayloadIterator { manifest: self, for_node: node, ndim, last_key: None }
     }
 
     pub fn new(chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>) -> Self {
@@ -187,6 +188,7 @@ impl FromIterator<ChunkInfo> for Manifest {
 struct PayloadIterator {
     manifest: Arc<Manifest>,
     for_node: NodeId,
+    ndim: usize,
     last_key: Option<(NodeId, ChunkIndices)>,
 }
 
@@ -194,6 +196,9 @@ impl Iterator for PayloadIterator {
     type Item = (ChunkIndices, ChunkPayload);
 
     fn next(&mut self) -> Option<Self::Item> {
+        // TODO: tie the MAX to the type in ChunkIndices.
+        let upper_bound =
+            ChunkIndices(itertools::repeat_n(u32::MAX, self.ndim).collect());
         match &self.last_key {
             None => {
                 if let Some((k @ (_, coord), payload)) = self
@@ -201,7 +206,7 @@ impl Iterator for PayloadIterator {
                     .chunks
                     .range((
                         Bound::Included((self.for_node.clone(), ChunkIndices(vec![]))),
-                        Bound::Unbounded,
+                        Bound::Included((self.for_node.clone(), upper_bound)),
                     ))
                     .next()
                 {

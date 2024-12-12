@@ -1260,6 +1260,9 @@ async fn updated_chunk_iterator<'a>(
     let snapshot = storage.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
     let res = nodes.filter_map(move |node| async move {
+        // This iterator should yield chunks for existing arrays + any updates.
+        // we check for deletion here in the case that `path` exists in the snapshot,
+        // and was deleted and then recreated in this changeset.
         if change_set.is_deleted(&node.path, &node.id) {
             None
         } else {
@@ -1297,7 +1300,7 @@ async fn verified_node_chunk_iterator<'a>(
 ) -> impl Stream<Item = RepositoryResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
-        NodeData::Array(_, manifests) => {
+        NodeData::Array(meta, manifests) => {
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
                     .array_chunks_iterator(&node.id, &node.path)
@@ -1326,6 +1329,7 @@ async fn verified_node_chunk_iterator<'a>(
                             let node_id_c = node.id.clone();
                             let node_id_c2 = node.id.clone();
                             let node_id_c3 = node.id.clone();
+                            let ndim = meta.shape.len();
                             async move {
                                 let manifest = storage
                                     .fetch_manifests(&manifest_ref.object_id)
@@ -1333,7 +1337,7 @@ async fn verified_node_chunk_iterator<'a>(
                                 match manifest {
                                     Ok(manifest) => {
                                         let old_chunks = manifest
-                                            .iter(node_id_c.clone())
+                                            .iter(node_id_c.clone(), ndim)
                                             .filter(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
