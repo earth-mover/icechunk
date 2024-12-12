@@ -6,6 +6,8 @@ use thiserror::Error;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::storage::ETag;
+
 use super::{
     format_constants, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
     IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
@@ -23,6 +25,8 @@ pub struct ManifestRef {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceError {
+    #[error("no virtual chunk container can handle the chunk location ({0})")]
+    NoContainerForUrl(String),
     #[error("error parsing virtual ref URL {0}")]
     CannotParseUrl(#[from] url::ParseError),
     #[error("virtual reference has no path segments {0}")]
@@ -33,16 +37,14 @@ pub enum VirtualReferenceError {
     CannotParseBucketName(String),
     #[error("error fetching virtual reference {0}")]
     FetchError(Box<dyn std::error::Error + Send + Sync>),
+    #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
+    ObjectModified(String),
     #[error("error parsing virtual reference {0}")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum VirtualChunkLocation {
-    Absolute(String),
-    // Relative(prefix_id, String)
-}
+pub struct VirtualChunkLocation(pub String);
 
 impl VirtualChunkLocation {
     pub fn from_absolute_path(
@@ -69,8 +71,17 @@ impl VirtualChunkLocation {
 
         let location = format!("{}://{}/{}", scheme, host, new_path,);
 
-        Ok(VirtualChunkLocation::Absolute(location))
+        Ok(VirtualChunkLocation(location))
     }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SecondsSinceEpoch(pub u32);
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Checksum {
+    LastModified(SecondsSinceEpoch),
+    ETag(ETag),
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -78,6 +89,7 @@ pub struct VirtualChunkRef {
     pub location: VirtualChunkLocation,
     pub offset: ChunkOffset,
     pub length: ChunkLength,
+    pub checksum: Option<Checksum>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -217,5 +229,24 @@ impl Iterator for PayloadIterator {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_chunk_location_bad() {
+        // errors relative chunk location
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("abcdef"),
+            Err(VirtualReferenceError::CannotParseUrl(_)),
+        ));
+        // extra / prevents bucket name detection
+        assert!(matches!(
+            VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
+            Err(VirtualReferenceError::CannotParseBucketName(_)),
+        ));
     }
 }

@@ -27,6 +27,7 @@ pub mod repository;
 pub mod storage;
 #[cfg(test)]
 pub mod strategies;
+pub mod virtual_chunks;
 pub mod zarr;
 
 pub use repository::{Repository, RepositoryBuilder, RepositoryConfig, SnapshotMetadata};

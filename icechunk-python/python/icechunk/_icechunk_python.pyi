@@ -51,10 +51,20 @@ class PyIcechunkStore:
     async def set(self, key: str, value: bytes) -> None: ...
     async def set_if_not_exists(self, key: str, value: bytes) -> None: ...
     def set_virtual_ref(
-        self, key: str, location: str, offset: int, length: int
+        self,
+        key: str,
+        location: str,
+        offset: int,
+        length: int,
+        checksum: int | str | datetime.datetime | None = None,
     ) -> None: ...
     async def async_set_virtual_ref(
-        self, key: str, location: str, offset: int, length: int
+        self,
+        key: str,
+        location: str,
+        offset: int,
+        length: int,
+        checksum: int | str | datetime.datetime | None = None,
     ) -> None: ...
     async def delete(self, key: str) -> None: ...
     @property

@@ -1,10 +1,7 @@
 use std::path::PathBuf;
 
 use icechunk::{
-    storage::{
-        s3::{S3Config, S3Credentials, StaticS3Credentials},
-        virtual_ref::ObjectStoreVirtualChunkResolverConfig,
-    },
+    storage::s3::{S3Config, S3Credentials, StaticS3Credentials},
     zarr::StorageConfig,
 };
 use pyo3::{prelude::*, types::PyType};
@@ -254,25 +251,6 @@ impl PyVirtualRefConfig {
             allow_http,
             region,
             anon: true,
-        }
-    }
-}
-
-impl From<&PyVirtualRefConfig> for ObjectStoreVirtualChunkResolverConfig {
-    fn from(config: &PyVirtualRefConfig) -> Self {
-        match config {
-            PyVirtualRefConfig::S3 {
-                credentials,
-                endpoint_url,
-                allow_http,
-                region,
-                anon,
-            } => ObjectStoreVirtualChunkResolverConfig::S3(S3Config {
-                region: region.clone(),
-                endpoint: endpoint_url.clone(),
-                credentials: mk_credentials(credentials.as_ref(), *anon),
-                allow_http: allow_http.unwrap_or(false),
-            }),
         }
     }
 }
