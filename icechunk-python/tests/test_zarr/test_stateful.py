@@ -7,8 +7,8 @@ from hypothesis import assume, note
 from hypothesis.stateful import (
     Settings,
     initialize,
-    precondition,
     invariant,
+    precondition,
     rule,
     run_state_machine_as_test,
 )
@@ -36,23 +36,25 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         # This lets us reuse the fixture provided store.
         self._sync(self.store.clear())  # FIXME: upstream
-        lsbefore = self._sync_iter(self.store.list_prefix(''))
+        lsbefore = self._sync_iter(self.store.list_prefix(""))
         zarr.group(store=self.store)
-        lsafter = self._sync_iter(self.store.list_prefix(''))
+        lsafter = self._sync_iter(self.store.list_prefix(""))
         assert len(lsbefore) == 0, ("more than 0 keys after clearing", lsbefore)
         assert len(lsafter) == 1, "more than 1 key after creating group"
 
     @precondition(lambda self: self.store.has_uncommitted_changes)
     @rule()
     def commit_with_check(self):
-        note("commiting and checking list_prefix")
-        lsbefore = self._sync_iter(self.store.list_prefix(''))
+        note("committing and checking list_prefix")
+        lsbefore = sorted(self._sync_iter(self.store.list_prefix("")))
         self.store.commit("foo")
-        lsafter = self._sync_iter(self.store.list_prefix(''))
-        if sorted(lsbefore) != sorted(lsafter):
-            raise ValueError("listing changed before and after commiting.")
-        else:
-            note("succesfully commited and checked.")
+        lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
+        if lsbefore != lsafter:
+            lsexpect = sorted(self._sync_iter(self.model.list_prefix("")))
+            raise ValueError(
+                f"listing changed before ({len(lsbefore)} items) and after ({len(lsafter)} items) committing."
+                f" \n\n Before : {lsbefore!r} \n\n After: {lsafter!r}, \n\n Expected: {lsexpect!r}"
+            )
 
     @rule(
         data=st.data(),
@@ -80,7 +82,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         model_list = self._sync_iter(self.model.list_prefix(""))
         store_list = self._sync_iter(self.store.list_prefix(""))
         note(f"Checking {len(model_list)} expected keys vs {len(store_list)} actual keys")
-        assert sorted(model_list) == sorted(store_list), (sorted(model_list), sorted(store_list))
+        assert sorted(model_list) == sorted(store_list), (
+            sorted(model_list),
+            sorted(store_list),
+        )
 
 
 def test_zarr_hierarchy():
