@@ -14,12 +14,15 @@ from hypothesis.stateful import (
 )
 
 from icechunk import IcechunkStore, StorageConfig
+from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, ZarrStoreStateMachine
 from zarr.testing.strategies import (
     node_names,
     np_array_and_chunks,
     numpy_arrays,
 )
+
+PROTOTYPE = default_buffer_prototype()
 
 
 # TODO: more before/after commit invariants?
@@ -43,17 +46,32 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert len(lsafter) == 1, "more than 1 key after creating group"
 
     @precondition(lambda self: self.store.has_uncommitted_changes)
-    @rule()
-    def commit_with_check(self):
+    @rule(data=st.data())
+    def commit_with_check(self, data):
         note("committing and checking list_prefix")
+
         lsbefore = sorted(self._sync_iter(self.store.list_prefix("")))
+        path = data.draw(st.sampled_from(lsbefore))
+        get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
+
         self.store.commit("foo")
+
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
+        get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
+
         if lsbefore != lsafter:
             lsexpect = sorted(self._sync_iter(self.model.list_prefix("")))
             raise ValueError(
                 f"listing changed before ({len(lsbefore)} items) and after ({len(lsafter)} items) committing."
                 f" \n\n Before : {lsbefore!r} \n\n After: {lsafter!r}, \n\n Expected: {lsexpect!r}"
+            )
+        if get_before != get_after:
+            get_expect = self._sync(self.model.xget(path, prototype=PROTOTYPE))
+            raise ValueError(
+                f"Value changed before and after commit for path {path}"
+                f" \n\n Before : {get_before.to_bytes()!r} \n\n "
+                f"After: {get_after.to_bytes()!r}, \n\n "
+                f"Expected: {get_expect.to_bytes()!r}"
             )
 
     @rule(
