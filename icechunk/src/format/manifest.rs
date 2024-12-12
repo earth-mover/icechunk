@@ -189,6 +189,7 @@ struct PayloadIterator {
     manifest: Arc<Manifest>,
     for_node: NodeId,
     ndim: usize,
+    // last_key maintains state of the iterator
     last_key: Option<(NodeId, ChunkIndices)>,
 }
 
@@ -220,15 +221,14 @@ impl Iterator for PayloadIterator {
                 if let Some((k @ (_, coord), payload)) = self
                     .manifest
                     .chunks
-                    .range((Bound::Excluded(last_key), Bound::Unbounded))
+                    .range((
+                        Bound::Excluded(last_key.clone()),
+                        Bound::Included((self.for_node.clone(), upper_bound)),
+                    ))
                     .next()
                 {
-                    if k.0 == self.for_node {
-                        self.last_key = Some(k.clone());
-                        Some((coord.clone(), payload.clone()))
-                    } else {
-                        None
-                    }
+                    self.last_key = Some(k.clone());
+                    Some((coord.clone(), payload.clone()))
                 } else {
                     None
                 }
@@ -239,7 +239,13 @@ impl Iterator for PayloadIterator {
 
 #[cfg(test)]
 mod tests {
+
+    use std::error::Error;
+
+    use crate::{format::manifest::ChunkInfo, zarr::ObjectId};
+
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_virtual_chunk_location_bad() {
@@ -253,5 +259,31 @@ mod tests {
             VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
             Err(VirtualReferenceError::CannotParseBucketName(_)),
         ));
+    }
+
+    #[tokio::test]
+    async fn test_manifest_chunk_iterator_yields_requested_nodes_only(
+    ) -> Result<(), Box<dyn Error>> {
+        // This is a regression test for a bug found by hypothesis.
+        // Because we use a `.range` query on the HashMap, we have to be careful
+        // to not yield chunks from a node that was not requested.
+        let mut array_ids = [NodeId::random(), NodeId::random()];
+        array_ids.sort();
+
+        // insert with a chunk in the manifest for the array with the larger NodeId
+        let chunk1 = ChunkInfo {
+            node: array_ids[1].clone(),
+            coord: ChunkIndices(vec![0, 0, 0]),
+            payload: ChunkPayload::Ref(ChunkRef {
+                id: ObjectId::random(),
+                offset: 0,
+                length: 4,
+            }),
+        };
+        let manifest: Arc<Manifest> = Arc::new(vec![chunk1].into_iter().collect());
+        let chunks = manifest.iter(array_ids[0].clone(), 3).collect::<Vec<_>>();
+        assert_eq!(chunks, vec![]);
+
+        Ok(())
     }
 }
