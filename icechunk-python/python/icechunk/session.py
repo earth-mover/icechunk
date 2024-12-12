@@ -32,11 +32,18 @@ class Session:
     def branch(self) -> str | None:
         return self._session.branch
 
+    @property
+    def has_uncommitted_changes(self) -> bool:
+        return self._session.has_uncommitted_changes
+
+    def discard_changes(self) -> None:
+        self._session.discard_changes()
+
     def store(self, config: StoreConfig | None = None) -> IcechunkStore:
         return IcechunkStore(self._session.store(config))
 
     def merge(self, other: Self) -> None:
         self._session.merge(other._session)
 
-    def commit(self, message: str) -> None:
-        self._session.commit(message)
+    def commit(self, message: str) -> str:
+        return self._session.commit(message)

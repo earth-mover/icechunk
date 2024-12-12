@@ -46,6 +46,15 @@ impl PySession {
         self.0.blocking_read().branch().map(|b| b.to_string())
     }
 
+    #[getter]
+    pub fn has_uncommitted_changes(&self) -> bool {
+        self.0.blocking_read().has_uncommitted_changes()
+    }
+
+    pub fn discard_changes(&self) {
+        self.0.blocking_write().discard_changes();
+    }
+
     #[pyo3(signature = (config = None))]
     pub fn store(&self, config: Option<PyStoreConfig>) -> PyResult<PyStore> {
         let store = Store::from_session(
@@ -73,15 +82,16 @@ impl PySession {
         })
     }
 
-    pub fn commit(&self, message: &str) -> PyResult<()> {
+    pub fn commit(&self, message: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async {
-            self.0
+            let snapshot_id = self
+                .0
                 .write()
                 .await
                 .commit(message, None)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(())
+            Ok(snapshot_id.to_string())
         })
     }
 }
