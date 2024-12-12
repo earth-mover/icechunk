@@ -13,6 +13,7 @@ use icechunk::{
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
+    types::PyType,
 };
 use tokio::sync::{Mutex, RwLock};
 
@@ -35,12 +36,24 @@ impl PyStoreConfig {
     }
 }
 
-#[pyclass(name = "Store")]
+#[pyclass(name = "PyStore")]
 #[derive(Clone)]
 pub struct PyStore(pub Arc<RwLock<Store>>);
 
 #[pymethods]
 impl PyStore {
+    #[classmethod]
+    fn from_bytes(_cls: Bound<'_, PyType>, bytes: Vec<u8>) -> PyResult<Self> {
+        let store =
+            Arc::new(RwLock::new(serde_json::from_slice(&bytes).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "Failed to deserialize store from bytes: {}",
+                    e
+                ))
+            })?));
+        Ok(Self(store))
+    }
+
     fn __eq__(&self, other: &Self) -> bool {
         self.0.blocking_read().deref() == other.0.blocking_read().deref()
     }

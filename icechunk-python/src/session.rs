@@ -1,7 +1,7 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 
 use icechunk::{session::Session, Store};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -9,31 +9,39 @@ use crate::{
     store::{PyStore, PyStoreConfig},
 };
 
-#[pyclass(name = "Session")]
+#[pyclass]
 #[derive(Clone)]
-pub struct PySession(Arc<RwLock<Session>>);
+pub struct PySession(pub Arc<RwLock<Session>>);
 
 #[pymethods]
 impl PySession {
+    #[classmethod]
+    fn from_bytes(_cls: Bound<'_, PyType>, bytes: Vec<u8>) -> PyResult<Self> {
+        let store =
+            Arc::new(RwLock::new(serde_json::from_slice(&bytes).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "Failed to deserialize store from bytes: {}",
+                    e
+                ))
+            })?));
+        Ok(Self(store))
+    }
+
     pub fn __eq__(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    pub fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
-        // FIXME: Use rmp_serde instead of serde_json to optimize performance
-        let serialized = serde_json::to_vec(&self.0.blocking_read().deref())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Cow::Owned(serialized))
-    }
-
+    #[getter]
     pub fn read_only(&self) -> bool {
         self.0.blocking_read().read_only()
     }
 
+    #[getter]
     pub fn snapshot_id(&self) -> String {
         self.0.blocking_read().snapshot_id().to_string()
     }
 
+    #[getter]
     pub fn branch(&self) -> Option<String> {
         self.0.blocking_read().branch().map(|b| b.to_string())
     }
@@ -59,6 +67,18 @@ impl PySession {
                 .write()
                 .await
                 .merge(changes)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
+    }
+
+    pub fn commit(&self, message: &str) -> PyResult<()> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            self.0
+                .write()
+                .await
+                .commit(message, None)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())

@@ -3,18 +3,23 @@ use std::{collections::HashMap, sync::Arc};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use icechunk::{
-    format::{snapshot::SnapshotMetadata, ChunkOffset, SnapshotId},
-    repository::RepositoryError,
+    format::{
+        snapshot::{self, SnapshotMetadata},
+        ChunkOffset, SnapshotId,
+    },
+    repository::{RepositoryError, VersionInfo},
     storage::virtual_ref::{
         ObjectStoreVirtualChunkResolver, ObjectStoreVirtualChunkResolverConfig,
         VirtualChunkResolver,
     },
     Repository, RepositoryConfig,
 };
-use pyo3::{prelude::*, types::PyType};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
+use tokio::sync::RwLock;
 
 use crate::{
     errors::PyIcechunkStoreError,
+    session::PySession,
     storage::{PyStorageConfig, PyVirtualRefConfig},
 };
 
@@ -54,7 +59,7 @@ impl PyRepositoryConfig {
     }
 }
 
-#[pyclass(name = "Repository")]
+#[pyclass]
 pub struct PyRepository(Repository);
 
 #[pymethods]
@@ -261,5 +266,52 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tags)
         })
+    }
+
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    pub fn readonly_session(
+        &self,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot_id: Option<String>,
+    ) -> PyResult<PySession> {
+        let version = if let Some(branch_name) = branch {
+            VersionInfo::BranchTipRef(branch_name)
+        } else if let Some(tag_name) = tag {
+            VersionInfo::TagRef(tag_name)
+        } else if let Some(snapshot_id) = snapshot_id {
+            let snapshot_id =
+                SnapshotId::try_from(snapshot_id.as_str()).map_err(|_| {
+                    PyIcechunkStoreError::RepositoryError(
+                        RepositoryError::InvalidSnapshotId(snapshot_id.to_owned()),
+                    )
+                })?;
+
+            VersionInfo::SnapshotId(snapshot_id)
+        } else {
+            return Err(PyValueError::new_err(
+                "Must provide either branch_name, tag_name, or snapshot_id",
+            ));
+        };
+
+        let session = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            self.0
+                .readonly_session(&version)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)
+        })?;
+
+        Ok(PySession(Arc::new(RwLock::new(session))))
+    }
+
+    pub fn writeable_session(&self, branch: &str) -> PyResult<PySession> {
+        let session = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            self.0
+                .writeable_session(branch)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)
+        })?;
+
+        Ok(PySession(Arc::new(RwLock::new(session))))
     }
 }
