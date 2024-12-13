@@ -417,6 +417,11 @@ impl Repository {
         Ok(tags)
     }
 
+    pub async fn tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+        let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
+        Ok(ref_data.snapshot)
+    }
+
     pub async fn readonly_session(
         &self,
         version: &VersionInfo,

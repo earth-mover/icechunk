@@ -11,6 +11,7 @@ intentionally changed, the repository files must be regenerated. For that, run t
 file as a python script: `python ./tests/test_can_read_old.py`.
 """
 
+from typing import cast
 import pytest
 from numpy.testing import assert_array_equal
 from object_store import ClientOptions, ObjectStore
@@ -38,24 +39,14 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
         store.put(key, data)
 
 
-def mk_store(read_only: bool):
+def mk_repo():
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
-    store = ic.IcechunkStore.open_or_create(
+    store = ic.Repository.open_or_create(
         storage=ic.StorageConfig.filesystem(store_path),
-        config=ic.StoreConfig(
+        config=ic.RepositoryConfig(
             inline_chunk_threshold_bytes=10,
-            virtual_ref_config=ic.VirtualRefConfig.s3_from_config(
-                credentials=ic.S3Credentials(
-                    access_key_id="minio123",
-                    secret_access_key="minio123",
-                ),
-                endpoint_url="http://localhost:9000",
-                allow_http=True,
-                region="us-east-1",
-            ),
         ),
-        read_only=read_only,
     )
     return store
 
@@ -71,7 +62,9 @@ async def write_a_test_repo():
     """
 
     print("Writing repository to ./tests/data/test-repo")
-    store = mk_store(read_only=False)
+    repo = mk_repo()
+    session = repo.writeable_session("main")
+    store = session.store()
 
     root = zarr.group(store=store)
     group1 = root.create_group(
@@ -97,25 +90,38 @@ async def write_a_test_repo():
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    store.commit("empty structure")
+    session.commit("empty structure")
+
+    session = repo.writeable_session("main")
+    store = session.store()
+    root = zarr.group(store=store)
+    big_chunks = cast(zarr.Array, root["group1/big_chunks"])
+    small_chunks = cast(zarr.Array, root["group1/small_chunks"])
 
     big_chunks[:] = 42.0
     small_chunks[:] = 84
-    store.commit("fill data")
+    snapshot = session.commit("fill data")
 
-    store.set_virtual_ref(
-        "group1/big_chunks/c/0/0",
-        "s3://testbucket/path/to/python/chunk-1",
-        offset=0,
-        length=5 * 5 * 4,
-    )
-    store.commit("set virtual chunk")
+    # store.set_virtual_ref(
+    #     "group1/big_chunks/c/0/0",
+    #     "s3://testbucket/path/to/python/chunk-1",
+    #     offset=0,
+    #     length=5 * 5 * 4,
+    # )
+    # store.commit("set virtual chunk")
 
-    store.new_branch("my-branch")
+    repo.create_branch("my-branch", snapshot_id=snapshot)
+    session = repo.writeable_session("my-branch")
+    store = session.store()
+
     await store.delete("group1/small_chunks/c/4")
-    snap4 = store.commit("delete a chunk")
+    snap4 = session.commit("delete a chunk")
 
-    store.tag("it works!", snap4)
+    repo.create_tag("it works!", snapshot_id=snap4)
+
+    session = repo.writeable_session("my-branch")
+    store = session.store()
+    root = zarr.open_group(store=store)
 
     group2 = root.create_group(
         "group2", attributes={"this": "is a nice group", "icechunk": 1, "size": 42.0}
@@ -137,8 +143,9 @@ async def write_a_test_repo():
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    snap5 = store.commit("some more structure")
-    store.tag("it also works!", snap5)
+    snap5 = session.commit("some more structure")
+
+    repo.create_tag("it also works!", snapshot_id=snap5)
 
     store.close()
 
@@ -148,7 +155,9 @@ async def test_icechunk_can_read_old_repo():
     pytest.xfail(
         "Temporary flagged as failing while we implement new virtual chunk mechanism"
     )
-    store = mk_store(read_only=True)
+
+    repo = mk_repo()
+    main_snapshot = repo.branch_tip("main")
 
     expected_main_history = [
         "set virtual chunk",
@@ -156,23 +165,25 @@ async def test_icechunk_can_read_old_repo():
         "empty structure",
         "Repository initialized",
     ]
-    assert [p.message for p in store.ancestry()] == expected_main_history
+    assert [p.message for p in repo.ancestry(main_snapshot)] == expected_main_history
 
-    store.checkout(branch="my-branch")
+    my_branch_snapshot = repo.branch_tip("my-branch")
     expected_branch_history = [
         "some more structure",
         "delete a chunk",
     ] + expected_main_history
-    assert [p.message for p in store.ancestry()] == expected_branch_history
+    assert [
+        p.message for p in repo.ancestry(my_branch_snapshot)
+    ] == expected_branch_history
 
-    store.checkout(tag="it also works!")
-    assert [p.message for p in store.ancestry()] == expected_branch_history
+    tag_snapshot = repo.tag("it also works!")
+    assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history
 
-    store.checkout(tag="it works!")
-    assert [p.message for p in store.ancestry()] == expected_branch_history[1:]
+    tag_snapshot = repo.tag("it works!")
+    assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history[1:]
 
-    store = mk_store(read_only=False)
-    store.checkout(branch="my-branch")
+    session = repo.writeable_session("my-branch")
+    store = session.store()
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
         "group2",

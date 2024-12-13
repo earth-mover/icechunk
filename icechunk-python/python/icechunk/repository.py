@@ -74,6 +74,9 @@ class Repository:
     def list_tags(self) -> list[str]:
         return self._repository.list_tags()
 
+    def tag(self, tag: str) -> str:
+        return self._repository.tag(tag)
+
     def readonly_session(
         self,
         *,

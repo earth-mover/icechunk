@@ -48,7 +48,11 @@ impl PyRepositoryConfig {
     #[new]
     #[pyo3(signature = (*, inline_chunk_threshold_bytes = 512, unsafe_overwrite_refs = false))]
     fn new(inline_chunk_threshold_bytes: u16, unsafe_overwrite_refs: bool) -> Self {
-        Self(RepositoryConfig { inline_chunk_threshold_bytes, unsafe_overwrite_refs, ..Default::default() })
+        Self(RepositoryConfig {
+            inline_chunk_threshold_bytes,
+            unsafe_overwrite_refs,
+            ..Default::default()
+        })
     }
 }
 
@@ -135,9 +139,14 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok::<_, PyErr>(
-                    Repository::open_or_create(config.map(|c| c.0), None, storage, HashMap::new())
-                        .await
-                        .map_err(PyIcechunkStoreError::RepositoryError)?,
+                    Repository::open_or_create(
+                        config.map(|c| c.0),
+                        None,
+                        storage,
+                        HashMap::new(),
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?,
                 )
             })?;
 
@@ -258,6 +267,14 @@ impl PyRepository {
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tags)
+        })
+    }
+
+    pub fn tag(&self, tag: &str) -> PyResult<String> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let tag =
+                self.0.tag(tag).await.map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(tag.to_string())
         })
     }
 
