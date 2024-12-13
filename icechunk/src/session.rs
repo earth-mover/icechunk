@@ -663,7 +663,7 @@ impl Session {
                     self.config.clone(),
                     Arc::clone(&self.storage),
                     Arc::clone(&self.virtual_resolver),
-                    self.snapshot_id.clone(),
+                    ref_data.snapshot.clone(),
                 );
 
                 let change_set = std::mem::take(&mut self.change_set);
