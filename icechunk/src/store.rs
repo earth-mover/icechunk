@@ -1056,6 +1056,7 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     async fn create_memory_store_repository() -> Repository {
         let storage = Arc::new(
@@ -2181,6 +2182,38 @@ mod tests {
             .await;
         let correct_error = matches!(result, Err(StoreError::ReadOnly { .. }));
         assert!(correct_error);
+    }
+
+    #[test]
+    fn test_serialize() {
+        let repo_dir = TempDir::new().expect("could not create temp dir");
+        let storage = Arc::new(
+            ObjectStorage::new_local_store(repo_dir.path())
+                .expect("could not create storage"),
+        );
+
+        let (_repo, store) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let repo =
+                Repository::create(None, None, storage, HashMap::new()).await.unwrap();
+            let ds = repo.writeable_session("main").await.unwrap();
+            let store = Store::from_session(
+                Arc::new(RwLock::new(ds)),
+                StoreConfig::default(),
+                false,
+            );
+            store
+                .set(
+                    "zarr.json",
+                    Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+                )
+                .await
+                .unwrap();
+            (repo, store)
+        });
+
+        let store_bytes = serde_json::to_vec(&store).unwrap();
+        let store2: Store = serde_json::from_slice(&store_bytes).unwrap();
+        assert!(store.eq(&store2));
     }
 
     // #[test]

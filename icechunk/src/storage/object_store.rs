@@ -49,7 +49,7 @@ impl From<&ByteRange> for Option<GetRange> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ObjectStorageConfig {
     url: String,
     prefix: String,
@@ -57,10 +57,11 @@ pub struct ObjectStorageConfig {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(transparent)]
 pub struct ObjectStorage {
+    config: ObjectStorageConfig,
     #[serde(skip)]
     store: Arc<dyn ObjectStore>,
-    config: ObjectStorageConfig,
 }
 
 impl ObjectStorage {
@@ -573,4 +574,31 @@ fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
     let created_at = object.last_modified;
     let id = object.location.filename()?.to_string();
     Some(ListInfo { id, created_at })
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::ObjectStorage;
+
+    #[test]
+    fn test_serialize_object_store() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = ObjectStorage::new_local_store(tmp_dir.path()).unwrap();
+
+        let serialized = serde_json::to_string(&store).unwrap();
+
+        assert_eq!(
+            serialized,
+            format!(
+                r#"{{"url":"file://{}","prefix":"","options":[]}}"#,
+                tmp_dir.path().display()
+            )
+        );
+
+        let deserialized: ObjectStorage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(store.config, deserialized.config);
+    }
 }

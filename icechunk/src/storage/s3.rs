@@ -45,10 +45,11 @@ use super::{
 };
 
 #[derive(Debug, Serialize)]
+#[serde(transparent)]
 pub struct S3Storage {
+    config: S3Config,
     #[serde(skip)]
     client: Arc<Client>,
-    config: S3Config,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -646,4 +647,41 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
     let created_at = last_modified.to_chrono_utc().ok()?;
     let id = Path::new(key).file_name().and_then(|s| s.to_str())?.to_string();
     Some(ListInfo { id, created_at })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{S3ClientOptions, S3Config, S3Credentials, S3Storage};
+
+    #[test]
+    fn test_serialize_s3_storage() {
+        let config = S3Config {
+            bucket: "bucket".to_string(),
+            prefix: "prefix".to_string(),
+            options: Some(S3ClientOptions {
+                region: Some("us-west-2".to_string()),
+                endpoint: Some("http://localhost:9000".to_string()),
+                credentials: S3Credentials::Static(super::StaticS3Credentials {
+                    access_key_id: "access_key_id".to_string(),
+                    secret_access_key: "secret_access_key".to_string(),
+                    session_token: Some("session_token".to_string()),
+                }),
+                allow_http: true,
+            }),
+        };
+        let storage = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(S3Storage::new_s3_store(&config))
+            .unwrap();
+
+        let serialized = serde_json::to_string(&storage).unwrap();
+
+        assert_eq!(
+            serialized,
+            r#"{"bucket":"bucket","prefix":"prefix","options":{"region":"us-west-2","endpoint":"http://localhost:9000","credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token"},"allow_http":true}}"#
+        );
+
+        let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(storage.config, deserialized.config);
+    }
 }

@@ -4,6 +4,7 @@ import pytest
 
 import icechunk
 import zarr
+from icechunk.repository import Repository
 from zarr.storage import LocalStore
 
 
@@ -14,21 +15,20 @@ def create_local_repo(path: str) -> icechunk.Repository:
 
 
 @pytest.fixture(scope="function")
-def tmp_store(tmpdir):
+def tmp_repo(tmpdir) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(store_path)
-
-    session = repo.writeable_session("main")
-    store = session.store()
-
-    yield store
+    return repo
 
 
-def test_pickle_read_only(tmp_store):
+def test_pickle_read_only(tmp_repo: Repository):
+    tmp_session = tmp_repo.writeable_session(branch="main")
+    tmp_store = tmp_session.store()
+
     assert tmp_store._read_only is False
 
     roundtripped = pickle.loads(pickle.dumps(tmp_store))
-    assert roundtripped._read_only is True
+    assert roundtripped._read_only is False
 
     with tmp_store.preserve_read_only():
         roundtripped = pickle.loads(pickle.dumps(tmp_store))
@@ -37,11 +37,14 @@ def test_pickle_read_only(tmp_store):
     assert tmp_store._read_only is False
 
 
-def test_pickle(tmp_store):
+def test_pickle(tmp_repo: Repository):
+    tmp_session = tmp_repo.writeable_session(branch="main")
+    tmp_store = tmp_session.store()
+
     root = zarr.group(store=tmp_store)
     array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="float32")
     array[:] = 20
-    tmp_store.commit("firsttt")
+    tmp_session.commit("firsttt")
 
     pickled = pickle.dumps(tmp_store)
 
@@ -56,7 +59,10 @@ def test_pickle(tmp_store):
     assert array_loaded[0, 5] == 20
 
 
-async def test_store_equality(tmpdir, tmp_store):
+async def test_store_equality(tmpdir, tmp_repo: Repository):
+    tmp_session = tmp_repo.writeable_session(branch="main")
+    tmp_store = tmp_session.store()
+
     assert tmp_store == tmp_store
 
     local_store = await LocalStore.open(f"{tmpdir}/zarr", read_only=False)
@@ -64,7 +70,7 @@ async def test_store_equality(tmpdir, tmp_store):
 
     memory_repo = icechunk.Repository.open_or_create(
         config=icechunk.RepositoryConfig(),
-        storage=icechunk.StorageConfig.filesystem("store_path"),
+        storage=icechunk.StorageConfig.memory("store_path"),
     )
 
     memory_session = memory_repo.writeable_session(branch="main")
