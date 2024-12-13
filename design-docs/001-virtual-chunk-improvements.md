@@ -145,7 +145,7 @@ pub struct RepositoryConfig {
 }
 ```
 
-The `RepositoryConfig` object acts as a default, read during repository instantiation, and overrideable by users at runtime. Different fields of configuration may have different behaviors when overridden.
+The `RepositoryConfig` object acts as a default, read during repository instantiation, and overridable by users at runtime. Different fields of configuration may have different behaviors when overridden.
 
 A user can modify the `RepositoryConfig` for their current repo instance, but decide not to save the change to storage. This will be very common as users tweak the configuration during experimentation.
 
