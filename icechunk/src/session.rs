@@ -1487,7 +1487,11 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2576,6 +2580,7 @@ mod tests {
         let _array_created_snap = ds.commit("create array", None).await?;
 
         let mut ds1 = repo.writeable_session("main").await?;
+        let mut ds2 = repo.writeable_session("main").await?;
 
         ds1.set_chunk_ref(
             new_array_path.clone(),
@@ -2603,7 +2608,6 @@ mod tests {
 
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks
-        let mut ds2 = repo.writeable_session("main").await?;
         ds2.set_chunk_ref(
             new_array_path.clone(),
             ChunkIndices(vec![2]),
