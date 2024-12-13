@@ -1809,7 +1809,8 @@ mod tests {
         let in_mem_storage =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
 
         // there should be no manifests yet
         assert!(!in_mem_storage
@@ -3005,267 +3006,261 @@ mod tests {
         Ok(())
     }
 
-    // #[cfg(test)]
-    // mod state_machine_test {
-    //     use crate::format::snapshot::NodeData;
-    //     use crate::format::Path;
-    //     use crate::ObjectStorage;
-    //     use crate::Repository;
-    //     use futures::Future;
-    //     // use futures::Future;
-    //     use proptest::prelude::*;
-    //     use proptest::sample;
-    //     use proptest::strategy::{BoxedStrategy, Just};
-    //     use proptest_state_machine::{
-    //         prop_state_machine, ReferenceStateMachine, StateMachineTest,
-    //     };
-    //     use std::collections::HashMap;
-    //     use std::fmt::Debug;
-    //     use std::sync::Arc;
-    //     use tokio::runtime::Runtime;
+    #[cfg(test)]
+    mod state_machine_test {
+        use crate::format::snapshot::NodeData;
+        use crate::format::Path;
+        use futures::Future;
+        use proptest::prelude::*;
+        use proptest::sample;
+        use proptest::strategy::{BoxedStrategy, Just};
+        use proptest_state_machine::{
+            prop_state_machine, ReferenceStateMachine, StateMachineTest,
+        };
+        use std::collections::HashMap;
+        use std::fmt::Debug;
+        use tokio::runtime::Runtime;
 
-    //     use proptest::test_runner::Config;
+        use proptest::test_runner::Config;
 
-    //     use super::ZarrArrayMetadata;
-    //     use super::{node_paths, zarr_array_metadata};
+        use super::create_memory_store_repository;
+        use super::Session;
+        use super::ZarrArrayMetadata;
+        use super::{node_paths, zarr_array_metadata};
 
-    //     #[derive(Clone, Debug)]
-    //     enum RepositoryTransition {
-    //         AddArray(Path, ZarrArrayMetadata),
-    //         UpdateArray(Path, ZarrArrayMetadata),
-    //         DeleteArray(Option<Path>),
-    //         AddGroup(Path),
-    //         DeleteGroup(Option<Path>),
-    //     }
+        #[derive(Clone, Debug)]
+        enum RepositoryTransition {
+            AddArray(Path, ZarrArrayMetadata),
+            UpdateArray(Path, ZarrArrayMetadata),
+            DeleteArray(Option<Path>),
+            AddGroup(Path),
+            DeleteGroup(Option<Path>),
+        }
 
-    //     /// An empty type used for the `ReferenceStateMachine` implementation.
-    //     struct RepositoryStateMachine;
+        /// An empty type used for the `ReferenceStateMachine` implementation.
+        struct RepositoryStateMachine;
 
-    //     #[derive(Clone, Default, Debug)]
-    //     struct RepositoryModel {
-    //         arrays: HashMap<Path, ZarrArrayMetadata>,
-    //         groups: Vec<Path>,
-    //     }
+        #[derive(Clone, Default, Debug)]
+        struct RepositoryModel {
+            arrays: HashMap<Path, ZarrArrayMetadata>,
+            groups: Vec<Path>,
+        }
 
-    //     impl ReferenceStateMachine for RepositoryStateMachine {
-    //         type State = RepositoryModel;
-    //         type Transition = RepositoryTransition;
+        impl ReferenceStateMachine for RepositoryStateMachine {
+            type State = RepositoryModel;
+            type Transition = RepositoryTransition;
 
-    //         fn init_state() -> BoxedStrategy<Self::State> {
-    //             Just(Default::default()).boxed()
-    //         }
+            fn init_state() -> BoxedStrategy<Self::State> {
+                Just(Default::default()).boxed()
+            }
 
-    //         fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
-    //             // proptest-state-machine generates the transitions first,
-    //             // *then* applies the preconditions to decide if that transition is valid.
-    //             // that means we have to make sure that we are not sampling from
-    //             // parts of the State that are empty.
-    //             // i.e. we need to apply a precondition here :/
-    //             let delete_arrays = {
-    //                 if !state.arrays.is_empty() {
-    //                     let array_keys: Vec<Path> =
-    //                         state.arrays.keys().cloned().collect();
-    //                     sample::select(array_keys)
-    //                         .prop_map(|p| RepositoryTransition::DeleteArray(Some(p)))
-    //                         .boxed()
-    //                 } else {
-    //                     Just(RepositoryTransition::DeleteArray(None)).boxed()
-    //                 }
-    //             };
+            fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
+                // proptest-state-machine generates the transitions first,
+                // *then* applies the preconditions to decide if that transition is valid.
+                // that means we have to make sure that we are not sampling from
+                // parts of the State that are empty.
+                // i.e. we need to apply a precondition here :/
+                let delete_arrays = {
+                    if !state.arrays.is_empty() {
+                        let array_keys: Vec<Path> =
+                            state.arrays.keys().cloned().collect();
+                        sample::select(array_keys)
+                            .prop_map(|p| RepositoryTransition::DeleteArray(Some(p)))
+                            .boxed()
+                    } else {
+                        Just(RepositoryTransition::DeleteArray(None)).boxed()
+                    }
+                };
 
-    //             let delete_groups = {
-    //                 if !state.groups.is_empty() {
-    //                     sample::select(state.groups.clone())
-    //                         .prop_map(|p| RepositoryTransition::DeleteGroup(Some(p)))
-    //                         .boxed()
-    //                 } else {
-    //                     Just(RepositoryTransition::DeleteGroup(None)).boxed()
-    //                 }
-    //             };
+                let delete_groups = {
+                    if !state.groups.is_empty() {
+                        sample::select(state.groups.clone())
+                            .prop_map(|p| RepositoryTransition::DeleteGroup(Some(p)))
+                            .boxed()
+                    } else {
+                        Just(RepositoryTransition::DeleteGroup(None)).boxed()
+                    }
+                };
 
-    //             prop_oneof![
-    //                 (node_paths(), zarr_array_metadata())
-    //                     .prop_map(|(a, b)| RepositoryTransition::AddArray(a, b)),
-    //                 (node_paths(), zarr_array_metadata())
-    //                     .prop_map(|(a, b)| RepositoryTransition::UpdateArray(a, b)),
-    //                 delete_arrays,
-    //                 node_paths().prop_map(RepositoryTransition::AddGroup),
-    //                 delete_groups,
-    //             ]
-    //             .boxed()
-    //         }
+                prop_oneof![
+                    (node_paths(), zarr_array_metadata())
+                        .prop_map(|(a, b)| RepositoryTransition::AddArray(a, b)),
+                    (node_paths(), zarr_array_metadata())
+                        .prop_map(|(a, b)| RepositoryTransition::UpdateArray(a, b)),
+                    delete_arrays,
+                    node_paths().prop_map(RepositoryTransition::AddGroup),
+                    delete_groups,
+                ]
+                .boxed()
+            }
 
-    //         fn apply(
-    //             mut state: Self::State,
-    //             transition: &Self::Transition,
-    //         ) -> Self::State {
-    //             match transition {
-    //                 // Array ops
-    //                 RepositoryTransition::AddArray(path, metadata) => {
-    //                     let res = state.arrays.insert(path.clone(), metadata.clone());
-    //                     assert!(res.is_none());
-    //                 }
-    //                 RepositoryTransition::UpdateArray(path, metadata) => {
-    //                     state
-    //                         .arrays
-    //                         .insert(path.clone(), metadata.clone())
-    //                         .expect("(postcondition) insertion failed");
-    //                 }
-    //                 RepositoryTransition::DeleteArray(path) => {
-    //                     let path = path.clone().unwrap();
-    //                     state
-    //                         .arrays
-    //                         .remove(&path)
-    //                         .expect("(postcondition) deletion failed");
-    //                 }
+            fn apply(
+                mut state: Self::State,
+                transition: &Self::Transition,
+            ) -> Self::State {
+                match transition {
+                    // Array ops
+                    RepositoryTransition::AddArray(path, metadata) => {
+                        let res = state.arrays.insert(path.clone(), metadata.clone());
+                        assert!(res.is_none());
+                    }
+                    RepositoryTransition::UpdateArray(path, metadata) => {
+                        state
+                            .arrays
+                            .insert(path.clone(), metadata.clone())
+                            .expect("(postcondition) insertion failed");
+                    }
+                    RepositoryTransition::DeleteArray(path) => {
+                        let path = path.clone().unwrap();
+                        state
+                            .arrays
+                            .remove(&path)
+                            .expect("(postcondition) deletion failed");
+                    }
 
-    //                 // Group ops
-    //                 RepositoryTransition::AddGroup(path) => {
-    //                     state.groups.push(path.clone());
-    //                     // TODO: postcondition
-    //                 }
-    //                 RepositoryTransition::DeleteGroup(Some(path)) => {
-    //                     let index =
-    //                         state.groups.iter().position(|x| x == path).expect(
-    //                             "Attempting to delete a non-existent path: {path}",
-    //                         );
-    //                     state.groups.swap_remove(index);
-    //                     state.groups.retain(|group| !group.starts_with(path));
-    //                     state.arrays.retain(|array, _| !array.starts_with(path));
-    //                 }
-    //                 _ => panic!(),
-    //             }
-    //             state
-    //         }
+                    // Group ops
+                    RepositoryTransition::AddGroup(path) => {
+                        state.groups.push(path.clone());
+                        // TODO: postcondition
+                    }
+                    RepositoryTransition::DeleteGroup(Some(path)) => {
+                        let index =
+                            state.groups.iter().position(|x| x == path).expect(
+                                "Attempting to delete a non-existent path: {path}",
+                            );
+                        state.groups.swap_remove(index);
+                        state.groups.retain(|group| !group.starts_with(path));
+                        state.arrays.retain(|array, _| !array.starts_with(path));
+                    }
+                    _ => panic!(),
+                }
+                state
+            }
 
-    //         fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
-    //             match transition {
-    //                 RepositoryTransition::AddArray(path, _) => {
-    //                     !state.arrays.contains_key(path) && !state.groups.contains(path)
-    //                 }
-    //                 RepositoryTransition::UpdateArray(path, _) => {
-    //                     state.arrays.contains_key(path)
-    //                 }
-    //                 RepositoryTransition::DeleteArray(path) => path.is_some(),
-    //                 RepositoryTransition::AddGroup(path) => {
-    //                     !state.arrays.contains_key(path) && !state.groups.contains(path)
-    //                 }
-    //                 RepositoryTransition::DeleteGroup(p) => p.is_some(),
-    //             }
-    //         }
-    //     }
+            fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
+                match transition {
+                    RepositoryTransition::AddArray(path, _) => {
+                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    }
+                    RepositoryTransition::UpdateArray(path, _) => {
+                        state.arrays.contains_key(path)
+                    }
+                    RepositoryTransition::DeleteArray(path) => path.is_some(),
+                    RepositoryTransition::AddGroup(path) => {
+                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    }
+                    RepositoryTransition::DeleteGroup(p) => p.is_some(),
+                }
+            }
+        }
 
-    //     struct TestRepository {
-    //         repository: Repository,
-    //         runtime: Runtime,
-    //     }
-    //     trait BlockOnUnwrap {
-    //         fn unwrap<F, T, E>(&self, future: F) -> T
-    //         where
-    //             F: Future<Output = Result<T, E>>,
-    //             E: Debug;
-    //     }
-    //     impl BlockOnUnwrap for Runtime {
-    //         fn unwrap<F, T, E>(&self, future: F) -> T
-    //         where
-    //             F: Future<Output = Result<T, E>>,
-    //             E: Debug,
-    //         {
-    //             self.block_on(future).unwrap()
-    //         }
-    //     }
+        struct TestRepository {
+            session: Session,
+            runtime: Runtime,
+        }
+        trait BlockOnUnwrap {
+            fn unwrap<F, T, E>(&self, future: F) -> T
+            where
+                F: Future<Output = Result<T, E>>,
+                E: Debug;
+        }
+        impl BlockOnUnwrap for Runtime {
+            fn unwrap<F, T, E>(&self, future: F) -> T
+            where
+                F: Future<Output = Result<T, E>>,
+                E: Debug,
+            {
+                self.block_on(future).unwrap()
+            }
+        }
 
-    //     impl StateMachineTest for TestRepository {
-    //         type SystemUnderTest = Self;
-    //         type Reference = RepositoryStateMachine;
+        impl StateMachineTest for TestRepository {
+            type SystemUnderTest = Self;
+            type Reference = RepositoryStateMachine;
 
-    //         fn init_test(
-    //             _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
-    //         ) -> Self::SystemUnderTest {
-    //             let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()));
-    //             let init_repository =
-    //                 tokio::runtime::Runtime::new().unwrap().block_on(async {
-    //                     let storage = Arc::new(storage);
-    //                     Repository::init(storage, false).await.unwrap()
-    //                 });
-    //             TestRepository {
-    //                 repository: init_repository.build(),
-    //                 runtime: Runtime::new().unwrap(),
-    //             }
-    //         }
+            fn init_test(
+                _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+            ) -> Self::SystemUnderTest {
+                let mut session =
+                    tokio::runtime::Runtime::new().unwrap().block_on(async {
+                        let repo = create_memory_store_repository().await;
+                        repo.writeable_session("main").await.unwrap()
+                    });
+                TestRepository { session: session, runtime: Runtime::new().unwrap() }
+            }
 
-    //         fn apply(
-    //             mut state: Self::SystemUnderTest,
-    //             _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
-    //             transition: RepositoryTransition,
-    //         ) -> Self::SystemUnderTest {
-    //             let runtime = &state.runtime;
-    //             let repository = &mut state.repository;
-    //             match transition {
-    //                 RepositoryTransition::AddArray(path, metadata) => {
-    //                     runtime.unwrap(repository.add_array(path, metadata))
-    //                 }
-    //                 RepositoryTransition::UpdateArray(path, metadata) => {
-    //                     runtime.unwrap(repository.update_array(path, metadata))
-    //                 }
-    //                 RepositoryTransition::DeleteArray(Some(path)) => {
-    //                     runtime.unwrap(repository.delete_array(path))
-    //                 }
-    //                 RepositoryTransition::AddGroup(path) => {
-    //                     runtime.unwrap(repository.add_group(path))
-    //                 }
-    //                 RepositoryTransition::DeleteGroup(Some(path)) => {
-    //                     runtime.unwrap(repository.delete_group(path))
-    //                 }
-    //                 _ => panic!(),
-    //             }
-    //             state
-    //         }
+            fn apply(
+                mut state: Self::SystemUnderTest,
+                _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+                transition: RepositoryTransition,
+            ) -> Self::SystemUnderTest {
+                let runtime = &state.runtime;
+                let repository = &mut state.session;
+                match transition {
+                    RepositoryTransition::AddArray(path, metadata) => {
+                        runtime.unwrap(repository.add_array(path, metadata))
+                    }
+                    RepositoryTransition::UpdateArray(path, metadata) => {
+                        runtime.unwrap(repository.update_array(path, metadata))
+                    }
+                    RepositoryTransition::DeleteArray(Some(path)) => {
+                        runtime.unwrap(repository.delete_array(path))
+                    }
+                    RepositoryTransition::AddGroup(path) => {
+                        runtime.unwrap(repository.add_group(path))
+                    }
+                    RepositoryTransition::DeleteGroup(Some(path)) => {
+                        runtime.unwrap(repository.delete_group(path))
+                    }
+                    _ => panic!(),
+                }
+                state
+            }
 
-    //         fn check_invariants(
-    //             state: &Self::SystemUnderTest,
-    //             ref_state: &<Self::Reference as ReferenceStateMachine>::State,
-    //         ) {
-    //             let runtime = &state.runtime;
-    //             for (path, metadata) in ref_state.arrays.iter() {
-    //                 let node = runtime.unwrap(state.repository.get_array(path));
-    //                 let actual_metadata = match node.node_data {
-    //                     NodeData::Array(metadata, _) => Ok(metadata),
-    //                     _ => Err("foo"),
-    //                 }
-    //                 .unwrap();
-    //                 assert_eq!(metadata, &actual_metadata);
-    //             }
+            fn check_invariants(
+                state: &Self::SystemUnderTest,
+                ref_state: &<Self::Reference as ReferenceStateMachine>::State,
+            ) {
+                let runtime = &state.runtime;
+                for (path, metadata) in ref_state.arrays.iter() {
+                    let node = runtime.unwrap(state.session.get_array(path));
+                    let actual_metadata = match node.node_data {
+                        NodeData::Array(metadata, _) => Ok(metadata),
+                        _ => Err("foo"),
+                    }
+                    .unwrap();
+                    assert_eq!(metadata, &actual_metadata);
+                }
 
-    //             for path in ref_state.groups.iter() {
-    //                 let node = runtime.unwrap(state.repository.get_group(path));
-    //                 match node.node_data {
-    //                     NodeData::Group => Ok(()),
-    //                     _ => Err("foo"),
-    //                 }
-    //                 .unwrap();
-    //             }
-    //         }
-    //     }
+                for path in ref_state.groups.iter() {
+                    let node = runtime.unwrap(state.session.get_group(path));
+                    match node.node_data {
+                        NodeData::Group => Ok(()),
+                        _ => Err("foo"),
+                    }
+                    .unwrap();
+                }
+            }
+        }
 
-    //     prop_state_machine! {
-    //         #![proptest_config(Config {
-    //         verbose: 0,
-    //         .. Config::default()
-    //     })]
+        prop_state_machine! {
+            #![proptest_config(Config {
+            verbose: 0,
+            .. Config::default()
+        })]
 
-    //     #[test]
-    //     fn run_repository_state_machine_test(
-    //         // This is a macro's keyword - only `sequential` is currently supported.
-    //         sequential
-    //         // The number of transitions to be generated for each case. This can
-    //         // be a single numerical value or a range as in here.
-    //         1..20
-    //         // Macro's boilerplate to separate the following identifier.
-    //         =>
-    //         // The name of the type that implements `StateMachineTest`.
-    //         TestRepository
-    //     );
-    //     }
-    // }
+        #[test]
+        fn run_repository_state_machine_test(
+            // This is a macro's keyword - only `sequential` is currently supported.
+            sequential
+            // The number of transitions to be generated for each case. This can
+            // be a single numerical value or a range as in here.
+            1..20
+            // Macro's boilerplate to separate the following identifier.
+            =>
+            // The name of the type that implements `StateMachineTest`.
+            TestRepository
+        );
+        }
+    }
 }
