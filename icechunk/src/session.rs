@@ -2189,13 +2189,18 @@ mod tests {
     ///
     /// Group: /foo/bar
     /// Array: /foo/bar/some-array
-    async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>> {
+    async fn get_repo_for_conflict() -> Result<Repository, Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writeable_session("main").await?;
 
         ds.add_group("/foo/bar".try_into().unwrap()).await?;
         ds.add_array("/foo/bar/some-array".try_into().unwrap(), basic_meta()).await?;
         ds.commit("create directory", None).await?;
+
+        Ok(repository)
+    }
+    async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>> {
+        let repository = get_repo_for_conflict().await?;
 
         let ds = repository.writeable_session("main").await?;
         let ds2 = repository.writeable_session("main").await?;
@@ -2892,11 +2897,13 @@ mod tests {
     /// writing to the same chunks.
     async fn test_conflict_resolution_success_through_multiple_commits(
     ) -> Result<(), Box<dyn Error>> {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+        let repo = get_repo_for_conflict().await?;
+        let mut ds2 = repo.writeable_session("main").await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         // write chunks with repo 1
         for coord in [0u32, 1, 2] {
+            let mut ds1 = repo.writeable_session("main").await?;
             ds1.set_chunk_ref(
                 path.clone(),
                 ChunkIndices(vec![coord]),
@@ -2938,7 +2945,10 @@ mod tests {
     /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
     async fn test_conflict_resolution_failure_in_multiple_commits(
     ) -> Result<(), Box<dyn Error>> {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+        let repo = get_repo_for_conflict().await?;
+
+        let mut ds1 = repo.writeable_session("main").await?;
+        let mut ds2 = repo.writeable_session("main").await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.set_user_attributes(
@@ -2948,6 +2958,7 @@ mod tests {
         .await?;
         let non_conflicting_snap = ds1.commit("update user atts", None).await?;
 
+        let mut ds1 = repo.writeable_session("main").await?;
         ds1.set_chunk_ref(
             path.clone(),
             ChunkIndices(vec![0]),
