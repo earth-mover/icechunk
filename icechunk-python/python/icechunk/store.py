@@ -29,6 +29,7 @@ class IcechunkStore(Store, SyncMixin):
             )
         self._store = store
         self._pickle_preserves_read_only = False
+        self._is_open = True
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, self.__class__):

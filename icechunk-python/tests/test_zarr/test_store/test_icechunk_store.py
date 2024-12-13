@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from icechunk.repository import Repository
 import pytest
 
 from icechunk import IcechunkStore, StorageConfig
@@ -47,7 +48,13 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.fixture
     async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
-        return IcechunkStore.open_or_create(**store_kwargs)
+        read_only = store_kwargs.pop("read_only")
+        repo = Repository.open_or_create(**store_kwargs)
+        if read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writeable_session("main")
+        return session.store()
 
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
@@ -55,7 +62,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
         # check store equality with same inputs
         # asserting this is important for being able to compare (de)serialized stores
-        store2 = self.store_cls.open_existing(**store_kwargs)
+        repo = Repository.open(**store_kwargs)
+        if store.read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writeable_session("main")
+        store2 = session.store()
         assert store == store2
 
     @pytest.mark.xfail(reason="Not implemented")
@@ -66,16 +78,24 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_store_open_read_only(
         self, store: IcechunkStore, store_kwargs: dict[str, Any], read_only: bool
     ) -> None:
-        store_kwargs["read_only"] = read_only
-        store = await self.store_cls.open(**store_kwargs)
+
+        repo = Repository.open(**store_kwargs)
+        if read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writeable_session("main")
+        store = session.store()
         assert store._is_open
         assert store.read_only == read_only
 
     async def test_read_only_store_raises(
         self, store: IcechunkStore, store_kwargs: dict[str, Any]
     ) -> None:
-        kwargs = {**store_kwargs, "read_only": True}
-        store = await self.store_cls.open(**kwargs)
+        kwargs = {**store_kwargs}
+        repo = Repository.open(**kwargs)
+        session = repo.readonly_session(branch="main")
+        store = session.store()
+
         assert store.read_only
 
         # set
