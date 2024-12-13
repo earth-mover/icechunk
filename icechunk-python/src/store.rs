@@ -234,20 +234,22 @@ impl PyStore {
     ) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.0);
 
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let virtual_ref = VirtualChunkRef {
-                location: VirtualChunkLocation::Absolute(location),
-                offset,
-                length,
-            };
-            store
-                .write()
-                .await
-                .set_virtual_ref(&key, virtual_ref)
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
-            Ok(())
-        })
+        // pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+        //     let virtual_ref = VirtualChunkRef {
+        //         location: VirtualChunkLocation::Absolute(location),
+        //         offset,
+        //         length,
+        //     };
+        //     store
+        //         .write()
+        //         .await
+        //         .set_virtual_ref(&key, virtual_ref)
+        //         .await
+        //         .map_err(PyIcechunkStoreError::from)?;
+        //     Ok(())
+        // })
+
+        unimplemented!();
     }
 
     fn delete<'py>(

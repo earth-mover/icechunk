@@ -108,6 +108,88 @@ pub enum RepositoryError {
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
+// pub struct RepositoryBuilder {
+//     config: RepositoryConfig,
+//     config_etag: Option<ETag>,
+//     storage: Arc<dyn Storage + Send + Sync>,
+//     snapshot_id: SnapshotId,
+//     change_set: Option<ChangeSet>,
+//     virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+// }
+
+// impl RepositoryBuilder {
+//     fn new(
+//         storage: Arc<dyn Storage + Send + Sync>,
+//         snapshot_id: SnapshotId,
+//         config: RepositoryConfig,
+//         config_etag: Option<ETag>,
+//     ) -> Self {
+//         Self {
+//             config,
+//             config_etag,
+//             snapshot_id,
+//             storage,
+//             change_set: None,
+//             virtual_chunk_credentials: HashMap::new(),
+//         }
+//     }
+
+//     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
+//         self.config.inline_chunk_threshold_bytes = threshold;
+//         self
+//     }
+
+//     pub fn with_unsafe_overwrite_refs(&mut self, value: bool) -> &mut Self {
+//         self.config.unsafe_overwrite_refs = value;
+//         self
+//     }
+
+//     pub fn with_virtual_chunk_container(
+//         &mut self,
+//         cont: VirtualChunkContainer,
+//     ) -> &mut Self {
+//         // TODO: validate the container: valid container, no duplicate names, no duplicate prefixes
+//         self.config.add_virtual_chunk_container(cont);
+//         self
+//     }
+
+//     pub fn with_virtual_chunk_containers(
+//         &mut self,
+//         containers: Vec<VirtualChunkContainer>,
+//     ) -> &mut Self {
+//         self.config.clear_virtual_chunk_containers();
+//         for cont in containers {
+//             self.config.add_virtual_chunk_container(cont)
+//         }
+//         self
+//     }
+
+//     pub fn with_virtual_chunk_credentials(
+//         &mut self,
+//         container: &str,
+//         credentials: ObjectStoreCredentials,
+//     ) -> &mut Self {
+//         self.virtual_chunk_credentials.insert(container.to_string(), credentials);
+//         self
+//     }
+
+//     pub fn with_change_set(&mut self, change_set_bytes: ChangeSet) -> &mut Self {
+//         self.change_set = Some(change_set_bytes);
+//         self
+//     }
+
+//     pub fn build(&self) -> Repository {
+//         Repository::new(
+//             self.config.clone(),
+//             self.config_etag.clone(),
+//             self.storage.clone(),
+//             self.snapshot_id.clone(),
+//             self.change_set.clone(),
+//             self.virtual_chunk_credentials.clone(),
+//         )
+//     }
+// }
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
     config: RepositoryConfig,

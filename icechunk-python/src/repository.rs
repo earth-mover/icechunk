@@ -5,10 +5,6 @@ use futures::TryStreamExt;
 use icechunk::{
     format::{snapshot::SnapshotMetadata, ChunkOffset, SnapshotId},
     repository::{RepositoryError, VersionInfo},
-    storage::virtual_ref::{
-        ObjectStoreVirtualChunkResolver, ObjectStoreVirtualChunkResolverConfig,
-        VirtualChunkResolver,
-    },
     Repository, RepositoryConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
@@ -84,7 +80,7 @@ impl PyRepository {
                     ));
                 }
 
-                Ok(Repository::create(Some(config.0), None, storage, HashMap::new())
+                Ok(Repository::create(config.map(|c| c.0), None, storage, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?)
             })?;
@@ -115,7 +111,7 @@ impl PyRepository {
                     ));
                 }
 
-                Ok(Repository::open(Some(config.0), NOne, storage, HashMap::new())
+                Ok(Repository::open(config.map(|c| c.0), None, storage, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?)
             })?;
@@ -139,7 +135,7 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok::<_, PyErr>(
-                    Repository::open_or_create(Some(config.0), None, storage, HashMap::new())
+                    Repository::open_or_create(config.map(|c| c.0), None, storage, HashMap::new())
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
                 )
