@@ -1,6 +1,6 @@
 import time
 import warnings
-from typing import Any
+from typing import Any, cast
 
 import dask.array
 import icechunk
@@ -20,25 +20,29 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-def mk_store(
-    read_only: bool, storage_config: dict[str, Any], store_config: dict[str, Any]
-) -> IcechunkStore:
+def mk_repo() -> icechunk.Repository:
     storage_config = icechunk.StorageConfig.s3_from_config(
-        **storage_config,
+        bucket="testbucket",
+        prefix="python-distributed-writers-test__" + str(time.time()),
+        endpoint_url="http://localhost:9000",
+        region="us-east-1",
+        allow_http=True,
         credentials=icechunk.S3Credentials(
             access_key_id="minio123",
             secret_access_key="minio123",
         ),
     )
-    store_config = icechunk.StoreConfig(**store_config)
-
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=storage_config,
-        read_only=read_only,
-        config=store_config,
+    repo_config = icechunk.RepositoryConfig(
+        inline_chunk_threshold_bytes=5,
     )
 
-    return store
+    repo = icechunk.Repository.open_or_create(
+        storage=storage_config,
+        config=repo_config,
+    )
+
+    return repo
+
 
 
 async def test_distributed_writers():
@@ -50,18 +54,9 @@ async def test_distributed_writers():
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
-
-    storage_config = {
-        "bucket": "testbucket",
-        "prefix": "python-distributed-writers-test__" + str(time.time()),
-        "endpoint_url": "http://localhost:9000",
-        "region": "us-east-1",
-        "allow_http": True,
-    }
-    store_config = {"inline_chunk_threshold_bytes": 5}
-    store = mk_store(
-        read_only=False, storage_config=storage_config, store_config=store_config
-    )
+    repo = mk_repo()
+    session = repo.writeable_session(branch="main")
+    store = session.store()
 
     shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
     dask_chunks = (CHUNK_DIM_SIZE * CHUNKS_PER_TASK,) * 2
@@ -75,18 +70,21 @@ async def test_distributed_writers():
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snap = store.commit("array created")
+    _first_snap = session.commit("array created")
 
     with Client(n_workers=8):
+        session = repo.writeable_session(branch="main")
+        store = session.store()
+        group = zarr.open_group(store=store)
+        zarray = cast(zarr.Array, group["array"])
         with store.preserve_read_only():
             store_dask(store, sources=[dask_array], targets=[zarray])
-        commit_res = store.commit("distributed commit")
+        commit_res = session.commit("distributed commit")
         assert commit_res
 
         # Lets open a new store to verify the results
-        store = mk_store(
-            read_only=True, storage_config=storage_config, store_config=store_config
-        )
+        readonly_session = repo.readonly_session(branch="main")
+        store = readonly_session.store()
         all_keys = [key async for key in store.list_prefix("/")]
         assert (
             len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
