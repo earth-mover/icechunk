@@ -1,5 +1,10 @@
 use std::{
-    cmp::min, collections::HashSet, future::{ready, Future}, iter, pin::Pin, sync::Arc
+    cmp::min,
+    collections::HashSet,
+    future::{ready, Future},
+    iter,
+    pin::Pin,
+    sync::Arc,
 };
 
 use bytes::Bytes;
@@ -9,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    change_set::ChangeSet, conflicts::{Conflict, ConflictResolution, ConflictSolver}, format::{
+    change_set::ChangeSet,
+    conflicts::{Conflict, ConflictResolution, ConflictSolver},
+    format::{
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkRef, VirtualReferenceError,
@@ -21,7 +28,12 @@ use crate::{
         transaction_log::TransactionLog,
         ByteRange, ChunkIndices, IcechunkFormatError, ManifestId, NodeId, ObjectId, Path,
         SnapshotId,
-    }, metadata::UserAttributes, refs::{fetch_branch_tip, update_branch, RefError}, repository::{RepositoryConfig, RepositoryError}, virtual_chunks::VirtualChunkResolver, Storage, StorageError
+    },
+    metadata::UserAttributes,
+    refs::{fetch_branch_tip, update_branch, RefError},
+    repository::{RepositoryConfig, RepositoryError},
+    virtual_chunks::VirtualChunkResolver,
+    Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -363,9 +375,8 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> SessionResult<
-        Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
-    > {
+    ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
+    {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
                 let storage = Arc::clone(&self.storage);
@@ -422,11 +433,8 @@ impl Session {
     /// As shown, the result of the returned function must be awaited to finish the upload.
     pub fn get_chunk_writer(
         &self,
-    ) -> impl FnOnce(
-        Bytes,
-    ) -> Pin<
-        Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>,
-    > {
+    ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+    {
         let threshold = self.config.inline_chunk_threshold_bytes as usize;
         let storage = Arc::clone(&self.storage);
         move |data: Bytes| {
@@ -486,11 +494,9 @@ impl Session {
 
     pub async fn all_chunks(
         &self,
-    ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_>
-    {
+    ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
         all_chunks(self.storage.as_ref(), &self.change_set, self.snapshot_id()).await
     }
-
 
     /// Discard all uncommitted changes and return them as a `ChangeSet`
     pub fn discard_changes(&mut self) -> ChangeSet {
@@ -1298,17 +1304,11 @@ mod tests {
         ));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-<<<<<<< HEAD
-        let repository =
-            Repository::open(None, None, Arc::new(storage), HashMap::new()).await?;
-        let mut ds = repository.writeable_session("main").await?;
-=======
         update_branch(&storage, "main", snapshot_id.clone(), None, true).await?;
 
-        let repo = Repository::open(RepositoryConfig::default(), Arc::new(storage), None)
-            .await?;
+        let repo =
+            Repository::open(None, None, Arc::new(storage), HashMap::new()).await?;
         let mut ds = repo.writeable_session("main").await?;
->>>>>>> 7c65b01 (First iter of new python api)
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await?;
@@ -1447,8 +1447,7 @@ mod tests {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let storage = Repository::add_in_mem_asset_caching(Arc::clone(&logging_c));
 
-        let repository =
-            Repository::create(None, None, storage, HashMap::new()).await?;
+        let repository = Repository::create(None, None, storage, HashMap::new()).await?;
 
         let mut ds = repository.writeable_session("main").await?;
 
@@ -1726,15 +1725,21 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let repo = Repository::create(None, None, storage, HashMap::new()).await?;
+        let mut ds = repo.writeable_session("main").await?;
 
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
+            shape: vec![4, 2, 4],
             data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -1766,10 +1771,15 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
+        ds.set_chunk_ref(
+            new_array_path.clone(),
+            ChunkIndices(vec![0, 1, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
         let snapshot_id = ds.commit("commit", None).await?;
+        let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
 
-        let ds =
-            repository.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
         let coords = ds
             .all_chunks()
             .await?
@@ -1781,7 +1791,8 @@ mod tests {
             vec![
                 ChunkIndices(vec![0, 0, 0]),
                 ChunkIndices(vec![0, 0, 1]),
-                ChunkIndices(vec![1, 0, 0])
+                ChunkIndices(vec![1, 0, 0]),
+                ChunkIndices(vec![0, 1, 0])
             ]
             .into_iter()
             .collect()
@@ -1794,8 +1805,7 @@ mod tests {
         let in_mem_storage =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repository =
-            Repository::create(None, None, storage, HashMap::new()).await?;
+        let repo = Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
 
         // there should be no manifests yet
         assert!(!in_mem_storage
@@ -1815,13 +1825,15 @@ mod tests {
                 .count(),
         );
 
-        let mut ds = repository.writeable_session("main").await?;
-
+        let mut ds = repo.writeable_session("main").await?;
         ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![5, 5],
             data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Float16(f32::NEG_INFINITY),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -1862,7 +1874,7 @@ mod tests {
                 .count(),
         );
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repo.writeable_session("main").await?;
 
         // add 3 chunks
         ds.set_chunk_ref(
@@ -1897,17 +1909,16 @@ mod tests {
                 .count()
         );
 
-        let mut ds = repository.writeable_session("main").await?;
-
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array(_, manifests) => {
                 manifests.first().as_ref().unwrap().object_id.clone()
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = in_mem_storage.fetch_manifests(&manifest_id).await?;
+        let manifest = storage.fetch_manifests(&manifest_id).await?;
         let initial_size = manifest.len();
 
+        let mut ds = repo.writeable_session("main").await?;
         ds.delete_array(a2path).await?;
         ds.commit("array2 deleted", None).await?;
 
@@ -1922,20 +1933,19 @@ mod tests {
                 .count()
         );
 
-        let mut ds = repository.writeable_session("main").await?;
-
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array(_, manifests) => {
                 manifests.first().as_ref().unwrap().object_id.clone()
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = in_mem_storage.fetch_manifests(&manifest_id).await?;
+        let manifest = storage.fetch_manifests(&manifest_id).await?;
         let size_after_delete = manifest.len();
 
         assert!(size_after_delete < initial_size);
 
         // delete a chunk
+        let mut ds = repo.writeable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 0]), None).await?;
         ds.commit("chunk deleted", None).await?;
 
@@ -1960,17 +1970,13 @@ mod tests {
                 .count(),
         );
 
-        let ds = repository
-            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
-            .await?;
-
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array(_, manifests) => {
                 manifests.first().as_ref().unwrap().object_id.clone()
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = in_mem_storage.fetch_manifests(&manifest_id).await?;
+        let manifest = storage.fetch_manifests(&manifest_id).await?;
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 
@@ -1979,9 +1985,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
-        let storage = Arc::clone(repository.storage());
-        let mut ds = repository.writeable_session("main").await?;
+        let repo = create_memory_store_repository().await;
+        let storage = Arc::clone(repo.storage());
+        let mut ds = repo.writeable_session("main").await?;
 
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
@@ -1990,19 +1996,20 @@ mod tests {
             new_snapshot_id,
             fetch_ref(storage.as_ref(), "main").await?.1.snapshot
         );
-        //assert_eq!(&new_snapshot_id, ds.snapshot_id());
+        assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
-        repository.create_tag("v1", &new_snapshot_id).await?;
+        repo.create_tag("v1", &new_snapshot_id).await?;
         let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
-        let mut ds = repository.writeable_session("main").await?;
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
                 Some(NodeSnapshot { path, user_attributes, node_data, ..})
                     if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
         ));
+
+        let mut ds = repo.writeable_session("main").await?;
 
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
@@ -2012,7 +2019,11 @@ mod tests {
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(2).unwrap(),
+            ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
             fill_value: FillValue::Int32(0),
             codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
@@ -2038,7 +2049,7 @@ mod tests {
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
         let parents =
-            repository.ancestry(&new_snapshot_id).await?.try_collect::<Vec<_>>().await?;
+            repo.ancestry(&new_snapshot_id).await?.try_collect::<Vec<_>>().await?;
         assert_eq!(parents[0].message, "second commit");
         assert_eq!(parents[1].message, "first commit");
         assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
@@ -2109,7 +2120,8 @@ mod tests {
         let in_mem_storage =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
         let mut ds = repo.writeable_session("main").await?;
 
         ds.add_group(Path::root()).await?;

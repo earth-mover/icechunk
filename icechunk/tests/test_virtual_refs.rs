@@ -6,18 +6,13 @@ mod tests {
             manifest::{Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError},
             snapshot::ZarrArrayMetadata,
             ByteRange, ChunkId, ChunkIndices, Path,
-        },
-        metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-        session::{get_chunk, SessionError},
-        storage::{
+        }, metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue}, session::{get_chunk, SessionError}, storage::{
             s3::{
                 mk_client, S3ClientOptions, S3Config, S3Credentials, S3Storage,
                 StaticS3Credentials,
             },
             ObjectStorage,
-        },
-        store::StoreConfig,
-        Repository, RepositoryConfig, Storage, Store,
+        }, store::{StoreConfig, StoreError}, virtual_chunks::{ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer}, Repository, RepositoryConfig, Storage, Store
     };
     use std::{collections::HashMap, error::Error, num::NonZeroU64, vec};
     use std::{path::Path as StdPath, sync::Arc};
@@ -577,7 +572,7 @@ mod tests {
         let ds = repo.writeable_session("main").await?;
         let mut store = Store::from_session(
             Arc::new(RwLock::new(ds)),
-            StoreOptions::default(),
+            StoreConfig::default(),
             false,
         );
 
