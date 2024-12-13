@@ -6,7 +6,7 @@ import time
 import pytest
 
 import zarr
-from icechunk import IcechunkStore, S3Credentials, StorageConfig
+from icechunk import S3Credentials, StorageConfig
 from icechunk.repository import Repository
 from xarray.tests.test_backends import (
     ZarrBase,
