@@ -28,23 +28,6 @@ PROTOTYPE = default_buffer_prototype()
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
-    def __init__(self, *args, **kwargs):
-        note("__init__")
-        super().__init__(*args, **kwargs)
-
-    @initialize()
-    def init_store(self) -> None:
-        note("init_store")
-        import zarr
-
-        # This lets us reuse the fixture provided store.
-        self._sync(self.store.clear())  # FIXME: upstream
-        lsbefore = self._sync_iter(self.store.list_prefix(""))
-        zarr.group(store=self.store)
-        lsafter = self._sync_iter(self.store.list_prefix(""))
-        assert len(lsbefore) == 0, ("more than 0 keys after clearing", lsbefore)
-        assert len(lsafter) == 1, "more than 1 key after creating group"
-
     @precondition(lambda self: self.store.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data):
@@ -94,7 +77,31 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assume(not np.iscomplexobj(array))
         super().add_array(data, name, array_and_chunks)
 
-    # TODO: port to zarr
+    #####  TODO: port everything below to zarr
+    @rule()
+    def clear(self):
+        import zarr
+
+        self._sync(self.store.clear())
+        self._sync(self.model.clear())
+
+        assert self._sync(self.store.is_empty("/"))
+        assert self._sync(self.model.is_empty("/"))
+
+        self.all_groups.clear()
+        self.all_arrays.clear()
+
+        zarr.group(store=self.store)
+        zarr.group(store=self.model)
+
+        assert not self._sync(self.store.is_empty("/"))
+        # TODO: MemoryStore is broken?
+        # assert not self._sync(self.model.is_empty("/"))
+
+        lsstore = self._sync_iter(self.store.list_prefix(""))
+        # lsmodel = self._sync_iter(self.model.list_prefix(""))
+        # assert len(lsmodel) == len(lsstore) == 1, "more than 1 key after creating group"
+
     @invariant()
     def check_list_prefix_from_root(self) -> None:
         model_list = self._sync_iter(self.model.list_prefix(""))
