@@ -10,7 +10,12 @@ use icechunk::{
 };
 use pretty_assertions::assert_eq;
 use rand::{thread_rng, Rng};
-use std::{collections::{HashMap, HashSet}, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU64,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     sync::{Barrier, RwLock},
     task::{self, JoinSet},

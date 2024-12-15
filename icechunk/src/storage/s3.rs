@@ -210,7 +210,12 @@ impl S3Storage {
         key: &str,
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
-        let mut b = self.get_client().await.get_object().bucket(self.config.bucket.clone()).key(key);
+        let mut b = self
+            .get_client()
+            .await
+            .get_object()
+            .bucket(self.config.bucket.clone())
+            .key(key);
 
         if let Some(header) = range_to_header(range) {
             b = b.range(header)
@@ -228,7 +233,12 @@ impl S3Storage {
         metadata: I,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
-        let mut b = self.get_client().await.put_object().bucket(self.config.bucket.clone()).key(key);
+        let mut b = self
+            .get_client()
+            .await
+            .put_object()
+            .bucket(self.config.bucket.clone())
+            .key(key);
 
         if let Some(ct) = content_type {
             b = b.content_type(ct)
@@ -576,8 +586,12 @@ impl Storage for S3Storage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.ref_key(ref_key)?;
-        let mut builder =
-            self.get_client().await.put_object().bucket(self.config.bucket.clone()).key(key.clone());
+        let mut builder = self
+            .get_client()
+            .await
+            .put_object()
+            .bucket(self.config.bucket.clone())
+            .key(key.clone());
 
         if !overwrite_refs {
             builder = builder.if_none_match("*")

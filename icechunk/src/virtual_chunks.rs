@@ -135,7 +135,6 @@ pub struct VirtualChunkResolver {
     fetchers: RwLock<HashMap<ContainerName, Arc<dyn ChunkFetcher>>>,
 }
 
-
 impl VirtualChunkResolver {
     pub fn new(
         containers: Vec<VirtualChunkContainer>,

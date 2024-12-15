@@ -3,16 +3,27 @@
 mod tests {
     use icechunk::{
         format::{
-            manifest::{Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError},
+            manifest::{
+                Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
+                VirtualChunkRef, VirtualReferenceError,
+            },
             snapshot::ZarrArrayMetadata,
             ByteRange, ChunkId, ChunkIndices, Path,
-        }, metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue}, session::{get_chunk, SessionError}, storage::{
+        },
+        metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+        session::{get_chunk, SessionError},
+        storage::{
             s3::{
                 mk_client, S3ClientOptions, S3Config, S3Credentials, S3Storage,
                 StaticS3Credentials,
             },
             ObjectStorage,
-        }, store::{StoreConfig, StoreError}, virtual_chunks::{ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer}, Repository, RepositoryConfig, Storage, Store
+        },
+        store::{StoreConfig, StoreError},
+        virtual_chunks::{
+            ObjectStoreCredentials, ObjectStorePlatform, VirtualChunkContainer,
+        },
+        Repository, RepositoryConfig, Storage, Store,
     };
     use std::{collections::HashMap, error::Error, num::NonZeroU64, vec};
     use std::{path::Path as StdPath, sync::Arc};
@@ -540,22 +551,20 @@ mod tests {
             },
         ];
 
-        let virtual_creds = HashMap::from([
-            (
-                "s3".to_string(),
-                ObjectStoreCredentials::Static {
-                    access_key_id: "minio123".to_string(),
-                    secret_access_key: "minio123".to_string(),
-                    session_token: None,
-                },
-            ),
-        ]);
+        let virtual_creds = HashMap::from([(
+            "s3".to_string(),
+            ObjectStoreCredentials::Static {
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
+                session_token: None,
+            },
+        )]);
 
         let mut config = RepositoryConfig::default();
         for container in containers {
             config.add_virtual_chunk_container(container);
         }
-            
+
         let repo = Repository::create(Some(config), None, storage, virtual_creds).await?;
 
         let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
@@ -571,11 +580,8 @@ mod tests {
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
         let ds = repo.writeable_session("main").await?;
-        let mut store = Store::from_session(
-            Arc::new(RwLock::new(ds)),
-            StoreConfig::default(),
-            false,
-        );
+        let mut store =
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default(), false);
 
         store
             .set(

@@ -29,8 +29,8 @@ pub mod storage;
 pub mod store;
 #[cfg(test)]
 pub mod strategies;
-pub mod virtual_chunks;
 pub mod utils;
+pub mod virtual_chunks;
 
 pub use repository::{Repository, RepositoryConfig};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
