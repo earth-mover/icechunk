@@ -96,10 +96,6 @@ pub struct Session {
 
 impl Hash for Session {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        #[allow(clippy::expect_used)]
-        let storage_str = rmp_serde::to_vec(self.storage.as_ref())
-            .expect("failed to serialize storage");
-        storage_str.hash(state);
         self.snapshot_id.hash(state);
         // TODO: SHould we hash the changeset?
         self.branch_name.hash(state);

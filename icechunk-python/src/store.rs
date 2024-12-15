@@ -34,6 +34,26 @@ impl PyStoreConfig {
     fn new(get_partial_values_concurrency: u16) -> Self {
         Self(StoreConfig { get_partial_values_concurrency })
     }
+
+    #[classmethod]
+    fn from_json(_cls: Bound<'_, PyType>, json: String) -> PyResult<Self> {
+        let config = serde_json::from_str(&json).map_err(|e| {
+            PyValueError::new_err(format!(
+                "Failed to deserialize store config from json: {}",
+                e
+            ))
+        })?;
+        Ok(Self(config))
+    }
+
+    fn as_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.0).map_err(|e| {
+            PyValueError::new_err(format!(
+                "Failed to serialize store config to json: {}",
+                e
+            ))
+        })
+    }
 }
 
 #[pyclass(name = "PyStore")]
@@ -43,32 +63,67 @@ pub struct PyStore(pub Arc<RwLock<Store>>);
 #[pymethods]
 impl PyStore {
     #[classmethod]
-    fn from_bytes(_cls: Bound<'_, PyType>, bytes: Vec<u8>) -> PyResult<Self> {
-        let store =
-            Arc::new(RwLock::new(serde_json::from_slice(&bytes).map_err(|e| {
-                PyValueError::new_err(format!(
-                    "Failed to deserialize store from bytes: {}",
-                    e
-                ))
-            })?));
-        Ok(Self(store))
+    #[pyo3(signature = (bytes, config = None))]
+    fn from_bytes(
+        _cls: Bound<'_, PyType>,
+        bytes: Vec<u8>,
+        config: Option<PyStoreConfig>,
+    ) -> PyResult<Self> {
+        let bytes = Bytes::from(bytes);
+        let config = config.map(|c| c.0).unwrap_or_default();
+        let store = Store::from_bytes(bytes, config).map_err(|e| {
+            PyValueError::new_err(format!(
+                "Failed to deserialize store from bytes: {}",
+                e
+            ))
+        })?;
+        Ok(Self(Arc::new(RwLock::new(store))))
     }
 
-    fn __eq__(&self, other: &Self) -> bool {
-        self.0.blocking_read().deref() == other.0.blocking_read().deref()
+    fn __eq__(&self, other: &Self) -> PyIcechunkStoreResult<bool> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let session_id = self.0.read().await.session_id().await?;
+            let other_session_id = other.0.read().await.session_id().await?;
+            Ok(session_id == other_session_id)
+        })
+    }
+
+    #[getter]
+    fn session_id(&self) -> PyIcechunkStoreResult<String> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let session_id = self.0.read().await.session_id().await?;
+            Ok(session_id.to_string())
+        })
     }
 
     #[getter]
     fn read_only(&self) -> PyIcechunkStoreResult<bool> {
-        let read_only = self.0.blocking_read().read_only();
-        Ok(read_only)
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let read_only = self.0.read().await.read_only().await;
+            Ok(read_only)
+        })
+    }
+
+    #[getter]
+    fn config(&self) -> PyIcechunkStoreResult<PyStoreConfig> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let config = self.0.read().await.config().clone();
+            Ok(PyStoreConfig(config))
+        })
     }
 
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         // FIXME: Use rmp_serde instead of serde_json to optimize performance
-        let serialized = serde_json::to_vec(self.0.blocking_read().deref())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Cow::Owned(serialized))
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let serialized = self
+                .0
+                .read()
+                .await
+                .as_bytes()
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(Cow::Owned(serialized.to_vec()))
+        })
     }
 
     fn is_empty<'py>(

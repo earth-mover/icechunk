@@ -21,6 +21,10 @@ class Session:
         return self._session.as_bytes()
 
     @property
+    def id(self) -> str:
+        return self._session.id
+
+    @property
     def read_only(self) -> bool:
         return self._session.read_only
 

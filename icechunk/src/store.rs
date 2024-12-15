@@ -15,7 +15,6 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
-use serde_json::json;
 use serde_with::{serde_as, skip_serializing_none, TryFromInto};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -116,26 +115,25 @@ impl Store {
         Self { session, config }
     }
 
-    pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
-        let deserialized: serde_json::Value =
+    pub fn from_bytes(bytes: Bytes, config: StoreConfig) -> StoreResult<Self> {
+        let session: Session =
             serde_json::from_slice(&bytes).map_err(StoreError::BadMetadata)?;
-        let session = deserialized["session"].clone();
-        let config = deserialized["config"].clone();
-        let session = serde_json::from_value(session).map_err(StoreError::from)?;
-        let config = serde_json::from_value(config).map_err(StoreError::BadMetadata)?;
+        // let session = deserialized["session"].clone();
+        // let config = deserialized["config"].clone();
+        // let session: Session = serde_json::from_value(session).map_err(StoreError::from)?;
+        // let config = serde_json::from_value(config).map_err(StoreError::BadMetadata)?;
         Ok(Self::from_session(Arc::new(RwLock::new(session)), config))
     }
 
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.read().await;
-
-        let serialized = json!({
-            "session": session.deref(),
-            "config": self.config,
-        });
-
-        let bytes = serde_json::to_vec(&serialized).map_err(StoreError::BadMetadata)?;
+        let bytes =
+            serde_json::to_vec(session.deref()).map_err(StoreError::BadMetadata)?;
         Ok(Bytes::from(bytes))
+    }
+
+    pub fn config(&self) -> &StoreConfig {
+        &self.config
     }
 
     pub async fn session_id(&self) -> StoreResult<String> {
@@ -2202,11 +2200,7 @@ mod tests {
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
             )
             .await;
-        println!("{:?}", result);
-        let correct_error = matches!(
-            result,
-            Err(StoreError::ReadOnly)
-        );
+        let correct_error = matches!(result, Err(StoreError::ReadOnly));
         assert!(correct_error);
     }
 
@@ -2219,9 +2213,8 @@ mod tests {
         );
 
         let repo = Repository::create(None, None, storage, HashMap::new()).await.unwrap();
-        let ds = repo.writeable_session("main").await.unwrap();
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await.unwrap()));
+        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
         store
             .set(
                 "zarr.json",
@@ -2230,8 +2223,11 @@ mod tests {
             .await
             .unwrap();
 
+        ds.write().await.commit("first", None).await.unwrap();
+
         let store_bytes = store.as_bytes().await.unwrap();
-        let store2: Store = Store::from_bytes(store_bytes).unwrap();
+        let store2: Store =
+            Store::from_bytes(store_bytes, StoreConfig::default()).unwrap();
         assert!(store.session_id().await.unwrap() == store2.session_id().await.unwrap());
     }
 
