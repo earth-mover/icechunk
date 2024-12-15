@@ -2,6 +2,7 @@ use std::{
     cmp::min,
     collections::HashSet,
     future::{ready, Future},
+    hash::{DefaultHasher, Hash, Hasher},
     iter,
     pin::Pin,
     sync::Arc,
@@ -93,11 +94,21 @@ pub struct Session {
     change_set: ChangeSet,
 }
 
+impl Hash for Session {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        #[allow(clippy::expect_used)]
+        let storage_str = rmp_serde::to_vec(self.storage.as_ref())
+            .expect("failed to serialize storage");
+        storage_str.hash(state);
+        self.snapshot_id.hash(state);
+        // TODO: SHould we hash the changeset?
+        self.branch_name.hash(state);
+    }
+}
+
 impl PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
-        self.snapshot_id == other.snapshot_id
-            && self.change_set == other.change_set
-            && self.branch_name == other.branch_name
+        self.id() == other.id()
     }
 }
 
@@ -133,6 +144,12 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::default(),
         }
+    }
+
+    pub fn id(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish().to_string()
     }
 
     pub fn branch(&self) -> Option<&str> {

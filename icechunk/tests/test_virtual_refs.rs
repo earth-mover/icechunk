@@ -416,7 +416,7 @@ mod tests {
         let repo = create_minio_repository().await;
         let ds = repo.writeable_session("main").await.unwrap();
         let mut store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default(), false);
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
             .set(
@@ -469,7 +469,7 @@ mod tests {
         let ds = repo.writeable_session("main").await.unwrap();
 
         let mut store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default(), false);
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
             .set(
@@ -581,7 +581,7 @@ mod tests {
 
         let ds = repo.writeable_session("main").await?;
         let mut store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default(), false);
+            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
             .set(
