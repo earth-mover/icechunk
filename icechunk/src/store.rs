@@ -76,8 +76,10 @@ pub enum StoreError {
     NotOnBranch,
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] serde_json::Error),
-    #[error("serialization error: `{0}`")]
+    #[error("deserialization error: `{0}`")]
     DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("serialization error: `{0}`")]
+    SerializationError(#[from] rmp_serde::encode::Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
@@ -128,7 +130,7 @@ impl Store {
 
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
-        let bytes = rmp_serde::to_vec(session.deref()).unwrap();
+        let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
         Ok(Bytes::from(bytes))
     }
 
@@ -251,10 +253,8 @@ impl Store {
             if session.read_only() {
                 return Err(StoreError::ReadOnly);
             }
-        } else {
-            if self.read_only().await {
-                return Err(StoreError::ReadOnly);
-            }
+        } else if self.read_only().await {
+            return Err(StoreError::ReadOnly);
         }
 
         match Key::parse(key)? {

@@ -1,12 +1,9 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
-    format::{
-        manifest::{VirtualChunkLocation, VirtualChunkRef},
-        ChunkLength, ChunkOffset,
-    },
+    format::{ChunkLength, ChunkOffset},
     store::{StoreConfig, StoreError},
     Store,
 };
@@ -19,9 +16,10 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
-    repository::KeyRanges,
     streams::PyAsyncGenerator,
 };
+
+type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
 #[pyclass(name = "StoreConfig")]
 #[derive(Clone)]
@@ -282,12 +280,12 @@ impl PyStore {
 
     fn set_virtual_ref(
         &self,
-        key: String,
-        location: String,
-        offset: ChunkOffset,
-        length: ChunkLength,
+        _key: String,
+        _location: String,
+        _offset: ChunkOffset,
+        _length: ChunkLength,
     ) -> PyIcechunkStoreResult<()> {
-        let store = Arc::clone(&self.0);
+        let _store = Arc::clone(&self.0);
 
         // pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
         //     let virtual_ref = VirtualChunkRef {
@@ -304,7 +302,7 @@ impl PyStore {
         //     Ok(())
         // })
 
-        unimplemented!();
+        Err(PyIcechunkStoreError::PyValueError("Not yet implemented".to_string()))
     }
 
     fn delete<'py>(

@@ -85,10 +85,10 @@ def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) 
     expected[:] = list(range(100))
 
     p = pickle.dumps(expected)
-    # actual = pickle.loads(p)
+    actual = pickle.loads(p)
 
-    # assert actual == expected
-    # np.testing.assert_array_equal(actual[:], expected[:])
+    assert actual == expected
+    np.testing.assert_array_equal(actual[:], expected[:])
 
 
 ### We should definitely test our fill_value handling since that uses custom

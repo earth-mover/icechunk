@@ -62,10 +62,8 @@ impl PySession {
 
     #[pyo3(signature = (config = None))]
     pub fn store(&self, config: Option<PyStoreConfig>) -> PyResult<PyStore> {
-        let store = Store::from_session(
-            self.0.clone(),
-            config.map(|c| c.0).unwrap_or_default(),
-        );
+        let store =
+            Store::from_session(self.0.clone(), config.map(|c| c.0).unwrap_or_default());
 
         let store = Arc::new(RwLock::new(store));
         Ok(PyStore(store))

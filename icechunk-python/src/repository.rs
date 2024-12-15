@@ -3,18 +3,14 @@ use std::{collections::HashMap, sync::Arc};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use icechunk::{
-    format::{snapshot::SnapshotMetadata, ChunkOffset, SnapshotId},
+    format::{snapshot::SnapshotMetadata, SnapshotId},
     repository::{RepositoryError, VersionInfo},
     Repository, RepositoryConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
-use crate::{
-    errors::PyIcechunkStoreError,
-    session::PySession,
-    storage::{PyStorageConfig, PyVirtualRefConfig},
-};
+use crate::{errors::PyIcechunkStoreError, session::PySession, storage::PyStorageConfig};
 
 #[pyclass(name = "SnapshotMetadata")]
 #[derive(Clone, Debug)]
@@ -36,8 +32,6 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
         }
     }
 }
-
-pub type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
 #[pyclass(name = "RepositoryConfig")]
 #[derive(Clone, Debug)]
@@ -62,12 +56,11 @@ pub struct PyRepository(Repository);
 #[pymethods]
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, virtual_ref_config = None))]
+    #[pyo3(signature = (storage, *, config = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
         storage: PyStorageConfig,
         config: Option<PyRepositoryConfig>,
-        virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -84,21 +77,20 @@ impl PyRepository {
                     ));
                 }
 
-                Ok(Repository::create(config.map(|c| c.0), None, storage, HashMap::new())
+                Repository::create(config.map(|c| c.0), None, storage, HashMap::new())
                     .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?)
+                    .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
 
         Ok(Self(repository))
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, virtual_ref_config = None))]
+    #[pyo3(signature = (storage, *, config = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
         storage: PyStorageConfig,
         config: Option<PyRepositoryConfig>,
-        virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -115,21 +107,20 @@ impl PyRepository {
                     ));
                 }
 
-                Ok(Repository::open(config.map(|c| c.0), None, storage, HashMap::new())
+                Repository::open(config.map(|c| c.0), None, storage, HashMap::new())
                     .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?)
+                    .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
 
         Ok(Self(repository))
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, virtual_ref_config = None))]
+    #[pyo3(signature = (storage, *, config = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         storage: PyStorageConfig,
         config: Option<PyRepositoryConfig>,
-        virtual_ref_config: Option<PyVirtualRefConfig>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
