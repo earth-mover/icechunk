@@ -29,6 +29,7 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Deserializer, Serialize};
+use tokio::sync::RwLock;
 
 use crate::{
     format::{
@@ -44,12 +45,12 @@ use super::{
     REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct S3Storage {
     config: S3Config,
     #[serde(skip)]
-    client: Arc<Client>,
+    client: RwLock<Option<Arc<Client>>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -134,8 +135,20 @@ pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
 
 impl S3Storage {
     pub async fn new_s3_store(config: &S3Config) -> Result<S3Storage, StorageError> {
-        let client = Arc::new(mk_client(config.options.as_ref()).await);
+        let client =
+            RwLock::new(Some(Arc::new(mk_client(config.options.as_ref()).await)));
         Ok(S3Storage { client, config: config.clone() })
+    }
+
+    async fn get_client(&self) -> Arc<Client> {
+        let guard = self.client.read().await;
+        if let Some(client) = guard.as_ref() {
+            Arc::clone(client)
+        } else {
+            let client = Arc::new(mk_client(self.config.options.as_ref()).await);
+            *self.client.write().await = Some(Arc::clone(&client));
+            client
+        }
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
@@ -179,7 +192,8 @@ impl S3Storage {
 
     async fn get_object(&self, key: &str) -> StorageResult<Bytes> {
         Ok(self
-            .client
+            .get_client()
+            .await
             .get_object()
             .bucket(self.config.bucket.clone())
             .key(key)
@@ -196,7 +210,7 @@ impl S3Storage {
         key: &str,
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
-        let mut b = self.client.get_object().bucket(self.config.bucket.clone()).key(key);
+        let mut b = self.get_client().await.get_object().bucket(self.config.bucket.clone()).key(key);
 
         if let Some(header) = range_to_header(range) {
             b = b.range(header)
@@ -214,7 +228,7 @@ impl S3Storage {
         metadata: I,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
-        let mut b = self.client.put_object().bucket(self.config.bucket.clone()).key(key);
+        let mut b = self.get_client().await.put_object().bucket(self.config.bucket.clone()).key(key);
 
         if let Some(ct) = content_type {
             b = b.content_type(ct)
@@ -249,7 +263,8 @@ impl S3Storage {
             .map_err(|e| StorageError::Other(e.to_string()))?;
 
         let res = self
-            .client
+            .get_client()
+            .await
             .delete_objects()
             .bucket(self.config.bucket.clone())
             .delete(delete)
@@ -273,27 +288,14 @@ pub fn range_to_header(range: &ByteRange) -> Option<String> {
 
 impl private::Sealed for S3Storage {}
 
-impl<'de> Deserialize<'de> for S3Storage {
-    fn deserialize<D>(deserializer: D) -> Result<S3Storage, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let config = S3Config::deserialize(deserializer)?;
-        #[allow(clippy::expect_used)]
-        let runtime =
-            tokio::runtime::Runtime::new().expect("Could not create tokio runtime");
-        let client = Arc::new(runtime.block_on(mk_client(config.options.as_ref())));
-        Ok(S3Storage { client, config })
-    }
-}
-
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
     async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
         let key = self.get_config_path()?;
         let res = self
-            .client
+            .get_client()
+            .await
             .get_object()
             .bucket(self.config.bucket.clone())
             .key(key)
@@ -319,7 +321,8 @@ impl Storage for S3Storage {
     ) -> StorageResult<ETag> {
         let key = self.get_config_path()?;
         let mut req = self
-            .client
+            .get_client()
+            .await
             .put_object()
             .bucket(self.config.bucket.clone())
             .key(key)
@@ -487,7 +490,8 @@ impl Storage for S3Storage {
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
         let key = self.ref_key(ref_key)?;
         let res = self
-            .client
+            .get_client()
+            .await
             .get_object()
             .bucket(self.config.bucket.clone())
             .key(key.clone())
@@ -511,7 +515,8 @@ impl Storage for S3Storage {
     async fn ref_names(&self) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
         let mut paginator = self
-            .client
+            .get_client()
+            .await
             .list_objects_v2()
             .bucket(self.config.bucket.clone())
             .prefix(prefix.clone())
@@ -543,7 +548,8 @@ impl Storage for S3Storage {
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let prefix = self.ref_key(ref_name)?;
         let mut paginator = self
-            .client
+            .get_client()
+            .await
             .list_objects_v2()
             .bucket(self.config.bucket.clone())
             .prefix(prefix.clone())
@@ -571,7 +577,7 @@ impl Storage for S3Storage {
     ) -> StorageResult<()> {
         let key = self.ref_key(ref_key)?;
         let mut builder =
-            self.client.put_object().bucket(self.config.bucket.clone()).key(key.clone());
+            self.get_client().await.put_object().bucket(self.config.bucket.clone()).key(key.clone());
 
         if !overwrite_refs {
             builder = builder.if_none_match("*")
@@ -603,7 +609,8 @@ impl Storage for S3Storage {
             .into_string()
             .map_err(StorageError::BadPrefix)?;
         let stream = self
-            .client
+            .get_client()
+            .await
             .list_objects_v2()
             .bucket(self.config.bucket.clone())
             .prefix(prefix)
@@ -653,8 +660,8 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
 mod tests {
     use super::{S3ClientOptions, S3Config, S3Credentials, S3Storage};
 
-    #[test]
-    fn test_serialize_s3_storage() {
+    #[tokio::test]
+    async fn test_serialize_s3_storage() {
         let config = S3Config {
             bucket: "bucket".to_string(),
             prefix: "prefix".to_string(),
@@ -669,10 +676,7 @@ mod tests {
                 allow_http: true,
             }),
         };
-        let storage = tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(S3Storage::new_s3_store(&config))
-            .unwrap();
+        let storage = S3Storage::new_s3_store(&config).await.unwrap();
 
         let serialized = serde_json::to_string(&storage).unwrap();
 
