@@ -10,7 +10,7 @@ import zarr
 import zarr.api
 import zarr.api.asynchronous
 from icechunk import IcechunkStore
-from tests.conftest import parse_store
+from tests.conftest import parse_repo
 from zarr import Array, AsyncArray, AsyncGroup, Group
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import JSON, ZarrFormat
@@ -19,18 +19,12 @@ from zarr.core.sync import sync
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.storage import StorePath, make_store_path
 
-if TYPE_CHECKING:
-    from _pytest.compat import LEGACY_PATH
-
 
 @pytest.fixture(params=["memory"])
-def store(request: pytest.FixtureRequest, tmpdir: LEGACY_PATH) -> IcechunkStore:
-    result = parse_store(request.param, str(tmpdir))
-    if not isinstance(result, IcechunkStore):
-        raise TypeError(
-            "Wrong store class returned by test fixture! got " + result + " instead"
-        )
-    return result
+def store(request: pytest.FixtureRequest) -> IcechunkStore:
+    repo = parse_repo(request.param, "test")
+    session = repo.writeable_session("main")
+    return session.store()
 
 
 @pytest.fixture(params=[True, False])

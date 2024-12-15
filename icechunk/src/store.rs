@@ -76,6 +76,8 @@ pub enum StoreError {
     NotOnBranch,
     #[error("bad metadata: `{0}`")]
     BadMetadata(#[from] serde_json::Error),
+    #[error("serialization error: `{0}`")]
+    DeserializationError(#[from] rmp_serde::decode::Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
@@ -116,8 +118,7 @@ impl Store {
     }
 
     pub fn from_bytes(bytes: Bytes, config: StoreConfig) -> StoreResult<Self> {
-        let session: Session =
-            serde_json::from_slice(&bytes).map_err(StoreError::BadMetadata)?;
+        let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
         // let session = deserialized["session"].clone();
         // let config = deserialized["config"].clone();
         // let session: Session = serde_json::from_value(session).map_err(StoreError::from)?;
@@ -126,9 +127,8 @@ impl Store {
     }
 
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
-        let session = self.session.read().await;
-        let bytes =
-            serde_json::to_vec(session.deref()).map_err(StoreError::BadMetadata)?;
+        let session = self.session.write().await;
+        let bytes = rmp_serde::to_vec(session.deref()).unwrap();
         Ok(Bytes::from(bytes))
     }
 

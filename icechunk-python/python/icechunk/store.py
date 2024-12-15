@@ -39,8 +39,8 @@ class IcechunkStore(Store, SyncMixin):
     def __getstate__(self) -> object:
         # we serialize the Rust store as bytes
         d = self.__dict__.copy()
-        d["_store"] = self._store.as_bytes()
         d["_config"] = self._store.config.as_json()
+        d["_store"] = self._store.as_bytes()
         if not self._pickle_preserves_read_only:
             d["_read_only"] = True
         return d
