@@ -115,7 +115,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
         keys = [
             "zarr.json",
-            "c/0",
+            "c/0/0/0",
             # icechunk does not allow v2 keys
             # "foo/c/0.0",
             # "foo/0/0"
@@ -309,12 +309,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             "foo-bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
         await store.set("foo/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
-        await store.set("foo/c/0", self.buffer_cls.from_bytes(b"chun"))
+        await store.set("foo/c/0/0/0", self.buffer_cls.from_bytes(b"chun"))
         await store.delete_dir("foo")
         assert await store.exists("zarr.json")
         assert await store.exists("foo-bar/zarr.json")
         assert not await store.exists("foo/zarr.json")
-        assert not await store.exists("foo/c/0")
+        assert not await store.exists("foo/c/0/0/0")
 
     async def test_getsize(self, store: IcechunkStore) -> None:
         key = "k/zarr.json"
