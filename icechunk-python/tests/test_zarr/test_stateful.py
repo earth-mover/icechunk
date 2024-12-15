@@ -10,7 +10,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from icechunk import IcechunkStore, StorageConfig, Repository
+from icechunk import Repository, StorageConfig
 from zarr.testing.stateful import ZarrHierarchyStateMachine, ZarrStoreStateMachine
 from zarr.testing.strategies import (
     node_names,

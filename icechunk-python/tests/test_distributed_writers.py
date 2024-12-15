@@ -1,13 +1,12 @@
 import time
 import warnings
-from typing import Any, cast
+from typing import cast
 
 import dask.array
 import icechunk
 import zarr
 from dask.array.utils import assert_eq
 from dask.distributed import Client
-from icechunk import IcechunkStore
 from icechunk.dask import store_dask
 
 # We create a 2-d array with this many chunks along each direction
@@ -42,7 +41,6 @@ def mk_repo() -> icechunk.Repository:
     )
 
     return repo
-
 
 
 async def test_distributed_writers():

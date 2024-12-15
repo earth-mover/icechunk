@@ -28,7 +28,7 @@ use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{

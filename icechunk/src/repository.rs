@@ -381,7 +381,7 @@ impl Repository {
         branch: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<BranchVersion> {
-        raise_if_invalid_snapshot_id(self.storage.as_ref(), &snapshot_id).await?;
+        raise_if_invalid_snapshot_id(self.storage.as_ref(), snapshot_id).await?;
         let branch_tip = self.branch_tip(branch).await?;
         let version = update_branch(
             self.storage.as_ref(),
@@ -428,7 +428,7 @@ impl Repository {
     ) -> RepositoryResult<Session> {
         let snapshot_id: SnapshotId = match version {
             VersionInfo::SnapshotId(sid) => {
-                raise_if_invalid_snapshot_id(self.storage.as_ref(), &sid).await?;
+                raise_if_invalid_snapshot_id(self.storage.as_ref(), sid).await?;
                 Ok::<_, RepositoryError>(SnapshotId::from(sid.clone()))
             }
             VersionInfo::TagRef(tag) => {

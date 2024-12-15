@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from icechunk.repository import Repository
 import pytest
 
 from icechunk import IcechunkStore, StorageConfig
+from icechunk.repository import Repository
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
@@ -78,7 +78,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_store_open_read_only(
         self, store: IcechunkStore, store_kwargs: dict[str, Any], read_only: bool
     ) -> None:
-
         repo = Repository.open(**store_kwargs)
         if read_only:
             session = repo.readonly_session(branch="main")

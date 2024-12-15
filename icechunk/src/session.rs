@@ -521,14 +521,14 @@ impl Session {
             return Err(SessionError::ReadOnlySession);
         };
 
-        let current = fetch_branch_tip(self.storage.as_ref(), &branch_name).await;
+        let current = fetch_branch_tip(self.storage.as_ref(), branch_name).await;
 
         let id = match current {
             Err(RefError::RefNotFound(_)) => {
                 do_commit(
                     &self.config,
                     self.storage.as_ref(),
-                    &branch_name,
+                    branch_name,
                     &self.snapshot_id,
                     &self.change_set,
                     message,
@@ -548,7 +548,7 @@ impl Session {
                     do_commit(
                         &self.config,
                         self.storage.as_ref(),
-                        &branch_name,
+                        branch_name,
                         &self.snapshot_id,
                         &self.change_set,
                         message,
@@ -1066,7 +1066,7 @@ async fn do_commit(
 
     let id = match update_branch(
         storage,
-        &branch_name,
+        branch_name,
         new_snapshot.clone(),
         Some(&parent_snapshot),
         config.unsafe_overwrite_refs,
@@ -3181,11 +3181,10 @@ mod tests {
             fn init_test(
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
-                let mut session =
-                    tokio::runtime::Runtime::new().unwrap().block_on(async {
-                        let repo = create_memory_store_repository().await;
-                        repo.writeable_session("main").await.unwrap()
-                    });
+                let session = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                    let repo = create_memory_store_repository().await;
+                    repo.writeable_session("main").await.unwrap()
+                });
                 TestRepository { session: session, runtime: Runtime::new().unwrap() }
             }
 

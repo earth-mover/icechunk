@@ -12,6 +12,7 @@ file as a python script: `python ./tests/test_can_read_old.py`.
 """
 
 from typing import cast
+
 import pytest
 from numpy.testing import assert_array_equal
 from object_store import ClientOptions, ObjectStore

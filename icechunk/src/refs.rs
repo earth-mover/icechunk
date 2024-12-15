@@ -209,13 +209,7 @@ pub async fn list_tags(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<S
     let all = storage.ref_names().await?;
     Ok(all
         .iter()
-        .filter_map(|path| {
-            if path.starts_with("tag.") {
-                Some(path.strip_prefix("tag.").unwrap().to_string())
-            } else {
-                None
-            }
-        })
+        .filter_map(|path| path.strip_prefix("tag.").map(|name| name.to_string()))
         .collect())
 }
 
@@ -225,13 +219,7 @@ pub async fn list_branches(
     let all = storage.ref_names().await?;
     Ok(all
         .iter()
-        .filter_map(|path| {
-            if path.starts_with("branch.") {
-                Some(path.strip_prefix("branch.").unwrap().to_string())
-            } else {
-                None
-            }
-        })
+        .filter_map(|path| path.strip_prefix("branch.").map(|name| name.to_string()))
         .collect())
 }
 

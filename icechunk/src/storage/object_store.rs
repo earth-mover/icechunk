@@ -76,7 +76,7 @@ impl ObjectStorage {
             prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
 
         let url = format!("memory:/{prefix}");
-        Ok(Self::from_url(&url, vec![])?)
+        Self::from_url(&url, vec![])
     }
 
     /// Create an local filesystem Storage implementation
@@ -86,7 +86,7 @@ impl ObjectStorage {
         create_dir_all(prefix).map_err(|e| StorageError::Other(e.to_string()))?;
         let prefix = prefix.display().to_string();
         let url = format!("file://{prefix}");
-        Ok(Self::from_url(&url, vec![])?)
+        Self::from_url(&url, vec![])
     }
 
     /// Create an ObjectStore client from a URL and provided options
