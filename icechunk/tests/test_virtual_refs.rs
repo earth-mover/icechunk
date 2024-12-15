@@ -550,12 +550,13 @@ mod tests {
                 },
             ),
         ]);
+
+        let mut config = RepositoryConfig::default();
+        for container in containers {
+            config.add_virtual_chunk_container(container);
+        }
             
-        let repo = Repository::create(
-            Some(RepositoryConfig {
-                virtual_chunk_containers: containers,
-                ..Default::default()
-            }), None, storage, virtual_creds).await?;
+        let repo = Repository::create(Some(config), None, storage, virtual_creds).await?;
 
         let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 

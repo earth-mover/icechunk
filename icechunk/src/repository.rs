@@ -50,7 +50,7 @@ impl Default for RepositoryConfig {
 }
 
 impl RepositoryConfig {
-    fn add_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
+    pub fn add_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
         self.virtual_chunk_containers.push(cont);
         sort_containers(&mut self.virtual_chunk_containers);
     }
