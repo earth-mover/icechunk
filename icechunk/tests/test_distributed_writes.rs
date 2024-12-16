@@ -4,7 +4,6 @@ use std::{collections::HashMap, num::NonZeroU64, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    change_set::ChangeSet,
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     repository::VersionInfo,
@@ -175,14 +174,14 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
 
     // We get the ChangeSet from repos 2, 3 and 4, by converting them into bytes.
     // This simulates a marshalling  operation from a remote writer.
-    let change_sets: Vec<ChangeSet> = vec![ds2.into(), ds3.into(), ds4.into()];
-    let change_sets_bytes = change_sets.iter().map(|cs| cs.export_to_bytes().unwrap());
-    let change_sets = change_sets_bytes
-        .map(|bytes| ChangeSet::import_from_bytes(bytes.as_slice()).unwrap());
+    let raw_sessions: Vec<Vec<u8>> = vec![ds2.as_bytes().unwrap(), ds3.as_bytes().unwrap(), ds4.as_bytes().unwrap()];
+    let sessions = raw_sessions
+        .into_iter()
+        .map(|bytes| Session::from_bytes(bytes).unwrap());
 
     // Merge the changesets into the first repo
-    for change_set in change_sets {
-        ds1.merge(change_set).await?;
+    for session in sessions {
+        ds1.merge(session.into()).await?;
     }
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra

@@ -75,8 +75,8 @@ async def test_distributed_writers():
         store = session.store()
         group = zarr.open_group(store=store)
         zarray = cast(zarr.Array, group["array"])
-        with store.preserve_read_only():
-            store_dask(store, sources=[dask_array], targets=[zarray])
+        # with store.preserve_read_only():
+        store_dask(session, sources=[dask_array], targets=[zarray])
         commit_res = session.commit("distributed commit")
         assert commit_res
 

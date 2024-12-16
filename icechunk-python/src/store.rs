@@ -123,6 +123,7 @@ impl PyStore {
         })
     }
 
+    #[getter]
     fn session(&self) -> PyResult<PySession> {
         let session = self.0.blocking_read().session();
         Ok(PySession(session))

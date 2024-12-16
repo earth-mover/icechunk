@@ -31,7 +31,6 @@ class IcechunkStore(Store, SyncMixin):
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
             )
         self._store = store
-        self._pickle_preserves_read_only = False
         self._is_open = True
 
     def __eq__(self, value: object) -> bool:
@@ -44,13 +43,10 @@ class IcechunkStore(Store, SyncMixin):
         d = self.__dict__.copy()
         d["_config"] = self._store.config.as_json()
         d["_store"] = self._store.as_bytes()
-        if not self._pickle_preserves_read_only:
-            d["_read_only"] = True
         return d
 
     def __setstate__(self, state: Any) -> None:
         # we have to deserialize the bytes of the Rust store
-        _read_only = state["_read_only"]
         store_repr = state["_store"]
         config_repr = state["_config"]
         config = StoreConfig.from_json(config_repr)
@@ -62,22 +58,11 @@ class IcechunkStore(Store, SyncMixin):
     def session_id(self) -> str:
         return self._store.session_id
 
+    @property
     def session(self) -> "Session":
         from icechunk import Session
 
-        return Session(self._store.session())
-
-    @contextlib.contextmanager
-    def preserve_read_only(self) -> Generator[None, None, None]:
-        """
-        Context manager to allow unpickling this store preserving `read_only` status.
-        By default, stores are set to read-only after unpickling.
-        """
-        try:
-            self._pickle_preserves_read_only = True
-            yield
-        finally:
-            self._pickle_preserves_read_only = False
+        return Session(self._store.session)
 
     async def clear(self) -> None:
         """Clear the store.

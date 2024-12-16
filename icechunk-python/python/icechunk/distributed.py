@@ -7,7 +7,7 @@ from icechunk import IcechunkStore, Session
 
 def extract_session(zarray: zarr.Array) -> Session:
     store = cast(IcechunkStore, zarray.store)
-    return store.session()
+    return store.session
 
 
 def merge_sessions(*sessions: Session) -> Session:

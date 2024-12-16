@@ -1,4 +1,5 @@
-from typing import Self
+import contextlib
+from typing import Generator, Self
 
 from icechunk._icechunk_python import PySession, StoreConfig
 from icechunk.store import IcechunkStore
@@ -9,6 +10,7 @@ class Session:
 
     def __init__(self, session: PySession):
         self._session = session
+        self._allow_distributed_write = False
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, self.__class__):

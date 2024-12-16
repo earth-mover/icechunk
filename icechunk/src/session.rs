@@ -584,6 +584,8 @@ impl Session {
         // a read only session pointed at the new snapshot
         self.change_set = ChangeSet::default();
         self.snapshot_id = id.clone();
+        // Once committed, the session is now read only, which we control 
+        // by setting the branch_name to None (you can only write to a branch session)
         self.branch_name = None;
 
         Ok(id)
