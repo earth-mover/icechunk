@@ -19,10 +19,12 @@ class Session:
             return False
         return self._session == value._session
 
-    def __getstate__(self):
+    def __getstate__(self) -> object:
         return self.as_bytes()
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: object) -> None:
+        if not isinstance(state, bytes):
+            raise TypeError(f"expected bytes, got {type(state).__name__}")
         self._session = PySession.from_bytes(state)
 
     def as_bytes(self) -> bytes:
