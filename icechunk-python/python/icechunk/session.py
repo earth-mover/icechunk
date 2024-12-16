@@ -10,25 +10,21 @@ class Session:
     def __init__(self, session: PySession):
         self._session = session
 
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "Session":
-        return cls(PySession.from_bytes(data))
-
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, self.__class__):
             return False
         return self._session == value._session
 
     def __getstate__(self) -> object:
-        return self.as_bytes()
+        state = {
+            "_session": self._session.as_bytes(),
+        }
+        return state
 
     def __setstate__(self, state: object) -> None:
-        if not isinstance(state, bytes):
-            raise TypeError(f"expected bytes, got {type(state).__name__}")
-        self._session = PySession.from_bytes(state)
-
-    def as_bytes(self) -> bytes:
-        return self._session.as_bytes()
+        if not isinstance(state, dict):
+            raise ValueError("Invalid state")
+        self._session = PySession.from_bytes(state["_session"])
 
     @property
     def id(self) -> str:

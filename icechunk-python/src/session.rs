@@ -1,7 +1,7 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use icechunk::{session::Session, Store};
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
+use pyo3::{prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -23,13 +23,12 @@ impl PySession {
     }
 
     pub fn __eq__(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        self.id() == other.id()
     }
 
-    fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
-        let bytes = serde_json::to_vec(&*self.0.blocking_read()).map_err(|e| {
-            PyValueError::new_err(format!("Failed to serialize store to bytes: {}", e))
-        })?;
+    fn as_bytes(&self) -> PyIcechunkStoreResult<Cow<[u8]>> {
+        let bytes =
+            self.0.blocking_read().as_bytes().map_err(PyIcechunkStoreError::from)?;
         Ok(Cow::Owned(bytes))
     }
 

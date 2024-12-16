@@ -58,6 +58,10 @@ def test_pickle(tmp_repo: Repository):
     assert array_loaded == array
     assert array_loaded[0, 5] == 20
 
+    pickled_session = pickle.dumps(tmp_session)
+    session_loaded = pickle.loads(pickled_session)
+    assert session_loaded == tmp_session
+
 
 async def test_store_equality(tmpdir, tmp_repo: Repository):
     tmp_session = tmp_repo.writeable_session(branch="main")
