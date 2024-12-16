@@ -14,7 +14,9 @@ class Session:
     def from_bytes(cls, data: bytes) -> "Session":
         return cls(PySession.from_bytes(data))
 
-    def __eq__(self, value):
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, self.__class__):
+            return False
         return self._session == value._session
 
     def as_bytes(self) -> bytes:

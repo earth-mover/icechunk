@@ -17,23 +17,15 @@ class Repository:
 
     @classmethod
     def create(
-        cls, storage, config: RepositoryConfig | None = None, virtual_ref_config=None
+        cls, storage: StorageConfig, config: RepositoryConfig | None = None
     ) -> Self:
-        return cls(
-            PyRepository.create(
-                storage, config=config, virtual_ref_config=virtual_ref_config
-            )
-        )
+        return cls(PyRepository.create(storage, config=config))
 
     @classmethod
     def open(
-        cls, storage, *, config: RepositoryConfig | None = None, virtual_ref_config=None
+        cls, storage: StorageConfig, *, config: RepositoryConfig | None = None
     ) -> Self:
-        return cls(
-            PyRepository.open(
-                storage, config=config, virtual_ref_config=virtual_ref_config
-            )
-        )
+        return cls(PyRepository.open(storage, config=config))
 
     @classmethod
     def open_or_create(
@@ -41,13 +33,8 @@ class Repository:
         storage: StorageConfig,
         *,
         config: RepositoryConfig | None = None,
-        virtual_ref_config=None,
     ) -> Self:
-        return cls(
-            PyRepository.open_or_create(
-                storage, config=config, virtual_ref_config=virtual_ref_config
-            )
-        )
+        return cls(PyRepository.open_or_create(storage, config=config))
 
     @staticmethod
     def exists(storage: StorageConfig) -> bool:
@@ -80,9 +67,9 @@ class Repository:
     def readonly_session(
         self,
         *,
-        branch=None,
-        tag=None,
-        snapshot_id=None,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
     ) -> Session:
         return Session(
             self._repository.readonly_session(
