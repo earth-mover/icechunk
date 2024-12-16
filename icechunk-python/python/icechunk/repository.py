@@ -17,7 +17,7 @@ class Repository:
 
     @classmethod
     def create(
-        cls, storage: StorageConfig, config: RepositoryConfig | None = None
+        cls, storage: StorageConfig, *, config: RepositoryConfig | None = None
     ) -> Self:
         return cls(PyRepository.create(storage, config=config))
 
