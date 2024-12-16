@@ -13,7 +13,7 @@
 
 * Existing packages for reference generation (VirtualiZarr, Kerchunk, etc.) uses URLs to identify virtual chunk locations.
 * One common case is many virtual chunks from a few objects.
-  * Example: `s3://some-bucket/some-prefix/some-file.nc` is pointed to by 10k chunks.
+  * Example: `s3://some-bucket/some-prefix/some-file.nc` is referenced by 10k chunks.
   * Having between 10 and 10k chunks from the same object is not unusual
 * Other common use case for virtual zarr datasets: each chunk comes from a different object. This can happen, for example, with a virtual zarr dataset.
   * Example: `s3://some-bucket/some-prefix/c/0/0/1` is pointed to by only 1 chunk. But there are many objects like it.
