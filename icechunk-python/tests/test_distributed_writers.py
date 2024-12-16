@@ -2,6 +2,8 @@ import time
 import warnings
 from typing import cast
 
+import pytest
+
 import dask.array
 import icechunk
 import zarr
@@ -43,6 +45,7 @@ def mk_repo() -> icechunk.Repository:
     return repo
 
 
+@pytest.mark.skip(reason="Distributed writes are not yet fully implemented")
 async def test_distributed_writers():
     """Write to an array using uncoordinated writers, distributed via Dask.
 

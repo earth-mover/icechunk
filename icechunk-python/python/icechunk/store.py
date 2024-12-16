@@ -1,5 +1,4 @@
-import contextlib
-from collections.abc import AsyncIterator, Generator, Iterable
+from collections.abc import AsyncIterator, Iterable
 from typing import TYPE_CHECKING, Any
 
 from icechunk._icechunk_python import PyStore, StoreConfig

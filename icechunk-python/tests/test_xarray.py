@@ -1,4 +1,5 @@
-from typing import Generator
+from collections.abc import Generator
+
 import pytest
 
 from icechunk.repository import Repository
@@ -51,9 +52,7 @@ def create_test_data(
 
 
 @contextlib.contextmanager
-def roundtrip(
-    data: xr.Dataset
-) -> Generator[xr.Dataset, None, None]:
+def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(StorageConfig.filesystem(tmpdir))
         session = repo.writeable_session("main")

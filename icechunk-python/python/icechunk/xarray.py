@@ -9,7 +9,7 @@ from packaging.version import Version
 
 import xarray as xr
 import zarr
-from icechunk import IcechunkStore, Session
+from icechunk import IcechunkStore
 from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode

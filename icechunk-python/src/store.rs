@@ -15,7 +15,9 @@ use pyo3::{
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    errors::{PyIcechunkStoreError, PyIcechunkStoreResult}, session::PySession, streams::PyAsyncGenerator
+    errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    session::PySession,
+    streams::PyAsyncGenerator,
 };
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
@@ -127,7 +129,7 @@ impl PyStore {
     fn session(&self) -> PyResult<PySession> {
         let session = self.0.blocking_read().session();
         Ok(PySession(session))
-    }   
+    }
 
     fn is_empty<'py>(
         &'py self,

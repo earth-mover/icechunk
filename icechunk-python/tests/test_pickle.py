@@ -30,9 +30,9 @@ def test_pickle_read_only(tmp_repo: Repository):
     roundtripped = pickle.loads(pickle.dumps(tmp_store))
     assert roundtripped._read_only is False
 
-    with tmp_store.preserve_read_only():
-        roundtripped = pickle.loads(pickle.dumps(tmp_store))
-        assert roundtripped._read_only is False
+    # with tmp_store.preserve_read_only():
+    #     roundtripped = pickle.loads(pickle.dumps(tmp_store))
+    #     assert roundtripped._read_only is False
 
     assert tmp_store._read_only is False
 

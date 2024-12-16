@@ -174,10 +174,10 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
 
     // We get the ChangeSet from repos 2, 3 and 4, by converting them into bytes.
     // This simulates a marshalling  operation from a remote writer.
-    let raw_sessions: Vec<Vec<u8>> = vec![ds2.as_bytes().unwrap(), ds3.as_bytes().unwrap(), ds4.as_bytes().unwrap()];
-    let sessions = raw_sessions
-        .into_iter()
-        .map(|bytes| Session::from_bytes(bytes).unwrap());
+    let raw_sessions: Vec<Vec<u8>> =
+        vec![ds2.as_bytes().unwrap(), ds3.as_bytes().unwrap(), ds4.as_bytes().unwrap()];
+    let sessions =
+        raw_sessions.into_iter().map(|bytes| Session::from_bytes(bytes).unwrap());
 
     // Merge the changesets into the first repo
     for session in sessions {

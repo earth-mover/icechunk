@@ -1,5 +1,4 @@
-import contextlib
-from typing import Generator, Self
+from typing import Self
 
 from icechunk._icechunk_python import PySession, StoreConfig
 from icechunk.store import IcechunkStore
