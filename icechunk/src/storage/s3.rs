@@ -141,8 +141,7 @@ impl S3Storage {
     }
 
     async fn get_client(&self) -> Arc<Client> {
-        let guard = self.client.read().await;
-        if let Some(client) = guard.as_ref() {
+        if let Some(client) = self.client.read().await.as_ref() {
             Arc::clone(client)
         } else {
             let client = Arc::new(mk_client(self.config.options.as_ref()).await);
