@@ -43,7 +43,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(StorageConfig.filesystem(tmpdir))
             session = repo.writeable_session("main")
-            yield session.store
+            yield session.store()
 
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
@@ -53,7 +53,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
             pytest.skip("v2 not supported")
         repo = Repository.create(StorageConfig.memory(""))
         session = repo.writeable_session("main")
-        yield session.store
+        yield session.store()
 
     def test_pickle(self):
         pytest.skip(reason="memory icechunk stores cannot be pickled.")
@@ -82,4 +82,4 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         )
         repo = Repository.create(storage=storage_config)
         session = repo.writeable_session("main")
-        yield session.store
+        yield session.store()
