@@ -35,7 +35,7 @@ def set_virtual_ref(
 
 ### Credentials
 
-Credentials are a read time concern. When the user writes the virtual chunk, they don't necessarily know what credentials set will be used to read it.
+Credentials are a read-time concern. When the user writes the virtual chunk, they don't necessarily know what credentials will be used to read it.
 
 Because of requirements 1 and 2, when users open a repo they need to know what sets of credentials they have to provide to be able to access all the chunks. This is not immediately obvious, Icechunk should provide a way to introspect a repo and inform the user what credentials they need. Then the user can setup the Repo instance appropriately with the credentials.
 
