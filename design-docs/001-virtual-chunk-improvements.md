@@ -23,7 +23,7 @@
 
 Because of requirement 1, the same repo can contain virtual chunks in multiple buckets, object stores, and platforms, potentially even buckets with the same name in different platforms.
 
-When the user adds a virtual ref, they will need to indicate the details of the platform for Icechunk to be able to retrieve it. These includes what cloud it is, region, endpoint url, etc. This means, the current approach of pointing to a chunk with a simple URL is not going to be enough. Not without encoding several new attributes in the URL, which seems hacky. A URL such as `s3://foo/bar.nc`, in itself doesn't have enough details to reach the object. Even if the protocol part of that URL is identified with the wire protocol needed to talk to the object store, there are missing details such as the region, the endpoint, or the authentication mechanism.
+When the user adds a virtual ref, they will need to specify all of these details for Icechunk to be able to retrieve it. These includes what cloud it is, region, endpoint url, etc. This means, the current approach of pointing to a chunk with a simple URL is not going to be enough. Not without encoding several new attributes in the URL, which seems hacky. A URL such as `s3://foo/bar.nc`, in itself doesn't have enough details to reach the object. Even if the protocol part of that URL is identified with the wire protocol needed to talk to the object store, there are missing details such as the region, the endpoint, or the authentication mechanism.
 
 This all means, the following function may have to change:
 
