@@ -22,19 +22,14 @@ impl PySession {
         Ok(Self(Arc::new(RwLock::new(session))))
     }
 
-    pub fn __eq__(&self, other: &Self) -> bool {
-        self.id() == other.id()
+    fn __eq__(&self, other: &PySession) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     fn as_bytes(&self) -> PyIcechunkStoreResult<Cow<[u8]>> {
         let bytes =
             self.0.blocking_read().as_bytes().map_err(PyIcechunkStoreError::from)?;
         Ok(Cow::Owned(bytes))
-    }
-
-    #[getter]
-    pub fn id(&self) -> String {
-        self.0.blocking_read().id()
     }
 
     #[getter]
@@ -66,7 +61,7 @@ impl PySession {
         let store =
             Store::from_session(self.0.clone(), config.map(|c| c.0).unwrap_or_default());
 
-        let store = Arc::new(RwLock::new(store));
+        let store = Arc::new(store);
         Ok(PyStore(store))
     }
 

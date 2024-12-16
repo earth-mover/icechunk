@@ -138,10 +138,6 @@ impl Store {
         &self.config
     }
 
-    pub async fn session_id(&self) -> StoreResult<String> {
-        Ok(self.session.read().await.id().to_string())
-    }
-
     pub fn session(&self) -> Arc<RwLock<Session>> {
         Arc::clone(&self.session)
     }
@@ -155,7 +151,7 @@ impl Store {
         Ok(res.is_none())
     }
 
-    pub async fn clear(&mut self) -> StoreResult<()> {
+    pub async fn clear(&self) -> StoreResult<()> {
         let mut repo = self.session.write().await;
         Ok(repo.clear().await?)
     }
@@ -314,7 +310,7 @@ impl Store {
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
     pub async fn set_virtual_ref(
-        &mut self,
+        &self,
         key: &str,
         reference: VirtualChunkRef,
     ) -> StoreResult<()> {
@@ -1077,7 +1073,7 @@ impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::{borrow::BorrowMut, collections::HashMap};
+    use std::collections::HashMap;
 
     use crate::{repository::VersionInfo, ObjectStorage, Repository};
 
@@ -1568,7 +1564,7 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         assert!(store.is_empty("").await.unwrap());
@@ -1576,7 +1572,6 @@ mod tests {
 
         assert_eq!(all_keys(&store).await.unwrap(), Vec::<String>::new());
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1587,7 +1582,6 @@ mod tests {
         assert!(store.exists("zarr.json").await.unwrap());
         assert_eq!(all_keys(&store).await.unwrap(), vec!["zarr.json".to_string()]);
         store
-            .borrow_mut()
             .set(
                 "group/zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1632,11 +1626,10 @@ mod tests {
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1666,11 +1659,10 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1701,11 +1693,10 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1803,11 +1794,10 @@ mod tests {
     async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1815,7 +1805,6 @@ mod tests {
             .await?;
 
         store
-            .borrow_mut()
             .set(
                 "group/zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1823,7 +1812,7 @@ mod tests {
             .await?;
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
-        store.borrow_mut().set("group-suffix/zarr.json", zarr_meta).await.unwrap();
+        store.set("group-suffix/zarr.json", zarr_meta).await.unwrap();
         let data = Bytes::copy_from_slice(b"hello");
         store.set_if_not_exists("group-suffix/c/0/1/0", data.clone()).await.unwrap();
 
@@ -1838,11 +1827,10 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -1977,7 +1965,7 @@ mod tests {
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
-        let mut store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
             .set(
@@ -2018,7 +2006,7 @@ mod tests {
         ds.write().await.commit("initial commit", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
-        let mut store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
             .set(
@@ -2222,6 +2210,11 @@ mod tests {
         let store_bytes = store.as_bytes().await.unwrap();
         let store2: Store =
             Store::from_bytes(store_bytes, StoreConfig::default()).unwrap();
-        assert!(store.session_id().await.unwrap() == store2.session_id().await.unwrap());
+
+        let zarr_json = store2.get("zarr.json", &ByteRange::ALL).await.unwrap();
+        assert_eq!(
+            zarr_json,
+            Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
+        );
     }
 }

@@ -12,7 +12,7 @@ use pyo3::{
     prelude::*,
     types::PyType,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 use crate::{
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
@@ -57,7 +57,7 @@ impl PyStoreConfig {
 
 #[pyclass(name = "PyStore")]
 #[derive(Clone)]
-pub struct PyStore(pub Arc<RwLock<Store>>);
+pub struct PyStore(pub Arc<Store>);
 
 #[pymethods]
 impl PyStore {
@@ -76,29 +76,24 @@ impl PyStore {
                 e
             ))
         })?;
-        Ok(Self(Arc::new(RwLock::new(store))))
+        Ok(Self(Arc::new(store)))
     }
 
-    fn __eq__(&self, other: &Self) -> PyIcechunkStoreResult<bool> {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let session_id = self.0.read().await.session_id().await?;
-            let other_session_id = other.0.read().await.session_id().await?;
-            Ok(session_id == other_session_id)
-        })
-    }
+    fn __eq__(&self, other: &PyStore) -> bool {
+        if Arc::ptr_eq(&self.0, &other.0) {
+            return true;
+        }
 
-    #[getter]
-    fn session_id(&self) -> PyIcechunkStoreResult<String> {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let session_id = self.0.read().await.session_id().await?;
-            Ok(session_id.to_string())
-        })
+        // If the stores were created from the same session they are equal
+        let session = self.0.session();
+        let other_session = other.0.session();
+        Arc::ptr_eq(&session, &other_session)
     }
 
     #[getter]
     fn read_only(&self) -> PyIcechunkStoreResult<bool> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let read_only = self.0.read().await.read_only().await;
+            let read_only = self.0.read_only().await;
             Ok(read_only)
         })
     }
@@ -106,7 +101,7 @@ impl PyStore {
     #[getter]
     fn config(&self) -> PyIcechunkStoreResult<PyStoreConfig> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let config = self.0.read().await.config().clone();
+            let config = self.0.config().clone();
             Ok(PyStoreConfig(config))
         })
     }
@@ -114,20 +109,15 @@ impl PyStore {
     fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
         // FIXME: Use rmp_serde instead of serde_json to optimize performance
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let serialized = self
-                .0
-                .read()
-                .await
-                .as_bytes()
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
+            let serialized =
+                self.0.as_bytes().await.map_err(PyIcechunkStoreError::from)?;
             Ok(Cow::Owned(serialized.to_vec()))
         })
     }
 
     #[getter]
     fn session(&self) -> PyResult<PySession> {
-        let session = self.0.blocking_read().session();
+        let session = self.0.session();
         Ok(PySession(session))
     }
 
@@ -138,12 +128,8 @@ impl PyStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let is_empty = store
-                .read()
-                .await
-                .is_empty(&prefix)
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
+            let is_empty =
+                store.is_empty(&prefix).await.map_err(PyIcechunkStoreError::from)?;
             Ok(is_empty)
         })
     }
@@ -151,7 +137,7 @@ impl PyStore {
     fn clear<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
+            store.clear().await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
@@ -159,7 +145,7 @@ impl PyStore {
     fn sync_clear(&self) -> PyIcechunkStoreResult<()> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            store.write().await.clear().await.map_err(PyIcechunkStoreError::from)?;
+            store.clear().await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
@@ -174,7 +160,7 @@ impl PyStore {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let byte_range = byte_range.unwrap_or((None, None)).into();
-            let data = store.read().await.get(&key, &byte_range).await;
+            let data = store.get(&key, &byte_range).await;
             // We need to distinguish the "safe" case of trying to fetch an uninitialized key
             // from other types of errors, we use PyKeyError exception for that
             match data {
@@ -194,8 +180,6 @@ impl PyStore {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let partial_values_stream = store
-                .read()
-                .await
                 .get_partial_values(iter)
                 .await
                 .map_err(PyIcechunkStoreError::StoreError)?;
@@ -219,25 +203,20 @@ impl PyStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = store
-                .read()
-                .await
-                .exists(&key)
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
+            let exists = store.exists(&key).await.map_err(PyIcechunkStoreError::from)?;
             Ok(exists)
         })
     }
 
     #[getter]
     fn supports_deletes(&self) -> PyIcechunkStoreResult<bool> {
-        let supports_deletes = self.0.blocking_read().supports_deletes()?;
+        let supports_deletes = self.0.supports_deletes()?;
         Ok(supports_deletes)
     }
 
     #[getter]
     fn supports_writes(&self) -> PyIcechunkStoreResult<bool> {
-        let supports_writes = self.0.blocking_read().supports_writes()?;
+        let supports_writes = self.0.supports_writes()?;
         Ok(supports_writes)
     }
 
@@ -257,8 +236,6 @@ impl PyStore {
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             store
-                .read()
-                .await
                 .set(&key, Bytes::from(value))
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -276,8 +253,6 @@ impl PyStore {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             store
-                .read()
-                .await
                 .set_if_not_exists(&key, Bytes::from(value))
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -320,14 +295,14 @@ impl PyStore {
         let store = Arc::clone(&self.0);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            store.write().await.delete(&key).await.map_err(PyIcechunkStoreError::from)?;
+            store.delete(&key).await.map_err(PyIcechunkStoreError::from)?;
             Ok(())
         })
     }
 
     #[getter]
     fn supports_partial_writes(&self) -> PyIcechunkStoreResult<bool> {
-        let supports_partial_writes = self.0.blocking_read().supports_partial_writes()?;
+        let supports_partial_writes = self.0.supports_partial_writes()?;
         Ok(supports_partial_writes)
     }
 
@@ -360,8 +335,6 @@ impl PyStore {
             );
 
             store
-                .read()
-                .await
                 .set_partial_values(mapped_to_bytes)
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
@@ -371,7 +344,7 @@ impl PyStore {
 
     #[getter]
     fn supports_listing(&self) -> PyIcechunkStoreResult<bool> {
-        let supports_listing = self.0.blocking_read().supports_listing()?;
+        let supports_listing = self.0.supports_listing()?;
         Ok(supports_listing)
     }
 
@@ -380,7 +353,7 @@ impl PyStore {
 
         #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(async move { store.read().await.list().await })?
+            .block_on(async move { store.list().await })?
             .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
 
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
@@ -392,9 +365,7 @@ impl PyStore {
 
         #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(
-                async move { store.read().await.list_prefix(prefix.as_str()).await },
-            )?
+            .block_on(async move { store.list_prefix(prefix.as_str()).await })?
             .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncGenerator::new(prepared_list))
@@ -405,7 +376,7 @@ impl PyStore {
 
         #[allow(deprecated)]
         let list = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(async move { store.read().await.list_dir(prefix.as_str()).await })?
+            .block_on(async move { store.list_dir(prefix.as_str()).await })?
             .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
         let prepared_list = Arc::new(Mutex::new(list.boxed()));
         Ok(PyAsyncGenerator::new(prepared_list))

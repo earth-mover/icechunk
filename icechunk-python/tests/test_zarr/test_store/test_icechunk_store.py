@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from typing import Any
 
 import pytest
@@ -68,7 +69,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         else:
             session = repo.writeable_session("main")
         store2 = session.store()
-        assert store == store2
+        # stores dont point to the same session instance, so they are not equal
+        assert store != store2
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
@@ -104,6 +106,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # delete
         with pytest.raises(ValueError):
             await store.delete("foo")
+
+    def test_serializable_store(self, store: IcechunkStore) -> None:
+        foo = pickle.dumps(store)
+        loaded = pickle.loads(foo)
+        # pickled stores dont point to the same session instance, so they are not equal
+        assert loaded != store
 
     async def test_set_many(self, store: IcechunkStore) -> None:
         """

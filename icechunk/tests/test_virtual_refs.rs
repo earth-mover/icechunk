@@ -415,7 +415,7 @@ mod tests {
 
         let repo = create_minio_repository().await;
         let ds = repo.writeable_session("main").await.unwrap();
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
@@ -468,7 +468,7 @@ mod tests {
         let repo = create_local_repository(repo_dir.path()).await;
         let ds = repo.writeable_session("main").await.unwrap();
 
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store
@@ -580,7 +580,7 @@ mod tests {
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
         let ds = repo.writeable_session("main").await?;
-        let mut store =
+        let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
         store

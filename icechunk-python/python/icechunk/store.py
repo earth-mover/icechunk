@@ -33,7 +33,7 @@ class IcechunkStore(Store, SyncMixin):
         self._is_open = True
 
     def __eq__(self, value: object) -> bool:
-        if not isinstance(value, self.__class__):
+        if not isinstance(value, IcechunkStore):
             return False
         return self._store == value._store
 
@@ -52,10 +52,6 @@ class IcechunkStore(Store, SyncMixin):
         state["_store"] = PyStore.from_bytes(store_repr, config)
         state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
-
-    @property
-    def session_id(self) -> str:
-        return self._store.session_id
 
     @property
     def session(self) -> "Session":

@@ -12,7 +12,7 @@ class Session:
         self._allow_distributed_write = False
 
     def __eq__(self, value: object) -> bool:
-        if not isinstance(value, self.__class__):
+        if not isinstance(value, Session):
             return False
         return self._session == value._session
 
@@ -26,10 +26,6 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    @property
-    def id(self) -> str:
-        return self._session.id
 
     @property
     def read_only(self) -> bool:

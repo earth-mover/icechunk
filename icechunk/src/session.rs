@@ -2,7 +2,6 @@ use std::{
     cmp::min,
     collections::HashSet,
     future::{ready, Future},
-    hash::{DefaultHasher, Hash, Hasher},
     iter,
     pin::Pin,
     sync::Arc,
@@ -94,20 +93,6 @@ pub struct Session {
     change_set: ChangeSet,
 }
 
-impl Hash for Session {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.snapshot_id.hash(state);
-        // TODO: SHould we hash the changeset?
-        self.branch_name.hash(state);
-    }
-}
-
-impl PartialEq for Session {
-    fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
-    }
-}
-
 impl Session {
     pub fn create_readonly_session(
         config: RepositoryConfig,
@@ -148,12 +133,6 @@ impl Session {
 
     pub fn as_bytes(&self) -> SessionResult<Vec<u8>> {
         rmp_serde::to_vec(self).map_err(SessionError::SerializationError)
-    }
-
-    pub fn id(&self) -> String {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish().to_string()
     }
 
     pub fn branch(&self) -> Option<&str> {

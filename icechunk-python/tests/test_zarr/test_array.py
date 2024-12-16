@@ -87,7 +87,8 @@ def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) 
     p = pickle.dumps(expected)
     actual = pickle.loads(p)
 
-    assert actual == expected
+    # pickled stores dont point to the same session instance, so they are not equal
+    assert actual != expected
     np.testing.assert_array_equal(actual[:], expected[:])
 
 

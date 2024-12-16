@@ -5,7 +5,6 @@ import pytest
 import icechunk
 import zarr
 from icechunk.repository import Repository
-from zarr.storage import LocalStore
 
 
 def create_local_repo(path: str) -> icechunk.Repository:
@@ -46,42 +45,18 @@ def test_pickle(tmp_repo: Repository):
     array[:] = 20
     tmp_session.commit("firsttt")
 
-    pickled = pickle.dumps(tmp_store)
-
-    store_loaded = pickle.loads(pickled)
-    assert store_loaded == tmp_store
+    pickled_store = pickle.dumps(tmp_store)
+    store_loaded = pickle.loads(pickled_store)
 
     root_loaded = zarr.open_group(store_loaded, mode="r")
     array_loaded = root_loaded["ones"]
 
     assert type(array_loaded) is zarr.Array
-    assert array_loaded == array
+    # pickled stores dont point to the same session instance, so they are not equal
+    assert array_loaded != array
     assert array_loaded[0, 5] == 20
 
     pickled_session = pickle.dumps(tmp_session)
     session_loaded = pickle.loads(pickled_session)
-    assert session_loaded == tmp_session
-
-
-async def test_store_equality(tmpdir, tmp_repo: Repository):
-    tmp_session = tmp_repo.writeable_session(branch="main")
-    tmp_store = tmp_session.store()
-
-    assert tmp_store == tmp_store
-
-    local_store = await LocalStore.open(f"{tmpdir}/zarr", read_only=False)
-    assert tmp_store != local_store
-
-    memory_repo = icechunk.Repository.open_or_create(
-        config=icechunk.RepositoryConfig(),
-        storage=icechunk.StorageConfig.memory("store_path"),
-    )
-
-    memory_session = memory_repo.writeable_session(branch="main")
-    memory_store = memory_session.store()
-    assert tmp_store != memory_store
-
-    repo3 = create_local_repo(f"{tmpdir}/test")
-    session3 = repo3.writeable_session(branch="main")
-    store3 = session3.store()
-    assert tmp_store != store3
+    assert tmp_session.snapshot_id == session_loaded.snapshot_id
+    assert tmp_session.branch == session_loaded.branch
