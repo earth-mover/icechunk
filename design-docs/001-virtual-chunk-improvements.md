@@ -332,7 +332,7 @@ The repo is stored in S3 us-east-1, all virtual chunks point to Google cloud sto
 
 #### Go to local MinIO for testing
 
-All virtual chunks point to S3 us-east-1, for testing purposes the chunks for an array in `s3://bucket/prefix/array` are also copied locally and served with MinIO on port 8080.
+All virtual chunks point to S3 us-east-1, for testing purposes the chunks for an array in `s3://bucket/prefix/array` are also copied locally and served with MinIO on port 9000.
 
 * When calling `set_virtual_ref` locations are passed with `s3://` protocol.
 * The icechunk repo instance is initialized with a configuration that creates a container with `name=minio-override`, `prefix=s3://bucket/prefix/array` and `endpoint_url=localhost:9000`
@@ -341,13 +341,14 @@ All virtual chunks point to S3 us-east-1, for testing purposes the chunks for an
 
 Ichecunk repo stored in S3 bucket `repo-bucket`. Virtual array `A` on Google cloud, bucket `virtual-a`. Virtual array `B` on Google cloud, bucket `virtual-b`. Virtual array `C` on s3 bucket `virtual-c`. All buckets have different credential sets.
 
-* When ingesting `virtual-a` VirtualiZarr is instructed to use protocol `modela`
-* When ingesting `virtual-b` VirtualiZarr is instructed to use protocol `modelb`
-* When ingesting `virtual-c` VirtualiZarr is instructed to use protocol `modelc`
+* When ingesting array `A` VirtualiZarr is instructed to use protocol `modela`. URLs will look something like: `modela://some-bucket/virtual-a`
+* When ingesting array `B` VirtualiZarr is instructed to use protocol `modelb`. URLs will look something like: `modelb://some-other-bucket/virtual-b`
+* When ingesting array `C` VirtualiZarr is instructed to use protocol `modelc`. URLs will look something like: `modelc://some-third-bucket-on-aws/virtual-c`
 * Persistent config is set up in the repo to create the following virtual chunk containers:
-  * `modela`: on Google storage platform with prefix `virtual-a`
-  * `modelb`: on Google storage platform with prefix `virtual-b`
-  * `modelc`: on S3 platform with prefix `virtual-c`
+  * `modela`: on Google storage platform with prefix `modela`
+  * `modelb`: on Google storage platform with prefix `modelb`
+  * `modelc`: on S3 platform with prefix `modelc`
+  * In this example we are using the same string for the container name and the prefix, but this doesn't need to be the case.
   * These containers can be set before or after the ingest (we recommend before and to pass `validate_containers=True`)
 * To open the repository users pass credentials associated with each virtual chunk container, in addition to the repository credentials.
 
