@@ -142,6 +142,10 @@ impl Store {
         Ok(self.session.read().await.id().to_string())
     }
 
+    pub fn session(&self) -> Arc<RwLock<Session>> {
+        Arc::clone(&self.session)
+    }
+
     pub async fn read_only(&self) -> bool {
         self.session.read().await.read_only()
     }

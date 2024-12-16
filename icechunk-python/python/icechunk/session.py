@@ -19,6 +19,12 @@ class Session:
             return False
         return self._session == value._session
 
+    def __getstate__(self):
+        return self.as_bytes()
+
+    def __setstate__(self, state):
+        self._session = PySession.from_bytes(state)
+
     def as_bytes(self) -> bytes:
         return self._session.as_bytes()
 

@@ -1,12 +1,15 @@
 import contextlib
 from collections.abc import AsyncIterator, Generator, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from icechunk._icechunk_python import PyStore, StoreConfig
 from zarr.abc.store import ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
+
+if TYPE_CHECKING:
+    from icechunk import Session
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -54,6 +57,15 @@ class IcechunkStore(Store, SyncMixin):
         state["_store"] = PyStore.from_bytes(store_repr, config)
         state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
+
+    @property
+    def session_id(self) -> str:
+        return self._store.session_id
+
+    def session(self) -> "Session":
+        from icechunk import Session
+
+        return Session(self._store.session())
 
     @contextlib.contextmanager
     def preserve_read_only(self) -> Generator[None, None, None]:

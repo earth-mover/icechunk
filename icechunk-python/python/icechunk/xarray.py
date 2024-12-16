@@ -11,7 +11,7 @@ import xarray as xr
 import zarr
 from icechunk import IcechunkStore
 from icechunk.dask import stateful_store_reduce
-from icechunk.distributed import extract_store, merge_stores
+from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import Dataset
 from xarray.backends.common import ArrayWriter

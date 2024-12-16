@@ -142,6 +142,14 @@ impl Session {
         }
     }
 
+    pub fn from_bytes(bytes: Vec<u8>) -> SessionResult<Self> {
+        rmp_serde::from_slice(&bytes).map_err(SessionError::DeserializationError)
+    }
+
+    pub fn as_bytes(&self) -> SessionResult<Vec<u8>> {
+        rmp_serde::to_vec(self).map_err(SessionError::SerializationError)
+    }
+
     pub fn id(&self) -> String {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);

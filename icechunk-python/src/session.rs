@@ -1,11 +1,11 @@
-use std::{ops::Deref, sync::Arc};
+use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use icechunk::{session::Session, Store};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
-    errors::PyIcechunkStoreError,
+    errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     store::{PyStore, PyStoreConfig},
 };
 
@@ -17,18 +17,20 @@ pub struct PySession(pub Arc<RwLock<Session>>);
 impl PySession {
     #[classmethod]
     fn from_bytes(_cls: Bound<'_, PyType>, bytes: Vec<u8>) -> PyResult<Self> {
-        let store =
-            Arc::new(RwLock::new(serde_json::from_slice(&bytes).map_err(|e| {
-                PyValueError::new_err(format!(
-                    "Failed to deserialize store from bytes: {}",
-                    e
-                ))
-            })?));
-        Ok(Self(store))
+        let session =
+            Session::from_bytes(bytes).map_err(PyIcechunkStoreError::SessionError)?;
+        Ok(Self(Arc::new(RwLock::new(session))))
     }
 
     pub fn __eq__(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    fn as_bytes(&self) -> PyResult<Cow<[u8]>> {
+        let bytes = serde_json::to_vec(&*self.0.blocking_read()).map_err(|e| {
+            PyValueError::new_err(format!("Failed to serialize store to bytes: {}", e))
+        })?;
+        Ok(Cow::Owned(bytes))
     }
 
     #[getter]

@@ -2,15 +2,16 @@
 from typing import cast
 
 import zarr
-from icechunk import IcechunkStore
+from icechunk import IcechunkStore, Session
 
 
-def extract_store(zarray: zarr.Array) -> IcechunkStore:
-    return cast(IcechunkStore, zarray.store)
+def extract_session(zarray: zarr.Array) -> Session:
+    store = cast(IcechunkStore, zarray.store)
+    return store.session()
 
 
-def merge_stores(*stores: IcechunkStore) -> IcechunkStore:
-    store, *rest = stores
+def merge_sessions(*sessions: Session) -> Session:
+    session, *rest = sessions
     for other in rest:
-        store.merge(other.change_set_bytes())
-    return store
+        session.merge(other)
+    return session
