@@ -11,7 +11,7 @@
 
 ### Current virtual chunk URL styles
 
-* The open source stack seating on top of Icechunk (VirtualiZarr, etc.) uses URLs to identify virtual chunk locations.
+* Existing packages for reference generation (VirtualiZarr, Kerchunk, etc.) uses URLs to identify virtual chunk locations.
 * One common case is many virtual chunks from a few objects.
   * Example: `s3://some-bucket/some-prefix/some-file.nc` is pointed to by 10k chunks.
   * Having between 10 and 10k chunks from the same object is not unusual
