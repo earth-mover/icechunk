@@ -1117,7 +1117,7 @@ mod tests {
             ObjectStorage::new_in_memory_store(Some("prefix".into()))
                 .expect("failed to create in-memory store"),
         );
-        Repository::create(None, None, storage, HashMap::new()).await.unwrap()
+        Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -1307,9 +1307,9 @@ mod tests {
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
         update_branch(&storage, "main", snapshot_id.clone(), None, true).await?;
+        Repository::store_config(&storage, &RepositoryConfig::default(), None).await?;
 
-        let repo =
-            Repository::open(None, None, Arc::new(storage), HashMap::new()).await?;
+        let repo = Repository::open(None, Arc::new(storage), HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
@@ -1449,7 +1449,7 @@ mod tests {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let storage = Repository::add_in_mem_asset_caching(Arc::clone(&logging_c));
 
-        let repository = Repository::create(None, None, storage, HashMap::new()).await?;
+        let repository = Repository::create(None, storage, HashMap::new()).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -1733,7 +1733,7 @@ mod tests {
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
-        let repo = Repository::create(None, None, storage, HashMap::new()).await?;
+        let repo = Repository::create(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
         // add a new array and retrieve its node
@@ -1811,8 +1811,7 @@ mod tests {
         let in_mem_storage =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         // there should be no manifests yet
         assert!(!in_mem_storage
@@ -2127,8 +2126,7 @@ mod tests {
         let in_mem_storage =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
         ds.add_group(Path::root()).await?;
@@ -3187,7 +3185,7 @@ mod tests {
                     let repo = create_memory_store_repository().await;
                     repo.writable_session("main").await.unwrap()
                 });
-                TestRepository { session: session, runtime: Runtime::new().unwrap() }
+                TestRepository { session, runtime: Runtime::new().unwrap() }
             }
 
             fn apply(

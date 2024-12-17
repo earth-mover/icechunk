@@ -33,7 +33,6 @@ let mut ds = Repository::create(Arc::clone(&storage));
         Arc::new(ObjectStorage::new_in_memory_store(None)?);
     let repo = Repository::create(
         None,
-        None,
         Repository::add_in_mem_asset_caching(Arc::clone(&storage)),
         HashMap::new(),
     )

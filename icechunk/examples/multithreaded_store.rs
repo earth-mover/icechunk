@@ -17,7 +17,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             unsafe_overwrite_refs: true,
             ..Default::default()
         }),
-        None,
         storage,
         HashMap::new(),
     )

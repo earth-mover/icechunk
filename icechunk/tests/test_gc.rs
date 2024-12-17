@@ -52,7 +52,6 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
             unsafe_overwrite_refs: true,
             ..Default::default()
         }),
-        None,
         Arc::clone(&storage),
         HashMap::new(),
     )
