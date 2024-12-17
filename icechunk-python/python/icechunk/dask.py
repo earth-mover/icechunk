@@ -19,8 +19,8 @@ from dask.base import compute_as_if_collection, tokenize
 from dask.core import flatten
 from dask.delayed import Delayed
 from dask.highlevelgraph import HighLevelGraph
-from icechunk import IcechunkStore
-from icechunk.distributed import extract_store, merge_stores
+from icechunk import Session
+from icechunk.distributed import extract_session, merge_sessions
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
@@ -33,7 +33,7 @@ def _assert_correct_dask_version() -> None:
 
 
 def store_dask(
-    store: IcechunkStore,
+    session: Session,
     *,
     sources: list[Array],
     targets: list[zarr.Array],
@@ -75,16 +75,16 @@ def store_dask(
         **store_kwargs,
     )
     # Now we tree-reduce all changesets
-    merged_store = stateful_store_reduce(
+    merged_session = stateful_store_reduce(
         stored_arrays,
         prefix="ice-changeset",
-        chunk=extract_store,
-        aggregate=merge_stores,
+        chunk=extract_session,
+        aggregate=merge_sessions,
         split_every=split_every,
         compute=True,
         **store_kwargs,
     )
-    store.merge(merged_store.change_set_bytes())
+    session.merge(merged_session)
 
 
 # tree-reduce all changesets, regardless of array
@@ -129,7 +129,7 @@ def stateful_store_reduce(
     prefix: str | None = None,
     split_every: int | None = None,
     **kwargs: Any,
-) -> IcechunkStore: ...
+) -> Session: ...
 
 
 def stateful_store_reduce(
@@ -141,7 +141,7 @@ def stateful_store_reduce(
     prefix: str | None = None,
     split_every: int | None = None,
     **kwargs: Any,
-) -> IcechunkStore | Delayed:
+) -> Session | Delayed:
     _assert_correct_dask_version()
 
     split_every = split_every or config.get("split_every", 8)
@@ -199,12 +199,12 @@ def stateful_store_reduce(
     )
     if compute:
         # copied from dask.array.store
-        merged_store, *_ = compute_as_if_collection(  # type: ignore[no-untyped-call]
+        merged_session, *_ = compute_as_if_collection(  # type: ignore[no-untyped-call]
             Array, store_dsk, list(layers[latest_layer].keys()), **kwargs
         )
         if TYPE_CHECKING:
-            assert isinstance(merged_store, IcechunkStore)
-        return merged_store
+            assert isinstance(merged_session, Session)
+        return merged_session
 
     else:
         key = "stateful-store-" + tokenize(array_names)

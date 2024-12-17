@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import pickle
 from typing import Any
 
 import pytest
 
 from icechunk import IcechunkStore, StorageConfig
+from icechunk.repository import Repository
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
@@ -47,7 +49,13 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.fixture
     async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
-        return IcechunkStore.open_or_create(**store_kwargs)
+        read_only = store_kwargs.pop("read_only")
+        repo = Repository.open_or_create(**store_kwargs)
+        if read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writeable_session("main")
+        return session.store()
 
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
@@ -55,8 +63,14 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
         # check store equality with same inputs
         # asserting this is important for being able to compare (de)serialized stores
-        store2 = self.store_cls.open_existing(**store_kwargs)
-        assert store == store2
+        repo = Repository.open(**store_kwargs)
+        if store.read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writeable_session("main")
+        store2 = session.store()
+        # stores dont point to the same session instance, so they are not equal
+        assert store != store2
 
     @pytest.mark.xfail(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
@@ -66,16 +80,23 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_store_open_read_only(
         self, store: IcechunkStore, store_kwargs: dict[str, Any], read_only: bool
     ) -> None:
-        store_kwargs["read_only"] = read_only
-        store = await self.store_cls.open(**store_kwargs)
+        repo = Repository.open(**store_kwargs)
+        if read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writeable_session("main")
+        store = session.store()
         assert store._is_open
         assert store.read_only == read_only
 
     async def test_read_only_store_raises(
         self, store: IcechunkStore, store_kwargs: dict[str, Any]
     ) -> None:
-        kwargs = {**store_kwargs, "read_only": True}
-        store = await self.store_cls.open(**kwargs)
+        kwargs = {**store_kwargs}
+        repo = Repository.open(**kwargs)
+        session = repo.readonly_session(branch="main")
+        store = session.store()
+
         assert store.read_only
 
         # set
@@ -85,6 +106,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # delete
         with pytest.raises(ValueError):
             await store.delete("foo")
+
+    def test_serializable_store(self, store: IcechunkStore) -> None:
+        foo = pickle.dumps(store)
+        loaded = pickle.loads(foo)
+        # pickled stores dont point to the same session instance, so they are not equal
+        assert loaded != store
 
     async def test_set_many(self, store: IcechunkStore) -> None:
         """
@@ -96,7 +123,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
         keys = [
             "zarr.json",
-            "c/0",
+            "c/0/0/0",
             # icechunk does not allow v2 keys
             # "foo/c/0.0",
             # "foo/0/0"
@@ -290,12 +317,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             "foo-bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
         await store.set("foo/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
-        await store.set("foo/c/0", self.buffer_cls.from_bytes(b"chun"))
+        await store.set("foo/c/0/0/0", self.buffer_cls.from_bytes(b"chun"))
         await store.delete_dir("foo")
         assert await store.exists("zarr.json")
         assert await store.exists("foo-bar/zarr.json")
         assert not await store.exists("foo/zarr.json")
-        assert not await store.exists("foo/c/0")
+        assert not await store.exists("foo/c/0/0/0")
 
     async def test_getsize(self, store: IcechunkStore) -> None:
         key = "k/zarr.json"

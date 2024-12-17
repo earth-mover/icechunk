@@ -1,7 +1,8 @@
 use std::convert::Infallible;
 
 use icechunk::{
-    format::IcechunkFormatError, repository::RepositoryError, zarr::StoreError,
+    format::IcechunkFormatError, repository::RepositoryError, session::SessionError,
+    store::StoreError, StorageError,
 };
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
@@ -18,10 +19,14 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub(crate) enum PyIcechunkStoreError {
+    #[error("storage error: {0}")]
+    StorageError(StorageError),
     #[error("store error: {0}")]
     StoreError(StoreError),
     #[error("repository error: {0}")]
-    RepositoryError(RepositoryError),
+    RepositoryError(#[from] RepositoryError),
+    #[error("session error: {0}")]
+    SessionError(SessionError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
     #[error("{0}")]
@@ -44,22 +49,21 @@ impl From<StoreError> for PyIcechunkStoreError {
     fn from(error: StoreError) -> Self {
         match error {
             StoreError::NotFound(e) => PyIcechunkStoreError::PyKeyError(e.to_string()),
-            StoreError::RepositoryError(RepositoryError::NodeNotFound {
-                path,
-                message: _,
-            }) => PyIcechunkStoreError::PyKeyError(format!("{}", path)),
+            StoreError::SessionError(SessionError::NodeNotFound { path, message: _ }) => {
+                PyIcechunkStoreError::PyKeyError(format!("{}", path))
+            }
             _ => PyIcechunkStoreError::StoreError(error),
         }
     }
 }
 
-impl From<RepositoryError> for PyIcechunkStoreError {
-    fn from(error: RepositoryError) -> Self {
+impl From<SessionError> for PyIcechunkStoreError {
+    fn from(error: SessionError) -> Self {
         match error {
-            RepositoryError::NodeNotFound { path, message: _ } => {
+            SessionError::NodeNotFound { path, message: _ } => {
                 PyIcechunkStoreError::PyKeyError(format!("{}", path))
             }
-            _ => PyIcechunkStoreError::RepositoryError(error),
+            _ => PyIcechunkStoreError::SessionError(error),
         }
     }
 }

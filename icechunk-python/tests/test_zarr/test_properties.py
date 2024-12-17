@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import IcechunkStore, Repository, StorageConfig
 
 pytest.importorskip("hypothesis")
 
@@ -24,10 +24,15 @@ _attr_values = st.recursive(
 )
 simple_attrs = st.none()
 
+
+def create(storage: StorageConfig) -> IcechunkStore:
+    repo = Repository.create(storage)
+    return repo.writeable_session("main").store()
+
+
 icechunk_stores = st.builds(
-    IcechunkStore.create,
+    create,
     storage=st.builds(StorageConfig.memory, prefix=st.just("prefix")),
-    read_only=st.just(False),
 )
 
 

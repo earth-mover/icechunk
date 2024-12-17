@@ -11,7 +11,7 @@ import xarray as xr
 import zarr
 from icechunk import IcechunkStore
 from icechunk.dask import stateful_store_reduce
-from icechunk.distributed import extract_store, merge_stores
+from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import Dataset
 from xarray.backends.common import ArrayWriter
@@ -92,7 +92,7 @@ class XarrayDatasetWriter:
     def __post_init__(self) -> None:
         if not isinstance(self.store, IcechunkStore):
             raise ValueError(
-                f"Please pass in an IcechunkStore. Received {type(self.store)!r} instead."
+                f"Please pass in an icechunk.Session. Received {type(self.store)!r} instead."
             )
 
     def _open_group(
@@ -181,16 +181,16 @@ class XarrayDatasetWriter:
         )  # type: ignore[no-untyped-call]
 
         # Now we tree-reduce all changesets
-        merged_store = stateful_store_reduce(
+        merged_session = stateful_store_reduce(
             stored_arrays,
             prefix="ice-changeset",
-            chunk=extract_store,
-            aggregate=merge_stores,
+            chunk=extract_session,
+            aggregate=merge_sessions,
             split_every=split_every,
             compute=True,
             **chunkmanager_store_kwargs,
         )
-        self.store.merge(merged_store.change_set_bytes())
+        self.store.session.merge(merged_session)
 
 
 def to_icechunk(

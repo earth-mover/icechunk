@@ -1,23 +1,26 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
 use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use icechunk::{
-    format::{ByteRange, ChunkId, ChunkIndices, Path},
+    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     ops::gc::{garbage_collect, GCConfig, GCSummary},
     refs::update_branch,
-    repository::{get_chunk, ZarrArrayMetadata},
-    storage::s3::{S3Config, S3Credentials, S3Storage, StaticS3Credentials},
-    Repository, Storage,
+    repository::VersionInfo,
+    session::get_chunk,
+    storage::s3::{
+        S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials,
+    },
+    Repository, RepositoryConfig, Storage,
 };
 use pretty_assertions::assert_eq;
 
-fn minio_s3_config() -> S3Config {
-    S3Config {
+fn minio_s3_config() -> S3ClientOptions {
+    S3ClientOptions {
         region: Some("us-east-1".to_string()),
         endpoint: Some("http://localhost:9000".to_string()),
         credentials: S3Credentials::Static(StaticS3Credentials {
@@ -35,20 +38,29 @@ fn minio_s3_config() -> S3Config {
 /// It runs [`garbage_collect`] to verify it's doing its job.
 pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-        S3Storage::new_s3_store(
-            "testbucket".to_string(),
-            format!("{:?}", ChunkId::random()),
-            Some(&minio_s3_config()),
-        )
+        S3Storage::new_s3_store(&S3Config {
+            bucket: "testbucket".to_string(),
+            prefix: "test_gc".to_string(),
+            options: Some(minio_s3_config()),
+        })
         .await
         .expect("Creating minio storage failed"),
     );
-    let mut repo = Repository::init(Arc::clone(&storage), false)
-        .await?
-        .with_inline_threshold_bytes(0)
-        .build();
+    let repo = Repository::create(
+        Some(RepositoryConfig {
+            inline_chunk_threshold_bytes: 0,
+            unsafe_overwrite_refs: true,
+            ..Default::default()
+        }),
+        None,
+        Arc::clone(&storage),
+        HashMap::new(),
+    )
+    .await?;
 
-    repo.add_group(Path::root()).await?;
+    let mut ds = repo.writeable_session("main").await?;
+
+    ds.add_group(Path::root()).await?;
     let zarr_meta = ZarrArrayMetadata {
         shape: vec![1100],
         data_type: DataType::Int8,
@@ -61,26 +73,28 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let array_path: Path = "/array".try_into().unwrap();
-    repo.add_array(array_path.clone(), zarr_meta.clone()).await?;
+    ds.add_array(array_path.clone(), zarr_meta.clone()).await?;
     // we write more than 1k chunks to go beyond the chunk size for object listing and delete
     for idx in 0..1100 {
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
-        let payload = repo.get_chunk_writer()(bytes.clone()).await?;
-        repo.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
+        let payload = ds.get_chunk_writer()(bytes.clone()).await?;
+        ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
 
-    let first_snap_id = repo.commit("main", "first", None).await?;
+    let first_snap_id = ds.commit("first", None).await?;
     assert_eq!(storage.list_chunks().await?.count().await, 1100);
+
+    let mut ds = repo.writeable_session("main").await?;
 
     // overwrite 10 chunks
     for idx in 0..10 {
         let bytes = Bytes::copy_from_slice(&0i8.to_be_bytes());
-        let payload = repo.get_chunk_writer()(bytes.clone()).await?;
-        repo.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
+        let payload = ds.get_chunk_writer()(bytes.clone()).await?;
+        ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
-    let second_snap_id = repo.commit("main", "second", None).await?;
+    let second_snap_id = ds.commit("second", None).await?;
     assert_eq!(storage.list_chunks().await?.count().await, 1110);
 
     // verify doing gc without dangling objects doesn't change the repo
@@ -91,7 +105,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(storage.list_chunks().await?.count().await, 1110);
     for idx in 0..10 {
         let bytes = get_chunk(
-            repo.get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
+            ds.get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
                 .await?,
         )
         .await?
@@ -117,10 +131,11 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(storage.list_snapshots().await?.count().await, 2);
 
     // Opening the repo on main should give the right data
-    let repo = Repository::from_branch_tip(Arc::clone(&storage), "main").await?.build();
+    let ds =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
     for idx in 0..10 {
         let bytes = get_chunk(
-            repo.get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
+            ds.get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
                 .await?,
         )
         .await?

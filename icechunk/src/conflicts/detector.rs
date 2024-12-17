@@ -10,8 +10,7 @@ use futures::{stream, StreamExt, TryStreamExt};
 use crate::{
     change_set::ChangeSet,
     format::{snapshot::NodeSnapshot, transaction_log::TransactionLog, NodeId, Path},
-    repository::{RepositoryError, RepositoryResult},
-    Repository,
+    session::{Session, SessionError, SessionResult},
 };
 
 use super::{Conflict, ConflictResolution, ConflictSolver};
@@ -23,10 +22,10 @@ impl ConflictSolver for ConflictDetector {
     async fn solve(
         &self,
         previous_change: &TransactionLog,
-        previous_repo: &Repository,
+        previous_repo: &Session,
         current_changes: ChangeSet,
-        current_repo: &Repository,
-    ) -> RepositoryResult<ConflictResolution> {
+        current_repo: &Session,
+    ) -> SessionResult<ConflictResolution> {
         let new_nodes_explicit_conflicts = stream::iter(
             current_changes.new_nodes().map(Ok),
         )
@@ -35,7 +34,7 @@ impl ConflictSolver for ConflictDetector {
                 Ok(_) => {
                     Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
                 }
-                Err(RepositoryError::NodeNotFound { .. }) => Ok(None),
+                Err(SessionError::NodeNotFound { .. }) => Ok(None),
                 Err(err) => Err(err),
             }
         });
@@ -47,8 +46,8 @@ impl ConflictSolver for ConflictDetector {
             for parent in path.ancestors().skip(1) {
                 match previous_repo.get_array(&parent).await {
                     Ok(_) => return Ok(Some(Conflict::NewNodeInInvalidGroup(parent))),
-                    Err(RepositoryError::NodeNotFound { .. })
-                    | Err(RepositoryError::NotAnArray { .. }) => {}
+                    Err(SessionError::NodeNotFound { .. })
+                    | Err(SessionError::NotAnArray { .. }) => {}
                     Err(err) => return Err(err),
                 }
             }
@@ -172,7 +171,7 @@ impl ConflictSolver for ConflictDetector {
         .try_filter_map(|(path, _node_id)| async {
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
-                Err(RepositoryError::NodeNotFound { .. }) => None,
+                Err(SessionError::NodeNotFound { .. }) => None,
                 Err(err) => Err(err)?,
             };
 
@@ -199,7 +198,7 @@ impl ConflictSolver for ConflictDetector {
         .try_filter_map(|(path, _node_id)| async {
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
-                Err(RepositoryError::NodeNotFound { .. }) => None,
+                Err(SessionError::NodeNotFound { .. }) => None,
                 Err(err) => Err(err)?,
             };
 
@@ -249,7 +248,7 @@ impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
         Self(Mutex::new((HashMap::new(), Some(iter))))
     }
 
-    fn find(&self, node_id: &NodeId) -> RepositoryResult<Path> {
+    fn find(&self, node_id: &NodeId) -> SessionResult<Path> {
         // we can safely unwrap the result of `lock` because there is no failing code called while
         // the mutex is hold. The mutex is there purely to support interior mutability
         #![allow(clippy::expect_used)]
@@ -268,9 +267,9 @@ impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
                 }
             }
             *iter = None;
-            Err(RepositoryError::ConflictingPathNotFound(node_id.clone()))
+            Err(SessionError::ConflictingPathNotFound(node_id.clone()))
         } else {
-            Err(RepositoryError::ConflictingPathNotFound(node_id.clone()))
+            Err(SessionError::ConflictingPathNotFound(node_id.clone()))
         }
     }
 }

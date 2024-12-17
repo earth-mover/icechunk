@@ -1,36 +1,37 @@
 import numpy as np
 
-import icechunk
 import zarr
+from tests.conftest import parse_repo
 
 rng = np.random.default_rng(seed=12345)
 
 
 async def test_store_clear_metadata_list() -> None:
-    store = icechunk.IcechunkStore.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
-    )
+    repo = parse_repo("memory", "test")
+    session = repo.writeable_session("main")
+    store = session.store()
 
     zarr.group(store=store)
-    store.commit("created node /")
+    session.commit("created node /")
+
+    session = repo.writeable_session("main")
+    store = session.store()
     await store.clear()
     zarr.group(store=store)
     assert len([_ async for _ in store.list_prefix("/")]) == 1
 
 
 async def test_store_clear_chunk_list() -> None:
-    store = icechunk.IcechunkStore.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
-    )
+    repo = parse_repo("memory", "test")
+    session = repo.writeable_session("main")
+    store = session.store()
 
     array_kwargs = dict(
         name="0", shape=(1, 3, 5, 1), chunks=(1, 3, 2, 1), fill_value=-1, dtype=np.int64
     )
     group = zarr.group(store=store)
     group.create_array(**array_kwargs)
-    store.commit("created node /")
+    session.commit("created node /")
 
     await store.clear()
     zarr.group(store=store)
