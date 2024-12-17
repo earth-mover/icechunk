@@ -29,7 +29,7 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::OnceCell;
 
 use crate::{
     format::{
@@ -50,7 +50,7 @@ use super::{
 pub struct S3Storage {
     config: S3Config,
     #[serde(skip)]
-    client: RwLock<Option<Arc<Client>>>,
+    client: OnceCell<Arc<Client>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -135,19 +135,19 @@ pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
 
 impl S3Storage {
     pub async fn new_s3_store(config: &S3Config) -> Result<S3Storage, StorageError> {
-        let client =
-            RwLock::new(Some(Arc::new(mk_client(config.options.as_ref()).await)));
+        let client = OnceCell::new();
+        client
+            .set(Arc::new(mk_client(config.options.as_ref()).await))
+            .map_err(|e| StorageError::Other(e.to_string()))?;
         Ok(S3Storage { client, config: config.clone() })
     }
 
-    async fn get_client(&self) -> Arc<Client> {
-        if let Some(client) = self.client.read().await.as_ref() {
-            Arc::clone(client)
-        } else {
-            let client = Arc::new(mk_client(self.config.options.as_ref()).await);
-            *self.client.write().await = Some(Arc::clone(&client));
-            client
-        }
+    async fn get_client(&self) -> &Arc<Client> {
+        self.client
+            .get_or_init(|| async {
+                Arc::new(mk_client(self.config.options.as_ref()).await)
+            })
+            .await
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {

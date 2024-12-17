@@ -80,14 +80,8 @@ impl PyStore {
     }
 
     fn __eq__(&self, other: &PyStore) -> bool {
-        if Arc::ptr_eq(&self.0, &other.0) {
-            return true;
-        }
-
         // If the stores were created from the same session they are equal
-        let session = self.0.session();
-        let other_session = other.0.session();
-        Arc::ptr_eq(&session, &other_session)
+        Arc::ptr_eq(&self.0.session(), &other.0.session())
     }
 
     #[getter]
