@@ -58,7 +58,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
 
     ds.add_group(Path::root()).await?;
     let zarr_meta = ZarrArrayMetadata {
@@ -85,7 +85,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let first_snap_id = ds.commit("first", None).await?;
     assert_eq!(storage.list_chunks().await?.count().await, 1100);
 
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
 
     // overwrite 10 chunks
     for idx in 0..10 {

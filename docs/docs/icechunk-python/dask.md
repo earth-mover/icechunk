@@ -23,7 +23,7 @@ from icechunk import Repository, StorageConfig
 
 storage_config = StorageConfig.filesystem("./icechunk-xarray")
 icechunk_repo = Repository.create(storage_config)
-icechunk_session = icechunk_repo.writeable_session("main")
+icechunk_session = icechunk_repo.writable_session("main")
 ```
 
 ## Icechunk + Dask
@@ -81,7 +81,7 @@ Now roundtrip an xarray dataset
 import icechunk.xarray
 import xarray as xr
 
-# Assuming you havee a valid writeable Session named icechunk_session
+# Assuming you have a valid writable Session named icechunk_session
 store = icechunk_session.store()
 
 dataset = xr.tutorial.open_dataset("rasm", chunks={"time": 1}).isel(time=slice(24))

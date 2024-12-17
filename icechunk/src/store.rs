@@ -1347,7 +1347,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1388,7 +1388,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
@@ -1429,7 +1429,7 @@ mod tests {
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let repo = create_memory_store_repository().await;
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -1518,7 +1518,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1563,7 +1563,7 @@ mod tests {
     #[tokio::test]
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1625,7 +1625,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1658,7 +1658,7 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1692,7 +1692,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1793,7 +1793,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1826,7 +1826,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -1884,7 +1884,7 @@ mod tests {
     #[tokio::test]
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -1904,7 +1904,7 @@ mod tests {
         let snapshot_id =
             { ds.write().await.commit("initial commit", None).await.unwrap() };
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         let new_data = Bytes::copy_from_slice(b"world");
@@ -1934,7 +1934,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
@@ -1948,7 +1948,7 @@ mod tests {
         // Create a new branch and do stuff with it
         repo.create_branch("dev", ds.read().await.snapshot_id()).await.unwrap();
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("dev").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("dev").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
         store.set("array/c/0/1/0", new_data.clone()).await?;
         let dev_snapshot =
@@ -1964,7 +1964,7 @@ mod tests {
     #[tokio::test]
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -2005,7 +2005,7 @@ mod tests {
 
         ds.write().await.commit("initial commit", None).await.unwrap();
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -2048,7 +2048,7 @@ mod tests {
     async fn test_overwrite() -> Result<(), Box<dyn std::error::Error>> {
         // GH347
         let repo = create_memory_store_repository().await;
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         let meta1 = Bytes::copy_from_slice(
@@ -2079,7 +2079,7 @@ mod tests {
 
         ds.write().await.commit("initial commit", None).await.unwrap();
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
         store.delete("zarr.json").await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
@@ -2099,7 +2099,7 @@ mod tests {
     #[tokio::test]
     async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -2112,7 +2112,7 @@ mod tests {
 
         ds.write().await.commit("root group", None).await.unwrap();
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -2125,7 +2125,7 @@ mod tests {
 
         let prev_snap = ds.write().await.commit("group a", None).await?;
 
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
         store
@@ -2154,11 +2154,11 @@ mod tests {
     #[tokio::test]
     async fn test_access_mode() {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await.unwrap();
-        let writeable_store =
+        let ds = repo.writable_session("main").await.unwrap();
+        let writable_store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
-        writeable_store
+        writable_store
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
@@ -2195,7 +2195,7 @@ mod tests {
         );
 
         let repo = Repository::create(None, None, storage, HashMap::new()).await.unwrap();
-        let ds = Arc::new(RwLock::new(repo.writeable_session("main").await.unwrap()));
+        let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
         let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
         store
             .set(

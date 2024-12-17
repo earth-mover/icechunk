@@ -12,7 +12,7 @@ def test_timetravel():
         storage=icechunk.StorageConfig.memory("test"),
         config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
     )
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     group = zarr.group(store=store, overwrite=True)
@@ -26,7 +26,7 @@ def test_timetravel():
     snapshot_id = session.commit("commit 1")
     assert session.read_only
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
     group = zarr.open_group(store=store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
@@ -50,7 +50,7 @@ def test_timetravel():
     assert store.read_only
     assert air_temp[200, 6] == 54
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
     group = zarr.open_group(store=store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
@@ -65,7 +65,7 @@ def test_timetravel():
     assert air_temp[200, 6] == 54
 
     repo.create_branch("feature", new_snapshot_id)
-    session = repo.writeable_session("feature")
+    session = repo.writable_session("feature")
     store = session.store()
     assert not store._read_only
     assert session.branch == "feature"
@@ -101,14 +101,14 @@ async def test_branch_reset():
         storage=icechunk.StorageConfig.memory("test"),
         config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
     )
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     group = zarr.group(store=store, overwrite=True)
     group.create_group("a")
     prev_snapshot_id = session.commit("group a")
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     group = zarr.open_group(store=store)

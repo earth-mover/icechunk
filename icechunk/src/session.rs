@@ -1101,7 +1101,7 @@ mod tests {
         refs::{fetch_ref, Ref},
         repository::VersionInfo,
         storage::logging::LoggingStorage,
-        strategies::{empty_writeable_session, node_paths, zarr_array_metadata},
+        strategies::{empty_writable_session, node_paths, zarr_array_metadata},
         ObjectStorage, Repository,
     };
 
@@ -1123,7 +1123,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_group(
         #[strategy(node_paths())] path: Path,
-        #[strategy(empty_writeable_session())] mut session: Session,
+        #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // getting any path from an empty repository must fail
         prop_assert!(session.get_node(&path).await.is_err());
@@ -1165,7 +1165,7 @@ mod tests {
     async fn test_add_delete_array(
         #[strategy(node_paths())] path: Path,
         #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(empty_writeable_session())] mut session: Session,
+        #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // new array must always succeed
         prop_assert!(session.add_array(path.clone(), metadata.clone()).await.is_ok());
@@ -1190,7 +1190,7 @@ mod tests {
     async fn test_add_array_group_clash(
         #[strategy(node_paths())] path: Path,
         #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
-        #[strategy(empty_writeable_session())] mut session: Session,
+        #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // adding a group at an existing array node must fail
         prop_assert!(session.add_array(path.clone(), metadata.clone()).await.is_ok());
@@ -1310,7 +1310,7 @@ mod tests {
 
         let repo =
             Repository::open(None, None, Arc::new(storage), HashMap::new()).await?;
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
         let node = ds.get_node(&array1_path).await?;
@@ -1451,7 +1451,7 @@ mod tests {
 
         let repository = Repository::create(None, None, storage, HashMap::new()).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
 
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
@@ -1459,7 +1459,7 @@ mod tests {
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
 
         // We need a new session after the commit
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
 
         //let node_id3 = NodeId::random();
         assert_eq!(snapshot_id, ds.snapshot_id);
@@ -1473,7 +1473,7 @@ mod tests {
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot { path, user_attributes, node_data, .. })
@@ -1511,7 +1511,7 @@ mod tests {
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
 
         let new_new_array_path: Path = "/group/array2".try_into().unwrap();
         ds.add_array(new_new_array_path.clone(), zarr_meta.clone()).await?;
@@ -1532,7 +1532,7 @@ mod tests {
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot { path, user_attributes, node_data, .. })
@@ -1575,7 +1575,7 @@ mod tests {
 
         let previous_snapshot_id = ds.commit("commit", None).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1648,7 +1648,7 @@ mod tests {
     #[tokio::test]
     async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         ds.add_group("/1".try_into().unwrap()).await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
@@ -1667,12 +1667,12 @@ mod tests {
     #[tokio::test]
     async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         ds.add_group("/1".try_into().unwrap()).await?;
         ds.commit("commit", None).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
         assert!(ds.get_group(&Path::root()).await.is_ok());
         assert!(ds.get_group(&"/1".try_into().unwrap()).await.is_err());
@@ -1683,11 +1683,11 @@ mod tests {
     #[tokio::test]
     async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         ds.commit("commit", None).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.delete_group(Path::root()).await?;
         ds.commit("commit", None).await?;
 
@@ -1701,7 +1701,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_children() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         ds.add_group("/a".try_into().unwrap()).await?;
         ds.add_group("/b".try_into().unwrap()).await?;
@@ -1715,14 +1715,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         ds.add_group("/a".try_into().unwrap()).await?;
         ds.add_group("/b".try_into().unwrap()).await?;
         ds.add_group("/b/bb".try_into().unwrap()).await?;
         ds.commit("commit", None).await?;
 
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
         ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
         assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
@@ -1734,7 +1734,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
         let repo = Repository::create(None, None, storage, HashMap::new()).await?;
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
@@ -1832,7 +1832,7 @@ mod tests {
                 .count(),
         );
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![5, 5],
@@ -1881,7 +1881,7 @@ mod tests {
                 .count(),
         );
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         // add 3 chunks
         ds.set_chunk_ref(
@@ -1925,7 +1925,7 @@ mod tests {
         let manifest = storage.fetch_manifests(&manifest_id).await?;
         let initial_size = manifest.len();
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
         ds.delete_array(a2path).await?;
         ds.commit("array2 deleted", None).await?;
 
@@ -1952,7 +1952,7 @@ mod tests {
         assert!(size_after_delete < initial_size);
 
         // delete a chunk
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 0]), None).await?;
         ds.commit("chunk deleted", None).await?;
 
@@ -1994,7 +1994,7 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
         let storage = Arc::clone(repo.storage());
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
@@ -2016,7 +2016,7 @@ mod tests {
                     if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
         ));
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
@@ -2072,8 +2072,8 @@ mod tests {
     async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
 
-        let mut ds1 = repository.writeable_session("main").await?;
-        let mut ds2 = repository.writeable_session("main").await?;
+        let mut ds1 = repository.writable_session("main").await?;
+        let mut ds2 = repository.writable_session("main").await?;
 
         ds1.add_group("/a".try_into().unwrap()).await?;
         ds2.add_group("/b".try_into().unwrap()).await?;
@@ -2129,7 +2129,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
             Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         ds.add_group(Path::root()).await?;
         let zarr_meta = ZarrArrayMetadata {
@@ -2155,7 +2155,7 @@ mod tests {
         // add 3 chunks
         // First 2 chunks are valid, third will be invalid chunk indices
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         assert!(ds
             .set_chunk_ref(
@@ -2198,7 +2198,7 @@ mod tests {
     /// Array: /foo/bar/some-array
     async fn get_repo_for_conflict() -> Result<Repository, Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
-        let mut ds = repository.writeable_session("main").await?;
+        let mut ds = repository.writable_session("main").await?;
 
         ds.add_group("/foo/bar".try_into().unwrap()).await?;
         ds.add_array("/foo/bar/some-array".try_into().unwrap(), basic_meta()).await?;
@@ -2209,8 +2209,8 @@ mod tests {
     async fn get_sessions_for_conflict() -> Result<(Session, Session), Box<dyn Error>> {
         let repository = get_repo_for_conflict().await?;
 
-        let ds = repository.writeable_session("main").await?;
-        let ds2 = repository.writeable_session("main").await?;
+        let ds = repository.writable_session("main").await?;
+        let ds2 = repository.writable_session("main").await?;
 
         Ok((ds, ds2))
     }
@@ -2492,7 +2492,7 @@ mod tests {
     async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         ds.add_group("/".try_into().unwrap()).await?;
         let zarr_meta = ZarrArrayMetadata {
@@ -2513,8 +2513,8 @@ mod tests {
         // one writer sets chunks
         // other writer sets the same chunks, generating a conflict
 
-        let mut ds1 = repo.writeable_session("main").await?;
-        let mut ds2 = repo.writeable_session("main").await?;
+        let mut ds1 = repo.writable_session("main").await?;
+        let mut ds2 = repo.writable_session("main").await?;
 
         ds1.set_chunk_ref(
             new_array_path.clone(),
@@ -2564,7 +2564,7 @@ mod tests {
     {
         let repo = create_memory_store_repository().await;
 
-        let mut ds = repo.writeable_session("main").await?;
+        let mut ds = repo.writable_session("main").await?;
 
         ds.add_group("/".try_into().unwrap()).await?;
         let zarr_meta = ZarrArrayMetadata {
@@ -2582,8 +2582,8 @@ mod tests {
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
         let _array_created_snap = ds.commit("create array", None).await?;
 
-        let mut ds1 = repo.writeable_session("main").await?;
-        let mut ds2 = repo.writeable_session("main").await?;
+        let mut ds1 = repo.writable_session("main").await?;
+        let mut ds2 = repo.writable_session("main").await?;
 
         ds1.set_chunk_ref(
             new_array_path.clone(),
@@ -2657,7 +2657,7 @@ mod tests {
         )
         .await?;
 
-        // TODO: We can't create writeable sessions from arbitrary snapshots anymore so not sure what to do about this?
+        // TODO: We can't create writable sessions from arbitrary snapshots anymore so not sure what to do about this?
         // let's try to create a new commit, that conflicts with the previous one and writes
         // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
         // let mut repo2 =
@@ -2905,12 +2905,12 @@ mod tests {
     async fn test_conflict_resolution_success_through_multiple_commits(
     ) -> Result<(), Box<dyn Error>> {
         let repo = get_repo_for_conflict().await?;
-        let mut ds2 = repo.writeable_session("main").await?;
+        let mut ds2 = repo.writable_session("main").await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         // write chunks with repo 1
         for coord in [0u32, 1, 2] {
-            let mut ds1 = repo.writeable_session("main").await?;
+            let mut ds1 = repo.writable_session("main").await?;
             ds1.set_chunk_ref(
                 path.clone(),
                 ChunkIndices(vec![coord]),
@@ -2954,8 +2954,8 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let repo = get_repo_for_conflict().await?;
 
-        let mut ds1 = repo.writeable_session("main").await?;
-        let mut ds2 = repo.writeable_session("main").await?;
+        let mut ds1 = repo.writable_session("main").await?;
+        let mut ds2 = repo.writable_session("main").await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.set_user_attributes(
@@ -2965,7 +2965,7 @@ mod tests {
         .await?;
         let non_conflicting_snap = ds1.commit("update user atts", None).await?;
 
-        let mut ds1 = repo.writeable_session("main").await?;
+        let mut ds1 = repo.writable_session("main").await?;
         ds1.set_chunk_ref(
             path.clone(),
             ChunkIndices(vec![0]),
@@ -3185,7 +3185,7 @@ mod tests {
             ) -> Self::SystemUnderTest {
                 let session = tokio::runtime::Runtime::new().unwrap().block_on(async {
                     let repo = create_memory_store_repository().await;
-                    repo.writeable_session("main").await.unwrap()
+                    repo.writable_session("main").await.unwrap()
                 });
                 TestRepository { session: session, runtime: Runtime::new().unwrap() }
             }

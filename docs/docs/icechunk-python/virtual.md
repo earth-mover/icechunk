@@ -118,7 +118,7 @@ repo = Repository.create(
 With the repo created, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
-session = repo.writeable_session("main")
+session = repo.writable_session("main")
 virtual_ds.virtualize.to_icechunk(session.store())
 ```
 

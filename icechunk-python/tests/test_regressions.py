@@ -65,7 +65,7 @@ async def test_issue_418():
             region="us-east-1",
         ),
     )
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
@@ -90,7 +90,7 @@ async def test_issue_418():
 
     session.commit("Initial commit")
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     root = zarr.Group.open(store=store)

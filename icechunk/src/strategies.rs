@@ -43,7 +43,7 @@ prop_compose! {
 
 prop_compose! {
     #[allow(clippy::expect_used)]
-    pub fn empty_writeable_session()(_id in any::<u32>()) -> Session {
+    pub fn empty_writable_session()(_id in any::<u32>()) -> Session {
     // _id is used as a hack to avoid using prop_oneof![Just(repository)]
     // Using Just requires Repository impl Clone, which we do not want
 
@@ -55,7 +55,7 @@ prop_compose! {
         let repository = Repository::create(None, None, Arc::new(storage), HashMap::new())
             .await
             .expect("Failed to initialize repository");
-        repository.writeable_session("main").await.expect("Failed to create session")
+        repository.writable_session("main").await.expect("Failed to create session")
     })
 }
 }

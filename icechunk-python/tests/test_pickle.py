@@ -21,7 +21,7 @@ def tmp_repo(tmpdir) -> Repository:
 
 
 def test_pickle_read_only(tmp_repo: Repository):
-    tmp_session = tmp_repo.writeable_session(branch="main")
+    tmp_session = tmp_repo.writable_session(branch="main")
     tmp_store = tmp_session.store()
 
     assert tmp_store._read_only is False
@@ -37,7 +37,7 @@ def test_pickle_read_only(tmp_repo: Repository):
 
 
 def test_pickle(tmp_repo: Repository):
-    tmp_session = tmp_repo.writeable_session(branch="main")
+    tmp_session = tmp_repo.writable_session(branch="main")
     tmp_store = tmp_session.store()
 
     root = zarr.group(store=tmp_store)

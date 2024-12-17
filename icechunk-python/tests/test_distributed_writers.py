@@ -56,7 +56,7 @@ async def test_distributed_writers():
     we can write everything we have written.
     """
     repo = mk_repo()
-    session = repo.writeable_session(branch="main")
+    session = repo.writable_session(branch="main")
     store = session.store()
 
     shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
@@ -74,7 +74,7 @@ async def test_distributed_writers():
     _first_snap = session.commit("array created")
 
     with Client(n_workers=8):
-        session = repo.writeable_session(branch="main")
+        session = repo.writable_session(branch="main")
         store = session.store()
         group = zarr.open_group(store=store)
         zarray = cast(zarr.Array, group["array"])

@@ -43,11 +43,11 @@ However, you can also create a repo on your local filesystem.
 
 ## Accessing the Icechunk store
 
-Once the repository is created, we can use `Session`s to read and write data. Since there is no data in the repository yet, 
-let's create a writeable session on the default `main` branch.
+Once the repository is created, we can use `Session`s to read and write data. Since there is no data in the repository yet,
+let's create a writable session on the default `main` branch.
 
 ```python
-session = repo.writeable_session("main")
+session = repo.writable_session("main")
 ```
 
 Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
@@ -82,15 +82,15 @@ session.commit("first commit")
 
 !!! note
 
-    Once a writeable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
+    Once a writable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
 
 
 ## Make a second commit
 
-At this point, we have already committed using our session, so we need to get a new session and store to make more changes. 
+At this point, we have already committed using our session, so we need to get a new session and store to make more changes.
 
 ```python
-session_2 = repo.writeable_session("main")
+session_2 = repo.writable_session("main")
 store_2 = session_2.store()
 group = zarr.open_group(store_2)
 array = group["my_array"]

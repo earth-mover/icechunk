@@ -66,10 +66,10 @@ ds2 = ds.isel(time=slice(18, None))  # part 2
 
 ## Write Xarray data to Icechunk
 
-Create a new writeable session on the `main` branch to get the `IcechunkStore`:
+Create a new writable session on the `main` branch to get the `IcechunkStore`:
 
 ```python
-session = repo.writeable_session("main")
+session = repo.writable_session("main")
 store = session.store()
 ```
 
@@ -101,7 +101,7 @@ this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='tim
 
 ```python
 # we have to get a new session after committing
-session = repo.writeable_session("main")
+session = repo.writable_session("main")
 ds2.to_zarr(session.store(), append_dim='time')
 ```
 

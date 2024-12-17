@@ -77,5 +77,5 @@ class Repository:
             )
         )
 
-    def writeable_session(self, branch: str) -> Session:
-        return Session(self._repository.writeable_session(branch))
+    def writable_session(self, branch: str) -> Session:
+        return Session(self._repository.writable_session(branch))

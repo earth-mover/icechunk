@@ -14,7 +14,7 @@ def tmp_store(tmpdir):
         config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=5),
     )
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     yield store, repo_path

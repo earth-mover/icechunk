@@ -57,7 +57,7 @@ async def test_write_minio_virtual_refs():
             region="us-east-1",
         ),
     )
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     array = zarr.Array.create(store, shape=(1, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
@@ -109,7 +109,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
             region="us-east-1", allow_http=False
         ),
     )
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     root = zarr.Group.from_store(store=store, zarr_format=3)

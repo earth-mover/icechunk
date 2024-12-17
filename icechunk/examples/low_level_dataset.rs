@@ -39,7 +39,7 @@ let mut ds = Repository::create(Arc::clone(&storage));
     )
     .await?;
 
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
 
     println!();
     println!();
@@ -171,7 +171,7 @@ ds.commit("some message", Default::default()).await?;
     println!();
     println!();
     println!("## Adding an inline chunk");
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
     ds.set_chunk_ref(
         array1_path.clone(),
         ChunkIndices(vec![0]),
@@ -215,7 +215,7 @@ ds.flush("a message", Default::default()).await?;
 
     println!("## Creating a new Repository instance @ latest version");
 
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
 
     println!(
         r#"
