@@ -161,10 +161,7 @@ class Model:
     def delete_branch(self, branch_name: str) -> None:
         del self.branches[branch_name]
 
-    def tag(self, tag_name: str, commit_id: str) -> None:
-        if commit_id is None:
-            assert self.HEAD is not None
-            commit_id = self.HEAD
+    def create_tag(self, tag_name: str, commit_id: str) -> None:
         self.tags[tag_name] = TagModel(commit_id=str(commit_id))
 
     def checkout_tag(self, ref: str) -> None:
@@ -295,13 +292,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         message=st.none() | st.text(max_size=MAX_TEXT_SIZE),
         target=tags,
     )
-    def tag(self, name, commit_id, message):
+    def create_tag(self, name, commit_id, message):
         note(f"Creating tag {name!r} for commit {commit_id!r} with message {message!r}")
         # we can create a tag and branch with the same name
         if name not in self.model.tags:
-            # TODO: test trepo.tag also
             self.repo.create_tag(name, commit_id)
-            self.model.tag(name, commit_id)
+            self.model.create_tag(name, commit_id)
         else:
             note("Expecting error.")
             with pytest.raises(ValueError):
@@ -375,5 +371,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     #     )
 
 
-VersionControlStateMachine.TestCase.settings = Settings(max_examples=300, deadline=None)
+VersionControlStateMachine.TestCase.settings = Settings(
+    max_examples=300, deadline=None, report_multiple_bugs=False
+)
 VersionControlTest = VersionControlStateMachine.TestCase
