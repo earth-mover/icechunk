@@ -8,16 +8,16 @@ import zarr
 
 @pytest.fixture(scope="function")
 def tmp_store(tmpdir):
-    store_path = f"{tmpdir}"
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.filesystem(store_path),
-        read_only=False,
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=5),
+    repo_path = f"{tmpdir}"
+    repo = icechunk.Repository.open_or_create(
+        storage=icechunk.StorageConfig.filesystem(repo_path),
+        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=5),
     )
 
-    yield store, store_path
+    session = repo.writeable_session("main")
+    store = session.store()
 
-    store.close()
+    yield store, repo_path
 
 
 def test_no_inline_chunks(tmp_store):

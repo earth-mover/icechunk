@@ -29,16 +29,15 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::OnceCell;
 
 use crate::{
     format::{
         attributes::AttributesTable, format_constants, manifest::Manifest,
         snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, FileTypeTag, ManifestId, SnapshotId,
+        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
     },
-    private,
-    zarr::ObjectId,
-    Storage, StorageError,
+    private, Storage, StorageError,
 };
 
 use super::{
@@ -46,11 +45,15 @@ use super::{
     REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct S3Storage {
-    client: Arc<Client>,
-    prefix: String,
-    bucket: String,
+    config: S3Config,
+    #[serde(skip)]
+    /// We need to use OnceCell to allow async initialization, because serde
+    /// does not support async cfunction calls from deserialization. This gives
+    /// us a way to lazily initialize the client.
+    client: OnceCell<Client>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -73,23 +76,31 @@ pub enum S3Credentials {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Config {
+pub struct S3ClientOptions {
     pub region: Option<String>,
     pub endpoint: Option<String>,
     pub credentials: S3Credentials,
     pub allow_http: bool,
 }
 
-pub async fn mk_client(config: Option<&S3Config>) -> Client {
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct S3Config {
+    pub bucket: String,
+    pub prefix: String,
+    pub options: Option<S3ClientOptions>,
+}
+
+pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
     let region = config
+        .as_ref()
         .and_then(|c| c.region.as_ref())
         .map(|r| RegionProviderChain::first_try(Some(Region::new(r.clone()))))
         .unwrap_or_else(RegionProviderChain::default_provider);
 
-    let endpoint = config.and_then(|c| c.endpoint.clone());
-    let allow_http = config.map(|c| c.allow_http).unwrap_or(false);
+    let endpoint = config.as_ref().and_then(|c| c.endpoint.clone());
+    let allow_http = config.as_ref().map(|c| c.allow_http).unwrap_or(false);
     let credentials =
-        config.map(|c| c.credentials.clone()).unwrap_or(S3Credentials::FromEnv);
+        config.as_ref().map(|c| c.credentials.clone()).unwrap_or(S3Credentials::FromEnv);
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
@@ -126,17 +137,25 @@ pub async fn mk_client(config: Option<&S3Config>) -> Client {
 }
 
 impl S3Storage {
-    pub async fn new_s3_store(
-        bucket_name: impl Into<String>,
-        prefix: impl Into<String>,
-        config: Option<&S3Config>,
-    ) -> Result<S3Storage, StorageError> {
-        let client = Arc::new(mk_client(config).await);
-        Ok(S3Storage { client, prefix: prefix.into(), bucket: bucket_name.into() })
+    pub async fn new_s3_store(config: &S3Config) -> Result<S3Storage, StorageError> {
+        let client = OnceCell::new();
+        client
+            .set(mk_client(config.options.as_ref()).await)
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+        Ok(S3Storage { client, config: config.clone() })
+    }
+
+    /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
+    /// client is not serializeable and must be initialized after deserialization. Under normal construction
+    /// the original client is returned immediately.
+    async fn get_client(&self) -> &Client {
+        self.client
+            .get_or_init(|| async { mk_client(self.config.options.as_ref()).await })
+            .await
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
+        let path = PathBuf::from_iter([self.config.prefix.as_str(), file_prefix, id]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
@@ -170,15 +189,16 @@ impl S3Storage {
     }
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
+        let path = PathBuf::from_iter([self.config.prefix.as_str(), REF_PREFIX, ref_key]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
     async fn get_object(&self, key: &str) -> StorageResult<Bytes> {
         Ok(self
-            .client
+            .get_client()
+            .await
             .get_object()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .key(key)
             .send()
             .await?
@@ -193,7 +213,12 @@ impl S3Storage {
         key: &str,
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
-        let mut b = self.client.get_object().bucket(self.bucket.clone()).key(key);
+        let mut b = self
+            .get_client()
+            .await
+            .get_object()
+            .bucket(self.config.bucket.clone())
+            .key(key);
 
         if let Some(header) = range_to_header(range) {
             b = b.range(header)
@@ -211,7 +236,12 @@ impl S3Storage {
         metadata: I,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
-        let mut b = self.client.put_object().bucket(self.bucket.clone()).key(key);
+        let mut b = self
+            .get_client()
+            .await
+            .put_object()
+            .bucket(self.config.bucket.clone())
+            .key(key);
 
         if let Some(ct) = content_type {
             b = b.content_type(ct)
@@ -246,9 +276,10 @@ impl S3Storage {
             .map_err(|e| StorageError::Other(e.to_string()))?;
 
         let res = self
-            .client
+            .get_client()
+            .await
             .delete_objects()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .delete(delete)
             .send()
             .await?;
@@ -271,11 +302,18 @@ pub fn range_to_header(range: &ByteRange) -> Option<String> {
 impl private::Sealed for S3Storage {}
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for S3Storage {
     async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
         let key = self.get_config_path()?;
-        let res =
-            self.client.get_object().bucket(self.bucket.clone()).key(key).send().await;
+        let res = self
+            .get_client()
+            .await
+            .get_object()
+            .bucket(self.config.bucket.clone())
+            .key(key)
+            .send()
+            .await;
 
         match res {
             Ok(output) => match output.e_tag {
@@ -296,9 +334,10 @@ impl Storage for S3Storage {
     ) -> StorageResult<ETag> {
         let key = self.get_config_path()?;
         let mut req = self
-            .client
+            .get_client()
+            .await
             .put_object()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .key(key)
             .content_type("application/yaml")
             .body(config.into());
@@ -464,9 +503,10 @@ impl Storage for S3Storage {
     async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
         let key = self.ref_key(ref_key)?;
         let res = self
-            .client
+            .get_client()
+            .await
             .get_object()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .key(key.clone())
             .send()
             .await;
@@ -488,9 +528,10 @@ impl Storage for S3Storage {
     async fn ref_names(&self) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
         let mut paginator = self
-            .client
+            .get_client()
+            .await
             .list_objects_v2()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .prefix(prefix.clone())
             .delimiter("/")
             .into_paginator()
@@ -520,9 +561,10 @@ impl Storage for S3Storage {
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let prefix = self.ref_key(ref_name)?;
         let mut paginator = self
-            .client
+            .get_client()
+            .await
             .list_objects_v2()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .prefix(prefix.clone())
             .into_paginator()
             .send();
@@ -547,8 +589,12 @@ impl Storage for S3Storage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.ref_key(ref_key)?;
-        let mut builder =
-            self.client.put_object().bucket(self.bucket.clone()).key(key.clone());
+        let mut builder = self
+            .get_client()
+            .await
+            .put_object()
+            .bucket(self.config.bucket.clone())
+            .key(key.clone());
 
         if !overwrite_refs {
             builder = builder.if_none_match("*")
@@ -575,14 +621,15 @@ impl Storage for S3Storage {
         &'a self,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
+        let prefix = PathBuf::from_iter([self.config.prefix.as_str(), prefix])
             .into_os_string()
             .into_string()
             .map_err(StorageError::BadPrefix)?;
         let stream = self
-            .client
+            .get_client()
+            .await
             .list_objects_v2()
-            .bucket(self.bucket.clone())
+            .bucket(self.config.bucket.clone())
             .prefix(prefix)
             .into_paginator()
             .send()
@@ -624,4 +671,38 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
     let created_at = last_modified.to_chrono_utc().ok()?;
     let id = Path::new(key).file_name().and_then(|s| s.to_str())?.to_string();
     Some(ListInfo { id, created_at })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{S3ClientOptions, S3Config, S3Credentials, S3Storage};
+
+    #[tokio::test]
+    async fn test_serialize_s3_storage() {
+        let config = S3Config {
+            bucket: "bucket".to_string(),
+            prefix: "prefix".to_string(),
+            options: Some(S3ClientOptions {
+                region: Some("us-west-2".to_string()),
+                endpoint: Some("http://localhost:9000".to_string()),
+                credentials: S3Credentials::Static(super::StaticS3Credentials {
+                    access_key_id: "access_key_id".to_string(),
+                    secret_access_key: "secret_access_key".to_string(),
+                    session_token: Some("session_token".to_string()),
+                }),
+                allow_http: true,
+            }),
+        };
+        let storage = S3Storage::new_s3_store(&config).await.unwrap();
+
+        let serialized = serde_json::to_string(&storage).unwrap();
+
+        assert_eq!(
+            serialized,
+            r#"{"bucket":"bucket","prefix":"prefix","options":{"region":"us-west-2","endpoint":"http://localhost:9000","credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token"},"allow_http":true}}"#
+        );
+
+        let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(storage.config, deserialized.config);
+    }
 }

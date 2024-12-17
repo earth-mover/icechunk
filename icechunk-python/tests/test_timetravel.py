@@ -1,15 +1,19 @@
+from typing import cast
+
 import icechunk
 import zarr
 import zarr.core
+import zarr.core.array
 import zarr.core.buffer
 
 
 def test_timetravel():
-    store = icechunk.IcechunkStore.create(
+    repo = icechunk.Repository.create(
         storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
-        read_only=False,
+        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
     )
+    session = repo.writeable_session("main")
+    store = session.store()
 
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array(
@@ -19,49 +23,69 @@ def test_timetravel():
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
 
-    snapshot_id = store.commit("commit 1")
-    assert not store._read_only
+    snapshot_id = session.commit("commit 1")
+    assert session.read_only
+
+    session = repo.writeable_session("main")
+    store = session.store()
+    group = zarr.open_group(store=store)
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
 
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
 
-    new_snapshot_id = store.commit("commit 2")
+    new_snapshot_id = session.commit("commit 2")
 
-    store.checkout(snapshot_id=snapshot_id)
+    session = repo.readonly_session(snapshot_id=snapshot_id)
+    store = session.store()
+    group = zarr.open_group(store=store, mode="r")
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
-    store.checkout(snapshot_id=new_snapshot_id)
+    session = repo.readonly_session(snapshot_id=new_snapshot_id)
+    store = session.store()
+    group = zarr.open_group(store=store, mode="r")
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 54
 
-    store.checkout(branch="main")
-
-    store.set_writeable()
-    assert not store.read_only
+    session = repo.writeable_session("main")
+    store = session.store()
+    group = zarr.open_group(store=store)
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
 
     air_temp[:, :] = 76
-    assert store.has_uncommitted_changes
-    assert store.branch == "main"
-    assert store.snapshot_id == new_snapshot_id
+    assert session.has_uncommitted_changes
+    assert session.branch == "main"
+    assert session.snapshot_id == new_snapshot_id
 
-    store.reset()
-    assert not store.has_uncommitted_changes
+    session.discard_changes()
+    assert not session.has_uncommitted_changes
     assert air_temp[200, 6] == 54
 
-    store.new_branch("feature")
+    repo.create_branch("feature", new_snapshot_id)
+    session = repo.writeable_session("feature")
+    store = session.store()
     assert not store._read_only
-    assert store.branch == "feature"
-    air_temp[:, :] = 90
-    feature_snapshot_id = store.commit("commit 3")
-    store.tag("v1.0", feature_snapshot_id)
+    assert session.branch == "feature"
 
-    store.checkout(tag="v1.0")
+    group = zarr.open_group(store=store)
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp[:, :] = 90
+    feature_snapshot_id = session.commit("commit 3")
+
+    repo.create_tag("v1.0", feature_snapshot_id)
+    session = repo.readonly_session(tag="v1.0")
+    store = session.store()
     assert store._read_only
-    assert store.branch is None
+    assert session.branch is None
+
+    group = zarr.open_group(store=store, mode="r")
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert air_temp[200, 6] == 90
 
-    parents = list(store.ancestry())
+    parents = list(repo.ancestry(feature_snapshot_id))
     assert [snap.message for snap in parents] == [
         "commit 3",
         "commit 2",
@@ -73,22 +97,32 @@ def test_timetravel():
 
 
 async def test_branch_reset():
-    store = icechunk.IcechunkStore.create(
+    repo = icechunk.Repository.create(
         storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.StoreConfig(inline_chunk_threshold_bytes=1),
+        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
     )
+    session = repo.writeable_session("main")
+    store = session.store()
 
     group = zarr.group(store=store, overwrite=True)
     group.create_group("a")
-    prev_snapshot_id = store.commit("group a")
+    prev_snapshot_id = session.commit("group a")
+
+    session = repo.writeable_session("main")
+    store = session.store()
+
+    group = zarr.open_group(store=store)
     group.create_group("b")
-    store.commit("group b")
+    session.commit("group b")
 
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys
     assert "b/zarr.json" in keys
 
-    store.reset_branch(prev_snapshot_id)
+    repo.reset_branch("main", prev_snapshot_id)
+
+    session = repo.readonly_session(branch="main")
+    store = session.store()
 
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys

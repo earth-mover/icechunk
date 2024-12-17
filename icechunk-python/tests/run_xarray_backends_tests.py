@@ -6,7 +6,8 @@ import time
 import pytest
 
 import zarr
-from icechunk import IcechunkStore, S3Credentials, StorageConfig
+from icechunk import S3Credentials, StorageConfig
+from icechunk.repository import Repository
 from xarray.tests.test_backends import (
     ZarrBase,
     default_zarr_version,  # noqa: F401; needed otherwise not discovered
@@ -40,7 +41,9 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
-            yield IcechunkStore.create(StorageConfig.filesystem(tmpdir))
+            repo = Repository.create(StorageConfig.filesystem(tmpdir))
+            session = repo.writeable_session("main")
+            yield session.store()
 
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
@@ -48,7 +51,9 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        yield IcechunkStore.create(StorageConfig.memory())
+        repo = Repository.create(StorageConfig.memory(""))
+        session = repo.writeable_session("main")
+        yield session.store()
 
     def test_pickle(self):
         pytest.skip(reason="memory icechunk stores cannot be pickled.")
@@ -75,5 +80,6 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
                 access_key_id="minio123", secret_access_key="minio123"
             ),
         )
-        store = IcechunkStore.create(storage=storage_config, read_only=False)
-        yield store
+        repo = Repository.create(storage=storage_config)
+        session = repo.writeable_session("main")
+        yield session.store()

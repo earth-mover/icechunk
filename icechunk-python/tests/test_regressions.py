@@ -1,14 +1,17 @@
+from typing import cast
+
 import pytest
 from object_store import ClientOptions, ObjectStore
 
 import zarr
+import zarr.core
+import zarr.core.array
 from icechunk import (
-    IcechunkStore,
     S3Credentials,
     StorageConfig,
-    StoreConfig,
     VirtualRefConfig,
 )
+from icechunk.repository import Repository
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
@@ -50,22 +53,21 @@ async def test_issue_418():
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
 
-    store = IcechunkStore.create(
+    repo = Repository.create(
         storage=StorageConfig.memory("test"),
-        config=StoreConfig(
-            inline_chunk_threshold_bytes=1,
-            virtual_ref_config=VirtualRefConfig.s3_from_config(
-                credentials=S3Credentials(
-                    access_key_id="minio123",
-                    secret_access_key="minio123",
-                ),
-                endpoint_url="http://localhost:9000",
-                allow_http=True,
-                region="us-east-1",
+        virtual_ref_config=VirtualRefConfig.s3_from_config(
+            credentials=S3Credentials(
+                access_key_id="minio123",
+                secret_access_key="minio123",
             ),
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            region="us-east-1",
         ),
-        read_only=False,
     )
+    session = repo.writeable_session("main")
+    store = session.store()
+
     root = zarr.Group.from_store(store=store, zarr_format=3)
     time = root.require_array(name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4")
     root.require_array(name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4")
@@ -86,7 +88,14 @@ async def test_issue_418():
     assert (await store._store.get("time/c/0")) == b"firs"
     assert (await store._store.get("time/c/1")) == b"econ"
 
-    store.commit("Initial commit")
+    session.commit("Initial commit")
+
+    session = repo.writeable_session("main")
+    store = session.store()
+
+    root = zarr.Group.open(store=store)
+    time = cast(zarr.core.array.Array, root["time"])
+    root.require_array(name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4")
 
     # resize the array and append a new chunk
     time.resize((3,))
@@ -101,7 +110,7 @@ async def test_issue_418():
     assert (await store._store.get("time/c/2")) == b"thir"
 
     # commit
-    store.commit("Append virtual ref")
+    session.commit("Append virtual ref")
 
     assert (await store._store.get("lon/c/0")) == b"fift"
     assert (await store._store.get("time/c/0")) == b"firs"

@@ -5,9 +5,8 @@ use futures::{stream, Stream, StreamExt, TryStreamExt};
 use tokio::pin;
 
 use crate::{
-    format::{ChunkId, ManifestId, SnapshotId},
+    format::{manifest::ChunkPayload, ChunkId, ManifestId, SnapshotId},
     refs::{list_refs, RefError},
-    repository::ChunkPayload,
     storage::ListInfo,
     Storage, StorageError,
 };

@@ -6,12 +6,11 @@ import zarr
 import zarr.core
 import zarr.core.buffer
 from icechunk import (
-    IcechunkStore,
     S3Credentials,
     StorageConfig,
-    StoreConfig,
     VirtualRefConfig,
 )
+from icechunk.repository import Repository
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
@@ -46,21 +45,20 @@ async def test_write_minio_virtual_refs():
     )
 
     # Open the store
-    store = IcechunkStore.open_or_create(
+    repo = Repository.open_or_create(
         storage=StorageConfig.memory("virtual"),
-        mode="w",
-        config=StoreConfig(
-            virtual_ref_config=VirtualRefConfig.s3_from_config(
-                credentials=S3Credentials(
-                    access_key_id="minio123",
-                    secret_access_key="minio123",
-                ),
-                endpoint_url="http://localhost:9000",
-                allow_http=True,
-                region="us-east-1",
-            )
+        virtual_ref_config=VirtualRefConfig.s3_from_config(
+            credentials=S3Credentials(
+                access_key_id="minio123",
+                secret_access_key="minio123",
+            ),
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            region="us-east-1",
         ),
     )
+    session = repo.writeable_session("main")
+    store = session.store()
 
     array = zarr.Array.create(store, shape=(1, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
 
@@ -71,7 +69,7 @@ async def test_write_minio_virtual_refs():
         "c/0/0/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
     )
     # we write a ref that simulates a lost chunk
-    await store.async_set_virtual_ref(
+    store.set_virtual_ref(
         "c/0/0/2", "s3://testbucket/path/to/python/non-existing", offset=1, length=4
     )
 
@@ -96,7 +94,7 @@ async def test_write_minio_virtual_refs():
         # TODO: we should include the key and other info in the exception
         await store.get("c/0/0/2", prototype=buffer_prototype)
 
-    _snapshot_id = store.commit("Add virtual refs")
+    _snapshot_id = session.commit("Add virtual refs")
 
 
 async def test_from_s3_public_virtual_refs(tmpdir):
@@ -105,15 +103,15 @@ async def test_from_s3_public_virtual_refs(tmpdir):
         "Temporary flagged as failing while we implement new virtual chunk mechanism"
     )
     # Open the store,
-    store = IcechunkStore.open_or_create(
+    repo = Repository.open_or_create(
         storage=StorageConfig.filesystem(f"{tmpdir}/virtual"),
-        read_only=False,
-        config=StoreConfig(
-            virtual_ref_config=VirtualRefConfig.s3_anonymous(
-                region="us-east-1", allow_http=False
-            )
+        virtual_ref_config=VirtualRefConfig.s3_anonymous(
+            region="us-east-1", allow_http=False
         ),
     )
+    session = repo.writeable_session("main")
+    store = session.store()
+
     root = zarr.Group.from_store(store=store, zarr_format=3)
     year = root.require_array(
         name="year", shape=((72,)), chunk_shape=((72,)), dtype="float32"

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use quick_cache::sync::Cache;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
@@ -16,13 +17,19 @@ use crate::{
 
 use super::{ETag, ListInfo, Storage, StorageError, StorageResult};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
 pub struct MemCachingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
+    #[serde(skip)]
     snapshot_cache: Cache<SnapshotId, Arc<Snapshot>>,
+    #[serde(skip)]
     manifest_cache: Cache<ManifestId, Arc<Manifest>>,
+    #[serde(skip)]
     transactions_cache: Cache<SnapshotId, Arc<TransactionLog>>,
+    #[serde(skip)]
     attributes_cache: Cache<AttributesId, Arc<AttributesTable>>,
+    #[serde(skip)]
     chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
 }
 
@@ -44,11 +51,27 @@ impl MemCachingStorage {
             chunk_cache: Cache::new(num_chunks as usize),
         }
     }
+
+    pub fn new_with_defaults(backend: Arc<dyn Storage + Send + Sync>) -> Self {
+        Self::new(backend, 2, 2, 0, 2, 0)
+    }
 }
 
 impl private::Sealed for MemCachingStorage {}
 
+impl<'de> Deserialize<'de> for MemCachingStorage {
+    fn deserialize<D>(deserializer: D) -> Result<MemCachingStorage, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let backend: Arc<dyn Storage + Sync + Send> =
+            Deserialize::deserialize(deserializer)?;
+        Ok(Self::new_with_defaults(backend))
+    }
+}
+
 #[async_trait]
+#[typetag::serde]
 impl Storage for MemCachingStorage {
     async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
         self.backend.fetch_config().await
@@ -228,15 +251,17 @@ mod test {
 
     use super::*;
     use crate::{
-        format::{manifest::ChunkInfo, NodeId},
-        repository::{ChunkIndices, ChunkPayload},
+        format::{
+            manifest::{ChunkInfo, ChunkPayload},
+            ChunkIndices, NodeId,
+        },
         storage::{logging::LoggingStorage, ObjectStorage, Storage},
     };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),
@@ -299,7 +324,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),

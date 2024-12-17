@@ -374,7 +374,7 @@ Ichecunk repo stored in S3 bucket `repo-bucket`. Virtual array `A` on Google clo
     Now the user initializes a Repo instance by passing, if needed, a credential set for each virtual chunk container. If a chunk is read for which there are no credentials, we default to the Storage credentials if on the same platform. Users can figure out the credentials they need to pass by checking the list of containers.
 
 3. > A mechanism to know all the "dependencies" of a repo
-  
+
     This can now be retrieved directly from the repository config. It's basically the set of virtual chunk containers (or a subset at least, if badly configured). To get more detail, there is a function that allows to query the list of all virtual chunk locations.
 
 6. > Fail for modified virtual chunks

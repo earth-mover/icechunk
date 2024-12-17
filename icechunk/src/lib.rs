@@ -24,15 +24,16 @@ pub mod metadata;
 pub mod ops;
 pub mod refs;
 pub mod repository;
+pub mod session;
 pub mod storage;
+pub mod store;
 #[cfg(test)]
 pub mod strategies;
 pub mod virtual_chunks;
-pub mod zarr;
 
-pub use repository::{Repository, RepositoryBuilder, RepositoryConfig, SnapshotMetadata};
+pub use repository::{Repository, RepositoryConfig};
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
-pub use zarr::Store;
+pub use store::Store;
 
 mod private {
     /// Used to seal traits we don't want user code to implement, to maintain compatibility.

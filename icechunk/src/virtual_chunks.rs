@@ -17,7 +17,7 @@ use crate::{
     },
     private,
     storage::s3::{
-        mk_client, range_to_header, S3Config, S3Credentials, StaticS3Credentials,
+        mk_client, range_to_header, S3ClientOptions, S3Credentials, StaticS3Credentials,
     },
 };
 
@@ -127,10 +127,11 @@ fn find_container<'a>(
     containers.iter().find(|cont| chunk_location.starts_with(cont.prefix.as_str()))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct VirtualChunkResolver {
     containers: Vec<VirtualChunkContainer>,
     credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+    #[serde(skip)]
     fetchers: RwLock<HashMap<ContainerName, Arc<dyn ChunkFetcher>>>,
 }
 
@@ -228,7 +229,7 @@ impl S3Fetcher {
         cont: &VirtualChunkContainer,
         credentials: Option<&ObjectStoreCredentials>,
     ) -> Self {
-        let config = S3Config {
+        let config = S3ClientOptions {
             region: cont.region.clone(),
             endpoint: cont.endpoint_url.clone(),
             credentials: match credentials {
