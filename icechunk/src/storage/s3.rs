@@ -50,7 +50,10 @@ use super::{
 pub struct S3Storage {
     config: S3Config,
     #[serde(skip)]
-    client: OnceCell<Arc<Client>>,
+    /// We need to use OnceCell to allow async initialization, because serde
+    /// does not support async cfunction calls from deserialization. This gives
+    /// us a way to lazily initialize the client.
+    client: OnceCell<Client>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -137,16 +140,17 @@ impl S3Storage {
     pub async fn new_s3_store(config: &S3Config) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
         client
-            .set(Arc::new(mk_client(config.options.as_ref()).await))
+            .set(mk_client(config.options.as_ref()).await)
             .map_err(|e| StorageError::Other(e.to_string()))?;
         Ok(S3Storage { client, config: config.clone() })
     }
 
-    async fn get_client(&self) -> &Arc<Client> {
+    /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
+    /// client is not serializeable and must be initialized after deserialization. Under normal construction
+    /// the original client is returned immediately.
+    async fn get_client(&self) -> &Client {
         self.client
-            .get_or_init(|| async {
-                Arc::new(mk_client(self.config.options.as_ref()).await)
-            })
+            .get_or_init(|| async { mk_client(self.config.options.as_ref()).await })
             .await
     }
 
