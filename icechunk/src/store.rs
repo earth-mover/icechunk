@@ -1658,9 +1658,8 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writeable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let session = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&session), StoreConfig::default());
 
         store
             .set(
@@ -1686,11 +1685,14 @@ mod tests {
             ]
         );
 
-        store.commit("foo").await?;
+        session.write().await.commit("foo", None).await?;
+
+        let session = repo.writeable_session("main").await?;
+        let store =
+            Store::from_session(Arc::new(RwLock::new(session)), StoreConfig::default());
         store.clear().await?;
 
         store
-            .borrow_mut()
             .set(
                 "zarr.json",
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),

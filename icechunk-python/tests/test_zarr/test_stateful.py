@@ -97,10 +97,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # TODO: MemoryStore is broken?
         # assert not self._sync(self.model.is_empty("/"))
 
-        lsstore = self._sync_iter(self.store.list_prefix(""))
-        # lsmodel = self._sync_iter(self.model.list_prefix(""))
-        # assert len(lsmodel) == len(lsstore) == 1, "more than 1 key after creating group"
-
     @invariant()
     def check_list_prefix_from_root(self) -> None:
         model_list = self._sync_iter(self.model.list_prefix(""))

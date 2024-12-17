@@ -242,7 +242,7 @@ mod tests {
 
     use std::error::Error;
 
-    use crate::{format::manifest::ChunkInfo, zarr::ObjectId};
+    use crate::{format::manifest::ChunkInfo, format::ObjectId};
 
     use super::*;
     use pretty_assertions::assert_eq;
