@@ -155,9 +155,8 @@ class Model:
         self.is_at_branch_head = True
         self.branch = ref
 
-    def reset_branch(self, commit) -> None:
-        self.branches[self.branch] = commit
-        self.checkout_branch(self.branch)
+    def reset_branch(self, branch, commit) -> None:
+        self.branches[branch] = commit
 
     def delete_branch(self, branch_name: str) -> None:
         del self.branches[branch_name]
@@ -315,17 +314,17 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.repo.reset()
         self.model.checkout_branch(self.model.branch)
 
-    @rule(commit=commits)
-    def reset_branch(self, commit) -> None:
-        if self.model.branch is None or self.model.changes_made:
-            # must be at branch tip, and with clean state, to reset it
-            with pytest.raises(ValueError):
-                self.repo.reset_branch(self.session.branch, commit)
-            return
+    @rule(branch=branches, commit=commits)
+    def reset_branch(self, branch, commit) -> None:
+        # if self.model.branch is None or self.model.changes_made:
+        #     # must be at branch tip, and with clean state, to reset it
+        #     with pytest.raises(ValueError):
+        #         self.repo.reset_branch(self.session.branch, commit)
+        #     return
 
         note(f"resetting branch {self.model.branch} from {self.model.HEAD} to {commit}")
-        self.repo.reset_branch(self.session.branch, commit)
-        self.model.reset_branch(commit)
+        self.repo.reset_branch(branch, commit)
+        self.model.reset_branch(branch, commit)
 
     # @rule(branch=consumes(branches))
     # def delete_branch(self, branch):
