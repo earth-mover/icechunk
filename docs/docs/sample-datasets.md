@@ -5,7 +5,6 @@ title: Sample Datasets
 
 ## Native Datasets
 
-
 ## Virtual Datasets
 
 ### NOAA [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) Data
@@ -23,7 +22,7 @@ storage = icechunk.StorageConfig.s3_anonymous(
     region='us-east-1',
 )
 
-store = icechunk.IcechunkStore.open_existing(storage=storage, mode="r", config=icechunk.StoreConfig(
+repo = icechunk.Repository.open_existing(storage=storage, mode="r", config=icechunk.RepositoryConfig(
     virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
 ))
 ```

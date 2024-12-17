@@ -3,7 +3,7 @@
 When creating and opening Icechunk stores, there are a two different sets of configuration to be aware of:
 
 - [`StorageConfig`](./reference.md#icechunk.StorageConfig) - for configuring access to the object store or filesystem
-- [`StoreConfig`](./reference.md#icechunk.StoreConfig) - for configuring the behavior of the Icechunk Store itself
+- [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) - for configuring the behavior of the Icechunk Repository itself
 
 ## Storage Config
 
@@ -68,9 +68,9 @@ Icechunk can also be used on a [local filesystem](./reference.md#icechunk.Storag
     icechunk.StorageConfig.filesystem("/path/to/my/dataset")
     ```
 
-## Store Config
+## Repository Config
 
-Separate from the storage config, the Store can also be configured with options which control its runtime behavior.
+Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
 
 ### Writing chunks inline
 
@@ -81,7 +81,7 @@ This is the default behavior for chunks smaller than 512 bytes, but it can be ov
 === "Never write chunks inline"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         inline_chunk_threshold_bytes=0,
         ...
     )
@@ -90,7 +90,7 @@ This is the default behavior for chunks smaller than 512 bytes, but it can be ov
 === "Write bigger chunks inline"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         inline_chunk_threshold_bytes=1024,
         ...
     )
@@ -103,7 +103,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 === "S3 from environment"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_from_env(),
         ...
     )
@@ -112,7 +112,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 === "S3 with credentials"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_from_config(
             credential=S3Credentials(
                 access_key_id='my-access-key',
@@ -127,7 +127,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 === "S3 Anonymous"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
         ...
     )
@@ -137,11 +137,11 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 
 Now we can now create or open an Icechunk store using our config.
 
-### Creating a new store
+### Creating a new repo
 
 !!! note
 
-    Icechunk stores cannot be created in the same location where another store already exists.
+    Icechunk repos cannot be created in the same location where another store already exists.
 
 === "Creating with S3 storage"
 
@@ -152,9 +152,8 @@ Now we can now create or open an Icechunk store using our config.
         region='us-east-1',
     )
 
-    store = icechunk.IcechunkStore.create(
+    repo = icechunk.Repository.create(
         storage=storage,
-        read_only=False,
     )
     ```
 
@@ -162,17 +161,45 @@ Now we can now create or open an Icechunk store using our config.
 
     ```python
     storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.StoreConfig(
+    config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=1024,
     )
 
-    store = icechunk.IcechunkStore.create(
+    repo = icechunk.Repository.create(
         storage=storage,
-        read_only=False,
     )
     ```
 
-### Opening an existing store
+If you are not sure if the repo exists yet, an `icechunk Repository` can created or opened if it already exists:
+
+=== "Open or creating with S3 storage"
+
+    ```python
+    storage = icechunk.StorageConfig.s3_from_env(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        region='us-east-1',
+    )
+
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+    )
+    ```
+
+=== "Open or creating with local filesystem"
+
+    ```python
+    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
+    config = icechunk.RepositoryConfig(
+        inline_chunk_threshold_bytes=1024,
+    )
+
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+    )
+    ```
+
+### Opening an existing repo
 
 === "Opening from S3 Storage"
 
@@ -183,13 +210,12 @@ Now we can now create or open an Icechunk store using our config.
         region='us-east-1',
     )
 
-    config = icechunk.StoreConfig(
+    config = icechunk.RepositoryConfig(
         virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
     )
 
-    store = icechunk.IcechunkStore.open_existing(
+    repo = icechunk.Repository.open_existing(
         storage=storage,
-        read_only=False,
         config=config,
     )
     ```
@@ -198,40 +224,12 @@ Now we can now create or open an Icechunk store using our config.
 
     ```python
     storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.StoreConfig(
+    config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=1024,
     )
 
     store = icechunk.IcechunkStore.open_existing(
         storage=storage,
-        read_only=False,
         config=config,
     )
     ```
-
-#### Read Only Mode
-
-Note that in all of the above examples, a `read_only` is provided to instruct the access level of the user to the store. This instructs whether the store should be opened in read only mode. When the store is marked read only, no write operations can be called and will resolve in a `ValueError`.
-
-It is possible to make a read only store writeable and vice versa:
-
-```python
-# Store is opened writeable
-store = icechunk.IcechunkStore.open_existing(
-    storage=storage,
-    read_only=False,
-    config=config,
-)
-
-# Change in place to read_only
-store.set_read_only()
-
-# Open another instance of the store that is writeable
-writeable_store = store.as_writeable()
-
-# Open another read only instance of the store
-another_store = writeable_store.as_read_only()
-
-# Set it writeable in place
-another_store.set_writeable()
-```

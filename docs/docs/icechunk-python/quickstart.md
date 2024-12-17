@@ -82,7 +82,7 @@ session.commit("first commit")
 
 !!! note
 
-    Once a writeable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitely.
+    Once a writeable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
 
 
 ## Make a second commit
