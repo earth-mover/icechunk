@@ -34,7 +34,7 @@ prop_compose! {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
-        Repository::create(None, None, Arc::new(storage), HashMap::new())
+        Repository::create(None, Arc::new(storage), HashMap::new())
             .await
             .expect("Failed to initialize repository")
     })
@@ -52,7 +52,7 @@ prop_compose! {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
-        let repository = Repository::create(None, None, Arc::new(storage), HashMap::new())
+        let repository = Repository::create(None, Arc::new(storage), HashMap::new())
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")

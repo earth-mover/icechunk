@@ -77,7 +77,7 @@ impl PyRepository {
                     ));
                 }
 
-                Repository::create(config.map(|c| c.0), None, storage, HashMap::new())
+                Repository::create(config.map(|c| c.0), storage, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
@@ -107,7 +107,7 @@ impl PyRepository {
                     ));
                 }
 
-                Repository::open(config.map(|c| c.0), None, storage, HashMap::new())
+                Repository::open(config.map(|c| c.0), storage, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
@@ -132,7 +132,6 @@ impl PyRepository {
                 Ok::<_, PyErr>(
                     Repository::open_or_create(
                         config.map(|c| c.0),
-                        None,
                         storage,
                         HashMap::new(),
                     )

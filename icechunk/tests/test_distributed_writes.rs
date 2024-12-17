@@ -45,9 +45,9 @@ async fn mk_repo(
     init: bool,
 ) -> Result<Repository, Box<dyn std::error::Error + Send + Sync>> {
     if init {
-        Ok(Repository::create(None, None, storage, HashMap::new()).await?)
+        Ok(Repository::create(None, storage, HashMap::new()).await?)
     } else {
-        Ok(Repository::open(None, None, storage, HashMap::new()).await?)
+        Ok(Repository::open(None, storage, HashMap::new()).await?)
     }
 }
 
