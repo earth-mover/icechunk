@@ -42,7 +42,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(StorageConfig.filesystem(tmpdir))
-            session = repo.writeable_session("main")
+            session = repo.writable_session("main")
             yield session.store()
 
 
@@ -52,7 +52,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         repo = Repository.create(StorageConfig.memory(""))
-        session = repo.writeable_session("main")
+        session = repo.writable_session("main")
         yield session.store()
 
     def test_pickle(self):
@@ -81,5 +81,5 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
             ),
         )
         repo = Repository.create(storage=storage_config)
-        session = repo.writeable_session("main")
+        session = repo.writable_session("main")
         yield session.store()

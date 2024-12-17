@@ -43,7 +43,7 @@ async def test_concurrency():
         storage=icechunk.StorageConfig.memory(prefix="concurrency"),
     )
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     group = zarr.group(store=store, overwrite=True)

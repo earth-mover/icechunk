@@ -8,13 +8,13 @@ rng = np.random.default_rng(seed=12345)
 
 async def test_store_clear_metadata_list() -> None:
     repo = parse_repo("memory", "test")
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     zarr.group(store=store)
     session.commit("created node /")
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
     await store.clear()
     zarr.group(store=store)
@@ -23,7 +23,7 @@ async def test_store_clear_metadata_list() -> None:
 
 async def test_store_clear_chunk_list() -> None:
     repo = parse_repo("memory", "test")
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     array_kwargs = dict(

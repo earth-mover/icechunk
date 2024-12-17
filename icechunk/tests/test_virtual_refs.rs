@@ -61,7 +61,6 @@ mod tests {
 
         Repository::create(
             Some(RepositoryConfig { virtual_chunk_containers, ..Default::default() }),
-            None,
             storage,
             creds,
         )
@@ -180,7 +179,7 @@ mod tests {
 
         let repo_dir = TempDir::new()?;
         let repo = create_local_repository(repo_dir.path()).await;
-        let mut ds = repo.writeable_session("main").await.unwrap();
+        let mut ds = repo.writable_session("main").await.unwrap();
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
             data_type: DataType::Int32,
@@ -296,7 +295,7 @@ mod tests {
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
         let repo = create_minio_repository().await;
-        let mut ds = repo.writeable_session("main").await.unwrap();
+        let mut ds = repo.writable_session("main").await.unwrap();
 
         let zarr_meta = ZarrArrayMetadata {
             shape: vec![1, 1, 2],
@@ -414,7 +413,7 @@ mod tests {
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
         let repo = create_minio_repository().await;
-        let ds = repo.writeable_session("main").await.unwrap();
+        let ds = repo.writable_session("main").await.unwrap();
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 
@@ -466,7 +465,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let repo_dir = TempDir::new()?;
         let repo = create_local_repository(repo_dir.path()).await;
-        let ds = repo.writeable_session("main").await.unwrap();
+        let ds = repo.writable_session("main").await.unwrap();
 
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
@@ -565,7 +564,7 @@ mod tests {
             config.add_virtual_chunk_container(container);
         }
 
-        let repo = Repository::create(Some(config), None, storage, virtual_creds).await?;
+        let repo = Repository::create(Some(config), storage, virtual_creds).await?;
 
         let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 
@@ -579,7 +578,7 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let ds = repo.writeable_session("main").await?;
+        let ds = repo.writable_session("main").await?;
         let store =
             Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
 

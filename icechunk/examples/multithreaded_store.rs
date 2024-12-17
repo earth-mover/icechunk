@@ -17,12 +17,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             unsafe_overwrite_refs: true,
             ..Default::default()
         }),
-        None,
         storage,
         HashMap::new(),
     )
     .await?;
-    let ds = Arc::new(RwLock::new(repo.writeable_session("main").await?));
+    let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
 
     store

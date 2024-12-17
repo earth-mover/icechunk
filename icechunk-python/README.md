@@ -41,7 +41,7 @@ storage = StorageConfig.memory("test")
 repo = Repository.open_or_create(storage=storage)
 
 # create a session for writing to the store
-session = repo.writeable_session(branch="main")
+session = repo.writable_session(branch="main")
 
 root = Group.from_store(store=session.store(), zarr_format=zarr_format)
 foo = root.create_array("foo", shape=(100,), chunks=(10,), dtype="i4")

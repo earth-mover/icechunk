@@ -77,7 +77,7 @@ impl PyRepository {
                     ));
                 }
 
-                Repository::create(config.map(|c| c.0), None, storage, HashMap::new())
+                Repository::create(config.map(|c| c.0), storage, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
@@ -107,7 +107,7 @@ impl PyRepository {
                     ));
                 }
 
-                Repository::open(config.map(|c| c.0), None, storage, HashMap::new())
+                Repository::open(config.map(|c| c.0), storage, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
@@ -132,7 +132,6 @@ impl PyRepository {
                 Ok::<_, PyErr>(
                     Repository::open_or_create(
                         config.map(|c| c.0),
-                        None,
                         storage,
                         HashMap::new(),
                     )
@@ -305,10 +304,10 @@ impl PyRepository {
         Ok(PySession(Arc::new(RwLock::new(session))))
     }
 
-    pub fn writeable_session(&self, branch: &str) -> PyResult<PySession> {
+    pub fn writable_session(&self, branch: &str) -> PyResult<PySession> {
         let session = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             self.0
-                .writeable_session(branch)
+                .writable_session(branch)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)
         })?;

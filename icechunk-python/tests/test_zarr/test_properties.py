@@ -27,7 +27,7 @@ simple_attrs = st.none()
 
 def create(storage: StorageConfig) -> IcechunkStore:
     repo = Repository.create(storage)
-    return repo.writeable_session("main").store()
+    return repo.writable_session("main").store()
 
 
 icechunk_stores = st.builds(

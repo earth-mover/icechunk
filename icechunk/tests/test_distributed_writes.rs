@@ -45,9 +45,9 @@ async fn mk_repo(
     init: bool,
 ) -> Result<Repository, Box<dyn std::error::Error + Send + Sync>> {
     if init {
-        Ok(Repository::create(None, None, storage, HashMap::new()).await?)
+        Ok(Repository::create(None, storage, HashMap::new()).await?)
     } else {
-        Ok(Repository::open(None, None, storage, HashMap::new()).await?)
+        Ok(Repository::open(None, storage, HashMap::new()).await?)
     }
 }
 
@@ -56,7 +56,7 @@ async fn write_chunks(
     xs: Range<u32>,
     ys: Range<u32>,
 ) -> Result<Session, Box<dyn std::error::Error + Send + Sync>> {
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
     for x in xs {
         for y in ys.clone() {
             let fx = x as f64;
@@ -121,7 +121,7 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
     let storage4 = mk_storage(prefix.as_str()).await?;
     let repo1 = mk_repo(storage1, true).await?;
 
-    let mut ds1 = repo1.writeable_session("main").await?;
+    let mut ds1 = repo1.writable_session("main").await?;
 
     let zarr_meta = ZarrArrayMetadata {
         shape: vec![SIZE as u64, SIZE as u64],

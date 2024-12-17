@@ -62,6 +62,13 @@ impl RepositoryConfig {
     pub fn clear_virtual_chunk_containers(&mut self) {
         self.virtual_chunk_containers.clear();
     }
+
+    pub fn update_virtual_chunk_container(
+        &mut self,
+        name: ContainerName,
+    ) -> Option<&mut VirtualChunkContainer> {
+        self.virtual_chunk_containers.iter_mut().find(|cont| cont.name == name)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,92 +115,10 @@ pub enum RepositoryError {
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
-// pub struct RepositoryBuilder {
-//     config: RepositoryConfig,
-//     config_etag: Option<ETag>,
-//     storage: Arc<dyn Storage + Send + Sync>,
-//     snapshot_id: SnapshotId,
-//     change_set: Option<ChangeSet>,
-//     virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
-// }
-
-// impl RepositoryBuilder {
-//     fn new(
-//         storage: Arc<dyn Storage + Send + Sync>,
-//         snapshot_id: SnapshotId,
-//         config: RepositoryConfig,
-//         config_etag: Option<ETag>,
-//     ) -> Self {
-//         Self {
-//             config,
-//             config_etag,
-//             snapshot_id,
-//             storage,
-//             change_set: None,
-//             virtual_chunk_credentials: HashMap::new(),
-//         }
-//     }
-
-//     pub fn with_inline_threshold_bytes(&mut self, threshold: u16) -> &mut Self {
-//         self.config.inline_chunk_threshold_bytes = threshold;
-//         self
-//     }
-
-//     pub fn with_unsafe_overwrite_refs(&mut self, value: bool) -> &mut Self {
-//         self.config.unsafe_overwrite_refs = value;
-//         self
-//     }
-
-//     pub fn with_virtual_chunk_container(
-//         &mut self,
-//         cont: VirtualChunkContainer,
-//     ) -> &mut Self {
-//         // TODO: validate the container: valid container, no duplicate names, no duplicate prefixes
-//         self.config.add_virtual_chunk_container(cont);
-//         self
-//     }
-
-//     pub fn with_virtual_chunk_containers(
-//         &mut self,
-//         containers: Vec<VirtualChunkContainer>,
-//     ) -> &mut Self {
-//         self.config.clear_virtual_chunk_containers();
-//         for cont in containers {
-//             self.config.add_virtual_chunk_container(cont)
-//         }
-//         self
-//     }
-
-//     pub fn with_virtual_chunk_credentials(
-//         &mut self,
-//         container: &str,
-//         credentials: ObjectStoreCredentials,
-//     ) -> &mut Self {
-//         self.virtual_chunk_credentials.insert(container.to_string(), credentials);
-//         self
-//     }
-
-//     pub fn with_change_set(&mut self, change_set_bytes: ChangeSet) -> &mut Self {
-//         self.change_set = Some(change_set_bytes);
-//         self
-//     }
-
-//     pub fn build(&self) -> Repository {
-//         Repository::new(
-//             self.config.clone(),
-//             self.config_etag.clone(),
-//             self.storage.clone(),
-//             self.snapshot_id.clone(),
-//             self.change_set.clone(),
-//             self.virtual_chunk_credentials.clone(),
-//         )
-//     }
-// }
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
     config: RepositoryConfig,
-    config_etag: Option<ETag>,
+    config_etag: ETag,
     storage: Arc<dyn Storage + Send + Sync>,
     virtual_resolver: Arc<VirtualChunkResolver>,
 }
@@ -201,7 +126,6 @@ pub struct Repository {
 impl Repository {
     pub async fn create(
         config: Option<RepositoryConfig>,
-        config_etag: Option<ETag>,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
     ) -> RepositoryResult<Self> {
@@ -210,19 +134,40 @@ impl Repository {
         }
 
         let config = config.unwrap_or_default();
+        let overwrite_refs = config.unsafe_overwrite_refs;
 
-        // On create we need to create the default branch
-        let new_snapshot = Snapshot::empty();
-        let new_snapshot_id = new_snapshot.metadata.id.clone();
-        storage.write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot)).await?;
-        update_branch(
-            storage.as_ref(),
-            Ref::DEFAULT_BRANCH,
-            new_snapshot_id.clone(),
-            None,
-            config.unsafe_overwrite_refs,
-        )
-        .await?;
+        let storage_c = Arc::clone(&storage);
+        let handle1 = tokio::spawn(async move {
+            // On create we need to create the default branch
+            let new_snapshot = Snapshot::empty();
+            let new_snapshot_id = new_snapshot.metadata.id.clone();
+            storage_c
+                .write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot))
+                .await?;
+
+            update_branch(
+                storage_c.as_ref(),
+                Ref::DEFAULT_BRANCH,
+                new_snapshot_id.clone(),
+                None,
+                overwrite_refs,
+            )
+            .await?;
+            Ok::<(), RepositoryError>(())
+        });
+
+        let storage_c = Arc::clone(&storage);
+        let config_c = config.clone();
+        let handle2 = tokio::spawn(async move {
+            let etag =
+                Repository::store_config(storage_c.as_ref(), &config_c, None).await?;
+            Ok::<_, RepositoryError>(etag)
+        });
+
+        #[allow(clippy::expect_used)]
+        handle1.await.expect("Error initializing repo")?;
+        #[allow(clippy::expect_used)]
+        let config_etag = handle2.await.expect("Error fetching repo config")?;
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
@@ -235,40 +180,49 @@ impl Repository {
 
     pub async fn open(
         config: Option<RepositoryConfig>,
-        config_etag: Option<ETag>,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
     ) -> RepositoryResult<Self> {
-        if !Self::exists(storage.as_ref()).await? {
-            return Err(RepositoryError::RepositoryDoesntExist);
-        }
+        let storage_c = Arc::clone(&storage);
+        let handle1 =
+            tokio::spawn(async move { Self::fetch_config(storage_c.as_ref()).await });
 
-        let (config, config_etag) = if let Some(config) = config {
-            (config, config_etag)
+        let storage_c = Arc::clone(&storage);
+        let handle2 = tokio::spawn(async move {
+            if !Self::exists(storage_c.as_ref()).await? {
+                return Err(RepositoryError::RepositoryDoesntExist);
+            }
+            Ok(())
+        });
+
+        #[allow(clippy::expect_used)]
+        handle2.await.expect("Error checking if repo exists")?;
+        #[allow(clippy::expect_used)]
+        if let Some((default_config, config_etag)) =
+            handle1.await.expect("Error fetching repo config")?
+        {
+            let config = config.unwrap_or(default_config);
+            let containers = config.virtual_chunk_containers.clone();
+            let virtual_resolver = Arc::new(VirtualChunkResolver::new(
+                containers,
+                virtual_chunk_credentials,
+            ));
+
+            Ok(Self { config, config_etag, storage, virtual_resolver })
         } else {
-            Self::fetch_config(storage.as_ref())
-                .await?
-                .map(|(config, etag)| (config, Some(etag)))
-                .unwrap_or((RepositoryConfig::default(), None))
-        };
-
-        let containers = config.virtual_chunk_containers.clone();
-        let virtual_resolver =
-            Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
-
-        Ok(Self { config, config_etag, storage, virtual_resolver })
+            Err(RepositoryError::RepositoryDoesntExist)
+        }
     }
 
     pub async fn open_or_create(
         config: Option<RepositoryConfig>,
-        config_etag: Option<ETag>,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
-            Self::open(config, config_etag, storage, virtual_chunk_credentials).await
+            Self::open(config, storage, virtual_chunk_credentials).await
         } else {
-            Self::create(config, config_etag, storage, virtual_chunk_credentials).await
+            Self::create(config, storage, virtual_chunk_credentials).await
         }
     }
 
@@ -301,9 +255,22 @@ impl Repository {
         }
     }
 
-    pub async fn update_config(&self) -> RepositoryResult<ETag> {
-        let bytes = Bytes::from(serde_yml::to_string(self.config())?);
-        let res = self.storage.update_config(bytes, self.config_etag.as_deref()).await?;
+    pub async fn save_config(&self) -> RepositoryResult<ETag> {
+        Repository::store_config(
+            self.storage().as_ref(),
+            self.config(),
+            Some(&self.config_etag),
+        )
+        .await
+    }
+
+    pub(crate) async fn store_config(
+        storage: &(dyn Storage + Send + Sync),
+        config: &RepositoryConfig,
+        config_etag: Option<&ETag>,
+    ) -> RepositoryResult<ETag> {
+        let bytes = Bytes::from(serde_yml::to_string(config)?);
+        let res = storage.update_config(bytes, config_etag.map(|e| e.as_str())).await?;
         Ok(res)
     }
 
@@ -451,7 +418,7 @@ impl Repository {
         Ok(session)
     }
 
-    pub async fn writeable_session(&self, branch: &str) -> RepositoryResult<Session> {
+    pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         let ref_data = fetch_branch_tip(self.storage.as_ref(), branch).await?;
         let session = Session::create_writable_session(
             self.config.clone(),
@@ -490,50 +457,48 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
 
-        let repo =
-            Repository::create(None, None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
-        // initializing a repo doesn't create the config file
-        assert!(Repository::fetch_config(storage.as_ref()).await?.is_none());
+        // initializing a repo creates the config file
+        assert!(Repository::fetch_config(storage.as_ref()).await?.is_some());
         // it inits with the default config
         assert_eq!(repo.config(), &RepositoryConfig::default());
         // updating the persistent config create a new file with default values
-        let etag = repo.update_config().await?;
+        let etag = repo.save_config().await?;
         assert_ne!(etag, "");
-        // assert_eq!(
-        //     Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
-        //     RepositoryConfig::default()
-        // );
+        assert_eq!(
+            Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
+            RepositoryConfig::default()
+        );
 
-        // // reload the repo changing config
-        // let repo = Repository::open(
-        //     Some(RepositoryConfig {
-        //         inline_chunk_threshold_bytes: 42,
-        //         ..Default::default()
-        //     }),
-        //     None,
-        //     Arc::clone(&storage),
-        //     HashMap::new(),
-        // )
-        // .await?;
+        // reload the repo changing config
+        let repo = Repository::open(
+            Some(RepositoryConfig {
+                inline_chunk_threshold_bytes: 42,
+                ..Default::default()
+            }),
+            Arc::clone(&storage),
+            HashMap::new(),
+        )
+        .await?;
 
-        // assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+        assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
 
-        // // update the persistent config
-        // let etag = repo.update_config().await?;
-        // assert_ne!(etag, "");
-        // assert_eq!(
-        //     Repository::fetch_config(storage.as_ref())
-        //         .await?
-        //         .unwrap()
-        //         .0
-        //         .inline_chunk_threshold_bytes,
-        //     42
-        // );
+        // update the persistent config
+        let etag = repo.save_config().await?;
+        assert_ne!(etag, "");
+        assert_eq!(
+            Repository::fetch_config(storage.as_ref())
+                .await?
+                .unwrap()
+                .0
+                .inline_chunk_threshold_bytes,
+            42
+        );
 
-        // // verify loading again gets the value from persistent config
-        // let repo = Repository::open(None, None, storage, HashMap::new()).await?;
-        // assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+        // verify loading again gets the value from persistent config
+        let repo = Repository::open(None, storage, HashMap::new()).await?;
+        assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
         Ok(())
     }
 }

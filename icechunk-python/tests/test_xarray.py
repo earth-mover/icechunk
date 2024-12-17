@@ -55,7 +55,7 @@ def create_test_data(
 def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(StorageConfig.filesystem(tmpdir))
-        session = repo.writeable_session("main")
+        session = repo.writable_session("main")
         to_icechunk(data, store=session.store(), mode="w")
 
         # if allow_distributed_write:

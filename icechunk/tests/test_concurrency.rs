@@ -36,8 +36,8 @@ const N: usize = 20;
 async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
-    let repo = Repository::create(None, None, storage, HashMap::new()).await?;
-    let mut ds = repo.writeable_session("main").await?;
+    let repo = Repository::create(None, storage, HashMap::new()).await?;
+    let mut ds = repo.writable_session("main").await?;
 
     ds.add_group(Path::root()).await?;
     let zarr_meta = ZarrArrayMetadata {
@@ -134,13 +134,10 @@ async fn read_task(ds: Arc<RwLock<Session>>, x: u32, y: u32, barrier: Arc<Barrie
         let actual_bytes =
             get_chunk(chunk_reader).await.expect("Failed to getch chunk payload");
 
-        match &actual_bytes {
-            Some(bytes) => {
-                if bytes == &expected_bytes {
-                    break;
-                }
+        if let Some(bytes) = &actual_bytes {
+            if bytes == &expected_bytes {
+                break;
             }
-            None => {}
         }
         let random_sleep = {
             let mut rng = thread_rng();
