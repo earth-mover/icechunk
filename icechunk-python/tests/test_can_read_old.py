@@ -64,7 +64,7 @@ async def write_a_test_repo():
 
     print("Writing repository to ./tests/data/test-repo")
     repo = mk_repo()
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     root = zarr.group(store=store)
@@ -93,7 +93,7 @@ async def write_a_test_repo():
     )
     session.commit("empty structure")
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
     root = zarr.group(store=store)
     big_chunks = cast(zarr.Array, root["group1/big_chunks"])
@@ -112,7 +112,7 @@ async def write_a_test_repo():
     # store.commit("set virtual chunk")
 
     repo.create_branch("my-branch", snapshot_id=snapshot)
-    session = repo.writeable_session("my-branch")
+    session = repo.writable_session("my-branch")
     store = session.store()
 
     await store.delete("group1/small_chunks/c/4")
@@ -120,7 +120,7 @@ async def write_a_test_repo():
 
     repo.create_tag("it works!", snapshot_id=snap4)
 
-    session = repo.writeable_session("my-branch")
+    session = repo.writable_session("my-branch")
     store = session.store()
     root = zarr.open_group(store=store)
 
@@ -183,7 +183,7 @@ async def test_icechunk_can_read_old_repo():
     tag_snapshot = repo.tag("it works!")
     assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history[1:]
 
-    session = repo.writeable_session("my-branch")
+    session = repo.writable_session("my-branch")
     store = session.store()
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
@@ -212,7 +212,7 @@ async def test_icechunk_can_read_old_repo():
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
     ) == ["c", "zarr.json"]
 
-    root = zarr.group(store=store.as_writeable())
+    root = zarr.group(store=store.as_writable())
     # inner is not initialized, so it's all fill values
     inner = root["group2/group3/group4/group5/inner"]
     assert_array_equal(inner[:], float("nan"))

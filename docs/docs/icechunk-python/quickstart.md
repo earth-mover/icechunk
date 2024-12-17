@@ -18,11 +18,11 @@ pip install icechunk
     Using it today requires installing the latest pre-release of Zarr Python 3.
 
 
-## Create a new store
+## Create a new Icechunk repository
 
-To get started, let's create a new Icechunk store.
-We recommend creating your store on S3 to get the most out of Icechunk's cloud-native design.
-However, you can also create a store on your local filesystem.
+To get started, let's create a new Icechunk repository.
+We recommend creating your repo on S3 to get the most out of Icechunk's cloud-native design.
+However, you can also create a repo on your local filesystem.
 
 === "S3 Storage"
 
@@ -31,15 +31,30 @@ However, you can also create a store on your local filesystem.
         bucket="icechunk-test",
         prefix="quickstart-demo-1"
     )
-    store = icechunk.IcechunkStore.create(storage_config)
+    repo = icechunk.Repository.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
     storage_config = icechunk.StorageConfig.filesystem("./icechunk-local")
-    store = icechunk.IcechunkStore.create(storage_config)
+    repo = icechunk.Repository.create(storage_config)
     ```
+
+## Accessing the Icechunk store
+
+Once the repository is created, we can use `Session`s to read and write data. Since there is no data in the repository yet,
+let's create a writable session on the default `main` branch.
+
+```python
+session = repo.writable_session("main")
+```
+
+Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
+
+```python
+store = session.store()
+```
 
 ## Write some data and commit
 
@@ -57,15 +72,29 @@ Now let's write some data
 array[:] = 1
 ```
 
-Now let's commit our update
+Now let's commit our update using the session
 
 ```python
-store.commit("first commit")
+session.commit("first commit")
 ```
 
 🎉 Congratulations! You just made your first Icechunk snapshot.
 
+!!! note
+
+    Once a writable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
+
+
 ## Make a second commit
+
+At this point, we have already committed using our session, so we need to get a new session and store to make more changes.
+
+```python
+session_2 = repo.writable_session("main")
+store_2 = session_2.store()
+group = zarr.open_group(store_2)
+array = group["my_array"]
+```
 
 Let's now put some new data into our array, overwriting the first five elements.
 
@@ -76,7 +105,7 @@ array[:5] = 2
 ...and commit the changes
 
 ```python
-store.commit("overwrite some values")
+snapshot_id_2 = session_2.commit("overwrite some values")
 ```
 
 ## Explore version history
@@ -84,7 +113,7 @@ store.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python
-hist = store.ancestry()
+hist = repo.ancestry(snapshot_id_2)
 for anc in hist:
     print(anc.id, anc.message, anc.written_at)
 
@@ -100,7 +129,13 @@ for anc in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-store.checkout(snapshot_id=hist[1].id)
+earlier_session = repo.readonly_session(snapshot_id=hist[1].id)
+store = earlier_session.store()
+
+# get the array
+group = zarr.open_group(store)
+array = group["my_array]
+
 # verify data matches first version
 assert array[0] == 1
 ```

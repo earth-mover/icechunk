@@ -25,7 +25,7 @@
 
 - The `StorageConfig` methods have been correctly typed.
 - `IcechunkStore` instances are now set to `read_only` by default after pickling.
-- When checking out a snapshot or tag, the `IcechunkStore` will be set to read-only. If you want to write to the store, you must call `IcechunkStore::set_writeable()`.
+- When checking out a snapshot or tag, the `IcechunkStore` will be set to read-only. If you want to write to the store, you must call `IcechunkStore::set_writable()`.
 - An error will now be raised if you try to checkout a snapshot that does not exist.
 
 ## Python Icechunk Library 0.1.0a4

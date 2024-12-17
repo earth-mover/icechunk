@@ -83,7 +83,7 @@ virtual_ds = xr.concat(
 #    err      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 ```
 
-We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk store to write this dataset to.
+We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk repo to write this dataset to.
 
 !!! note
 
@@ -91,10 +91,10 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 
 !!! note
 
-    Take note of the `virtual_ref_config` passed into the `StoreConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
+    Take note of the `virtual_ref_config` passed into the `RepositoryConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
 
 ```python
-from icechunk import IcechunkStore, StorageConfig, StoreConfig, VirtualRefConfig
+from icechunk import Repository, StorageConfig, RepositoryConfig, VirtualRefConfig
 
 storage = StorageConfig.s3_from_config(
     bucket='YOUR_BUCKET_HERE',
@@ -107,18 +107,19 @@ storage = StorageConfig.s3_from_config(
     )
 )
 
-store = IcechunkStore.create(
+repo = Repository.create(
     storage=storage,
-    config=StoreConfig(
+    config=RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
     )
 )
 ```
 
-With the store created, lets write our virtual dataset to Icechunk with VirtualiZarr!
+With the repo created, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
-virtual_ds.virtualize.to_icechunk(store)
+session = repo.writable_session("main")
+virtual_ds.virtualize.to_icechunk(session.store())
 ```
 
 The refs are written so lets save our progress by committing to the store.
@@ -128,7 +129,7 @@ The refs are written so lets save our progress by committing to the store.
     Your commit hash will be different! For more on the version control features of Icechunk, see the [version control page](./version-control.md).
 
 ```python
-store.commit()
+session.commit("My first virtual store!")
 
 # 'THAJHTYQABGD2B10D5C0'
 ```

@@ -37,7 +37,7 @@ async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
     let repo = Repository::create(None, None, storage, HashMap::new()).await?;
-    let mut ds = repo.writeable_session("main").await?;
+    let mut ds = repo.writable_session("main").await?;
 
     ds.add_group(Path::root()).await?;
     let zarr_meta = ZarrArrayMetadata {

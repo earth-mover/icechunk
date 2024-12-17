@@ -20,7 +20,7 @@ from zarr.storage import StorePath
 @pytest.fixture
 def store(request: pytest.FixtureRequest, tmpdir) -> IcechunkStore:
     repo = parse_repo("local", str(tmpdir))
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     return session.store()
 
 

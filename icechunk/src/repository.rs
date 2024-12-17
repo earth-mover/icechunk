@@ -451,7 +451,7 @@ impl Repository {
         Ok(session)
     }
 
-    pub async fn writeable_session(&self, branch: &str) -> RepositoryResult<Session> {
+    pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         let ref_data = fetch_branch_tip(self.storage.as_ref(), branch).await?;
         let session = Session::create_writable_session(
             self.config.clone(),

@@ -6,26 +6,24 @@ and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarra
 
 !!! warning
 
-    Using Xarray and Icechunk together currently requires installing Xarray from source.
+    Using Xarray and Icechunk together currently requires installing Xarray >= 2024.11.0.
 
     ```shell
-    pip install git+https://github.com/pydata/xarray
+    pip install "xarray>=2024.11.0"
     ```
 
-    We expect this functionality to be included in Xarray's next release.
-
-In this example, we'll explain how to create a new Icechunk store, write some sample data
+In this example, we'll explain how to create a new Icechunk repo, write some sample data
 to it, and append data a second block of data using Icechunk's version control features.
 
-## Create a new store
+## Create a new repo
 
 Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll create an
-Icechunk store in S3 or a local file system. You will need to replace the `StorageConfig`
+Icechunk repo in S3 or a local file system. You will need to replace the `StorageConfig`
 with a bucket or file path that you have access to.
 
 ```python
 import xarray as xr
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import Repository, StorageConfig
 ```
 
 === "S3 Storage"
@@ -35,14 +33,14 @@ from icechunk import IcechunkStore, StorageConfig
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    store = IcechunkStore.create(storage_config)
+    repo = Repository.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
     storage_config = StorageConfig.filesystem("./icechunk-xarray")
-    store = IcechunkStore.create(storage_config)
+    repo = Repository.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray
@@ -68,6 +66,13 @@ ds2 = ds.isel(time=slice(18, None))  # part 2
 
 ## Write Xarray data to Icechunk
 
+Create a new writable session on the `main` branch to get the `IcechunkStore`:
+
+```python
+session = repo.writable_session("main")
+store = session.store()
+```
+
 Writing Xarray data to Icechunk is as easy as calling `Dataset.to_zarr`:
 
 ```python
@@ -82,10 +87,10 @@ ds1.to_zarr(store, zarr_format=3, consolidated=False)
     fast to fetch from storage.
     2. `zarr_format=3` is required until the default Zarr format changes in Xarray.
 
-After writing, we commit the changes:
+After writing, we commit the changes using the session:
 
 ```python
-store.commit("add RASM data to store")
+session.commit("add RASM data to store")
 # output: 'ME4VKFPA5QAY0B2YSG8G'
 ```
 
@@ -95,13 +100,15 @@ Next, we want to add a second block of data to our store. Above, we created `ds2
 this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='time'`.
 
 ```python
-ds2.to_zarr(store, append_dim='time')
+# we have to get a new session after committing
+session = repo.writable_session("main")
+ds2.to_zarr(session.store(), append_dim='time')
 ```
 
 And then we'll commit the changes:
 
 ```python
-store.commit("append more data")
+session.commit("append more data")
 # output: 'WW4V8V34QCZ2NXTD5DXG'
 ```
 
@@ -137,7 +144,7 @@ xr.open_zarr(store, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-store.checkout(snapshot_id='ME4VKFPA5QAY0B2YSG8G')
+store = repo.readable_session(snapshot_id='ME4VKFPA5QAY0B2YSG8G').store()
 
 xr.open_zarr(store, consolidated=False)
 # <xarray.Dataset> Size: 9MB

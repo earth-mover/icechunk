@@ -305,10 +305,10 @@ impl PyRepository {
         Ok(PySession(Arc::new(RwLock::new(session))))
     }
 
-    pub fn writeable_session(&self, branch: &str) -> PyResult<PySession> {
+    pub fn writable_session(&self, branch: &str) -> PyResult<PySession> {
         let session = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             self.0
-                .writeable_session(branch)
+                .writable_session(branch)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)
         })?;

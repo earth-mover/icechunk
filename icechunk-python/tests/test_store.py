@@ -4,13 +4,13 @@ from tests.conftest import parse_repo
 
 async def test_store_clear() -> None:
     repo = parse_repo("memory", "test")
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
 
     zarr.group(store=store)
     session.commit("created node /")
 
-    session = repo.writeable_session("main")
+    session = repo.writable_session("main")
     store = session.store()
     await store.clear()
     zarr.group(store=store)
