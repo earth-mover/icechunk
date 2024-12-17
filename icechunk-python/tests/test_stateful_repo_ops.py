@@ -235,13 +235,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=commits)
     def checkout_commit(self, ref):
         note(f"Checking out commit {ref}")
-        if not self.model.changes_made:
-            self.session = self.repo.readonly_session(snapshot_id=ref)
-            assert self.session.read_only
-            self.model.checkout_commit(ref)
-        else:
-            with pytest.raises(ValueError, match="uncommitted changes"):
-                self.repo.readonly_session(snapshot_id=ref)
+        self.session = self.repo.readonly_session(snapshot_id=ref)
+        assert self.session.read_only
+        self.model.checkout_commit(ref)
 
     @rule(ref=tags)
     def checkout_tag(self, ref):
@@ -249,7 +245,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         Tags and branches are combined here since checkout magically works for both.
         This test is relying on the model tracking tags and branches accurately.
         """
-        if ref in self.model.tags and not self.model.changes_made:
+        if ref in self.model.tags:
             note(f"Checking out tag {ref!r}")
             self.session = self.repo.readonly_session(tag=ref)
             assert self.session.read_only
@@ -257,13 +253,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         else:
             note("Expecting error.")
             with pytest.raises(ValueError):
-                self.repo.checkout(tag=ref)
+                self.repo.readonly_session(tag=ref)
 
     @rule(ref=branches)
     def checkout_branch(self, ref):
         # TODO: sometimes readonly?
         # TODO: checkout when changes_made
-        if ref in self.model.branches and not self.model.changes_made:
+        if ref in self.model.branches:
             note(f"Checking out branch {ref!r}")
             self.session = self.repo.writable_session(ref)
             assert not self.session.read_only
@@ -312,7 +308,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch, commit) -> None:
-        # if self.model.branch is None or self.model.changes_made:
+        # if self.model.branch is None:
         #     # must be at branch tip, and with clean state, to reset it
         #     with pytest.raises(ValueError):
         #         self.repo.reset_branch(self.session.branch, commit)
