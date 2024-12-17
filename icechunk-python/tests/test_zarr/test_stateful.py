@@ -27,7 +27,7 @@ PROTOTYPE = default_buffer_prototype()
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
-    @precondition(lambda self: self.store.has_uncommitted_changes)
+    @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data):
         note("committing and checking list_prefix")
