@@ -27,6 +27,11 @@ PROTOTYPE = default_buffer_prototype()
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
+    def __init__(self, repo):
+        self.repo = repo
+        store = repo.writable_session("main").store()
+        super().__init__(store)
+
     @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data):
@@ -36,7 +41,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         path = data.draw(st.sampled_from(lsbefore))
         get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
 
-        self.store.commit("foo")
+        self.store.session.commit("foo")
+
+        self.store = self.repo.writable_session("main").store()
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
@@ -109,10 +116,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
 
 def test_zarr_hierarchy():
-    store = Repository.create(StorageConfig.memory()).writable_session("main").store()
+    repo = Repository.create(StorageConfig.memory())
 
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
-        return ModifiedZarrHierarchyStateMachine(store)
+        return ModifiedZarrHierarchyStateMachine(repo)
 
     run_state_machine_as_test(
         mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
