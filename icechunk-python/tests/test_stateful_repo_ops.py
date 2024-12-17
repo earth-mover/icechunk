@@ -40,6 +40,8 @@ simple_attrs = st.dictionaries(
 # set in_side to one
 array_shapes = npst.array_shapes(max_dims=4, min_side=1)
 
+DEFAULT_BRANCH = "main"
+
 
 @st.composite
 def v3_group_metadata(draw):
@@ -144,11 +146,9 @@ class Model:
         self.is_at_branch_head = False
         self.branch = None
 
-    def create_branch(self, name: str) -> None:
-        self.branch = name
-        self.is_at_branch_head = True
-        assert self.HEAD is not None
-        self.branches[name] = self.HEAD
+    def create_branch(self, name: str, commit: str) -> None:
+        assert commit in self.commits
+        self.branches[name] = commit
 
     def checkout_branch(self, ref: str) -> None:
         self.checkout_commit(self.branches[ref])
@@ -194,13 +194,19 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.repo = Repository.create(StorageConfig.memory())
         self.session = self.repo.writable_session("main")
 
-        self.model.HEAD = self.repo.branch_tip("main")
-        self.model.create_branch("main")
+        HEAD = self.repo.branch_tip("main")
+        self.model.commits[HEAD] = {}
+        self.model.HEAD = HEAD
+        self.model.create_branch("main", HEAD)
+        self.model.checkout_branch("main")
+
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata()))
+
+        # TODO: return "main" to branches bundle so we can delete it ;)
 
     def new_store(self) -> None:
         self.session = self.repo.writable_session("main")
@@ -259,24 +265,24 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def checkout_branch(self, ref):
         # TODO: sometimes readonly?
         # TODO: checkout when changes_made
+        # TODO: error otherwise
         if ref in self.model.branches:
             note(f"Checking out branch {ref!r}")
             self.session = self.repo.writable_session(ref)
             assert not self.session.read_only
             self.model.checkout_branch(ref)
 
-    @rule(name=simple_text | st.just("main"), target=branches)
-    def create_branch(self, name):
+    @rule(name=simple_text | st.just("main"), commit=commits, target=branches)
+    def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r}")
         # we can create a tag and branch with the same name
         if name not in self.model.branches:
-            self.repo.create_branch(name, self.session.snapshot_id)
-            assert not self.session.read_only
-            self.model.create_branch(name)
+            self.repo.create_branch(name, commit)
+            self.model.create_branch(name, commit)
         else:
             note("Expecting error.")
             with pytest.raises(ValueError):
-                self.repo.create_branch(name, self.session.snapshot_id)
+                self.repo.create_branch(name, commit)
         # returning this `name` to the Bundle is OK even if the branch was not created
         # This will test out checking out and deleting a branch that does not exist.
         return name
