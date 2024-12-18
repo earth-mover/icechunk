@@ -43,6 +43,8 @@ array_shapes = npst.array_shapes(max_dims=4, min_side=1)
 DEFAULT_BRANCH = "main"
 
 
+#########
+# TODO: port to Zarr
 @st.composite
 def v3_group_metadata(draw):
     from zarr.core.group import GroupMetadata
@@ -88,6 +90,8 @@ class NewSyncStoreWrapper(SyncStoreWrapper):
         return self._sync_iter(self.store.list_prefix(prefix))
 
 
+#####
+
 MAX_TEXT_SIZE = 120
 
 keys = st.lists(zrst.node_names, min_size=1, max_size=4).map("/".join)
@@ -105,7 +109,6 @@ class Model:
         self.store: dict = {}  #
 
         self.changes_made: bool = False
-        self.is_at_branch_head: bool = True
 
         self.HEAD: None | str = None
         self.branch: None | str = None
@@ -143,7 +146,6 @@ class Model:
         self.store = copy.deepcopy(self.commits[ref])
         self.changes_made = False
         self.HEAD = ref
-        self.is_at_branch_head = False
         self.branch = None
 
     def create_branch(self, name: str, commit: str) -> None:
@@ -152,7 +154,6 @@ class Model:
 
     def checkout_branch(self, ref: str) -> None:
         self.checkout_commit(self.branches[ref])
-        self.is_at_branch_head = True
         self.branch = ref
 
     def reset_branch(self, branch, commit) -> None:
@@ -220,7 +221,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(f"setting path {path!r} with {value.to_bytes()!r}")
         # FIXME: remove when we support complex values with infinity fill_value
         assume("complex" not in json.loads(value.to_bytes())["data_type"])
-        if self.model.is_at_branch_head:
+        if self.model.branch is not None:
             self.sync_store.set(path, value)
             self.model[path] = value
         else:
