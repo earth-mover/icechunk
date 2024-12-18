@@ -1,7 +1,8 @@
 from typing import cast
 
-import icechunk
 import pytest
+
+import icechunk
 import zarr
 import zarr.core
 import zarr.core.array

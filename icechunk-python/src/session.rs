@@ -5,7 +5,9 @@ use pyo3::{prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
-    conflicts::PyConflictSolver, errors::{PyIcechunkStoreError, PyIcechunkStoreResult}, store::{PyStore, PyStoreConfig}
+    conflicts::PyConflictSolver,
+    errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    store::{PyStore, PyStoreConfig},
 };
 
 #[pyclass]

@@ -6,7 +6,9 @@ mod storage;
 mod store;
 mod streams;
 
-use conflicts::{PyBasicConflictSolver, PyConflictDetector, PyConflictSolver, PyVersionSelection};
+use conflicts::{
+    PyBasicConflictSolver, PyConflictDetector, PyConflictSolver, PyVersionSelection,
+};
 use pyo3::prelude::*;
 use repository::{PyRepository, PyRepositoryConfig, PySnapshotMetadata};
 use session::PySession;
