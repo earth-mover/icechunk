@@ -291,14 +291,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return name
 
     @precondition(lambda self: self.model.has_commits)
-    @rule(
-        name=simple_text,
-        commit_id=commits,
-        message=st.none() | st.text(max_size=MAX_TEXT_SIZE),
-        target=tags,
-    )
-    def create_tag(self, name, commit_id, message):
-        note(f"Creating tag {name!r} for commit {commit_id!r} with message {message!r}")
+    @rule(name=simple_text, commit_id=commits, target=tags)
+    def create_tag(self, name, commit_id):
+        note(f"Creating tag {name!r} for commit {commit_id!r}")
         # we can create a tag and branch with the same name
         if name not in self.model.tags:
             self.repo.create_tag(name, commit_id)
