@@ -55,7 +55,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f" \n\n Before : {lsbefore!r} \n\n After: {lsafter!r}, \n\n Expected: {lsexpect!r}"
             )
         if get_before != get_after:
-            get_expect = self._sync(self.model.xget(path, prototype=PROTOTYPE))
+            get_expect = self._sync(self.model.get(path, prototype=PROTOTYPE))
             raise ValueError(
                 f"Value changed before and after commit for path {path}"
                 f" \n\n Before : {get_before.to_bytes()!r} \n\n "
