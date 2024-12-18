@@ -189,16 +189,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note("----------")
         self.model = Model()
 
-    @initialize(data=st.data())
-    def initialize(self, data):
+    @initialize(data=st.data(), target=branches)
+    def initialize(self, data) -> str:
         self.repo = Repository.create(StorageConfig.memory())
-        self.session = self.repo.writable_session("main")
+        self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
-        HEAD = self.repo.branch_tip("main")
+        HEAD = self.repo.branch_tip(DEFAULT_BRANCH)
         self.model.commits[HEAD] = {}
         self.model.HEAD = HEAD
-        self.model.create_branch("main", HEAD)
-        self.model.checkout_branch("main")
+        self.model.create_branch(DEFAULT_BRANCH, HEAD)
+        self.model.checkout_branch(DEFAULT_BRANCH)
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
@@ -206,7 +206,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata()))
 
-        # TODO: return "main" to branches bundle so we can delete it ;)
+        return DEFAULT_BRANCH
 
     def new_store(self) -> None:
         self.session = self.repo.writable_session("main")
@@ -264,13 +264,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=branches)
     def checkout_branch(self, ref):
         # TODO: sometimes readonly?
-        # TODO: checkout when changes_made
-        # TODO: error otherwise
         if ref in self.model.branches:
             note(f"Checking out branch {ref!r}")
             self.session = self.repo.writable_session(ref)
             assert not self.session.read_only
             self.model.checkout_branch(ref)
+        else:
+            with pytest.raises(ValueError):
+                note(f"Expecting error when checking out branch {ref!r}")
+                self.repo.writable_session(ref)
 
     @rule(name=simple_text | st.just("main"), commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
@@ -308,18 +310,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # This will test out checking out and deleting a tag that does not exist.
         return name
 
-    def reset(self) -> None:
-        self.repo.reset()
-        self.model.checkout_branch(self.model.branch)
+    @rule()
+    def discard_changes(self) -> None:
+        self.session.discard_changes()
+        if self.model.branch is not None:
+            self.model.checkout_branch(self.model.branch)
+        else:
+            self.model.checkout_commit(self.session.snapshot_id)
 
+    # if there are changes in a session tied to the same branch
+    # then an attempt to commit from that session will raise a conflict
+    # (as is expected)
+    @precondition(lambda self: not self.model.changes_made)
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch, commit) -> None:
-        # if self.model.branch is None:
-        #     # must be at branch tip, and with clean state, to reset it
-        #     with pytest.raises(ValueError):
-        #         self.repo.reset_branch(self.session.branch, commit)
-        #     return
-
         note(f"resetting branch {self.model.branch} from {self.model.HEAD} to {commit}")
         self.repo.reset_branch(branch, commit)
         self.model.reset_branch(branch, commit)
@@ -328,7 +332,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # def delete_branch(self, branch):
     #     note(f"Deleting branch {branch!r}")
     #     if branch in self.model.branches and branch != "main":
-    #         self.repo.delete_branch(branch)
+    #         self.session.delete_branch(branch)
     #         self.model.delete_branch(branch)
     #     else:
     #         note("Expecting error.")
@@ -358,22 +362,23 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 np.testing.assert_allclose(actual_fv, expected_fv)
             assert actual == expected
 
-    # @invariant()
-    # def check_commit_data(self):
-    #     commit_data = self.repo.commit_log.commit_data
-    #     expected_tags = self.model.tags
-    #     actual_tags = {
-    #         tag.label: TagModel(commit_id=str(tag.commit.id), message=tag.message)
-    #         for tag in self.repo.tags
-    #     }
-    #     assert actual_tags == expected_tags
-    #     assert self.model.branches == {k: str(v) for k, v in commit_data.branches.items()}
-    #     assert sorted(self.model.commits.keys()) == sorted(
-    #         map(str, commit_data.commits.keys())
-    #     )
+    @invariant()
+    def check_commit_data(self):
+        expected_tags = self.model.tags
+        actual_tags = {
+            tag: TagModel(commit_id=self.repo.tag(tag)) for tag in self.repo.list_tags()
+        }
+        assert actual_tags == expected_tags
+
+        assert self.model.branches == {
+            k: self.repo.branch_tip(k) for k in self.repo.list_branches()
+        }
+
+        # TODO: assert all snapshot_ids are present?
+        # assert sorted(self.model.commits.keys()) == sorted(
+        #     map(str, commit_data.commits.keys())
+        # )
 
 
-VersionControlStateMachine.TestCase.settings = Settings(
-    max_examples=300, deadline=None, report_multiple_bugs=False
-)
+VersionControlStateMachine.TestCase.settings = Settings(max_examples=300, deadline=None)
 VersionControlTest = VersionControlStateMachine.TestCase
