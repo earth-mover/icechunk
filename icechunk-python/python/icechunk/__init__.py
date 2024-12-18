@@ -1,11 +1,15 @@
 # module
 
 from icechunk._icechunk_python import (
+    BasicConflictSolver,
+    ConflictDetector,
+    ConflictSolver,
     RepositoryConfig,
     S3Credentials,
     SnapshotMetadata,
     StorageConfig,
     StoreConfig,
+    VersionSelection,
     VirtualRefConfig,
     __version__,
 )
@@ -14,6 +18,9 @@ from icechunk.session import Session
 from icechunk.store import IcechunkStore
 
 __all__ = [
+    "BasicConflictSolver",
+    "ConflictDetector",
+    "ConflictSolver",
     "IcechunkStore",
     "Repository",
     "RepositoryConfig",
@@ -22,6 +29,7 @@ __all__ = [
     "SnapshotMetadata",
     "StorageConfig",
     "StoreConfig",
+    "VersionSelection",
     "VirtualRefConfig",
     "__version__",
 ]

@@ -1,3 +1,4 @@
+mod conflicts;
 mod errors;
 mod repository;
 mod session;
@@ -5,6 +6,7 @@ mod storage;
 mod store;
 mod streams;
 
+use conflicts::{PyBasicConflictSolver, PyConflictDetector, PyConflictSolver, PyVersionSelection};
 use pyo3::prelude::*;
 use repository::{PyRepository, PyRepositoryConfig, PySnapshotMetadata};
 use session::PySession;
@@ -29,5 +31,9 @@ fn _icechunk_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStoreConfig>()?;
     m.add_class::<PySnapshotMetadata>()?;
     m.add_class::<PyVirtualRefConfig>()?;
+    m.add_class::<PyConflictSolver>()?;
+    m.add_class::<PyBasicConflictSolver>()?;
+    m.add_class::<PyConflictDetector>()?;
+    m.add_class::<PyVersionSelection>()?;
     Ok(())
 }

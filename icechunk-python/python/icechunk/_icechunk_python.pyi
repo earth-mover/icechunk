@@ -1,6 +1,8 @@
 import abc
 import datetime
+
 from collections.abc import AsyncGenerator, Iterable
+from enum import Enum
 
 class RepositoryConfig:
     def __init__(
@@ -68,6 +70,7 @@ class PySession:
     def store(self, config: StoreConfig | None = None) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
     def commit(self, message: str) -> str: ...
+    def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
     @classmethod
@@ -322,5 +325,51 @@ class StoreConfig:
     def as_json(self) -> str:
         """Return the StoreConfig object as a JSON string"""
         ...
+
+class VersionSelection(Enum):
+    """Enum for selecting the which version of a conflict"""
+
+    Fail = 0
+    UseOurs = 1
+    UseTheirs = 2
+
+class ConflictSolver:
+    """An abstract conflict solver that can be used to detect or resolve conflicts between two stores
+
+    This should never be used directly, but should be subclassed to provide specific conflict resolution behavior
+    """
+
+    ...
+
+class BasicConflictSolver(ConflictSolver):
+    """A basic conflict solver that allows for simple configuration of resolution behavior"""
+
+    def __init__(
+        self,
+        *,
+        on_user_attributes_conflict: VersionSelection = VersionSelection.UseOurs,
+        on_chunk_conflict: VersionSelection = VersionSelection.UseOurs,
+        fail_on_delete_of_updated_array: bool = False,
+        fail_on_delete_of_updated_group: bool = False,
+    ) -> None:
+        """Create a BasicConflictSolver object with the given configuration options
+        Parameters:
+        on_user_attributes_conflict: VersionSelection
+            The behavior to use when a user attribute conflict is encountered, by default VersionSelection.use_ours()
+        on_chunk_conflict: VersionSelection
+            The behavior to use when a chunk conflict is encountered, by default VersionSelection.use_theirs()
+        fail_on_delete_of_updated_array: bool
+            Whether to fail when a chunk is deleted that has been updated, by default False
+        fail_on_delete_of_updated_group: bool
+            Whether to fail when a group is deleted that has been updated, by default False
+        """
+        ...
+
+class ConflictDetector(ConflictSolver):
+    """A conflict detector that can be used to detect conflicts between two stores and
+    report if resolution is possible
+    """
+
+    def __init__(self) -> None: ...
 
 __version__: str

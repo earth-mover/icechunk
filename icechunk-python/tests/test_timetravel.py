@@ -1,6 +1,7 @@
 from typing import cast
 
 import icechunk
+import pytest
 import zarr
 import zarr.core
 import zarr.core.array
@@ -131,3 +132,42 @@ async def test_branch_reset():
     assert (
         await store.get("b/zarr.json", zarr.core.buffer.default_buffer_prototype())
     ) is None
+
+
+def test_rebase_user_attrs_edit_with_ours(tmpdir):
+    repo = icechunk.Repository.create(
+        storage=icechunk.StorageConfig.filesystem(str(tmpdir)),
+    )
+
+    session = repo.writable_session("main")
+    store = session.store()
+    root = zarr.group(store=store)
+    root.create_group("foo/bar")
+    root.create_array("foo/bar/some-array", shape=(10, 10), dtype="i4")
+    session.commit("commit 1")
+
+    session_a = repo.writable_session("main")
+    session_b = repo.writable_session("main")
+    store_a = session_a.store()
+    store_b = session_b.store()
+
+    root_a = zarr.group(store=store_a)
+    array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
+    array_a.attrs["repo"] = 1
+    session_a.commit("update array")
+
+    root_b = zarr.group(store=store_b)
+    array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
+    array_b.attrs["repo"] = 2
+
+    with pytest.raises(ValueError):
+        session_b.commit("update array")
+
+    solver = icechunk.BasicConflictSolver(
+        on_user_attributes_conflict=icechunk.VersionSelection.UseOurs,
+    )
+
+    session_b.rebase(solver)
+    session_b.commit("after conflict")
+
+    assert array_b.attrs["repo"] == 2

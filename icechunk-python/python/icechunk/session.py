@@ -1,6 +1,7 @@
 from typing import Self
 
-from icechunk._icechunk_python import PySession, StoreConfig
+from icechunk import ConflictSolver, StoreConfig
+from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
 
 
@@ -54,3 +55,6 @@ class Session:
 
     def commit(self, message: str) -> str:
         return self._session.commit(message)
+
+    def rebase(self, solver: ConflictSolver) -> None:
+        self._session.rebase(solver)
