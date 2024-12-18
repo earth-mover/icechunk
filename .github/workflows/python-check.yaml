@@ -102,7 +102,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pytest -n 4
+          pytest -n 4 --hypothesis-verbosity=verbose -s
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
