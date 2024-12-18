@@ -75,14 +75,16 @@ impl ChangeSet {
         self.new_arrays.get(path)
     }
 
-    pub fn delete_group(&mut self, path: Path, node_id: &NodeId) {
+    pub fn delete_group(&mut self, path: Path, node_id: &NodeId, delete_children: bool) {
         self.updated_attributes.remove(node_id);
         match self.new_groups.remove(&path) {
             Some(deleted_node_id) => {
                 // the group was created in this session
                 // so we delete it directly, no need to flag as deleted
                 debug_assert!(&deleted_node_id == node_id);
-                self.delete_children(&path);
+                if delete_children {
+                    self.delete_children(&path)
+                };
             }
             None => {
                 // it's an old group, we need to flag it as deleted
@@ -100,7 +102,7 @@ impl ChangeSet {
             .collect();
 
         for (path, node) in groups_to_delete {
-            self.delete_group(path, &node);
+            self.delete_group(path, &node, true);
         }
 
         let arrays_to_delete: Vec<_> = self
