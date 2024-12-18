@@ -75,14 +75,16 @@ impl ChangeSet {
         self.new_arrays.get(path)
     }
 
-    pub fn delete_group(&mut self, path: Path, node_id: &NodeId) {
+    pub fn delete_group(&mut self, path: Path, node_id: &NodeId, delete_children: bool) {
         self.updated_attributes.remove(node_id);
         match self.new_groups.remove(&path) {
             Some(deleted_node_id) => {
                 // the group was created in this session
                 // so we delete it directly, no need to flag as deleted
                 debug_assert!(&deleted_node_id == node_id);
-                self.delete_children(&path);
+                if delete_children {
+                    self.delete_children(&path)
+                };
             }
             None => {
                 // it's an old group, we need to flag it as deleted
@@ -96,15 +98,11 @@ impl ChangeSet {
             .new_groups
             .iter()
             .filter(|(child_path, _)| child_path.starts_with(path))
-            // dcherian: sometimes we somehow end up deleting the same path twice
-            // I don't understand why, but hypothesis occasionally finds this behaviour
-            // It does not reproduce easily.
-            .filter(|(child_path, _)| child_path != &path)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
         for (path, node) in groups_to_delete {
-            self.delete_group(path, &node);
+            self.delete_group(path, &node, true);
         }
 
         let arrays_to_delete: Vec<_> = self
