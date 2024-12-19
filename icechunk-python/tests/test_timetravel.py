@@ -135,7 +135,8 @@ async def test_branch_reset():
     ) is None
 
 
-def test_rebase_user_attrs_edit_with_ours(tmpdir):
+@pytest.fixture
+def repo_for_rebase(tmpdir) -> icechunk.Repository:
     repo = icechunk.Repository.create(
         storage=icechunk.StorageConfig.filesystem(str(tmpdir)),
     )
@@ -146,6 +147,12 @@ def test_rebase_user_attrs_edit_with_ours(tmpdir):
     root.create_group("foo/bar")
     root.create_array("foo/bar/some-array", shape=(10, 10), dtype="i4")
     session.commit("commit 1")
+
+    return repo
+
+
+def test_rebase_user_attrs_edit_with_ours(repo_for_rebase):
+    repo = repo_for_rebase
 
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
