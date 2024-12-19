@@ -150,6 +150,6 @@ impl PyRebaseFailedData {
     }
 
     fn __str__(&self) -> String {
-        format!("Rebase failed on snapshot {}: {} conflicts found, use `args[0].conflicts` to view the conflicts.", self.snapshot, self.conflicts.len())
+        format!("Rebase failed on snapshot {}: {} conflicts found, use `RebaseFailed.args[0].conflicts` to view the conflicts.", self.snapshot, self.conflicts.len())
     }
 }
