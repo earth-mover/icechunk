@@ -1,7 +1,10 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
-use icechunk::{session::Session, Store};
-use pyo3::{prelude::*, types::PyType};
+use icechunk::{
+    session::{Session, SessionError},
+    Store,
+};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -97,12 +100,15 @@ impl PySession {
     pub fn rebase(&self, solver: PyConflictSolver) -> PyResult<()> {
         let solver = solver.as_ref();
         pyo3_async_runtimes::tokio::get_runtime().block_on(async {
-            self.0
-                .write()
-                .await
-                .rebase(solver)
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
+            self.0.write().await.rebase(solver).await.map_err(|e| match e {
+                SessionError::RebaseFailed { snapshot, conflicts } => {
+                    PyValueError::new_err(format!(
+                        "Rebase failed at snapshot {} with conflicts: {:?}",
+                        snapshot, conflicts
+                    ))
+                }
+                e => PyIcechunkStoreError::from(e).into(),
+            })?;
             Ok(())
         })
     }

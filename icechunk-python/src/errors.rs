@@ -5,8 +5,7 @@ use icechunk::{
     store::StoreError, StorageError,
 };
 use pyo3::{
-    exceptions::{PyKeyError, PyValueError},
-    PyErr,
+    create_exception, exceptions::{PyKeyError, PyValueError}, PyErr
 };
 use thiserror::Error;
 

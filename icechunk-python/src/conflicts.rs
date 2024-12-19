@@ -49,15 +49,15 @@ impl PyBasicConflictSolver {
         fail_on_delete_of_updated_array: bool,
         fail_on_delete_of_updated_group: bool,
     ) -> (Self, PyConflictSolver) {
-        (
-            Self,
-            PyConflictSolver(Arc::new(BasicConflictSolver {
-                on_user_attributes_conflict: on_user_attributes_conflict.into(),
-                on_chunk_conflict: on_chunk_conflict.into(),
-                fail_on_delete_of_updated_array,
-                fail_on_delete_of_updated_group,
-            })),
-        )
+        let solver = Arc::new(BasicConflictSolver {
+            on_user_attributes_conflict: on_user_attributes_conflict.into(),
+            on_chunk_conflict: on_chunk_conflict.into(),
+            fail_on_delete_of_updated_array,
+            fail_on_delete_of_updated_group,
+        });
+
+        println!("solver: {:?}", solver);
+        (Self, PyConflictSolver(solver))
     }
 }
 
