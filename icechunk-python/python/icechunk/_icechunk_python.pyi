@@ -371,4 +371,41 @@ class ConflictDetector(ConflictSolver):
 
     def __init__(self) -> None: ...
 
+class IcechunkError(Exception):
+    """Base class for all Icechunk errors"""
+
+    ...
+
+class ConflictErrorData:
+    """Data class for conflict errors. This describes the snapshot conflict detected when committing a session
+
+    If this error is raised, it means the branch was modified and committed by another session after the session was created.
+    """
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def expected_parent(self) -> str:
+        """The expected parent snapshot ID.
+
+        This is the snapshot ID that the session was based on when the
+        commit operation was called.
+        """
+        ...
+    @property
+    def actual_parent(self) -> str:
+        """
+        The actual parent snapshot ID of the branch that the session attempted to commit to.
+
+        When the session is based on a branch, this is the snapshot ID of the branch tip. If this
+        error is raised, it means the branch was modified and committed by another session after
+        the session was created.
+        """
+        ...
+
+class ConflictError(IcechunkError):
+    """An error that occurs when a conflict is detected"""
+
+    args: tuple[ConflictErrorData]
+    ...
+
 __version__: str

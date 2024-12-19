@@ -2785,8 +2785,6 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
-        /// TODO: Try with root group? 
-
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.set_user_attributes(
             path.clone(),

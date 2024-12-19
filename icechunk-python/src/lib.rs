@@ -9,6 +9,7 @@ mod streams;
 use conflicts::{
     PyBasicConflictSolver, PyConflictDetector, PyConflictSolver, PyVersionSelection,
 };
+use errors::{ConflictError, IcechunkError, PyConflictErrorData};
 use pyo3::prelude::*;
 use repository::{PyRepository, PyRepositoryConfig, PySnapshotMetadata};
 use session::PySession;
@@ -19,7 +20,7 @@ use store::{PyStore, PyStoreConfig};
 
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
-fn _icechunk_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyRepository>()?;
     m.add_class::<PyRepositoryConfig>()?;
@@ -37,5 +38,10 @@ fn _icechunk_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_class::<PyConflictDetector>()?;
     m.add_class::<PyVersionSelection>()?;
+
+    // Exceptions
+    m.add("IcechunkError", py.get_type::<IcechunkError>())?;
+    m.add("ConflictError", py.get_type::<ConflictError>())?;
+    m.add_class::<PyConflictErrorData>()?;
     Ok(())
 }

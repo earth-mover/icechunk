@@ -7,6 +7,7 @@ import zarr
 import zarr.core
 import zarr.core.array
 import zarr.core.buffer
+from icechunk._icechunk_python import ConflictError
 
 
 def test_timetravel():
@@ -168,7 +169,7 @@ def test_rebase_user_attrs_edit_with_ours(repo_for_rebase):
     array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
     array_b.attrs["repo"] = 2
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ConflictError):
         session_b.commit("update array")
 
     solver = icechunk.BasicConflictSolver(

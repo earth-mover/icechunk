@@ -5,7 +5,10 @@ use icechunk::{
     store::StoreError, StorageError,
 };
 use pyo3::{
-    create_exception, exceptions::{PyKeyError, PyValueError}, PyErr
+    create_exception,
+    exceptions::{PyKeyError, PyValueError},
+    prelude::*,
+    PyErr,
 };
 use thiserror::Error;
 
@@ -70,12 +73,46 @@ impl From<SessionError> for PyIcechunkStoreError {
 impl From<PyIcechunkStoreError> for PyErr {
     fn from(error: PyIcechunkStoreError) -> Self {
         match error {
+            PyIcechunkStoreError::SessionError(SessionError::Conflict {
+                expected_parent,
+                actual_parent,
+            }) => ConflictError::new_err(PyConflictErrorData {
+                expected_parent: expected_parent.map(|s| s.to_string()),
+                actual_parent: actual_parent.map(|s| s.to_string()),
+            }),
             PyIcechunkStoreError::PyKeyError(e) => PyKeyError::new_err(e),
             PyIcechunkStoreError::PyValueError(e) => PyValueError::new_err(e),
             PyIcechunkStoreError::PyError(err) => err,
-            _ => PyValueError::new_err(error.to_string()),
+            _ => IcechunkError::new_err(error.to_string()),
         }
     }
 }
 
 pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
+
+create_exception!(icechunk, IcechunkError, PyValueError);
+
+create_exception!(icechunk, ConflictError, IcechunkError);
+
+#[pyclass(name = "ConflictErrorData")]
+pub struct PyConflictErrorData {
+    #[pyo3(get)]
+    expected_parent: Option<String>,
+    #[pyo3(get)]
+    actual_parent: Option<String>,
+}
+
+#[pymethods]
+impl PyConflictErrorData {
+    fn __repr__(&self) -> String {
+        format!(
+            "ConflictErrorData(expected_parent={}, actual_parent={})",
+            self.expected_parent.as_deref().unwrap_or("None"),
+            self.actual_parent.as_deref().unwrap_or("None")
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!("Failed to commit, expected parent: {:?}, actual parent: {:?}", self.expected_parent, self.actual_parent)
+    }
+}
