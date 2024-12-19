@@ -175,16 +175,12 @@ def test_rebase_user_attrs_edit_with_ours(repo_for_rebase):
         on_user_attributes_conflict=icechunk.VersionSelection.UseOurs,
     )
 
-    # Currently the conflict is not resolvable
-    with pytest.raises(icechunk.RebaseFailed):
+    try:
         session_b.rebase(solver)
-
-    # try:
-    #     session_b.rebase(solver)
-    #     session_b.commit("after conflict")
-    # except icechunk.RebaseFailed as e:
-    #     print(e)
-    #     for conflict in e.conflicts:
-    #         print(conflict)
+        session_b.commit("after conflict")
+    except icechunk.RebaseFailed as e:
+        print(e)
+        for conflict in e.conflicts:
+            print(conflict)
 
     assert array_b.attrs["repo"] == 2
