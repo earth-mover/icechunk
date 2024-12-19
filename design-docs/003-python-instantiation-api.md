@@ -4,8 +4,8 @@
 
 1. A good interface to instantiate existing and new `Repositories`, including different types of `Storage` instances.
     * For the case of existing repos, reading of configuration and snapshot should happen concurrently.
-1. A good interface to tune the configuration parameters of a `Repository`, both at runtime and in storage.
-1. A good interface to tune the configuration parameters of a `Store`.
+1. A good interface to tune the configuration parameters of a `Repository`, both at runtime and in storage, such as `inline_chunk_threshold_bytes`, `unsafe_overwrite_refs`, and `virtual_chunk_containers`.
+1. A good interface to tune the configuration parameters of a `Store`, such as `get_partial_values_concurrency`.
 1. A good way to pass credentials, both for the `Storage` instance and for the `VirtualChunkContainers`.
 
 ## Discussion
@@ -37,25 +37,45 @@
 * We unify repo and store config. The extra flexibility is not worth the complexity
 * We use the same types for Storage config and virtual chunk container store config
 * We use the same types for repo credentials and virtual chunk container credentials
-* We don't offer different config types for different object stores
+* We offer different config types for different object stores, to be able to use the natural option names
 
 ```python
 ObjectStorePlatform = Literal["S3", "GoogleCloudStorage", "Azure", "Tigris", "S3Compatible", "LocalFileSystem", "InMemory"]
 
+class ObjectStoreConfigBase(ABC):
+  def object_store_name(self):
+     ...
+
 @dataclass
-class ObjectStoreConfig:
-    object_store: ObjectStorePlatform
-    region: str | None
-    endpoint_url: str | None
-    anonymous: bool
-    allow_http: bool
-    extra: Mapping[str, Any] # this will initially be empty, but it could in the future include fine tuning parameters
+class S3Config(ObjectStoreConfigBase):
+  object_store: ObjectStorePlatform
+  prefix: str | None    # a location within an object store, for example, a bucket name + path
+  region: str | None
+  endpoint_url: str | None
+  anonymous: bool
+  allow_http: bool
+  extra: Mapping[str, Any] # this will initially be empty, but it could in the future include fine tuning parameters
+
+@dataclass
+class S3CompatibleConfig(S3Config):
+  pass
+
+@dataclass
+class AzureConfig(ObjectStoreConfigBase):
+  ...
+  extra: Mapping[str, Any] # this will initially be empty, but it could in the future include fine tuning parameters
+
+
+# more similar classes for other supported object stores
+
+ObjectStoreConfig = S3Config | S3CompatibleConfig | AzureConfig | ...
 
 @dataclass
 class VirtualChunkContainer:
     name: str
-    prefix: str
+    url_prefix: str  # this is the string VirtualChunkContainers match against the chunk location url
     store: ObjectStoreConfig
+
 
 @dataclass
 class RepositoryConfig:
@@ -67,8 +87,9 @@ class RepositoryConfig:
     get_partial_values_concurrency: int
 
 
-def default_repository_config() -> RepositoryConfig:
-  ...
+  @staticmethod
+  def default() -> RepositoryConfig:
+    ...
 
 
 
@@ -77,7 +98,7 @@ class FromEnvCredentials:
   pass
 
 @dataclass
-class AnonymousCredentials:
+class NoCredentials:
   pass
 
 @dataclass
@@ -90,18 +111,18 @@ class StaticCredentials:
 class ExpiringCredentials(StaticCredentials):
   expiration: datetime
 
+
 @dataclass
 class RefreshableCredentials:
-  fetch_with: Callable[[], ExpiringCredentials]
-  refresh_with: Callable[[ExpiringCredentials], ExpiringCredentials]
+  refresh_with: Callable[[ExpiringCredentials | None], ExpiringCredentials]
 
-ObjectStoreCredentials = FromEnvCredentials | AnonymousCredentials | StaticCredentials | RefreshableCredentials
+ObjectStoreCredentials = FromEnvCredentials | NoCredentials | StaticCredentials | RefreshableCredentials
 
 class Repository:
     @classmethod
     def open(
         store: ObjectStoreConfig,
-        store_credentials: ObjectStoreCredentials | None = None,
+        store_credentials: ObjectStoreCredentials = FromEnvCredentials,
         config: RepositoryConfig | None = None,
         virtual_chunk_credentials: Mapping[str, ObjectStoreCredentials] | None = None
     ) -> Repository:
@@ -136,4 +157,11 @@ class Repository:
     @property
     def config(self) -> RepositoryConfig:
       ...
+
+    def new_with_config(self,*, 
+                        inline_chunk_threshold_bytes: int | None = None,
+                        unsafe_overwrite_refs: bool | None = None,
+                        virtual_chunk_containers: List[VirtualChunkContainer] | None = None,
+                        get_partial_values_concurrency: int | None = None,
+    ) -> Repository
 ```
