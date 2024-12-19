@@ -1,7 +1,5 @@
 from typing import cast
 
-import pytest
-
 import icechunk
 import zarr
 import zarr.core

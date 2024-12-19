@@ -7,7 +7,7 @@ from icechunk import (
     RebaseFailedData,
     StoreConfig,
 )
-from icechunk._icechunk_python import PyConflictError, PyRebaseFailed, PySession
+from icechunk._icechunk_python import PyConflictError, PyRebaseFailedError, PySession
 from icechunk.store import IcechunkStore
 
 
@@ -44,12 +44,12 @@ class ConflictError(Exception):
         return self._error.actual_parent
 
 
-class RebaseFailed(Exception):
+class RebaseFailedError(Exception):
     """Error raised when a rebase operation fails."""
 
     _error: RebaseFailedData
 
-    def __init__(self, error: PyRebaseFailed) -> None:
+    def __init__(self, error: PyRebaseFailedError) -> None:
         self._error = error.args[0]
 
     def __str__(self) -> str:
@@ -171,5 +171,5 @@ class Session:
         """
         try:
             self._session.rebase(solver)
-        except PyRebaseFailed as e:
-            raise RebaseFailed(e) from None
+        except PyRebaseFailedError as e:
+            raise RebaseFailedError(e) from None

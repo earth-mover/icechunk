@@ -484,7 +484,7 @@ class RebaseFailedData:
         """The conflicts that occurred during the rebase operation"""
         ...
 
-class PyRebaseFailed(IcechunkError):
+class PyRebaseFailedError(IcechunkError):
     """An error that occurs when a rebase operation fails"""
 
     args: tuple[RebaseFailedData]

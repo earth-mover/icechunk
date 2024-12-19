@@ -85,7 +85,7 @@ impl From<PyIcechunkStoreError> for PyErr {
             PyIcechunkStoreError::SessionError(SessionError::RebaseFailed {
                 snapshot,
                 conflicts,
-            }) => PyRebaseFailed::new_err(PyRebaseFailedData {
+            }) => PyRebaseFailedError::new_err(PyRebaseFailedData {
                 snapshot: snapshot.to_string(),
                 conflicts: conflicts.iter().map(PyConflict::from).collect(),
             }),
@@ -129,7 +129,7 @@ impl PyConflictErrorData {
     }
 }
 
-create_exception!(icechunk, PyRebaseFailed, IcechunkError);
+create_exception!(icechunk, PyRebaseFailedError, IcechunkError);
 
 #[pyclass(name = "RebaseFailedData")]
 #[derive(Debug, Clone)]
