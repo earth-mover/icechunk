@@ -1,8 +1,73 @@
 from typing import Self
 
-from icechunk import ConflictSolver, StoreConfig
-from icechunk._icechunk_python import PySession
+from icechunk import (
+    Conflict,
+    ConflictErrorData,
+    ConflictSolver,
+    RebaseFailedData,
+    StoreConfig,
+)
+from icechunk._icechunk_python import PyConflictError, PyRebaseFailed, PySession
 from icechunk.store import IcechunkStore
+
+
+class ConflictError(Exception):
+    """Error raised when a commit operation fails due to a conflict."""
+
+    _error: ConflictErrorData
+
+    def __init__(self, error: PyConflictError) -> None:
+        self._error = error.args[0]
+
+    def __str__(self) -> str:
+        return str(self._error)
+
+    @property
+    def expected_parent(self) -> str:
+        """
+        The expected parent snapshot ID.
+
+        This is the snapshot ID that the session was based on when the
+        commit operation was called.
+        """
+        return self._error.expected_parent
+
+    @property
+    def actual_parent(self) -> str:
+        """
+        The actual parent snapshot ID of the branch that the session attempted to commit to.
+
+        When the session is based on a branch, this is the snapshot ID of the branch tip. If this
+        error is raised, it means the branch was modified and committed by another session after
+        the session was created.
+        """
+        return self._error.actual_parent
+
+
+class RebaseFailed(Exception):
+    """Error raised when a rebase operation fails."""
+
+    _error: RebaseFailedData
+
+    def __init__(self, error: PyRebaseFailed) -> None:
+        self._error = error.args[0]
+
+    def __str__(self) -> str:
+        return str(self._error)
+
+    @property
+    def snapshot_id(self) -> str:
+        """
+        The snapshot ID that the rebase operation failed on.
+        """
+        return self._error.snapshot
+
+    @property
+    def conflicts(self) -> list[Conflict]:
+        """
+        List of conflicts that occurred during the rebase operation.
+        """
+        return self._error.conflicts
 
 
 class Session:
@@ -54,7 +119,13 @@ class Session:
         self._session.merge(other._session)
 
     def commit(self, message: str) -> str:
-        return self._session.commit(message)
+        try:
+            return self._session.commit(message)
+        except PyConflictError as e:
+            raise ConflictError(e) from None
 
     def rebase(self, solver: ConflictSolver) -> None:
-        self._session.rebase(solver)
+        try:
+            self._session.rebase(solver)
+        except PyRebaseFailed as e:
+            raise RebaseFailed(e) from None

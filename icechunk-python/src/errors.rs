@@ -78,14 +78,14 @@ impl From<PyIcechunkStoreError> for PyErr {
             PyIcechunkStoreError::SessionError(SessionError::Conflict {
                 expected_parent,
                 actual_parent,
-            }) => ConflictError::new_err(PyConflictErrorData {
+            }) => PyConflictError::new_err(PyConflictErrorData {
                 expected_parent: expected_parent.map(|s| s.to_string()),
                 actual_parent: actual_parent.map(|s| s.to_string()),
             }),
             PyIcechunkStoreError::SessionError(SessionError::RebaseFailed {
                 snapshot,
                 conflicts,
-            }) => RebaseFailed::new_err(PyRebaseFailedData {
+            }) => PyRebaseFailed::new_err(PyRebaseFailedData {
                 snapshot: snapshot.to_string(),
                 conflicts: conflicts.iter().map(PyConflict::from).collect(),
             }),
@@ -101,7 +101,7 @@ pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
 
 create_exception!(icechunk, IcechunkError, PyValueError);
 
-create_exception!(icechunk, ConflictError, IcechunkError);
+create_exception!(icechunk, PyConflictError, IcechunkError);
 
 #[pyclass(name = "ConflictErrorData")]
 pub struct PyConflictErrorData {
@@ -129,7 +129,7 @@ impl PyConflictErrorData {
     }
 }
 
-create_exception!(icechunk, RebaseFailed, IcechunkError);
+create_exception!(icechunk, PyRebaseFailed, IcechunkError);
 
 #[pyclass(name = "RebaseFailedData")]
 #[derive(Debug, Clone)]
@@ -150,6 +150,10 @@ impl PyRebaseFailedData {
     }
 
     fn __str__(&self) -> String {
-        format!("Rebase failed on snapshot {}: {} conflicts found, use `RebaseFailed.args[0].conflicts` to view the conflicts.", self.snapshot, self.conflicts.len())
+        format!(
+            "Rebase failed on snapshot {}: {} conflicts found",
+            self.snapshot,
+            self.conflicts.len()
+        )
     }
 }

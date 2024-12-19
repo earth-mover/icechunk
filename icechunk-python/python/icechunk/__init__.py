@@ -4,11 +4,9 @@ from icechunk._icechunk_python import (
     BasicConflictSolver,
     Conflict,
     ConflictDetector,
-    ConflictError,
     ConflictErrorData,
     ConflictSolver,
     ConflictType,
-    RebaseFailed,
     RebaseFailedData,
     RepositoryConfig,
     S3Credentials,
@@ -20,7 +18,7 @@ from icechunk._icechunk_python import (
     __version__,
 )
 from icechunk.repository import Repository
-from icechunk.session import Session
+from icechunk.session import ConflictError, RebaseFailed, Session
 from icechunk.store import IcechunkStore
 
 __all__ = [

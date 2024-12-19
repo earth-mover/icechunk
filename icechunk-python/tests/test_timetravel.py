@@ -7,7 +7,6 @@ import zarr
 import zarr.core
 import zarr.core.array
 import zarr.core.buffer
-from icechunk._icechunk_python import ConflictError
 
 
 def test_timetravel():
@@ -169,19 +168,23 @@ def test_rebase_user_attrs_edit_with_ours(repo_for_rebase):
     array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
     array_b.attrs["repo"] = 2
 
-    with pytest.raises(ConflictError):
+    with pytest.raises(icechunk.ConflictError):
         session_b.commit("update array")
 
     solver = icechunk.BasicConflictSolver(
         on_user_attributes_conflict=icechunk.VersionSelection.UseOurs,
     )
 
-    try:
+    # Currently the conflict is not resolvable
+    with pytest.raises(icechunk.RebaseFailed):
         session_b.rebase(solver)
-        session_b.commit("after conflict")
-    except icechunk.RebaseFailed as e:
-        print(e)
-        for conflict in e.args[0].conflicts:
-            print(conflict)
+
+    # try:
+    #     session_b.rebase(solver)
+    #     session_b.commit("after conflict")
+    # except icechunk.RebaseFailed as e:
+    #     print(e)
+    #     for conflict in e.conflicts:
+    #         print(conflict)
 
     assert array_b.attrs["repo"] == 2

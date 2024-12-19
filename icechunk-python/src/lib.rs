@@ -11,7 +11,8 @@ use conflicts::{
     PyConflictType, PyVersionSelection,
 };
 use errors::{
-    ConflictError, IcechunkError, PyConflictErrorData, PyRebaseFailedData, RebaseFailed,
+    IcechunkError, PyConflictError, PyConflictErrorData, PyRebaseFailed,
+    PyRebaseFailedData,
 };
 use pyo3::prelude::*;
 use repository::{PyRepository, PyRepositoryConfig, PySnapshotMetadata};
@@ -44,9 +45,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
-    m.add("ConflictError", py.get_type::<ConflictError>())?;
+    m.add("PyConflictError", py.get_type::<PyConflictError>())?;
     m.add_class::<PyConflictErrorData>()?;
-    m.add("RebaseFailed", py.get_type::<RebaseFailed>())?;
+    m.add("PyRebaseFailed", py.get_type::<PyRebaseFailed>())?;
     m.add_class::<PyConflictType>()?;
     m.add_class::<PyConflict>()?;
     m.add_class::<PyRebaseFailedData>()?;

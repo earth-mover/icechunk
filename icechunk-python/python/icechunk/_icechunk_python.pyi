@@ -381,6 +381,7 @@ class ConflictErrorData:
 
     If this error is raised, it means the branch was modified and committed by another session after the session was created.
     """
+    @property
     def expected_parent(self) -> str:
         """The expected parent snapshot ID.
 
@@ -399,7 +400,7 @@ class ConflictErrorData:
         """
         ...
 
-class ConflictError(IcechunkError):
+class PyConflictError(IcechunkError):
     """An error that occurs when a conflict is detected"""
 
     args: tuple[ConflictErrorData]
@@ -448,7 +449,7 @@ class RebaseFailedData:
         """The conflicts that occurred during the rebase operation"""
         ...
 
-class RebaseFailed(IcechunkError):
+class PyRebaseFailed(IcechunkError):
     """An error that occurs when a rebase operation fails"""
 
     args: tuple[RebaseFailedData]
