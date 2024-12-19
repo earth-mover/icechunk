@@ -4,8 +4,8 @@
 
 1. A good interface to instantiate existing and new `Repositories`, including different types of `Storage` instances.
     * For the case of existing repos, reading of configuration and snapshot should happen concurrently.
-1. A good interface to tune the configuration parameters of a `Repository`, both at runtime and in storage.
-1. A good interface to tune the configuration parameters of a `Store`.
+1. A good interface to tune the configuration parameters of a `Repository`, both at runtime and in storage, such as `inline_chunk_threshold_bytes`, `unsafe_overwrite_refs`, and `virtual_chunk_containers`.
+1. A good interface to tune the configuration parameters of a `Store`, such as `get_partial_values_concurrency`.
 1. A good way to pass credentials, both for the `Storage` instance and for the `VirtualChunkContainers`.
 
 ## Discussion
@@ -45,6 +45,7 @@ ObjectStorePlatform = Literal["S3", "GoogleCloudStorage", "Azure", "Tigris", "S3
 @dataclass
 class ObjectStoreConfig:
     object_store: ObjectStorePlatform
+    prefix: str | None    # a location within an object store, for example, a bucket name + path
     region: str | None
     endpoint_url: str | None
     anonymous: bool
@@ -54,7 +55,7 @@ class ObjectStoreConfig:
 @dataclass
 class VirtualChunkContainer:
     name: str
-    prefix: str
+    url_prefix: str  # this is the string VirtualChunkContainers match against the chunk location url
     store: ObjectStoreConfig
 
 @dataclass
