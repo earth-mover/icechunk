@@ -1,14 +1,26 @@
 import abc
 import datetime
 from collections.abc import AsyncGenerator, Iterable
+from enum import Enum
 
 class RepositoryConfig:
+    """Configuration for an Icechunk repository"""
     def __init__(
         self,
         *,
         inline_chunk_threshold_bytes: int = 512,
         unsafe_overwrite_refs: bool = False,
-    ) -> None: ...
+    ) -> None:
+        """
+        Create a RepositoryConfig object with the given configuration options
+
+        Parameters
+        ----------
+        inline_chunk_threshold_bytes: int
+            The threshold in bytes for when to inline chunks instead of storing them as references
+        unsafe_overwrite_refs: bool
+        """
+        ...
 
 class PyRepository:
     @classmethod
@@ -68,6 +80,7 @@ class PySession:
     def store(self, config: StoreConfig | None = None) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
     def commit(self, message: str) -> str: ...
+    def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
     @classmethod
@@ -129,12 +142,23 @@ class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     async def __anext__(self) -> str: ...
 
 class SnapshotMetadata:
+    """Metadata for a snapshot"""
     @property
-    def id(self) -> str: ...
+    def id(self) -> str:
+        """The snapshot ID"""
+        ...
     @property
-    def written_at(self) -> datetime.datetime: ...
+    def written_at(self) -> datetime.datetime:
+        """
+        The timestamp when the snapshot was written
+        """
+        ...
     @property
-    def message(self) -> str: ...
+    def message(self) -> str:
+        """
+        The commit message of the snapshot
+        """
+        ...
 
 class PyAsyncSnapshotGenerator(
     AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta
@@ -323,4 +347,145 @@ class StoreConfig:
         """Return the StoreConfig object as a JSON string"""
         ...
 
+class VersionSelection(Enum):
+    """Enum for selecting the which version of a conflict"""
+
+    Fail = 0
+    UseOurs = 1
+    UseTheirs = 2
+
+class ConflictSolver:
+    """An abstract conflict solver that can be used to detect or resolve conflicts between two stores
+
+    This should never be used directly, but should be subclassed to provide specific conflict resolution behavior
+    """
+
+    ...
+
+class BasicConflictSolver(ConflictSolver):
+    """A basic conflict solver that allows for simple configuration of resolution behavior
+
+    This conflict solver allows for simple configuration of resolution behavior for conflicts that may occur during a rebase operation.
+    It will attempt to resolve a limited set of conflicts based on the configuration options provided.
+
+    - When a user attribute conflict is encountered, the behavior is determined by the `on_user_attributes_conflict` option
+    - When a chunk conflict is encountered, the behavior is determined by the `on_chunk_conflict` option
+    - When an array is deleted that has been updated, `fail_on_delete_of_updated_array` will determine whether to fail the rebase operation
+    - When a group is deleted that has been updated, `fail_on_delete_of_updated_group` will determine whether to fail the rebase operation
+    """
+
+    def __init__(
+        self,
+        *,
+        on_user_attributes_conflict: VersionSelection = VersionSelection.UseOurs,
+        on_chunk_conflict: VersionSelection = VersionSelection.UseOurs,
+        fail_on_delete_of_updated_array: bool = False,
+        fail_on_delete_of_updated_group: bool = False,
+    ) -> None:
+        """Create a BasicConflictSolver object with the given configuration options
+        Parameters:
+        on_user_attributes_conflict: VersionSelection
+            The behavior to use when a user attribute conflict is encountered, by default VersionSelection.use_ours()
+        on_chunk_conflict: VersionSelection
+            The behavior to use when a chunk conflict is encountered, by default VersionSelection.use_theirs()
+        fail_on_delete_of_updated_array: bool
+            Whether to fail when a chunk is deleted that has been updated, by default False
+        fail_on_delete_of_updated_group: bool
+            Whether to fail when a group is deleted that has been updated, by default False
+        """
+        ...
+
+class ConflictDetector(ConflictSolver):
+    """A conflict solver that can be used to detect conflicts between two stores, but does not resolve them
+
+    Where the `BasicConflictSolver` will attempt to resolve conflicts, the `ConflictDetector` will only detect them. This means
+    that during a rebase operation the `ConflictDetector` will raise a `RebaseFailed` error if any conflicts are detected, and
+    allow the rebase operation to be retried with a different conflict resolution strategy. Otherwise, if no conflicts are detected
+    the rebase operation will succeed.
+    """
+
+    def __init__(self) -> None: ...
+
+class IcechunkError(Exception):
+    """Base class for all Icechunk errors"""
+
+    ...
+
+class ConflictErrorData:
+    """Data class for conflict errors. This describes the snapshot conflict detected when committing a session
+
+    If this error is raised, it means the branch was modified and committed by another session after the session was created.
+    """
+    @property
+    def expected_parent(self) -> str:
+        """The expected parent snapshot ID.
+
+        This is the snapshot ID that the session was based on when the
+        commit operation was called.
+        """
+        ...
+    @property
+    def actual_parent(self) -> str:
+        """
+        The actual parent snapshot ID of the branch that the session attempted to commit to.
+
+        When the session is based on a branch, this is the snapshot ID of the branch tip. If this
+        error is raised, it means the branch was modified and committed by another session after
+        the session was created.
+        """
+        ...
+
+class PyConflictError(IcechunkError):
+    """An error that occurs when a conflict is detected"""
+
+    args: tuple[ConflictErrorData]
+    ...
+
 __version__: str
+
+class ConflictType(Enum):
+    """Type of conflict detected"""
+
+    NewNodeConflictsWithExistingNode = 1
+    NewNodeInInvalidGroup = 2
+    ZarrMetadataDoubleUpdate = 3
+    ZarrMetadataUpdateOfDeletedArray = 4
+    UserAttributesDoubleUpdate = 5
+    UserAttributesUpdateOfDeletedNode = 6
+    ChunkDoubleUpdate = 7
+    ChunksUpdatedInDeletedArray = 8
+    ChunksUpdatedInUpdatedArray = 9
+    DeleteOfUpdatedArray = 10
+    DeleteOfUpdatedGroup = 11
+
+class Conflict:
+    """A conflict detected between snapshots"""
+
+    @property
+    def conflict_type(self) -> ConflictType:
+        """The type of conflict detected"""
+        ...
+
+    @property
+    def path(self) -> str:
+        """The path of the node that caused the conflict"""
+        ...
+
+class RebaseFailedData:
+    """Data class for rebase failed errors. This describes the error that occurred when rebasing a session"""
+
+    @property
+    def snapshot(self) -> str:
+        """The snapshot ID that the session was rebased to"""
+        ...
+
+    @property
+    def conflicts(self) -> list[Conflict]:
+        """The conflicts that occurred during the rebase operation"""
+        ...
+
+class PyRebaseFailedError(IcechunkError):
+    """An error that occurs when a rebase operation fails"""
+
+    args: tuple[RebaseFailedData]
+    ...

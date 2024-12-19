@@ -561,10 +561,29 @@ async fn set_array_meta(
     array_meta: ArrayMetadata,
     repo: &mut Session,
 ) -> Result<(), StoreError> {
-    if repo.get_array(&path).await.is_ok() {
-        // TODO: we don't necessarily need to update both
-        repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
-        repo.update_array(path, array_meta.zarr_metadata).await?;
+    if let Ok(node) = repo.get_array(&path).await {
+        // Check if the user attributes are different, if they are update them
+        let existing_attrs = match node.user_attributes {
+            None => None,
+            Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
+            // FIXME: implement
+            Some(UserAttributesSnapshot::Ref(_)) => None,
+        };
+
+        if existing_attrs != array_meta.attributes {
+            repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
+        }
+
+        // Check if the zarr metadata is different, if it is update it
+        if let NodeData::Array(existing_array_metadata, _) = node.node_data {
+            if existing_array_metadata != array_meta.zarr_metadata {
+                repo.update_array(path, array_meta.zarr_metadata).await?;
+            }
+        } else {
+            // This should be unreachable, but just in case...
+            repo.update_array(path, array_meta.zarr_metadata).await?;
+        }
+
         Ok(())
     } else {
         repo.add_array(path.clone(), array_meta.zarr_metadata).await?;

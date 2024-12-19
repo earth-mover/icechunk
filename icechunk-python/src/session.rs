@@ -5,6 +5,7 @@ use pyo3::{prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
+    conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     store::{PyStore, PyStoreConfig},
 };
@@ -90,6 +91,19 @@ impl PySession {
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
+        })
+    }
+
+    pub fn rebase(&self, solver: PyConflictSolver) -> PyResult<()> {
+        let solver = solver.as_ref();
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            self.0
+                .write()
+                .await
+                .rebase(solver)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
         })
     }
 }
