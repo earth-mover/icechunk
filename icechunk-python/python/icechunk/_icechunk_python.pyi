@@ -4,12 +4,23 @@ from collections.abc import AsyncGenerator, Iterable
 from enum import Enum
 
 class RepositoryConfig:
+    """Configuration for an Icechunk repository"""
     def __init__(
         self,
         *,
         inline_chunk_threshold_bytes: int = 512,
         unsafe_overwrite_refs: bool = False,
-    ) -> None: ...
+    ) -> None:
+        """
+        Create a RepositoryConfig object with the given configuration options
+
+        Parameters
+        ----------
+        inline_chunk_threshold_bytes: int
+            The threshold in bytes for when to inline chunks instead of storing them as references
+        unsafe_overwrite_refs: bool
+        """
+        ...
 
 class PyRepository:
     @classmethod
@@ -131,12 +142,23 @@ class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     async def __anext__(self) -> str: ...
 
 class SnapshotMetadata:
+    """Metadata for a snapshot"""
     @property
-    def id(self) -> str: ...
+    def id(self) -> str:
+        """The snapshot ID"""
+        ...
     @property
-    def written_at(self) -> datetime.datetime: ...
+    def written_at(self) -> datetime.datetime:
+        """
+        The timestamp when the snapshot was written
+        """
+        ...
     @property
-    def message(self) -> str: ...
+    def message(self) -> str:
+        """
+        The commit message of the snapshot
+        """
+        ...
 
 class PyAsyncSnapshotGenerator(
     AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta

@@ -71,6 +71,8 @@ class RebaseFailed(Exception):
 
 
 class Session:
+    """A session object that allows for reading and writing data from an Icechunk repository."""
+
     _session: PySession
 
     def __init__(self, session: PySession):
@@ -95,36 +97,78 @@ class Session:
 
     @property
     def read_only(self) -> bool:
+        """Whether the session is read-only."""
         return self._session.read_only
 
     @property
     def snapshot_id(self) -> str:
+        """The base snapshot ID of the session"""
         return self._session.snapshot_id
 
     @property
     def branch(self) -> str | None:
+        """The branch that the session is based on. This is only set if the
+        session is writable"""
         return self._session.branch
 
     @property
     def has_uncommitted_changes(self) -> bool:
+        """Whether the session has uncommitted changes. This is only possibly
+        true if the session is writable"""
         return self._session.has_uncommitted_changes
 
     def discard_changes(self) -> None:
+        """When the session is writable, discard any uncommitted changes"""
         self._session.discard_changes()
 
     def store(self, config: StoreConfig | None = None) -> IcechunkStore:
+        """Get a zarr Store object for reading and writing data from the repository using zarr python"""
         return IcechunkStore(self._session.store(config))
 
     def merge(self, other: Self) -> None:
+        """Merge the changes for this session with the changes from another session"""
         self._session.merge(other._session)
 
     def commit(self, message: str) -> str:
+        """Commit the changes in the session to the repository
+
+        When successful, the writable session is completed and the session is now read-only
+        and based on the new commit. The snapshot ID of the new commit is returned.
+
+        If the session is out of date, this will raise a ConflictError exception depicting
+        the conflict that occurred. The session will need to be rebased before committing.
+
+        Args:
+            message (str): The message to write with the commit
+
+        Returns:
+            str: The snapshot ID of the new commit
+        """
         try:
             return self._session.commit(message)
         except PyConflictError as e:
             raise ConflictError(e) from None
 
     def rebase(self, solver: ConflictSolver) -> None:
+        """Rebase the session to the latest ancestry of the branch.
+
+        This method will iteratively crawl the ancestry of the branch and apply the changes
+        from the branch to the session. If a conflict is detected, the conflict solver will
+        be used to optionally resolve the conflict. When complete, the session will be based
+        on the latest commit of the branch and the session will be ready to attempt another
+        commit.
+
+        When a conflict is detected and a resolution is not possible with the proivided
+        solver, a RebaseFailed exception will be raised. This exception will contain the
+        snapshot ID that the rebase failed on and a list of conflicts that occurred.
+
+        Args:
+            solver (ConflictSolver): The conflict solver to use when a conflict is detected
+
+        Raises:
+            RebaseFailed: When a conflict is detected and the solver fails to resolve it
+
+        """
         try:
             self._session.rebase(solver)
         except PyRebaseFailed as e:
