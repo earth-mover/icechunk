@@ -363,7 +363,16 @@ class ConflictSolver:
     ...
 
 class BasicConflictSolver(ConflictSolver):
-    """A basic conflict solver that allows for simple configuration of resolution behavior"""
+    """A basic conflict solver that allows for simple configuration of resolution behavior
+
+    This conflict solver allows for simple configuration of resolution behavior for conflicts that may occur during a rebase operation.
+    It will attempt to resolve a limited set of conflicts based on the configuration options provided.
+
+    - When a user attribute conflict is encountered, the behavior is determined by the `on_user_attributes_conflict` option
+    - When a chunk conflict is encountered, the behavior is determined by the `on_chunk_conflict` option
+    - When an array is deleted that has been updated, `fail_on_delete_of_updated_array` will determine whether to fail the rebase operation
+    - When a group is deleted that has been updated, `fail_on_delete_of_updated_group` will determine whether to fail the rebase operation
+    """
 
     def __init__(
         self,
@@ -387,8 +396,12 @@ class BasicConflictSolver(ConflictSolver):
         ...
 
 class ConflictDetector(ConflictSolver):
-    """A conflict detector that can be used to detect conflicts between two stores and
-    report if resolution is possible
+    """A conflict solver that can be used to detect conflicts between two stores, but does not resolve them
+
+    Where the `BasicConflictSolver` will attempt to resolve conflicts, the `ConflictDetector` will only detect them. This means
+    that during a rebase operation the `ConflictDetector` will raise a `RebaseFailed` error if any conflicts are detected, and
+    allow the rebase operation to be retried with a different conflict resolution strategy. Otherwise, if no conflicts are detected
+    the rebase operation will succeed.
     """
 
     def __init__(self) -> None: ...
