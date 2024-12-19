@@ -566,7 +566,8 @@ async fn set_array_meta(
         let existing_attrs = match node.user_attributes {
             None => None,
             Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-            Some(UserAttributesSnapshot::Ref(_)) => unimplemented!(),
+            // FIXME: implement
+            Some(UserAttributesSnapshot::Ref(_)) => None,
         };
 
         if existing_attrs != array_meta.attributes {
@@ -574,14 +575,14 @@ async fn set_array_meta(
         }
 
         // Check if the zarr metadata is different, if it is update it
-        let existing_array_meta = match node.node_data {
-            NodeData::Array(zarr_metadata, _) => zarr_metadata,
-            NodeData::Group => unreachable!(),
-        };
-
-        if existing_array_meta != array_meta.zarr_metadata {
+        if let NodeData::Array(existing_array_metadata, _) = node.node_data {
+            if existing_array_metadata != array_meta.zarr_metadata {
+                repo.update_array(path, array_meta.zarr_metadata).await?;
+            }
+        } else {
+            // This should be unreachable, but just in case...
             repo.update_array(path, array_meta.zarr_metadata).await?;
-        };
+        }
 
         Ok(())
     } else {
