@@ -11,8 +11,8 @@ use conflicts::{
     PyConflictType, PyVersionSelection,
 };
 use errors::{
-    IcechunkError, PyConflictError, PyConflictErrorData, PyRebaseFailedError,
-    PyRebaseFailedData,
+    IcechunkError, PyConflictError, PyConflictErrorData, PyRebaseFailedData,
+    PyRebaseFailedError,
 };
 use pyo3::prelude::*;
 use repository::{PyRepository, PyRepositoryConfig, PySnapshotMetadata};
