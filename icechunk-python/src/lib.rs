@@ -7,9 +7,12 @@ mod store;
 mod streams;
 
 use conflicts::{
-    PyBasicConflictSolver, PyConflictDetector, PyConflictSolver, PyVersionSelection,
+    PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
+    PyConflictType, PyVersionSelection,
 };
-use errors::{ConflictError, IcechunkError, PyConflictErrorData};
+use errors::{
+    ConflictError, IcechunkError, PyConflictErrorData, PyRebaseFailedData, RebaseFailed,
+};
 use pyo3::prelude::*;
 use repository::{PyRepository, PyRepositoryConfig, PySnapshotMetadata};
 use session::PySession;
@@ -43,5 +46,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
     m.add("ConflictError", py.get_type::<ConflictError>())?;
     m.add_class::<PyConflictErrorData>()?;
+    m.add("RebaseFailed", py.get_type::<RebaseFailed>())?;
+    m.add_class::<PyConflictType>()?;
+    m.add_class::<PyConflict>()?;
+    m.add_class::<PyRebaseFailedData>()?;
     Ok(())
 }

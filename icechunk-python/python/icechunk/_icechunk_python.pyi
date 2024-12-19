@@ -381,9 +381,6 @@ class ConflictErrorData:
 
     If this error is raised, it means the branch was modified and committed by another session after the session was created.
     """
-
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def expected_parent(self) -> str:
         """The expected parent snapshot ID.
 
@@ -409,3 +406,50 @@ class ConflictError(IcechunkError):
     ...
 
 __version__: str
+
+class ConflictType(Enum):
+    """Type of conflict detected"""
+
+    NewNodeConflictsWithExistingNode = 1
+    NewNodeInInvalidGroup = 2
+    ZarrMetadataDoubleUpdate = 3
+    ZarrMetadataUpdateOfDeletedArray = 4
+    UserAttributesDoubleUpdate = 5
+    UserAttributesUpdateOfDeletedNode = 6
+    ChunkDoubleUpdate = 7
+    ChunksUpdatedInDeletedArray = 8
+    ChunksUpdatedInUpdatedArray = 9
+    DeleteOfUpdatedArray = 10
+    DeleteOfUpdatedGroup = 11
+
+class Conflict:
+    """A conflict detected between snapshots"""
+
+    @property
+    def conflict_type(self) -> ConflictType:
+        """The type of conflict detected"""
+        ...
+
+    @property
+    def path(self) -> str:
+        """The path of the node that caused the conflict"""
+        ...
+
+class RebaseFailedData:
+    """Data class for rebase failed errors. This describes the error that occurred when rebasing a session"""
+
+    @property
+    def snapshot(self) -> str:
+        """The snapshot ID that the session was rebased to"""
+        ...
+
+    @property
+    def conflicts(self) -> list[Conflict]:
+        """The conflicts that occurred during the rebase operation"""
+        ...
+
+class RebaseFailed(IcechunkError):
+    """An error that occurs when a rebase operation fails"""
+
+    args: tuple[RebaseFailedData]
+    ...

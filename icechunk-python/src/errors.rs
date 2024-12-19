@@ -12,6 +12,8 @@ use pyo3::{
 };
 use thiserror::Error;
 
+use crate::conflicts::PyConflict;
+
 /// A simple wrapper around the StoreError to make it easier to convert to a PyErr
 ///
 /// When you use the ? operator, the error is coerced. But if you return the value it is not.
@@ -80,6 +82,13 @@ impl From<PyIcechunkStoreError> for PyErr {
                 expected_parent: expected_parent.map(|s| s.to_string()),
                 actual_parent: actual_parent.map(|s| s.to_string()),
             }),
+            PyIcechunkStoreError::SessionError(SessionError::RebaseFailed {
+                snapshot,
+                conflicts,
+            }) => RebaseFailed::new_err(PyRebaseFailedData {
+                snapshot: snapshot.to_string(),
+                conflicts: conflicts.iter().map(PyConflict::from).collect(),
+            }),
             PyIcechunkStoreError::PyKeyError(e) => PyKeyError::new_err(e),
             PyIcechunkStoreError::PyValueError(e) => PyValueError::new_err(e),
             PyIcechunkStoreError::PyError(err) => err,
@@ -113,6 +122,34 @@ impl PyConflictErrorData {
     }
 
     fn __str__(&self) -> String {
-        format!("Failed to commit, expected parent: {:?}, actual parent: {:?}", self.expected_parent, self.actual_parent)
+        format!(
+            "Failed to commit, expected parent: {:?}, actual parent: {:?}",
+            self.expected_parent, self.actual_parent
+        )
+    }
+}
+
+create_exception!(icechunk, RebaseFailed, IcechunkError);
+
+#[pyclass(name = "RebaseFailedData")]
+#[derive(Debug, Clone)]
+pub struct PyRebaseFailedData {
+    #[pyo3(get)]
+    snapshot: String,
+    #[pyo3(get)]
+    conflicts: Vec<PyConflict>,
+}
+
+#[pymethods]
+impl PyRebaseFailedData {
+    fn __repr__(&self) -> String {
+        format!(
+            "RebaseFailedData(snapshot={}, conflicts={:?})",
+            self.snapshot, self.conflicts
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!("Rebase failed on snapshot {}: {} conflicts found, use `args[0].conflicts` to view the conflicts.", self.snapshot, self.conflicts.len())
     }
 }
