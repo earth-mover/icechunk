@@ -158,7 +158,7 @@ class Repository:
     def config(self) -> RepositoryConfig:
       ...
 
-    def new_with_config(self,*, 
+    def new_with_config(self,*,
                         inline_chunk_threshold_bytes: int | None = None,
                         unsafe_overwrite_refs: bool | None = None,
                         virtual_chunk_containers: List[VirtualChunkContainer] | None = None,
