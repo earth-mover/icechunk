@@ -4,39 +4,40 @@ use std::{collections::HashMap, num::NonZeroU64, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
+    config::{Credentials, S3CompatibleOptions, StaticCredentials},
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     repository::VersionInfo,
     session::{get_chunk, Session},
-    storage::s3::{
-        S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials,
-    },
-    Repository, Storage,
+    storage::make_storage,
+    ObjectStoreConfig, Repository, Storage,
 };
 use tokio::task::JoinSet;
 
 const SIZE: usize = 10;
 
+#[allow(clippy::expect_used)]
 async fn mk_storage(
     prefix: &str,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error + Send + Sync>> {
-    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-        S3Storage::new_s3_store(&S3Config {
-            bucket: "testbucket".to_string(),
-            prefix: prefix.to_string(),
-            options: Some(S3ClientOptions {
-                region: Some("us-east-1".to_string()),
-                endpoint: Some("http://localhost:9000".to_string()),
-                credentials: S3Credentials::Static(StaticS3Credentials {
-                    access_key_id: "minio123".into(),
-                    secret_access_key: "minio123".into(),
-                    session_token: None,
-                }),
-                allow_http: true,
-            }),
-        })
-        .await?,
-    );
+    let storage: Arc<dyn Storage + Send + Sync> = make_storage(
+        ObjectStoreConfig::S3Compatible(S3CompatibleOptions {
+            region: Some("us-east-1".to_string()),
+            endpoint_url: Some("http://localhost:9000".to_string()),
+            allow_http: true,
+            anonymous: false,
+        }),
+        Some("testbucket".to_string()),
+        Some(prefix.to_string()),
+        Some(Credentials::Static(StaticCredentials {
+            access_key_id: "minio123".into(),
+            secret_access_key: "minio123".into(),
+            session_token: None,
+        })),
+    )
+    .await
+    .expect("Creating minio storage failed");
+
     Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
