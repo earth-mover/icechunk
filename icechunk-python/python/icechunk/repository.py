@@ -23,7 +23,7 @@ class Repository:
     ) -> Self:
         """Create a new Icechunk repository.
 
-        If one already exists at the given storafe location, an error will be raised.
+        If one already exists at the given store location, an error will be raised.
 
         Args:
             storage: The storage configuration for the repository.
