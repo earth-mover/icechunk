@@ -1713,12 +1713,25 @@ mod tests {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
+        ds.commit("initialize", None).await?;
+
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group("/a".try_into().unwrap()).await?;
         ds.add_group("/b".try_into().unwrap()).await?;
         ds.add_group("/b/bb".try_into().unwrap()).await?;
+
         ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
         assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
+
+        ds.delete_group("/a".try_into().unwrap()).await?;
+        assert!(ds.change_set.is_empty());
+
+        // try deleting the child group again, since this was a group that was already
+        // deleted, it should be a no-op
+        ds.delete_group("/b/bb".try_into().unwrap()).await?;
+        ds.delete_group("/a".try_into().unwrap()).await?;
+        assert!(ds.change_set.is_empty());
         Ok(())
     }
 
