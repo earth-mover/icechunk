@@ -18,7 +18,7 @@ However the `commit` call is not guaranteed to succeed, and an error is thrown i
 ```python
 try:
     commit_id = session.commit("yay")
-except Exception as e:
+except ConflictError as e:
     print(f"Commit failed: {e}")
 ```
 
@@ -27,13 +27,9 @@ To resolve this, the `rebase` method was added in the rust layer. This has not y
 ```python
 try:
     commit_id = session.commit("yay")
-except Exception as e:
-    if isinstance(e, ConflictError):
-        try:
-	          session.rebase(solver=BasicConflictSolver())
-	          commit_id = session.commit("merged")
-	      except Exception as e:
-			      print(f"Failed to rebase: {e}")
+except ConflictError as e:
+    session.rebase(solver=BasicConflictSolver())
+    commit_id = session.commit("merged")
 ```
 
 This is a common pattern that will need to be followed. Two notes on the errors returned for failures in the rust core:
@@ -59,7 +55,7 @@ try:
     commit_id = session.commit("merged")
 except RebaseFailedError as e:
     # just an example of what we could pull for data, the message would be more informative
-    print(f"Failed to rebase because of conflicts:")
+    print(f"Failed to rebase at snapshot {e.snapshot_id} because of conflicts:")
     for conflict in e.conflicts:
         print(f"{c.path}: {c.reason}")
 ```
@@ -73,7 +69,25 @@ with repo.open_writable_session("main", message="Update data", solver=BasicConfl
 
 # Session is finished, committed and rebased automatically
 ```
+ 
+The context manager could handle the loop of trying to commit and rebase iteratively. When it fails, a new error is returned that has the same conflict context 
+as the normal `RebaseFailedError`, but with extra access to the session so the changes are recoverable if desired:
 
-## Open Questions
+```python
 
-1. How do we handle the case where rebase fails within a session context? How do we avoid losing the user's work on failure in case they want to try a different strategy? Does this matter?
+try: 
+    with repo.open_writable_session("main", message="Update data", solver=BasicConflictSolver(), retries=5) as session:
+	    store = session.store()
+	    # Do Stuff with the store
+except AutomaticRebaseFailedError as e:
+    print(f"Rebase failed at snapshot {e.snapshot_id}")
+
+    # We can get the session
+    session = e.session
+
+    # or just the conflict info like normal, so we can make changes to the session to fixup the session and try again
+    print(f"Found conflicts:")
+    for conflict in e.conflicts:
+        print(f"{c.path}: {c.reason}")
+
+```
