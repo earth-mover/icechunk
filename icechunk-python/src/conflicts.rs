@@ -119,12 +119,14 @@ impl From<&Conflict> for PyConflict {
                 conflicted_chunks: None,
             },
             Conflict::ChunkDoubleUpdate { path, node_id: _, chunk_coordinates } => {
+                let mut chunk_coordinates =
+                    chunk_coordinates.iter().map(|c| c.0.clone()).collect::<Vec<_>>();
+                chunk_coordinates.sort();
+
                 PyConflict {
                     conflict_type: PyConflictType::ChunkDoubleUpdate,
                     path: path.to_string(),
-                    conflicted_chunks: Some(
-                        chunk_coordinates.iter().map(|c| c.0.clone()).collect(),
-                    ),
+                    conflicted_chunks: Some(chunk_coordinates),
                 }
             }
             Conflict::ChunksUpdatedInDeletedArray { path, node_id: _ } => PyConflict {
