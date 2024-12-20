@@ -69,13 +69,13 @@ with repo.open_writable_session("main", message="Update data", solver=BasicConfl
 
 # Session is finished, committed and rebased automatically
 ```
- 
-The context manager could handle the loop of trying to commit and rebase iteratively. When it fails, a new error is returned that has the same conflict context 
+
+The context manager could handle the loop of trying to commit and rebase iteratively. When it fails, a new error is returned that has the same conflict context
 as the normal `RebaseFailedError`, but with extra access to the session so the changes are recoverable if desired:
 
 ```python
 
-try: 
+try:
     with repo.open_writable_session("main", message="Update data", solver=BasicConflictSolver(), retries=5) as session:
 	    store = session.store()
 	    # Do Stuff with the store
