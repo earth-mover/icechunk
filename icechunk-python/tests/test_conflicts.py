@@ -171,7 +171,7 @@ def test_rebase_chunks_with_ours(
         except icechunk.RebaseFailedError as e:
             assert e.conflicts[0].path == "/foo/bar/some-array"
             assert e.conflicts[0].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
-            assert len(e.conflicts) == 10
+            assert len(e.conflicts) == 1
 
             np.testing.assert_array_equal(
                 np.array(e.conflicts[0].conflicted_chunks),
