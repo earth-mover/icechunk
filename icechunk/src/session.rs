@@ -176,11 +176,7 @@ impl Session {
     /// Delete a group in the hierarchy
     ///
     /// Deletes of non existing groups will succeed.
-    pub async fn delete_group(
-        &mut self,
-        path: Path,
-        delete_children: bool,
-    ) -> SessionResult<()> {
+    pub async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
         match self.get_group(&path).await {
             Ok(parent) => {
                 let nodes_iter: Vec<NodeSnapshot> = self
@@ -190,11 +186,9 @@ impl Session {
                     .collect();
                 for node in nodes_iter {
                     match node.node_type() {
-                        NodeType::Group => self.change_set.delete_group(
-                            node.path,
-                            &node.id,
-                            delete_children,
-                        ),
+                        NodeType::Group => {
+                            self.change_set.delete_group(node.path, &node.id)
+                        }
                         NodeType::Array => {
                             self.change_set.delete_array(node.path, &node.id)
                         }
@@ -463,7 +457,7 @@ impl Session {
 
         for (t, p) in to_delete {
             match t {
-                NodeType::Group => self.delete_group(p, true).await?,
+                NodeType::Group => self.delete_group(p).await?,
                 NodeType::Array => self.delete_array(p).await?,
             }
         }
@@ -1162,10 +1156,10 @@ mod tests {
         prop_assert!(matches);
 
         // deleting the added group must succeed
-        prop_assert!(session.delete_group(path.clone(), true).await.is_ok());
+        prop_assert!(session.delete_group(path.clone()).await.is_ok());
 
         // deleting twice must succeed
-        prop_assert!(session.delete_group(path.clone(), true).await.is_ok());
+        prop_assert!(session.delete_group(path.clone()).await.is_ok());
 
         // getting a deleted group must fail
         prop_assert!(session.get_node(&path).await.is_err());
@@ -1174,7 +1168,7 @@ mod tests {
         prop_assert!(session.add_group(path.clone()).await.is_ok());
 
         // deleting again must succeed
-        prop_assert!(session.delete_group(path.clone(), true).await.is_ok());
+        prop_assert!(session.delete_group(path.clone()).await.is_ok());
     }
 
     #[proptest(async = "tokio")]
@@ -1217,7 +1211,7 @@ mod tests {
         prop_assert!(matches);
 
         let matches = matches!(
-            session.delete_group(path.clone(), true).await.unwrap_err(),
+            session.delete_group(path.clone()).await.unwrap_err(),
             SessionError::NotAGroup{node, ..} if node.path == path
         );
         prop_assert!(matches);
@@ -1235,7 +1229,7 @@ mod tests {
             SessionError::NotAnArray{node, ..} if node.path == path
         );
         prop_assert!(matches);
-        prop_assert!(session.delete_group(path.clone(), true).await.is_ok());
+        prop_assert!(session.delete_group(path.clone()).await.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1334,12 +1328,9 @@ mod tests {
 
         let group_name = "/tbd-group".to_string();
         ds.add_group(group_name.clone().try_into().unwrap()).await?;
-        ds.delete_group(group_name.clone().try_into().unwrap(), true).await?;
+        ds.delete_group(group_name.clone().try_into().unwrap()).await?;
         // deleting non-existing is no-op
-        assert!(ds
-            .delete_group(group_name.clone().try_into().unwrap(), true)
-            .await
-            .is_ok());
+        assert!(ds.delete_group(group_name.clone().try_into().unwrap()).await.is_ok());
         assert!(ds.get_node(&group_name.try_into().unwrap()).await.is_err());
 
         // add a new array and retrieve its node
@@ -1670,7 +1661,7 @@ mod tests {
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
         ds.add_group("/1".try_into().unwrap()).await?;
-        ds.delete_group("/1".try_into().unwrap(), true).await?;
+        ds.delete_group("/1".try_into().unwrap()).await?;
         assert_eq!(ds.list_nodes().await?.count(), 1);
         ds.commit("commit", None).await?;
 
@@ -1692,7 +1683,7 @@ mod tests {
         ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
-        ds.delete_group("/1".try_into().unwrap(), true).await?;
+        ds.delete_group("/1".try_into().unwrap()).await?;
         assert!(ds.get_group(&Path::root()).await.is_ok());
         assert!(ds.get_group(&"/1".try_into().unwrap()).await.is_err());
         assert_eq!(ds.list_nodes().await?.count(), 1);
@@ -1707,7 +1698,7 @@ mod tests {
         ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
-        ds.delete_group(Path::root(), true).await?;
+        ds.delete_group(Path::root()).await?;
         ds.commit("commit", None).await?;
 
         let ds = repository
@@ -1725,21 +1716,7 @@ mod tests {
         ds.add_group("/a".try_into().unwrap()).await?;
         ds.add_group("/b".try_into().unwrap()).await?;
         ds.add_group("/b/bb".try_into().unwrap()).await?;
-        ds.delete_group("/b".try_into().unwrap(), true).await?;
-        assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
-        assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dont_delete_children() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
-        let mut ds = repository.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
-        ds.add_group("/a".try_into().unwrap()).await?;
-        ds.add_group("/b".try_into().unwrap()).await?;
-        ds.add_group("/b/bb".try_into().unwrap()).await?;
-        ds.delete_group("/b".try_into().unwrap(), false).await?;
+        ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
         assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
         Ok(())
@@ -1756,7 +1733,7 @@ mod tests {
         ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
-        ds.delete_group("/b".try_into().unwrap(), true).await?;
+        ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
         assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
         Ok(())
@@ -2510,7 +2487,7 @@ mod tests {
         ds1.commit("update user attributes", None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
-        ds2.delete_group(path.clone(), true).await?;
+        ds2.delete_group(path.clone()).await?;
         ds2.commit("delete group", None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
@@ -3242,7 +3219,7 @@ mod tests {
                         runtime.unwrap(repository.add_group(path))
                     }
                     RepositoryTransition::DeleteGroup(Some(path)) => {
-                        runtime.unwrap(repository.delete_group(path, true))
+                        runtime.unwrap(repository.delete_group(path))
                     }
                     _ => panic!(),
                 }

@@ -361,7 +361,7 @@ impl Store {
                         Ok(guard.deref_mut().delete_array(node_path).await?)
                     }
                     NodeData::Group => {
-                        Ok(guard.deref_mut().delete_group(node_path, false).await?)
+                        Ok(guard.deref_mut().delete_group(node_path).await?)
                     }
                 }
             }
