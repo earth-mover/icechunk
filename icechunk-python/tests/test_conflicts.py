@@ -51,7 +51,10 @@ def test_detect_conflicts(repo: icechunk.Repository):
         except icechunk.RebaseFailedError as e:
             assert len(e.conflicts) == 2
             assert e.conflicts[0].path == "/foo/bar/some-array"
-            assert e.conflicts[0].conflict_type == icechunk.ConflictType.UserAttributesDoubleUpdate
+            assert (
+                e.conflicts[0].conflict_type
+                == icechunk.ConflictType.UserAttributesDoubleUpdate
+            )
             assert e.conflicts[0].conflicted_chunks is None
 
             assert e.conflicts[1].path == "/foo/bar/some-array"
@@ -161,7 +164,9 @@ def test_rebase_chunks_with_ours(
     with pytest.raises(icechunk.RebaseFailedError):
         try:
             session_b.rebase(
-                icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.Fail)
+                icechunk.BasicConflictSolver(
+                    on_chunk_conflict=icechunk.VersionSelection.Fail
+                )
             )
         except icechunk.RebaseFailedError as e:
             assert e.conflicts[0].path == "/foo/bar/some-array"
@@ -170,18 +175,20 @@ def test_rebase_chunks_with_ours(
 
             np.testing.assert_array_equal(
                 np.array(e.conflicts[0].conflicted_chunks),
-                np.array([
-                    [0, 0],
-                    [1, 0],
-                    [2, 0],
-                    [3, 0],
-                    [4, 0],
-                    [5, 0],
-                    [6, 0],
-                    [7, 0],
-                    [8, 0],
-                    [9, 0],
-                ])
+                np.array(
+                    [
+                        [0, 0],
+                        [1, 0],
+                        [2, 0],
+                        [3, 0],
+                        [4, 0],
+                        [5, 0],
+                        [6, 0],
+                        [7, 0],
+                        [8, 0],
+                        [9, 0],
+                    ]
+                ),
             )
 
             raise e
