@@ -471,6 +471,11 @@ class Conflict:
         """The path of the node that caused the conflict"""
         ...
 
+    @property
+    def conflicted_chunks(self) -> list[list[int]]:
+        """If the conflict is a chunk conflict, this will return the list of chunk indices that are in conflict"""
+        ...
+
 class RebaseFailedData:
     """Data class for rebase failed errors. This describes the error that occurred when rebasing a session"""
 
