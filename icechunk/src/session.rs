@@ -178,23 +178,7 @@ impl Session {
     /// Deletes of non existing groups will succeed.
     pub async fn delete_group(&mut self, path: Path) -> SessionResult<()> {
         match self.get_group(&path).await {
-            Ok(parent) => {
-                let nodes_iter: Vec<NodeSnapshot> = self
-                    .list_nodes()
-                    .await?
-                    .filter(|node| node.path.starts_with(&parent.path))
-                    .collect();
-                for node in nodes_iter {
-                    match node.node_type() {
-                        NodeType::Group => {
-                            self.change_set.delete_group(node.path, &node.id)
-                        }
-                        NodeType::Array => {
-                            self.change_set.delete_array(node.path, &node.id)
-                        }
-                    }
-                }
-            }
+            Ok(parent) => self.change_set.delete_group(parent.path, &parent.id),
             Err(SessionError::NodeNotFound { .. }) => {}
             Err(err) => Err(err)?,
         }
