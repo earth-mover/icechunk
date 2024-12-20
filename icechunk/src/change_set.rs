@@ -96,10 +96,6 @@ impl ChangeSet {
             .new_groups
             .iter()
             .filter(|(child_path, _)| child_path.starts_with(path))
-            // dcherian: sometimes we somehow end up deleting the same path twice
-            // I don't understand why, but hypothesis occasionally finds this behaviour
-            // It does not reproduce easily.
-            .filter(|(child_path, _)| child_path != &path)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
