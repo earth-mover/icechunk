@@ -12,8 +12,8 @@ use crate::{
         IcechunkFormatError, NodeId, SnapshotId,
     },
     refs::{
-        create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
-        BranchVersion, Ref, RefError,
+        create_tag, delete_branch, fetch_branch_tip, fetch_tag, list_branches, list_tags,
+        update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
     storage::ETag,
@@ -362,6 +362,14 @@ impl Repository {
         Ok(version)
     }
 
+    /// Delete a branch from the repository.
+    /// This will remove the branch reference and the branch history. It will not remove the
+    /// chunks or snapshots associated with the branch.
+    pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
+        delete_branch(self.storage.as_ref(), branch).await?;
+        Ok(())
+    }
+
     /// Create a new tag in the repository at the given snapshot id
     pub async fn create_tag(
         &self,
@@ -530,7 +538,14 @@ mod tests {
             HashSet::from(["main".into(), "branch1".into(), "branch2".into()])
         );
 
-        // TODO: Delete a branch
+        // Delete a branch
+        repo.delete_branch("branch1").await?;
+
+        let branches = repo.list_branches().await?;
+        assert_eq!(
+            HashSet::from_iter(branches.into_iter()),
+            HashSet::from(["main".into(), "branch2".into()])
+        );
 
         // Create some tags
         repo.create_tag("tag1", &initial_snapshot).await?;

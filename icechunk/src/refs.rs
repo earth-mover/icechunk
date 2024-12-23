@@ -1,6 +1,6 @@
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -254,6 +254,23 @@ async fn last_branch_version(
     // TODO! optimize
     let mut all = Box::pin(branch_history(storage, branch).await?);
     all.try_next().await?.ok_or(RefError::RefNotFound(branch.to_string()))
+}
+
+pub async fn delete_branch(
+    storage: &(dyn Storage + Send + Sync),
+    branch: &str,
+) -> RefResult<()> {
+    let key = branch_root(branch)?;
+    let key_ref = key.as_str();
+    let refs = storage
+        .ref_versions(key_ref)
+        .await?
+        .filter_map(|v| async move {
+            v.ok().map(|v| format!("{}/{}", key_ref, v).as_str().to_string())
+        })
+        .boxed();
+    storage.delete_refs(refs).await?;
+    Ok(())
 }
 
 pub async fn fetch_tag(
@@ -525,6 +542,13 @@ mod tests {
                 fetch_ref(storage.as_ref(), "branch1").await?,
                 (Ref::Branch("branch1".to_string()), RefData { snapshot: sid.clone() })
             );
+
+            // delete a branch
+            delete_branch(storage.as_ref(), "branch1").await?;
+            assert!(matches!(
+                fetch_ref(storage.as_ref(), "branch1").await,
+                Err(RefError::RefNotFound(name)) if name == "branch1"
+            ));
 
             Ok(())
         }).await;

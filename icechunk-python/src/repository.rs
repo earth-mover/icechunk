@@ -262,8 +262,11 @@ impl PyRepository {
 
     pub fn tag(&self, tag: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let tag =
-                self.0.lookup_tag(tag).await.map_err(PyIcechunkStoreError::RepositoryError)?;
+            let tag = self
+                .0
+                .lookup_tag(tag)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tag.to_string())
         })
     }
