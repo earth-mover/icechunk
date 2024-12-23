@@ -67,7 +67,7 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        opts = S3CompatibleOptions(endpoint_url="http://localhost:9000",allow_http=True)
+        opts = S3CompatibleOptions(endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1")
         credentials = Credentials.Static(StaticCredentials(access_key_id="minio123", secret_access_key="minio123"))
         repo = Repository.create(make_storage(ObjectStoreConfig.S3Compatible(opts), bucket="testbucket", prefix="python-xarray-test__" + str(time.time()), credentials=credentials))
         session = repo.writable_session("main")
