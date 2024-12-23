@@ -1,4 +1,8 @@
-use std::{collections::HashMap, iter, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -12,8 +16,8 @@ use crate::{
         IcechunkFormatError, NodeId, SnapshotId,
     },
     refs::{
-        create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
-        BranchVersion, Ref, RefError,
+        create_tag, delete_branch, fetch_branch_tip, fetch_tag, list_branches, list_tags,
+        update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
     storage::ETag,
@@ -329,13 +333,13 @@ impl Repository {
     }
 
     /// List all branches in the repository.
-    pub async fn list_branches(&self) -> RepositoryResult<Vec<String>> {
+    pub async fn list_branches(&self) -> RepositoryResult<HashSet<String>> {
         let branches = list_branches(self.storage.as_ref()).await?;
         Ok(branches)
     }
 
     /// Get the snapshot id of the tip of a branch
-    pub async fn branch_tip(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version = fetch_branch_tip(self.storage.as_ref(), branch).await?;
         Ok(branch_version.snapshot)
     }
@@ -349,7 +353,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<BranchVersion> {
         raise_if_invalid_snapshot_id(self.storage.as_ref(), snapshot_id).await?;
-        let branch_tip = self.branch_tip(branch).await?;
+        let branch_tip = self.lookup_branch(branch).await?;
         let version = update_branch(
             self.storage.as_ref(),
             branch,
@@ -360,6 +364,14 @@ impl Repository {
         .await?;
 
         Ok(version)
+    }
+
+    /// Delete a branch from the repository.
+    /// This will remove the branch reference and the branch history. It will not remove the
+    /// chunks or snapshots associated with the branch.
+    pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
+        delete_branch(self.storage.as_ref(), branch).await?;
+        Ok(())
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -379,12 +391,12 @@ impl Repository {
     }
 
     /// List all tags in the repository.
-    pub async fn list_tags(&self) -> RepositoryResult<Vec<String>> {
+    pub async fn list_tags(&self) -> RepositoryResult<HashSet<String>> {
         let tags = list_tags(self.storage.as_ref()).await?;
         Ok(tags)
     }
 
-    pub async fn tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
         Ok(ref_data.snapshot)
     }
@@ -446,7 +458,11 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        error::Error,
+        sync::Arc,
+    };
 
     use crate::{ObjectStorage, Repository, RepositoryConfig, Storage};
 
@@ -499,6 +515,53 @@ mod tests {
         // verify loading again gets the value from persistent config
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+
+        let initial_branches = repo.list_branches().await?;
+        assert_eq!(initial_branches, HashSet::from(["main".into()]));
+
+        let initial_tags = repo.list_tags().await?;
+        assert_eq!(initial_tags, HashSet::new());
+
+        // Create some branches
+        let initial_snapshot = repo.lookup_branch("main").await?;
+        repo.create_branch("branch1", &initial_snapshot).await?;
+        repo.create_branch("branch2", &initial_snapshot).await?;
+
+        let branches = repo.list_branches().await?;
+        assert_eq!(
+            branches,
+            HashSet::from([
+                "main".to_string(),
+                "branch1".to_string(),
+                "branch2".to_string()
+            ])
+        );
+
+        // Delete a branch
+        repo.delete_branch("branch1").await?;
+
+        let branches = repo.list_branches().await?;
+        assert_eq!(branches, HashSet::from(["main".to_string(), "branch2".to_string()]));
+
+        // Create some tags
+        repo.create_tag("tag1", &initial_snapshot).await?;
+
+        let tags = repo.list_tags().await?;
+        assert_eq!(tags, HashSet::from(["tag1".to_string()]));
+
+        // get the snapshot id of the tag
+        let tag_snapshot = repo.lookup_tag("tag1").await?;
+        assert_eq!(tag_snapshot, initial_snapshot);
+
         Ok(())
     }
 }

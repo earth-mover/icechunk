@@ -91,11 +91,11 @@ class Repository:
         """
         self._repository.create_branch(branch, snapshot_id)
 
-    def list_branches(self) -> list[str]:
+    def list_branches(self) -> set[str]:
         """List the branches in the repository."""
         return self._repository.list_branches()
 
-    def branch_tip(self, branch: str) -> str:
+    def lookup_branch(self, branch: str) -> str:
         """Get the tip snapshot ID of a branch.
 
         Args:
@@ -104,7 +104,7 @@ class Repository:
         Returns:
             str: The snapshot ID of the tip of the branch
         """
-        return self._repository.branch_tip(branch)
+        return self._repository.lookup_branch(branch)
 
     def reset_branch(self, branch: str, snapshot_id: str) -> None:
         """Reset a branch to a specific snapshot.
@@ -118,6 +118,14 @@ class Repository:
         """
         self._repository.reset_branch(branch, snapshot_id)
 
+    def delete_branch(self, branch: str) -> None:
+        """Delete a branch.
+
+        Args:
+            branch: The branch to delete.
+        """
+        self._repository.delete_branch(branch)
+
     def create_tag(self, tag: str, snapshot_id: str) -> None:
         """Create a new tag at the given snapshot.
 
@@ -127,11 +135,11 @@ class Repository:
         """
         self._repository.create_tag(tag, snapshot_id)
 
-    def list_tags(self) -> list[str]:
+    def list_tags(self) -> set[str]:
         """List the tags in the repository."""
         return self._repository.list_tags()
 
-    def tag(self, tag: str) -> str:
+    def lookup_tag(self, tag: str) -> str:
         """Get the snapshot ID of a tag.
 
         Args:
@@ -140,7 +148,7 @@ class Repository:
         Returns:
             str: The snapshot ID of the tag.
         """
-        return self._repository.tag(tag)
+        return self._repository.lookup_tag(tag)
 
     def readonly_session(
         self,
