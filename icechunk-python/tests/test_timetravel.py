@@ -75,6 +75,13 @@ def test_timetravel():
     air_temp[:, :] = 90
     feature_snapshot_id = session.commit("commit 3")
 
+    branches = repo.list_branches()
+    assert set(branches) == set(["main", "feature"])
+
+    repo.delete_branch("feature")
+    branches = repo.list_branches()
+    assert branches == ["main"]
+
     repo.create_tag("v1.0", feature_snapshot_id)
     session = repo.readonly_session(tag="v1.0")
     store = session.store()
@@ -94,6 +101,11 @@ def test_timetravel():
     ]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
+
+    tags = repo.list_tags()
+    assert tags == ["v1.0"]
+    tag_snapshot_id = repo.lookup_tag("v1.0")
+    assert tag_snapshot_id == feature_snapshot_id
 
 
 async def test_branch_reset():

@@ -206,7 +206,7 @@ impl PyRepository {
         })
     }
 
-    pub fn branch_tip(&self, branch_name: &str) -> PyResult<String> {
+    pub fn lookup_branch(&self, branch_name: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tip = self
                 .0
@@ -227,6 +227,16 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             self.0
                 .reset_branch(branch_name, &snapshot_id)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
+    pub fn delete_branch(&self, branch: &str) -> PyResult<()> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            self.0
+                .delete_branch(branch)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(())
@@ -260,7 +270,7 @@ impl PyRepository {
         })
     }
 
-    pub fn tag(&self, tag: &str) -> PyResult<String> {
+    pub fn lookup_tag(&self, tag: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tag = self
                 .0
