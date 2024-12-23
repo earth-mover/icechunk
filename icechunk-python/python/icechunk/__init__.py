@@ -10,6 +10,7 @@ from icechunk._icechunk_python import (
     RebaseFailedData,
     RepositoryConfig,
     ObjectStoreConfig,
+    S3CompatibleOptions,
     StaticCredentials,
     Credentials,
     SnapshotMetadata,
@@ -40,6 +41,7 @@ __all__ = [
     "RepositoryConfig",
     "StaticCredentials",
     "Credentials",
+    "S3CompatibleOptions"
     "Session",
     "SnapshotMetadata",
     "Storage",

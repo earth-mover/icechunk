@@ -80,7 +80,7 @@ impl From<PyCredentials> for Credentials {
     }
 }
 
-#[pyclass(name = "S3ClientOptions")]
+#[pyclass(name = "S3CompatibleOptions")]
 #[derive(Clone, Debug)]
 pub struct PyS3CompatibleOptions {
     #[pyo3(get, set)]
@@ -91,6 +91,20 @@ pub struct PyS3CompatibleOptions {
     pub allow_http: bool,
     #[pyo3(get, set)]
     pub anonymous: bool,
+}
+
+#[pymethods]
+impl PyS3CompatibleOptions {
+    #[new]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false))]
+    pub(crate) fn new(
+        region: Option<String>,
+        endpoint_url: Option<String>,
+        allow_http: bool,
+        anonymous: bool,
+    ) -> Self {
+        Self { region, endpoint_url, allow_http, anonymous }
+    }
 }
 
 impl From<PyS3CompatibleOptions> for S3CompatibleOptions {
