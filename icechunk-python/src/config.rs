@@ -6,6 +6,8 @@ use icechunk::{
 };
 use pyo3::{pyclass, pyfunction, pymethods, PyResult};
 
+use crate::errors::PyIcechunkStoreError;
+
 #[pyclass(name = "StaticCredentials")]
 #[derive(Clone, Debug)]
 pub struct PyStaticCredentials {
@@ -192,8 +194,8 @@ pub(crate) fn make_storage(
             credentials.map(|cred| cred.into()),
         )
         .await
-    });
+        .map_err(PyIcechunkStoreError::StorageError)
+    })?;
 
-    // FIXME: unwrap
-    Ok(PyStorage(storage.unwrap()))
+    Ok(PyStorage(storage))
 }
