@@ -197,6 +197,10 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         self.delete_objects(SNAPSHOT_PREFIX, chunks.map(|id| id.to_string()).boxed())
             .await
     }
+
+    async fn delete_refs(&self, refs: BoxStream<'_, String>) -> StorageResult<usize> {
+        self.delete_objects(REF_PREFIX, refs).await
+    }
 }
 
 fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>

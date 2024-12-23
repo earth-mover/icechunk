@@ -159,7 +159,7 @@ async def test_icechunk_can_read_old_repo():
     )
 
     repo = mk_repo()
-    main_snapshot = repo.branch_tip("main")
+    main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [
         "set virtual chunk",
@@ -169,7 +169,7 @@ async def test_icechunk_can_read_old_repo():
     ]
     assert [p.message for p in repo.ancestry(main_snapshot)] == expected_main_history
 
-    my_branch_snapshot = repo.branch_tip("my-branch")
+    my_branch_snapshot = repo.lookup_branch("my-branch")
     expected_branch_history = [
         "some more structure",
         "delete a chunk",

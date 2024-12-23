@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
@@ -147,7 +150,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_branches(&self) -> PyResult<Vec<String>> {
+    pub fn list_branches(&self) -> PyResult<HashSet<String>> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let branches = self
                 .0
@@ -158,11 +161,11 @@ impl PyRepository {
         })
     }
 
-    pub fn branch_tip(&self, branch_name: &str) -> PyResult<String> {
+    pub fn lookup_branch(&self, branch_name: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tip = self
                 .0
-                .branch_tip(branch_name)
+                .lookup_branch(branch_name)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tip.to_string())
@@ -185,6 +188,16 @@ impl PyRepository {
         })
     }
 
+    pub fn delete_branch(&self, branch: &str) -> PyResult<()> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            self.0
+                .delete_branch(branch)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn create_tag(&self, tag_name: &str, snapshot_id: &str) -> PyResult<()> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
             PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
@@ -201,7 +214,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_tags(&self) -> PyResult<Vec<String>> {
+    pub fn list_tags(&self) -> PyResult<HashSet<String>> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tags = self
                 .0
@@ -212,10 +225,13 @@ impl PyRepository {
         })
     }
 
-    pub fn tag(&self, tag: &str) -> PyResult<String> {
+    pub fn lookup_tag(&self, tag: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let tag =
-                self.0.tag(tag).await.map_err(PyIcechunkStoreError::RepositoryError)?;
+            let tag = self
+                .0
+                .lookup_tag(tag)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tag.to_string())
         })
     }
