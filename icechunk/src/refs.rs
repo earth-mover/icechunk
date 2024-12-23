@@ -206,21 +206,31 @@ pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<R
 }
 
 pub async fn list_tags(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<String>> {
-    let all = storage.ref_names().await?;
-    Ok(all
-        .iter()
-        .filter_map(|path| path.strip_prefix("tag.").map(|name| name.to_string()))
-        .collect())
+    let tags = list_refs(storage)
+        .await?
+        .into_iter()
+        .filter_map(|r| match r {
+            Ref::Tag(name) => Some(name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    Ok(tags)
 }
 
 pub async fn list_branches(
     storage: &(dyn Storage + Send + Sync),
 ) -> RefResult<Vec<String>> {
-    let all = storage.ref_names().await?;
-    Ok(all
-        .iter()
-        .filter_map(|path| path.strip_prefix("branch.").map(|name| name.to_string()))
-        .collect())
+    let branches = list_refs(storage)
+        .await?
+        .into_iter()
+        .filter_map(|r| match r {
+            Ref::Branch(name) => Some(name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    Ok(branches)
 }
 
 async fn branch_history<'a, 'b>(

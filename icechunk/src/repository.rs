@@ -335,7 +335,7 @@ impl Repository {
     }
 
     /// Get the snapshot id of the tip of a branch
-    pub async fn branch_tip(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version = fetch_branch_tip(self.storage.as_ref(), branch).await?;
         Ok(branch_version.snapshot)
     }
@@ -349,7 +349,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<BranchVersion> {
         raise_if_invalid_snapshot_id(self.storage.as_ref(), snapshot_id).await?;
-        let branch_tip = self.branch_tip(branch).await?;
+        let branch_tip = self.lookup_branch(branch).await?;
         let version = update_branch(
             self.storage.as_ref(),
             branch,
@@ -384,7 +384,7 @@ impl Repository {
         Ok(tags)
     }
 
-    pub async fn tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
         Ok(ref_data.snapshot)
     }
@@ -446,7 +446,11 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        error::Error,
+        sync::Arc,
+    };
 
     use crate::{ObjectStorage, Repository, RepositoryConfig, Storage};
 
@@ -499,6 +503,45 @@ mod tests {
         // verify loading again gets the value from persistent config
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+
+        let initial_branches = repo.list_branches().await?;
+        assert_eq!(initial_branches, vec!["main"]);
+
+        let initial_tags = repo.list_tags().await?;
+        assert_eq!(initial_tags, Vec::<String>::new());
+
+        // Create some branches
+        let initial_snapshot = repo.lookup_branch("main").await?;
+        repo.create_branch("branch1", &initial_snapshot).await?;
+        repo.create_branch("branch2", &initial_snapshot).await?;
+
+        let branches = repo.list_branches().await?;
+        assert_eq!(
+            HashSet::from_iter(branches.into_iter()),
+            HashSet::from(["main".into(), "branch1".into(), "branch2".into()])
+        );
+
+        // TODO: Delete a branch
+
+        // Create some tags
+        repo.create_tag("tag1", &initial_snapshot).await?;
+
+        let tags = repo.list_tags().await?;
+        assert_eq!(tags, vec!["tag1".to_string()]);
+
+        // get the snapshot id of the tag
+        let tag_snapshot = repo.lookup_tag("tag1").await?;
+        assert_eq!(tag_snapshot, initial_snapshot);
+
         Ok(())
     }
 }

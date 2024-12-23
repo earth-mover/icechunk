@@ -210,7 +210,7 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tip = self
                 .0
-                .branch_tip(branch_name)
+                .lookup_branch(branch_name)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tip.to_string())
@@ -263,7 +263,7 @@ impl PyRepository {
     pub fn tag(&self, tag: &str) -> PyResult<String> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tag =
-                self.0.tag(tag).await.map_err(PyIcechunkStoreError::RepositoryError)?;
+                self.0.lookup_tag(tag).await.map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(tag.to_string())
         })
     }
