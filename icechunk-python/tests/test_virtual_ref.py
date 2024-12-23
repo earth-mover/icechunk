@@ -5,7 +5,7 @@ from object_store import ClientOptions, ObjectStore
 import zarr
 import zarr.core
 import zarr.core.buffer
-from icechunk.repository import ObjectStoreConfig, Repository, make_storage
+from icechunk.repository import Repository
 from icechunk import ObjectStoreConfig, make_storage
 
 
