@@ -133,12 +133,7 @@ impl S3Storage {
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([
-            self.bucket.as_str(),
-            self.prefix.as_str(),
-            file_prefix,
-            id,
-        ]);
+        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
