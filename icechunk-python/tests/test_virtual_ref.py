@@ -5,8 +5,8 @@ from object_store import ClientOptions, ObjectStore
 import zarr
 import zarr.core
 import zarr.core.buffer
-from icechunk.repository import Repository
 from icechunk import ObjectStoreConfig, make_storage
+from icechunk.repository import Repository
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):

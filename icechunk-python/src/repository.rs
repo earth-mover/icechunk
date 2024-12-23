@@ -37,23 +37,6 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
     }
 }
 
-//#[pyclass(name = "RepositoryConfig")]
-//#[derive(Clone, Debug)]
-//pub struct PyRepositoryConfig(RepositoryConfig);
-//
-//#[pymethods]
-//impl PyRepositoryConfig {
-//    #[new]
-//    #[pyo3(signature = (*, inline_chunk_threshold_bytes = 512, unsafe_overwrite_refs = false))]
-//    fn new(inline_chunk_threshold_bytes: u16, unsafe_overwrite_refs: bool) -> Self {
-//        Self(RepositoryConfig {
-//            inline_chunk_threshold_bytes,
-//            unsafe_overwrite_refs,
-//            ..Default::default()
-//        })
-//    }
-//}
-
 #[pyclass]
 pub struct PyRepository(Repository);
 
@@ -65,7 +48,6 @@ impl PyRepository {
         _cls: &Bound<'_, PyType>,
         storage: PyStorage,
         config: Option<PyRepositoryConfig>,
-        //virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {

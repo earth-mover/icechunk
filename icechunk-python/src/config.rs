@@ -39,12 +39,6 @@ impl From<PyStaticCredentials> for StaticCredentials {
     }
 }
 
-// impl From<PyStaticCredentials> for S3Credentials {
-//     fn from(value: PyS3Credentials) -> Self {
-//         S3Credentials::Static(value.into())
-//     }
-// }
-
 #[pymethods]
 impl PyStaticCredentials {
     #[new]

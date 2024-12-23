@@ -17,7 +17,6 @@ from icechunk._icechunk_python import (
     Storage,
     StoreConfig,
     VersionSelection,
-    # VirtualRefConfig,
     __version__,
     make_storage,
 )
