@@ -51,7 +51,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(make_storage(ObjectStoreConfig.InMoemory()))
+        repo = Repository.create(make_storage(ObjectStoreConfig.InMemory()))
         session = repo.writable_session("main")
         yield session.store()
 
