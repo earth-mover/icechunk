@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -200,12 +202,14 @@ pub async fn update_branch(
     }
 }
 
-pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<Ref>> {
+pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<HashSet<Ref>> {
     let all = storage.ref_names().await?;
     all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()
 }
 
-pub async fn list_tags(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<String>> {
+pub async fn list_tags(
+    storage: &(dyn Storage + Send + Sync),
+) -> RefResult<HashSet<String>> {
     let tags = list_refs(storage)
         .await?
         .into_iter()
@@ -213,14 +217,14 @@ pub async fn list_tags(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<S
             Ref::Tag(name) => Some(name),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<HashSet<_>>();
 
     Ok(tags)
 }
 
 pub async fn list_branches(
     storage: &(dyn Storage + Send + Sync),
-) -> RefResult<Vec<String>> {
+) -> RefResult<HashSet<String>> {
     let branches = list_refs(storage)
         .await?
         .into_iter()
@@ -228,7 +232,7 @@ pub async fn list_branches(
             Ref::Branch(name) => Some(name),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<HashSet<_>>();
 
     Ok(branches)
 }
@@ -397,7 +401,7 @@ mod tests {
 
             let res = fetch_tag(storage.as_ref(), "tag1").await;
             assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
-            assert_eq!(list_refs(storage.as_ref()).await?, vec![]);
+            assert_eq!(list_refs(storage.as_ref()).await?, HashSet::new());
 
             create_tag(storage.as_ref(), "tag1", s1.clone(), false).await?;
             create_tag(storage.as_ref(), "tag2", s2.clone(), false).await?;
@@ -420,7 +424,7 @@ mod tests {
 
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // attempts to recreate a tag fail
@@ -430,7 +434,7 @@ mod tests {
             ));
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // attempting to create a branch that doesn't exist, with a fake parent
@@ -440,7 +444,7 @@ mod tests {
             assert!(res.is_err());
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // create a branch successfully
@@ -468,11 +472,11 @@ mod tests {
 
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![
+                HashSet::from([
                     Ref::Branch("branch1".to_string()),
                     Ref::Tag("tag1".to_string()),
                     Ref::Tag("tag2".to_string())
-                ]
+                ])
             );
 
             // update a branch successfully

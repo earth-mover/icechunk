@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
@@ -195,7 +198,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_branches(&self) -> PyResult<Vec<String>> {
+    pub fn list_branches(&self) -> PyResult<HashSet<String>> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let branches = self
                 .0
@@ -259,7 +262,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_tags(&self) -> PyResult<Vec<String>> {
+    pub fn list_tags(&self) -> PyResult<HashSet<String>> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let tags = self
                 .0

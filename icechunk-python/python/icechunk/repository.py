@@ -91,7 +91,7 @@ class Repository:
         """
         self._repository.create_branch(branch, snapshot_id)
 
-    def list_branches(self) -> list[str]:
+    def list_branches(self) -> set[str]:
         """List the branches in the repository."""
         return self._repository.list_branches()
 
@@ -135,7 +135,7 @@ class Repository:
         """
         self._repository.create_tag(tag, snapshot_id)
 
-    def list_tags(self) -> list[str]:
+    def list_tags(self) -> set[str]:
         """List the tags in the repository."""
         return self._repository.list_tags()
 

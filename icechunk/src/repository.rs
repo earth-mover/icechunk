@@ -1,4 +1,8 @@
-use std::{collections::HashMap, iter, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -329,7 +333,7 @@ impl Repository {
     }
 
     /// List all branches in the repository.
-    pub async fn list_branches(&self) -> RepositoryResult<Vec<String>> {
+    pub async fn list_branches(&self) -> RepositoryResult<HashSet<String>> {
         let branches = list_branches(self.storage.as_ref()).await?;
         Ok(branches)
     }
@@ -387,7 +391,7 @@ impl Repository {
     }
 
     /// List all tags in the repository.
-    pub async fn list_tags(&self) -> RepositoryResult<Vec<String>> {
+    pub async fn list_tags(&self) -> RepositoryResult<HashSet<String>> {
         let tags = list_tags(self.storage.as_ref()).await?;
         Ok(tags)
     }
@@ -522,10 +526,10 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         let initial_branches = repo.list_branches().await?;
-        assert_eq!(initial_branches, vec!["main"]);
+        assert_eq!(initial_branches, HashSet::from(["main".into()]));
 
         let initial_tags = repo.list_tags().await?;
-        assert_eq!(initial_tags, Vec::<String>::new());
+        assert_eq!(initial_tags, HashSet::new());
 
         // Create some branches
         let initial_snapshot = repo.lookup_branch("main").await?;
@@ -534,24 +538,25 @@ mod tests {
 
         let branches = repo.list_branches().await?;
         assert_eq!(
-            HashSet::from_iter(branches.into_iter()),
-            HashSet::from(["main".into(), "branch1".into(), "branch2".into()])
+            branches,
+            HashSet::from([
+                "main".to_string(),
+                "branch1".to_string(),
+                "branch2".to_string()
+            ])
         );
 
         // Delete a branch
         repo.delete_branch("branch1").await?;
 
         let branches = repo.list_branches().await?;
-        assert_eq!(
-            HashSet::from_iter(branches.into_iter()),
-            HashSet::from(["main".into(), "branch2".into()])
-        );
+        assert_eq!(branches, HashSet::from(["main".to_string(), "branch2".to_string()]));
 
         // Create some tags
         repo.create_tag("tag1", &initial_snapshot).await?;
 
         let tags = repo.list_tags().await?;
-        assert_eq!(tags, vec!["tag1".to_string()]);
+        assert_eq!(tags, HashSet::from(["tag1".to_string()]));
 
         // get the snapshot id of the tag
         let tag_snapshot = repo.lookup_tag("tag1").await?;
