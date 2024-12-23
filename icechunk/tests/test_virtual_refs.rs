@@ -538,7 +538,7 @@ mod tests {
                 store: ObjectStoreConfig::S3(S3CompatibleOptions {
                     region: Some(String::from("us-east-1")),
                     endpoint_url: None,
-                    anonymous: false,
+                    anonymous: true,
                     allow_http: false,
                 }),
             },
