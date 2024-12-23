@@ -75,43 +75,13 @@ impl ChangeSet {
         self.new_arrays.get(path)
     }
 
+    /// IMPORTANT: This method does not delete children. The caller
+    /// is responsible for doing that
     pub fn delete_group(&mut self, path: Path, node_id: &NodeId) {
         self.updated_attributes.remove(node_id);
-        match self.new_groups.remove(&path) {
-            Some(deleted_node_id) => {
-                // the group was created in this session
-                // so we delete it directly, no need to flag as deleted
-                debug_assert!(&deleted_node_id == node_id);
-                self.delete_children(&path);
-            }
-            None => {
-                // it's an old group, we need to flag it as deleted
-                self.deleted_groups.insert((path, node_id.clone()));
-            }
-        }
-    }
-
-    fn delete_children(&mut self, path: &Path) {
-        let groups_to_delete: Vec<_> = self
-            .new_groups
-            .iter()
-            .filter(|(child_path, _)| child_path.starts_with(path))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        for (path, node) in groups_to_delete {
-            self.delete_group(path, &node);
-        }
-
-        let arrays_to_delete: Vec<_> = self
-            .new_arrays
-            .iter()
-            .filter(|(child_path, _)| child_path.starts_with(path))
-            .map(|(k, (node, _))| (k.clone(), node.clone()))
-            .collect();
-
-        for (path, node) in arrays_to_delete {
-            self.delete_array(path, &node);
+        if self.new_groups.remove(&path).is_none() {
+            // it's an old group, we need to flag it as deleted
+            self.deleted_groups.insert((path, node_id.clone()));
         }
     }
 
