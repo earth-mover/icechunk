@@ -6,7 +6,7 @@ import time
 import pytest
 
 import zarr
-from icechunk import S3Credentials, StorageConfig
+from icechunk import Credentials, ObjectStoreConfig, make_storage
 from icechunk.repository import Repository
 from xarray.tests.test_backends import (
     ZarrBase,
@@ -41,7 +41,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(StorageConfig.filesystem(tmpdir))
+            repo = Repository.create(make_storage(ObjectStoreConfig.LocalFileSystem(tmpdir)))
             session = repo.writable_session("main")
             yield session.store()
 
@@ -51,7 +51,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(StorageConfig.memory(""))
+        repo = Repository.create(make_storage(ObjectStoreConfig.InMoemory()))
         session = repo.writable_session("main")
         yield session.store()
 
