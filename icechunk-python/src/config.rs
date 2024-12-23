@@ -141,7 +141,7 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::S3Compatible(opts.into())
             }
             PyObjectStoreConfig::S3(opts) => ObjectStoreConfig::S3(opts.into()),
-            PyObjectStoreConfig::Gcs() => ObjectStoreConfig::GCS {},
+            PyObjectStoreConfig::Gcs() => ObjectStoreConfig::Gcs {},
             PyObjectStoreConfig::Azure() => ObjectStoreConfig::Azure {},
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }

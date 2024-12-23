@@ -45,7 +45,7 @@ pub fn mk_default_containers() -> Vec<VirtualChunkContainer> {
         VirtualChunkContainer {
             name: "gcs".to_string(),
             url_prefix: "gcs".to_string(),
-            store: ObjectStoreConfig::GCS {},
+            store: ObjectStoreConfig::Gcs {},
         },
         VirtualChunkContainer {
             name: "az".to_string(),
@@ -168,7 +168,7 @@ impl VirtualChunkResolver {
             ObjectStoreConfig::S3Compatible(opts) => {
                 Ok(Arc::new(S3Fetcher::new(opts, self.credentials.get(&cont.name)).await))
             }
-            ObjectStoreConfig::GCS { .. } => {
+            ObjectStoreConfig::Gcs { .. } => {
                 unimplemented!("support for virtual chunks on gcs")
             }
             ObjectStoreConfig::Azure { .. } => {

@@ -255,7 +255,7 @@ pub async fn make_storage(
         ),
 
         #[allow(clippy::unimplemented)]
-        ObjectStoreConfig::GCS {} => unimplemented!(),
+        ObjectStoreConfig::Gcs {} => unimplemented!(),
         #[allow(clippy::unimplemented)]
         ObjectStoreConfig::Azure {} => unimplemented!(),
         #[allow(clippy::unimplemented)]
