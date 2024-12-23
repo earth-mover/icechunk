@@ -54,7 +54,7 @@ def test_zarr_hierarchy():
 
 def test_zarr_store():
     pytest.skip("icechunk is more strict about keys")
-    store = Repository.create(StorageConfig.memory()).writable_session("main").store()
+    store = Repository.create(make_storage(ObjectStoreConfig.InMemory())).writable_session("main").store()
 
     def mk_test_instance_sync() -> ZarrHierarchyStateMachine:
         return ZarrStoreStateMachine(store)
