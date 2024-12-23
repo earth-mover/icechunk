@@ -198,7 +198,7 @@ impl S3Fetcher {
         credentials: Option<&Credentials>,
     ) -> Self {
         let credentials = credentials.cloned().unwrap_or(if opts.anonymous {
-            Credentials::None
+            Credentials::DontSign
         } else {
             Credentials::FromEnv
         });

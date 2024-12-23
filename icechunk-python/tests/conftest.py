@@ -2,7 +2,7 @@ from typing import Literal
 
 import pytest
 
-from icechunk import Repository, ObjectStoreConfig, make_storage
+from icechunk import ObjectStoreConfig, Repository, make_storage
 
 
 def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:

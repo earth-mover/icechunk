@@ -6,7 +6,13 @@ import time
 import pytest
 
 import zarr
-from icechunk import Credentials, ObjectStoreConfig, make_storage, S3CompatibleOptions, StaticCredentials
+from icechunk import (
+    Credentials,
+    ObjectStoreConfig,
+    S3CompatibleOptions,
+    StaticCredentials,
+    make_storage,
+)
 from icechunk.repository import Repository
 from xarray.tests.test_backends import (
     ZarrBase,
@@ -41,7 +47,9 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(make_storage(ObjectStoreConfig.LocalFileSystem(tmpdir)))
+            repo = Repository.create(
+                make_storage(ObjectStoreConfig.LocalFileSystem(tmpdir))
+            )
             session = repo.writable_session("main")
             yield session.store()
 
@@ -67,8 +75,19 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        opts = S3CompatibleOptions(endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1")
-        credentials = Credentials.Static(StaticCredentials(access_key_id="minio123", secret_access_key="minio123"))
-        repo = Repository.create(make_storage(ObjectStoreConfig.S3Compatible(opts), bucket="testbucket", prefix="python-xarray-test__" + str(time.time()), credentials=credentials))
+        opts = S3CompatibleOptions(
+            endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
+        )
+        credentials = Credentials.Static(
+            StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+        )
+        repo = Repository.create(
+            make_storage(
+                ObjectStoreConfig.S3Compatible(opts),
+                bucket="testbucket",
+                prefix="python-xarray-test__" + str(time.time()),
+                credentials=credentials,
+            )
+        )
         session = repo.writable_session("main")
         yield session.store()

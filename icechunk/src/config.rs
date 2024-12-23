@@ -20,7 +20,7 @@ pub enum ObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(S3CompatibleOptions),
     S3(S3CompatibleOptions),
-    GCS {
+    Gcs {
         // TODO:
     },
     Azure {
@@ -89,7 +89,7 @@ pub enum Credentials {
     #[serde(rename = "from_env")]
     FromEnv,
     #[serde(rename = "none")]
-    None,
+    DontSign,
     #[serde(rename = "static")]
     Static(StaticCredentials),
 }

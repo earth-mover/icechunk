@@ -66,7 +66,7 @@ impl PyStaticCredentials {
 #[derive(Clone, Debug)]
 pub enum PyCredentials {
     FromEnv(),
-    None(),
+    DontSign(),
     Static(PyStaticCredentials),
 }
 
@@ -74,7 +74,7 @@ impl From<PyCredentials> for Credentials {
     fn from(credentials: PyCredentials) -> Self {
         match credentials {
             PyCredentials::FromEnv() => Credentials::FromEnv,
-            PyCredentials::None() => Credentials::None,
+            PyCredentials::DontSign() => Credentials::DontSign,
             PyCredentials::Static(creds) => Credentials::Static(creds.into()),
         }
     }

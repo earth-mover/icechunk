@@ -6,13 +6,7 @@ from object_store import ClientOptions, ObjectStore
 import zarr
 import zarr.core
 import zarr.core.array
-from icechunk import (
-    Credentials,
-    make_storage,
-    ObjectStoreConfig,
-    #VirtualRefConfig,
-)
-from icechunk.repository import Repository
+from icechunk.repository import ObjectStoreConfig, Repository
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
@@ -55,16 +49,16 @@ async def test_issue_418():
     await write_minio_virtual_refs()
 
     repo = Repository.create(
-        storage=StorageConfig.memory("test"),
-        virtual_ref_config=VirtualRefConfig.s3_from_config(
-            credentials=S3Credentials(
-                access_key_id="minio123",
-                secret_access_key="minio123",
-            ),
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-            region="us-east-1",
-        ),
+        storage=ObjectStoreConfig.InMemory()
+        # virtual_ref_config=VirtualRefConfig.s3_from_config(
+        #     credentials=S3Credentials(
+        #         access_key_id="minio123",
+        #         secret_access_key="minio123",
+        #     ),
+        #     endpoint_url="http://localhost:9000",
+        #     allow_http=True,
+        #     region="us-east-1",
+        # ),
     )
     session = repo.writable_session("main")
     store = session.store()

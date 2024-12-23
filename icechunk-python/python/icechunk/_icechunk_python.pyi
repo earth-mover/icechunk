@@ -1,6 +1,6 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator
 from enum import Enum
 
 class RepositoryConfig:
@@ -261,20 +261,68 @@ class StaticCredentials:
         session_token: str | None = None,
     ): ...
 
+class Credentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Nonen:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, _0: StaticCredentials) -> None: ...
+
+class ObjectStoreConfig:
+    class InMemory:
+        def __init__(self) -> None: ...
+
+    class LocalFileSystem:
+        def __init__(self, path: str) -> None: ...
+
+    class S3Compatible:
+        def __init__(self, options: S3CompatibleOptions) -> None: ...
+
+    class S3:
+        def __init__(self, options: S3CompatibleOptions) -> None: ...
+
+    class Gcs:
+        def __init__(self) -> None: ...
+
+    class Azure:
+        def __init__(self) -> None: ...
+
+    class Tigris:
+        def __init__(self) -> None: ...
+
+class S3CompatibleOptions:
+    def __init__(
+        self,
+        region: str | None = None,
+        endpoint_url: str | None = None,
+        allow_http: bool = False,
+        anonymous: bool = False,
+    ) -> None: ...
+
+def make_storage(
+    config: ObjectStoreConfig,
+    bucket: str | None = None,
+    prefix: str | None = None,
+    credentials: Credentials | None = None,
+) -> Storage: ...
+
 # class VirtualRefConfig:
 #     class S3:
 #         """Config for an S3 Object Storage compatible storage backend"""
-# 
+#
 #         credentials: S3Credentials | None
 #         endpoint_url: str | None
 #         allow_http: bool | None
 #         region: str | None
-# 
+#
 #     @classmethod
 #     def s3_from_env(cls) -> VirtualRefConfig:
 #         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage backend
 #         with the given bucket and prefix
-# 
+#
 #         This assumes that the necessary credentials are available in the environment:
 #             AWS_REGION or AWS_DEFAULT_REGION
 #             AWS_ACCESS_KEY_ID,
@@ -284,7 +332,7 @@ class StaticCredentials:
 #             AWS_ALLOW_HTTP (optional)
 #         """
 #         ...
-# 
+#
 #     @classmethod
 #     def s3_from_config(
 #         cls,
@@ -296,12 +344,12 @@ class StaticCredentials:
 #     ) -> VirtualRefConfig:
 #         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
 #         backend with the given bucket, prefix, and configuration
-# 
+#
 #         This method will directly use the provided credentials to authenticate with the S3 service,
 #         ignoring any environment variables.
 #         """
 #         ...
-# 
+#
 #     @classmethod
 #     def s3_anonymous(
 #         cls,

@@ -18,9 +18,7 @@ class Repository:
         self._repository = repository
 
     @classmethod
-    def create(
-        cls, storage: Storage, config: RepositoryConfig | None = None
-    ) -> Self:
+    def create(cls, storage: Storage, config: RepositoryConfig | None = None) -> Self:
         """Create a new Icechunk repository.
 
         If one already exists at the given store location, an error will be raised.
@@ -32,9 +30,7 @@ class Repository:
         return cls(PyRepository.create(storage, config=config))
 
     @classmethod
-    def open(
-        cls, storage: Storage, config: RepositoryConfig | None = None
-    ) -> Self:
+    def open(cls, storage: Storage, config: RepositoryConfig | None = None) -> Self:
         """Open an existing Icechunk repository.
 
         If no repository exists at the given storage location, an error will be raised.

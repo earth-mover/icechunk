@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
-from icechunk import IcechunkStore, Repository, make_storage, ObjectStoreConfig, Storage
+from icechunk import IcechunkStore, ObjectStoreConfig, Repository, make_storage
 
 pytest.importorskip("hypothesis")
 
@@ -31,9 +31,7 @@ def create() -> IcechunkStore:
     return repo.writable_session("main").store()
 
 
-icechunk_stores = st.builds(
-    create
-)
+icechunk_stores = st.builds(create)
 
 
 @settings(report_multiple_bugs=True, deadline=None)

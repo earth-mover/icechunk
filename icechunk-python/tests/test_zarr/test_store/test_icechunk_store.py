@@ -42,7 +42,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.fixture
     def store_kwargs(self, tmpdir) -> dict[str, Any]:
         kwargs = {
-            "storage": make_storage(ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/store_test")),
+            "storage": make_storage(
+                ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/store_test")
+            ),
             "read_only": False,
         }
         return kwargs

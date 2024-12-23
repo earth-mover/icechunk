@@ -47,7 +47,9 @@ def mk_repo():
     config = ic.RepositoryConfig(
         inline_chunk_threshold_bytes=12,
     )
-    store = ic.Repository.open_or_create(storage=StorageConfig.LocalFileSystem(store_path), config=config)
+    store = ic.Repository.open_or_create(
+        storage=ic.ObjectStoreConfig.LocalFileSystem(store_path), config=config
+    )
     return store
 
 
