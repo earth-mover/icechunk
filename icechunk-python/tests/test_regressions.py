@@ -7,9 +7,10 @@ import zarr
 import zarr.core
 import zarr.core.array
 from icechunk import (
-    S3Credentials,
-    StorageConfig,
-    VirtualRefConfig,
+    Credentials,
+    make_storage,
+    ObjectStoreConfig,
+    #VirtualRefConfig,
 )
 from icechunk.repository import Repository
 

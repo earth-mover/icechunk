@@ -26,26 +26,23 @@ class PyRepository:
     @classmethod
     def create(
         cls,
-        storage: StorageConfig,
-        *,
+        storage: Storage,
         config: RepositoryConfig | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
         cls,
-        storage: StorageConfig,
-        *,
+        storage: Storage,
         config: RepositoryConfig | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
         cls,
-        storage: StorageConfig,
-        *,
+        storage: Storage,
         config: RepositoryConfig | None = None,
     ) -> PyRepository: ...
     @staticmethod
-    def exists(storage: StorageConfig) -> bool: ...
+    def exists(storage: Storage) -> bool: ...
     def ancestry(self, snapshot_id: str) -> list[SnapshotMetadata]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> list[str]: ...
@@ -166,7 +163,7 @@ class PyAsyncSnapshotGenerator(
     def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotMetadata: ...
 
-class StorageConfig:
+class Storage:
     """Storage configuration for an IcechunkStore
 
     Currently supports memory, filesystem, and S3 storage backends.
@@ -182,77 +179,77 @@ class StorageConfig:
     ```
     """
 
-    @classmethod
-    def memory(cls, prefix: str) -> StorageConfig:
-        """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
-        ...
+    # @classmethod
+    # def memory(cls, prefix: str) -> StorageConfig:
+    #     """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
+    #     ...
 
-    @classmethod
-    def filesystem(cls, root: str) -> StorageConfig:
-        """Create a StorageConfig object for a local filesystem storage backend with the given root directory"""
-        ...
+    # @classmethod
+    # def filesystem(cls, root: str) -> StorageConfig:
+    #     """Create a StorageConfig object for a local filesystem storage backend with the given root directory"""
+    #     ...
 
-    @classmethod
-    def object_store(cls, url: str, options: Iterable[tuple[str, str]]) -> StorageConfig:
-        """Create a StorageConfig object for an Object Storage compatible storage backend
-        with the given URL and options"""
-        ...
+    # @classmethod
+    # def object_store(cls, url: str, options: Iterable[tuple[str, str]]) -> StorageConfig:
+    #     """Create a StorageConfig object for an Object Storage compatible storage backend
+    #     with the given URL and options"""
+    #     ...
 
-    @classmethod
-    def s3_from_env(
-        cls,
-        bucket: str,
-        prefix: str,
-        endpoint_url: str | None,
-        allow_http: bool = False,
-        region: str | None = None,
-    ) -> StorageConfig:
-        """Create a StorageConfig object for an S3 Object Storage compatible storage backend
-        with the given bucket and prefix
+    # @classmethod
+    # def s3_from_env(
+    #     cls,
+    #     bucket: str,
+    #     prefix: str,
+    #     endpoint_url: str | None,
+    #     allow_http: bool = False,
+    #     region: str | None = None,
+    # ) -> StorageConfig:
+    #     """Create a StorageConfig object for an S3 Object Storage compatible storage backend
+    #     with the given bucket and prefix
 
-        This assumes that the necessary credentials are available in the environment:
-            AWS_REGION
-            AWS_ACCESS_KEY_ID,
-            AWS_SECRET_ACCESS_KEY,
-            AWS_SESSION_TOKEN (optional)
-            AWS_ENDPOINT_URL (optional)
-            AWS_ALLOW_HTTP (optional)
-        """
-        ...
+    #     This assumes that the necessary credentials are available in the environment:
+    #         AWS_REGION
+    #         AWS_ACCESS_KEY_ID,
+    #         AWS_SECRET_ACCESS_KEY,
+    #         AWS_SESSION_TOKEN (optional)
+    #         AWS_ENDPOINT_URL (optional)
+    #         AWS_ALLOW_HTTP (optional)
+    #     """
+    #     ...
 
-    @classmethod
-    def s3_from_config(
-        cls,
-        bucket: str,
-        prefix: str,
-        credentials: S3Credentials,
-        endpoint_url: str | None,
-        allow_http: bool = False,
-        region: str | None = None,
-    ) -> StorageConfig:
-        """Create a StorageConfig object for an S3 Object Storage compatible storage
-        backend with the given bucket, prefix, and configuration
+    # @classmethod
+    # def s3_from_config(
+    #     cls,
+    #     bucket: str,
+    #     prefix: str,
+    #     credentials: S3Credentials,
+    #     endpoint_url: str | None,
+    #     allow_http: bool = False,
+    #     region: str | None = None,
+    # ) -> StorageConfig:
+    #     """Create a StorageConfig object for an S3 Object Storage compatible storage
+    #     backend with the given bucket, prefix, and configuration
 
-        This method will directly use the provided credentials to authenticate with the S3 service,
-        ignoring any environment variables.
-        """
-        ...
+    #     This method will directly use the provided credentials to authenticate with the S3 service,
+    #     ignoring any environment variables.
+    #     """
+    #     ...
 
-    @classmethod
-    def s3_anonymous(
-        cls,
-        bucket: str,
-        prefix: str,
-        endpoint_url: str | None,
-        allow_http: bool = False,
-        region: str | None = None,
-    ) -> StorageConfig:
-        """Create a StorageConfig object for an S3 Object Storage compatible storage
-        using anonymous access
-        """
-        ...
+    # @classmethod
+    # def s3_anonymous(
+    #     cls,
+    #     bucket: str,
+    #     prefix: str,
+    #     endpoint_url: str | None,
+    #     allow_http: bool = False,
+    #     region: str | None = None,
+    # ) -> StorageConfig:
+    #     """Create a StorageConfig object for an S3 Object Storage compatible storage
+    #     using anonymous access
+    #     """
+    #     ...
 
-class S3Credentials:
+class StaticCredentials:
     access_key_id: str
     secret_access_key: str
     session_token: str | None
@@ -264,59 +261,59 @@ class S3Credentials:
         session_token: str | None = None,
     ): ...
 
-class VirtualRefConfig:
-    class S3:
-        """Config for an S3 Object Storage compatible storage backend"""
-
-        credentials: S3Credentials | None
-        endpoint_url: str | None
-        allow_http: bool | None
-        region: str | None
-
-    @classmethod
-    def s3_from_env(cls) -> VirtualRefConfig:
-        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage backend
-        with the given bucket and prefix
-
-        This assumes that the necessary credentials are available in the environment:
-            AWS_REGION or AWS_DEFAULT_REGION
-            AWS_ACCESS_KEY_ID,
-            AWS_SECRET_ACCESS_KEY,
-            AWS_SESSION_TOKEN (optional)
-            AWS_ENDPOINT_URL (optional)
-            AWS_ALLOW_HTTP (optional)
-        """
-        ...
-
-    @classmethod
-    def s3_from_config(
-        cls,
-        credentials: S3Credentials,
-        *,
-        endpoint_url: str | None = None,
-        allow_http: bool | None = None,
-        region: str | None = None,
-    ) -> VirtualRefConfig:
-        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
-        backend with the given bucket, prefix, and configuration
-
-        This method will directly use the provided credentials to authenticate with the S3 service,
-        ignoring any environment variables.
-        """
-        ...
-
-    @classmethod
-    def s3_anonymous(
-        cls,
-        *,
-        endpoint_url: str | None = None,
-        allow_http: bool | None = None,
-        region: str | None = None,
-    ) -> VirtualRefConfig:
-        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
-        using anonymous access
-        """
-        ...
+# class VirtualRefConfig:
+#     class S3:
+#         """Config for an S3 Object Storage compatible storage backend"""
+# 
+#         credentials: S3Credentials | None
+#         endpoint_url: str | None
+#         allow_http: bool | None
+#         region: str | None
+# 
+#     @classmethod
+#     def s3_from_env(cls) -> VirtualRefConfig:
+#         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage backend
+#         with the given bucket and prefix
+# 
+#         This assumes that the necessary credentials are available in the environment:
+#             AWS_REGION or AWS_DEFAULT_REGION
+#             AWS_ACCESS_KEY_ID,
+#             AWS_SECRET_ACCESS_KEY,
+#             AWS_SESSION_TOKEN (optional)
+#             AWS_ENDPOINT_URL (optional)
+#             AWS_ALLOW_HTTP (optional)
+#         """
+#         ...
+# 
+#     @classmethod
+#     def s3_from_config(
+#         cls,
+#         credentials: S3Credentials,
+#         *,
+#         endpoint_url: str | None = None,
+#         allow_http: bool | None = None,
+#         region: str | None = None,
+#     ) -> VirtualRefConfig:
+#         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
+#         backend with the given bucket, prefix, and configuration
+# 
+#         This method will directly use the provided credentials to authenticate with the S3 service,
+#         ignoring any environment variables.
+#         """
+#         ...
+# 
+#     @classmethod
+#     def s3_anonymous(
+#         cls,
+#         *,
+#         endpoint_url: str | None = None,
+#         allow_http: bool | None = None,
+#         region: str | None = None,
+#     ) -> VirtualRefConfig:
+#         """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
+#         using anonymous access
+#         """
+#         ...
 
 class StoreConfig:
     """Configuration for an IcechunkStore"""

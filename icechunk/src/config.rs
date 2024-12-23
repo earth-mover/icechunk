@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::virtual_chunks::{
@@ -15,7 +17,7 @@ pub struct S3CompatibleOptions {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ObjectStoreConfig {
     InMemory,
-    LocalFileSystem,
+    LocalFileSystem(PathBuf),
     S3Compatible(S3CompatibleOptions),
     S3(S3CompatibleOptions),
     GCS {

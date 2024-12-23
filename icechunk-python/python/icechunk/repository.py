@@ -4,7 +4,7 @@ from icechunk._icechunk_python import (
     PyRepository,
     RepositoryConfig,
     SnapshotMetadata,
-    StorageConfig,
+    Storage,
 )
 from icechunk.session import Session
 
@@ -19,7 +19,7 @@ class Repository:
 
     @classmethod
     def create(
-        cls, storage: StorageConfig, *, config: RepositoryConfig | None = None
+        cls, storage: Storage, config: RepositoryConfig | None = None
     ) -> Self:
         """Create a new Icechunk repository.
 
@@ -33,7 +33,7 @@ class Repository:
 
     @classmethod
     def open(
-        cls, storage: StorageConfig, *, config: RepositoryConfig | None = None
+        cls, storage: Storage, config: RepositoryConfig | None = None
     ) -> Self:
         """Open an existing Icechunk repository.
 
@@ -49,8 +49,7 @@ class Repository:
     @classmethod
     def open_or_create(
         cls,
-        storage: StorageConfig,
-        *,
+        storage: Storage,
         config: RepositoryConfig | None = None,
     ) -> Self:
         """Open an existing Icechunk repository or create a new one if it does not exist.
@@ -63,7 +62,7 @@ class Repository:
         return cls(PyRepository.open_or_create(storage, config=config))
 
     @staticmethod
-    def exists(storage: StorageConfig) -> bool:
+    def exists(storage: Storage) -> bool:
         """Check if a repository exists at the given storage location.
 
         Args:

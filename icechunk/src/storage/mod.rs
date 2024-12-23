@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use s3::S3Storage;
-use std::{ffi::OsString, path::PathBuf, sync::Arc};
+use std::{ffi::OsString, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -228,8 +228,8 @@ pub async fn make_storage(
         ObjectStoreConfig::InMemory {} => {
             Arc::new(ObjectStorage::new_in_memory_store(None)?)
         }
-        ObjectStoreConfig::LocalFileSystem => {
-            Arc::new(ObjectStorage::new_local_store(&PathBuf::new())?)
+        ObjectStoreConfig::LocalFileSystem(path) => {
+            Arc::new(ObjectStorage::new_local_store(&path)?)
         }
         ObjectStoreConfig::S3Compatible(opts) => Arc::new(
             S3Storage::new(

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import IcechunkStore, ObjectStoreConfig, make_storage
 from icechunk.repository import Repository
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
@@ -42,7 +42,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.fixture
     def store_kwargs(self, tmpdir) -> dict[str, Any]:
         kwargs = {
-            "storage": StorageConfig.filesystem(f"{tmpdir}/store_test"),
+            "storage": make_storage(ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/store_test")),
             "read_only": False,
         }
         return kwargs

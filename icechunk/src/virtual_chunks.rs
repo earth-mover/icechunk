@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError, Client};
@@ -60,7 +60,7 @@ pub fn mk_default_containers() -> Vec<VirtualChunkContainer> {
         VirtualChunkContainer {
             name: "file".to_string(),
             url_prefix: "file".to_string(),
-            store: ObjectStoreConfig::LocalFileSystem {},
+            store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
         },
     ]
 }

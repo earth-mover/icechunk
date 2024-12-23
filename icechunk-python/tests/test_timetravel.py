@@ -1,6 +1,6 @@
 from typing import cast
 
-import icechunk
+import icechunk as ic
 import zarr
 import zarr.core
 import zarr.core.array
@@ -8,9 +8,11 @@ import zarr.core.buffer
 
 
 def test_timetravel():
-    repo = icechunk.Repository.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    repo = ic.Repository.create(
+        storage=ic.make_storage(ic.ObjectStoreConfig.InMemory()),
+        config=config,
     )
     session = repo.writable_session("main")
     store = session.store()
@@ -97,10 +99,13 @@ def test_timetravel():
 
 
 async def test_branch_reset():
-    repo = icechunk.Repository.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    repo = ic.Repository.create(
+        storage=ic.make_storage(ic.ObjectStoreConfig.InMemory()),
+        config=config,
     )
+
     session = repo.writable_session("main")
     store = session.store()
 

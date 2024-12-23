@@ -5,12 +5,16 @@ use futures::TryStreamExt;
 use icechunk::{
     format::{snapshot::SnapshotMetadata, SnapshotId},
     repository::{RepositoryError, VersionInfo},
-    Repository, RepositoryConfig,
+    Repository,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
-use crate::{errors::PyIcechunkStoreError, session::PySession, storage::PyStorageConfig};
+use crate::{
+    config::{PyRepositoryConfig, PyStorage},
+    errors::PyIcechunkStoreError,
+    session::PySession,
+};
 
 #[pyclass(name = "SnapshotMetadata")]
 #[derive(Clone, Debug)]
@@ -33,22 +37,22 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
     }
 }
 
-#[pyclass(name = "RepositoryConfig")]
-#[derive(Clone, Debug)]
-pub struct PyRepositoryConfig(RepositoryConfig);
-
-#[pymethods]
-impl PyRepositoryConfig {
-    #[new]
-    #[pyo3(signature = (*, inline_chunk_threshold_bytes = 512, unsafe_overwrite_refs = false))]
-    fn new(inline_chunk_threshold_bytes: u16, unsafe_overwrite_refs: bool) -> Self {
-        Self(RepositoryConfig {
-            inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs,
-            ..Default::default()
-        })
-    }
-}
+//#[pyclass(name = "RepositoryConfig")]
+//#[derive(Clone, Debug)]
+//pub struct PyRepositoryConfig(RepositoryConfig);
+//
+//#[pymethods]
+//impl PyRepositoryConfig {
+//    #[new]
+//    #[pyo3(signature = (*, inline_chunk_threshold_bytes = 512, unsafe_overwrite_refs = false))]
+//    fn new(inline_chunk_threshold_bytes: u16, unsafe_overwrite_refs: bool) -> Self {
+//        Self(RepositoryConfig {
+//            inline_chunk_threshold_bytes,
+//            unsafe_overwrite_refs,
+//            ..Default::default()
+//        })
+//    }
+//}
 
 #[pyclass]
 pub struct PyRepository(Repository);
@@ -59,25 +63,13 @@ impl PyRepository {
     #[pyo3(signature = (storage, *, config = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
-        storage: PyStorageConfig,
+        storage: PyStorage,
         config: Option<PyRepositoryConfig>,
+        //virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = storage
-                    .create_storage()
-                    .await
-                    .map_err(PyIcechunkStoreError::StorageError)?;
-                if Repository::exists(storage.as_ref())
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?
-                {
-                    return Err(PyIcechunkStoreError::RepositoryError(
-                        RepositoryError::AlreadyInitialized,
-                    ));
-                }
-
-                Repository::create(config.map(|c| c.0), storage, HashMap::new())
+                Repository::create(config.map(|c| c.into()), storage.0, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
@@ -89,25 +81,12 @@ impl PyRepository {
     #[pyo3(signature = (storage, *, config = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
-        storage: PyStorageConfig,
+        storage: PyStorage,
         config: Option<PyRepositoryConfig>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = storage
-                    .create_storage()
-                    .await
-                    .map_err(PyIcechunkStoreError::StorageError)?;
-                if !Repository::exists(storage.as_ref())
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?
-                {
-                    return Err(PyIcechunkStoreError::RepositoryError(
-                        RepositoryError::RepositoryDoesntExist,
-                    ));
-                }
-
-                Repository::open(config.map(|c| c.0), storage, HashMap::new())
+                Repository::open(config.map(|c| c.into()), storage.0, HashMap::new())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
@@ -119,20 +98,15 @@ impl PyRepository {
     #[pyo3(signature = (storage, *, config = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
-        storage: PyStorageConfig,
+        storage: PyStorage,
         config: Option<PyRepositoryConfig>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = storage
-                    .create_storage()
-                    .await
-                    .map_err(PyIcechunkStoreError::StorageError)?;
-
                 Ok::<_, PyErr>(
                     Repository::open_or_create(
-                        config.map(|c| c.0),
-                        storage,
+                        config.map(|c| c.into()),
+                        storage.0,
                         HashMap::new(),
                     )
                     .await
@@ -144,13 +118,9 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists(storage: PyStorageConfig) -> PyResult<bool> {
+    fn exists(storage: PyStorage) -> PyResult<bool> {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let storage = storage
-                .create_storage()
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
-            let exists = Repository::exists(storage.as_ref())
+            let exists = Repository::exists(storage.0.as_ref())
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)

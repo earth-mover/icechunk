@@ -6,9 +6,9 @@ import zarr
 import zarr.core
 import zarr.core.buffer
 from icechunk import (
-    S3Credentials,
-    StorageConfig,
-    VirtualRefConfig,
+    Credentials,
+    Storage,
+    #VirtualRefConfig,
 )
 from icechunk.repository import Repository
 

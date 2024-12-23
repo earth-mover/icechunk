@@ -18,7 +18,7 @@ mod tests {
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     };
-    use std::{collections::HashMap, error::Error, num::NonZeroU64, vec};
+    use std::{collections::HashMap, error::Error, num::NonZeroU64, path::PathBuf, vec};
     use std::{path::Path as StdPath, sync::Arc};
     use tempfile::TempDir;
     use tokio::sync::RwLock;
@@ -90,7 +90,7 @@ mod tests {
             VirtualChunkContainer {
                 name: "file".to_string(),
                 url_prefix: "file://".to_string(),
-                store: ObjectStoreConfig::LocalFileSystem,
+                store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
             },
             VirtualChunkContainer {
                 name: "s3".to_string(),
@@ -530,7 +530,7 @@ mod tests {
             VirtualChunkContainer {
                 name: "file".to_string(),
                 url_prefix: "file://".to_string(),
-                store: ObjectStoreConfig::LocalFileSystem,
+                store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
             },
             VirtualChunkContainer {
                 name: "public".to_string(),
