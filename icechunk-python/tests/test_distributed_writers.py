@@ -28,7 +28,7 @@ def mk_repo() -> icechunk.Repository:
     credentials = icechunk.Credentials.Static(
         icechunk.StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
     )
-    storage = icechunk.make_storage(
+    storage = icechunk.Storage.create(
         icechunk.ObjectStoreConfig.S3Compatible(opts),
         bucket="testbucket",
         prefix="python-distributed-writers-test__" + str(time.time()),

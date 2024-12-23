@@ -27,18 +27,21 @@ class PyRepository:
     def create(
         cls,
         storage: Storage,
+        *,
         config: RepositoryConfig | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
         cls,
         storage: Storage,
+        *,
         config: RepositoryConfig | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
         cls,
         storage: Storage,
+        *,
         config: RepositoryConfig | None = None,
     ) -> PyRepository: ...
     @staticmethod
@@ -180,7 +183,13 @@ class Storage:
     ```
     """
 
-    pass
+    @staticmethod
+    def create(
+        config: ObjectStoreConfig,
+        bucket: str | None = None,
+        prefix: str | None = None,
+        credentials: Credentials | None = None,
+    ) -> Storage: ...
 
 class StaticCredentials:
     access_key_id: str
@@ -198,7 +207,7 @@ class Credentials:
     class FromEnv:
         def __init__(self) -> None: ...
 
-    class Nonen:
+    class DontSign:
         def __init__(self) -> None: ...
 
     class Static:
@@ -234,13 +243,6 @@ class S3CompatibleOptions:
         allow_http: bool = False,
         anonymous: bool = False,
     ) -> None: ...
-
-def make_storage(
-    config: ObjectStoreConfig,
-    bucket: str | None = None,
-    prefix: str | None = None,
-    credentials: Credentials | None = None,
-) -> Storage: ...
 
 class StoreConfig:
     """Configuration for an IcechunkStore"""

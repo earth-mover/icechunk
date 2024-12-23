@@ -12,7 +12,7 @@ def tmp_store(tmpdir):
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.make_storage(
+        storage=icechunk.Storage.create(
             icechunk.ObjectStoreConfig.LocalFileSystem(repo_path)
         ),
         config=config,

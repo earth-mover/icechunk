@@ -18,7 +18,6 @@ from icechunk._icechunk_python import (
     StoreConfig,
     VersionSelection,
     __version__,
-    make_storage,
 )
 from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
@@ -48,5 +47,4 @@ __all__ = [
     "VersionSelection",
     # "VirtualRefConfig",
     "__version__",
-    "make_storage",
 ]

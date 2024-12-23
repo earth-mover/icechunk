@@ -10,7 +10,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from icechunk import ObjectStoreConfig, Repository, make_storage
+from icechunk import ObjectStoreConfig, Repository, Storage
 from zarr.testing.stateful import ZarrHierarchyStateMachine, ZarrStoreStateMachine
 from zarr.testing.strategies import (
     node_names,
@@ -43,7 +43,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
 def test_zarr_hierarchy():
     store = (
-        Repository.create(make_storage(ObjectStoreConfig.InMemory()))
+        Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         .writable_session("main")
         .store()
     )
@@ -59,7 +59,7 @@ def test_zarr_hierarchy():
 def test_zarr_store():
     pytest.skip("icechunk is more strict about keys")
     store = (
-        Repository.create(make_storage(ObjectStoreConfig.InMemory()))
+        Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         .writable_session("main")
         .store()
     )

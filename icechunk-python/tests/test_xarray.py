@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 import xarray as xr
-from icechunk import ObjectStoreConfig, make_storage
+from icechunk import ObjectStoreConfig, Storage
 from icechunk.xarray import to_icechunk
 from xarray.testing import assert_identical
 
@@ -54,7 +54,9 @@ def create_test_data(
 @contextlib.contextmanager
 def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(make_storage(ObjectStoreConfig.LocalFileSystem(tmpdir)))
+        repo = Repository.create(
+            Storage.create(ObjectStoreConfig.LocalFileSystem(tmpdir))
+        )
         session = repo.writable_session("main")
         to_icechunk(data, store=session.store(), mode="w")
 

@@ -11,7 +11,7 @@ from icechunk import (
     ObjectStoreConfig,
     S3CompatibleOptions,
     StaticCredentials,
-    make_storage,
+    Storage,
 )
 from icechunk.repository import Repository
 from xarray.tests.test_backends import (
@@ -48,7 +48,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(
-                make_storage(ObjectStoreConfig.LocalFileSystem(tmpdir))
+                Storage.create(ObjectStoreConfig.LocalFileSystem(tmpdir))
             )
             session = repo.writable_session("main")
             yield session.store()
@@ -59,7 +59,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(make_storage(ObjectStoreConfig.InMemory()))
+        repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         session = repo.writable_session("main")
         yield session.store()
 
@@ -82,7 +82,7 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
             StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
         )
         repo = Repository.create(
-            make_storage(
+            Storage.create(
                 ObjectStoreConfig.S3Compatible(opts),
                 bucket="testbucket",
                 prefix="python-xarray-test__" + str(time.time()),

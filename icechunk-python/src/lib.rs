@@ -7,8 +7,8 @@ mod store;
 mod streams;
 
 use config::{
-    make_storage, PyCredentials, PyObjectStoreConfig, PyRepositoryConfig,
-    PyS3CompatibleOptions, PyStaticCredentials, PyStorage,
+    PyCredentials, PyObjectStoreConfig, PyRepositoryConfig, PyS3CompatibleOptions,
+    PyStaticCredentials, PyStorage,
 };
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
@@ -43,7 +43,6 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyS3CompatibleOptions>()?;
     m.add_class::<PyObjectStoreConfig>()?;
     m.add_class::<PyStorage>()?;
-    m.add_function(wrap_pyfunction!(make_storage, m)?)?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;

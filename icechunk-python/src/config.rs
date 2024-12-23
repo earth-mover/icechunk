@@ -4,7 +4,7 @@ use icechunk::{
     config::{Credentials, S3CompatibleOptions, StaticCredentials},
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
-use pyo3::{pyclass, pyfunction, pymethods, PyResult};
+use pyo3::{pyclass, pymethods, PyResult};
 
 use crate::errors::PyIcechunkStoreError;
 
@@ -186,24 +186,27 @@ impl PyRepositoryConfig {
 #[derive(Clone, Debug)]
 pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
-#[pyfunction]
-#[pyo3(signature = ( config, bucket=None, prefix=None, credentials=None))]
-pub(crate) fn make_storage(
-    config: PyObjectStoreConfig,
-    bucket: Option<String>,
-    prefix: Option<String>,
-    credentials: Option<PyCredentials>,
-) -> PyResult<PyStorage> {
-    let storage = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-        icechunk::storage::make_storage(
-            config.into(),
-            bucket,
-            prefix,
-            credentials.map(|cred| cred.into()),
-        )
-        .await
-        .map_err(PyIcechunkStoreError::StorageError)
-    })?;
+#[pymethods]
+impl PyStorage {
+    #[pyo3(signature = ( config, bucket=None, prefix=None, credentials=None))]
+    #[staticmethod]
+    pub fn create(
+        config: PyObjectStoreConfig,
+        bucket: Option<String>,
+        prefix: Option<String>,
+        credentials: Option<PyCredentials>,
+    ) -> PyResult<Self> {
+        let storage = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            icechunk::storage::make_storage(
+                config.into(),
+                bucket,
+                prefix,
+                credentials.map(|cred| cred.into()),
+            )
+            .await
+            .map_err(PyIcechunkStoreError::StorageError)
+        })?;
 
-    Ok(PyStorage(storage))
+        Ok(PyStorage(storage))
+    }
 }
