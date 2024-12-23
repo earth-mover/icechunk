@@ -6,6 +6,7 @@ import zarr
 import zarr.core
 import zarr.core.buffer
 from icechunk.repository import ObjectStoreConfig, Repository, make_storage
+from icechunk import ObjectStoreConfig, make_storage
 
 
 def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
