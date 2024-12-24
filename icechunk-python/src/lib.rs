@@ -21,7 +21,7 @@ use errors::{
 use pyo3::prelude::*;
 use repository::{PyRepository, PySnapshotMetadata};
 use session::PySession;
-use store::{PyStore, PyStoreConfig};
+use store::PyStore;
 
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
@@ -31,8 +31,6 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRepositoryConfig>()?;
     m.add_class::<PySession>()?;
     m.add_class::<PyStore>()?;
-    m.add_class::<PyStoreConfig>()?;
-    m.add_class::<PyStoreConfig>()?;
     m.add_class::<PySnapshotMetadata>()?;
     m.add_class::<PyConflictSolver>()?;
     m.add_class::<PyBasicConflictSolver>()?;
