@@ -248,15 +248,6 @@ class Storage:
 
     Currently supports memory, filesystem, and S3 storage backends.
     Use the class methods to create a StorageConfig object with the desired backend.
-
-    Ex:
-    ```
-    storage_config = StorageConfig.memory("prefix")
-    storage_config = StorageConfig.filesystem("/path/to/root")
-    storage_config = StorageConfig.object_store("s3://bucket/prefix", vec!["my", "options"])
-    storage_config = StorageConfig.s3_from_env("bucket", "prefix")
-    storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
-    ```
     """
 
     @staticmethod
@@ -266,10 +257,95 @@ class Storage:
         prefix: str | None,
         credentials: S3Credentials | None = None,
     ) -> Storage: ...
+<<<<<<< HEAD
     @staticmethod
     def in_memory() -> Storage: ...
     @staticmethod
     def local_filesystem(path: str) -> Storage: ...
+=======
+
+class S3Credentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None
+
+    def __init__(
+        self,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str | None = None,
+    ): ...
+
+class Credentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class DontSign:
+        def __init__(self) -> None: ...
+
+    class S3:
+        def __init__(self, _0: S3Credentials) -> None: ...
+
+class ObjectStoreConfig:
+    class InMemory:
+        def __init__(self) -> None: ...
+
+    class LocalFileSystem:
+        def __init__(self, path: str) -> None: ...
+
+    class S3Compatible:
+        def __init__(self, options: S3CompatibleOptions) -> None: ...
+
+    class S3:
+        def __init__(self, options: S3CompatibleOptions) -> None: ...
+
+    class Gcs:
+        def __init__(self) -> None: ...
+
+    class Azure:
+        def __init__(self) -> None: ...
+
+    class Tigris:
+        def __init__(self) -> None: ...
+
+class S3CompatibleOptions:
+    def __init__(
+        self,
+        region: str | None = None,
+        endpoint_url: str | None = None,
+        allow_http: bool = False,
+        anonymous: bool = False,
+    ) -> None: ...
+
+class StoreConfig:
+    """Configuration for an IcechunkStore"""
+
+    def __init__(
+        self,
+        get_partial_values_concurrency: int | None = None,
+    ):
+        """Create a StoreConfig object with the given configuration options
+
+        Parameters
+        ----------
+        get_partial_values_concurrency: int | None
+            The number of concurrent requests to make when fetching partial values
+
+        -------
+        StoreConfig
+            A StoreConfig object with the given configuration options
+        """
+        ...
+
+    @classmethod
+    def from_json(cls, json: str) -> StoreConfig:
+        """Create a StoreConfig object from a JSON string"""
+        ...
+
+    def as_json(self) -> str:
+        """Return the StoreConfig object as a JSON string"""
+        ...
+>>>>>>> 801dbdd (Rename static credentials to s3 credentials)
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""

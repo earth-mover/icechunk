@@ -25,8 +25,8 @@ def mk_repo() -> icechunk.Repository:
     opts = icechunk.S3Options(
         endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
     )
-    credentials = icechunk.Credentials.Static(
-        icechunk.StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+    credentials = icechunk.Credentials.S3(
+        icechunk.S3Credentials(access_key_id="minio123", secret_access_key="minio123")
     )
     storage = icechunk.Storage.create(
         icechunk.ObjectStoreConfig.S3Compatible(opts),

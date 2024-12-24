@@ -7,9 +7,16 @@ import pytest
 
 import zarr
 from icechunk import (
+<<<<<<< HEAD
     S3Credentials,
     S3Options,
     S3StaticCredentials,
+=======
+    Credentials,
+    ObjectStoreConfig,
+    S3CompatibleOptions,
+    S3Credentials,
+>>>>>>> 801dbdd (Rename static credentials to s3 credentials)
     Storage,
 )
 from icechunk.repository import Repository
@@ -75,8 +82,13 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         opts = S3Options(
             endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
         )
+<<<<<<< HEAD
         credentials = S3Credentials.Static(
             S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+=======
+        credentials = Credentials.S3(
+            S3Credentials(access_key_id="minio123", secret_access_key="minio123")
+>>>>>>> 801dbdd (Rename static credentials to s3 credentials)
         )
         repo = Repository.create(
             Storage.s3(

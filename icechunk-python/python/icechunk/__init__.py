@@ -12,9 +12,14 @@ from icechunk._icechunk_python import (
     ObjectStoreConfig,
     RebaseFailedData,
     RepositoryConfig,
+<<<<<<< HEAD
     S3Credentials,
     S3Options,
     S3StaticCredentials,
+=======
+    S3CompatibleOptions,
+    S3Credentials,
+>>>>>>> 801dbdd (Rename static credentials to s3 credentials)
     SnapshotMetadata,
     Storage,
     VersionSelection,
@@ -41,9 +46,14 @@ __all__ = [
     "RebaseFailedError",
     "Repository",
     "RepositoryConfig",
+<<<<<<< HEAD
     "S3Credentials",
     "S3Options",
     "S3StaticCredentials",
+=======
+    "S3CompatibleOptions",
+    "S3Credentials",
+>>>>>>> 801dbdd (Rename static credentials to s3 credentials)
     "Session",
     "SnapshotMetadata",
     "Storage",
