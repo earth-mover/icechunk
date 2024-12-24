@@ -119,7 +119,7 @@ pub enum PyObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(PyS3CompatibleOptions),
     S3(PyS3CompatibleOptions),
-    Gcs(),
+    Gcs(Option<Vec<(String, String)>>),
     Azure(),
     Tigris(),
 }
@@ -135,7 +135,7 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::S3Compatible(opts.into())
             }
             PyObjectStoreConfig::S3(opts) => ObjectStoreConfig::S3(opts.into()),
-            PyObjectStoreConfig::Gcs() => ObjectStoreConfig::Gcs {},
+            PyObjectStoreConfig::Gcs(opts) => ObjectStoreConfig::Gcs(opts),
             PyObjectStoreConfig::Azure() => ObjectStoreConfig::Azure {},
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }

@@ -91,6 +91,8 @@ pub async fn mk_client(config: &S3CompatibleOptions, credentials: Credentials) -
                     "user",
                 ));
         }
+        // Ignore non s3 credentials
+        _ => {}
     }
 
     let mut s3_builder = Builder::from(&aws_config.load().await);

@@ -43,9 +43,9 @@ pub fn mk_default_containers() -> Vec<VirtualChunkContainer> {
             }),
         },
         VirtualChunkContainer {
-            name: "gcs".to_string(),
-            url_prefix: "gcs".to_string(),
-            store: ObjectStoreConfig::Gcs {},
+            name: "gs".to_string(),
+            url_prefix: "gs".to_string(),
+            store: ObjectStoreConfig::Gcs(None),
         },
         VirtualChunkContainer {
             name: "az".to_string(),
