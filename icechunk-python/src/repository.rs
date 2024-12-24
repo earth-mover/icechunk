@@ -6,6 +6,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use icechunk::{
+    config::Credentials,
     format::{snapshot::SnapshotMetadata, SnapshotId},
     repository::{RepositoryError, VersionInfo},
     Repository,
@@ -14,7 +15,7 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
-    config::{PyRepositoryConfig, PyStorage},
+    config::{PyCredentials, PyRepositoryConfig, PyStorage},
     errors::PyIcechunkStoreError,
     session::PySession,
 };
@@ -46,45 +47,56 @@ pub struct PyRepository(Repository);
 #[pymethods]
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None))]
+    #[pyo3(signature = (storage, *, config = None, virtual_chunk_credentials = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
         storage: PyStorage,
         config: Option<PyRepositoryConfig>,
+        virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                Repository::create(config.map(|c| c.into()), storage.0, HashMap::new())
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)
+                Repository::create(
+                    config.map(|c| c.into()),
+                    storage.0,
+                    map_credentials(virtual_chunk_credentials),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
 
         Ok(Self(repository))
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None))]
+    #[pyo3(signature = (storage, *, config = None, virtual_chunk_credentials = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
         storage: PyStorage,
         config: Option<PyRepositoryConfig>,
+        virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                Repository::open(config.map(|c| c.into()), storage.0, HashMap::new())
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)
+                Repository::open(
+                    config.map(|c| c.into()),
+                    storage.0,
+                    map_credentials(virtual_chunk_credentials),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)
             })?;
 
         Ok(Self(repository))
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None))]
+    #[pyo3(signature = (storage, *, config = None, virtual_chunk_credentials = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         storage: PyStorage,
         config: Option<PyRepositoryConfig>,
+        virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
     ) -> PyResult<Self> {
         let repository =
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -92,7 +104,7 @@ impl PyRepository {
                     Repository::open_or_create(
                         config.map(|c| c.into()),
                         storage.0,
-                        HashMap::new(),
+                        map_credentials(virtual_chunk_credentials),
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -282,4 +294,13 @@ impl PyRepository {
 
         Ok(PySession(Arc::new(RwLock::new(session))))
     }
+}
+
+fn map_credentials(
+    cred: Option<HashMap<String, PyCredentials>>,
+) -> HashMap<String, Credentials> {
+    cred.map(|cred| {
+        cred.iter().map(|(name, cred)| (name.clone(), cred.clone().into())).collect()
+    })
+    .unwrap_or_default()
 }

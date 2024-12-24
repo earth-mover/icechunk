@@ -54,6 +54,11 @@ mod tests {
             creds.insert("s3".to_string(), s3_credentials);
         }
 
+        let virtual_chunk_containers = virtual_chunk_containers
+            .into_iter()
+            .map(|cont| (cont.name.clone(), cont))
+            .collect();
+
         Repository::create(
             Some(RepositoryConfig { virtual_chunk_containers, ..Default::default() }),
             storage,
@@ -555,7 +560,7 @@ mod tests {
 
         let mut config = RepositoryConfig::default();
         for container in containers {
-            config.add_virtual_chunk_container(container);
+            config.set_virtual_chunk_container(container);
         }
 
         let repo = Repository::create(Some(config), storage, virtual_creds).await?;

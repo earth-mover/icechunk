@@ -84,7 +84,11 @@ impl ObjectStorage {
     /// This implementation should not be used in production code.
     pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, StorageError> {
         create_dir_all(prefix).map_err(|e| StorageError::Other(e.to_string()))?;
-        let prefix = prefix.display().to_string();
+
+        let prefix = std::fs::canonicalize(prefix)
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+        let prefix =
+            prefix.into_os_string().into_string().map_err(StorageError::BadPrefix)?;
         let url = format!("file://{prefix}");
         Self::from_url(&url, vec![])
     }
@@ -579,6 +583,8 @@ fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::path::PathBuf;
+
     use tempfile::TempDir;
 
     use super::ObjectStorage;
@@ -594,11 +600,43 @@ mod tests {
             serialized,
             format!(
                 r#"{{"url":"file://{}","prefix":"","options":[]}}"#,
-                tmp_dir.path().display()
+                std::fs::canonicalize(tmp_dir.path()).unwrap().to_str().unwrap()
             )
         );
 
         let deserialized: ObjectStorage = serde_json::from_str(&serialized).unwrap();
         assert_eq!(store.config, deserialized.config);
+    }
+
+    struct TestLocalPath(String);
+
+    impl From<&TestLocalPath> for std::path::PathBuf {
+        fn from(path: &TestLocalPath) -> Self {
+            std::path::PathBuf::from(&path.0)
+        }
+    }
+
+    impl Drop for TestLocalPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_canonicalize_path() {
+        // Absolute path
+        let tmp_dir = TempDir::new().unwrap();
+        let store = ObjectStorage::new_local_store(tmp_dir.path());
+        assert!(store.is_ok());
+
+        // Relative path
+        let rel_path = "relative/path";
+        let store = ObjectStorage::new_local_store(PathBuf::from(&rel_path).as_path());
+        assert!(store.is_ok());
+
+        // Relative with leading ./
+        let rel_path = TestLocalPath("./other/path".to_string());
+        let store = ObjectStorage::new_local_store(PathBuf::from(&rel_path).as_path());
+        assert!(store.is_ok());
     }
 }

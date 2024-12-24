@@ -18,6 +18,7 @@ from icechunk._icechunk_python import (
     Storage,
     StoreConfig,
     VersionSelection,
+    VirtualChunkContainer,
     __version__,
 )
 from icechunk.repository import Repository
@@ -47,6 +48,6 @@ __all__ = [
     "Storage",
     "StoreConfig",
     "VersionSelection",
-    # "VirtualRefConfig",
+    "VirtualChunkContainer",
     "__version__",
 ]
