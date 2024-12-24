@@ -43,11 +43,12 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
 def mk_repo():
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
+
+    config = ic.RepositoryConfig(
+        inline_chunk_threshold_bytes=12,
+    )
     store = ic.Repository.open_or_create(
-        storage=ic.StorageConfig.filesystem(store_path),
-        config=ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=10,
-        ),
+        storage=ic.ObjectStoreConfig.LocalFileSystem(store_path), config=config
     )
     return store
 
@@ -158,7 +159,7 @@ async def test_icechunk_can_read_old_repo():
     )
 
     repo = mk_repo()
-    main_snapshot = repo.branch_tip("main")
+    main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [
         "set virtual chunk",
@@ -168,7 +169,7 @@ async def test_icechunk_can_read_old_repo():
     ]
     assert [p.message for p in repo.ancestry(main_snapshot)] == expected_main_history
 
-    my_branch_snapshot = repo.branch_tip("my-branch")
+    my_branch_snapshot = repo.lookup_branch("my-branch")
     expected_branch_history = [
         "some more structure",
         "delete a chunk",

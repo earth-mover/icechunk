@@ -1,8 +1,8 @@
 use std::{collections::HashSet, future::Future, sync::Arc};
 
 use bytes::Bytes;
-use chrono::Utc;
 use icechunk::{
+    config::{Credentials, S3CompatibleOptions, StaticCredentials},
     format::{
         manifest::Manifest, snapshot::Snapshot, ByteRange, ChunkId, ManifestId,
         SnapshotId,
@@ -10,30 +10,32 @@ use icechunk::{
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
-    storage::{
-        s3::{S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
-        StorageResult,
-    },
-    ObjectStorage, Storage, StorageError,
+    storage::{make_storage, StorageResult},
+    ObjectStorage, ObjectStoreConfig, Repository, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 
-async fn mk_storage() -> StorageResult<S3Storage> {
-    S3Storage::new_s3_store(&S3Config {
-        bucket: "testbucket".to_string(),
-        prefix: "test_s3_storage__".to_string() + Utc::now().to_rfc3339().as_str(),
-        options: Some(S3ClientOptions {
+#[allow(clippy::expect_used)]
+async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let storage: Arc<dyn Storage + Send + Sync> = make_storage(
+        ObjectStoreConfig::S3Compatible(S3CompatibleOptions {
             region: Some("us-east-1".to_string()),
-            endpoint: Some("http://localhost:9000".to_string()),
-            credentials: S3Credentials::Static(StaticS3Credentials {
-                access_key_id: "minio123".into(),
-                secret_access_key: "minio123".into(),
-                session_token: None,
-            }),
+            endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
+            anonymous: false,
         }),
-    })
+        Some("testbucket".to_string()),
+        Some(prefix.to_string()),
+        Some(Credentials::Static(StaticCredentials {
+            access_key_id: "minio123".into(),
+            secret_access_key: "minio123".into(),
+            session_token: None,
+        })),
+    )
     .await
+    .expect("Creating minio storage failed");
+
+    Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
 fn mk_in_memory_storage() -> ObjectStorage {
@@ -46,7 +48,8 @@ where
     F: Fn(Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-    let s1 = Arc::new(mk_storage().await?);
+    let prefix = format!("{:?}", ChunkId::random());
+    let s1 = mk_storage(prefix.as_str()).await?;
     let s2 = Arc::new(mk_in_memory_storage());
     f(s1).await?;
     f(s2).await?;

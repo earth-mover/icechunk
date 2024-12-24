@@ -1,6 +1,6 @@
 from typing import cast
 
-import icechunk
+import icechunk as ic
 import zarr
 import zarr.core
 import zarr.core.array
@@ -8,9 +8,11 @@ import zarr.core.buffer
 
 
 def test_timetravel():
-    repo = icechunk.Repository.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    repo = ic.Repository.create(
+        storage=ic.Storage.create(ic.ObjectStoreConfig.InMemory()),
+        config=config,
     )
     session = repo.writable_session("main")
     store = session.store()
@@ -75,6 +77,13 @@ def test_timetravel():
     air_temp[:, :] = 90
     feature_snapshot_id = session.commit("commit 3")
 
+    branches = repo.list_branches()
+    assert branches == set(["main", "feature"])
+
+    repo.delete_branch("feature")
+    branches = repo.list_branches()
+    assert branches == set(["main"])
+
     repo.create_tag("v1.0", feature_snapshot_id)
     session = repo.readonly_session(tag="v1.0")
     store = session.store()
@@ -95,12 +104,20 @@ def test_timetravel():
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
 
+    tags = repo.list_tags()
+    assert tags == set(["v1.0"])
+    tag_snapshot_id = repo.lookup_tag("v1.0")
+    assert tag_snapshot_id == feature_snapshot_id
+
 
 async def test_branch_reset():
-    repo = icechunk.Repository.create(
-        storage=icechunk.StorageConfig.memory("test"),
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=1),
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    repo = ic.Repository.create(
+        storage=ic.Storage.create(ic.ObjectStoreConfig.InMemory()),
+        config=config,
     )
+
     session = repo.writable_session("main")
     store = session.store()
 

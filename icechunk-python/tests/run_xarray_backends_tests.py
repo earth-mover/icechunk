@@ -6,7 +6,13 @@ import time
 import pytest
 
 import zarr
-from icechunk import S3Credentials, StorageConfig
+from icechunk import (
+    Credentials,
+    ObjectStoreConfig,
+    S3CompatibleOptions,
+    StaticCredentials,
+    Storage,
+)
 from icechunk.repository import Repository
 from xarray.tests.test_backends import (
     ZarrBase,
@@ -41,7 +47,9 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(StorageConfig.filesystem(tmpdir))
+            repo = Repository.create(
+                Storage.create(ObjectStoreConfig.LocalFileSystem(tmpdir))
+            )
             session = repo.writable_session("main")
             yield session.store()
 
@@ -51,7 +59,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(StorageConfig.memory(""))
+        repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         session = repo.writable_session("main")
         yield session.store()
 
@@ -67,19 +75,19 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        storage_config = {
-            "bucket": "testbucket",
-            "prefix": "python-xarray-test__" + str(time.time()),
-            "endpoint_url": "http://localhost:9000",
-            "region": "us-east-1",
-            "allow_http": True,
-        }
-        storage_config = StorageConfig.s3_from_config(
-            **storage_config,
-            credentials=S3Credentials(
-                access_key_id="minio123", secret_access_key="minio123"
-            ),
+        opts = S3CompatibleOptions(
+            endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
         )
-        repo = Repository.create(storage=storage_config)
+        credentials = Credentials.Static(
+            StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+        )
+        repo = Repository.create(
+            Storage.create(
+                ObjectStoreConfig.S3Compatible(opts),
+                bucket="testbucket",
+                prefix="python-xarray-test__" + str(time.time()),
+                credentials=credentials,
+            )
+        )
         session = repo.writable_session("main")
         yield session.store()

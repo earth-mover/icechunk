@@ -10,6 +10,7 @@ use aws_sdk_s3::{
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
+use s3::S3Storage;
 use std::{ffi::OsString, sync::Arc};
 
 use async_trait::async_trait;
@@ -28,12 +29,13 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
+    config::Credentials,
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
         transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
         SnapshotId,
     },
-    private,
+    private, ObjectStoreConfig,
 };
 
 #[derive(Debug, Error)]
@@ -195,6 +197,10 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         self.delete_objects(SNAPSHOT_PREFIX, chunks.map(|id| id.to_string()).boxed())
             .await
     }
+
+    async fn delete_refs(&self, refs: BoxStream<'_, String>) -> StorageResult<usize> {
+        self.delete_objects(REF_PREFIX, refs).await
+    }
 }
 
 fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
@@ -214,4 +220,49 @@ where
 {
     // FIXME: flag error, don't skip
     s.try_filter_map(|info| async move { Ok(convert_list_item(info)) }).boxed()
+}
+
+pub async fn make_storage(
+    config: ObjectStoreConfig,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    credentials: Option<Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    Ok(match config {
+        ObjectStoreConfig::InMemory {} => {
+            Arc::new(ObjectStorage::new_in_memory_store(None)?)
+        }
+        ObjectStoreConfig::LocalFileSystem(path) => {
+            Arc::new(ObjectStorage::new_local_store(&path)?)
+        }
+        ObjectStoreConfig::S3Compatible(opts) => Arc::new(
+            S3Storage::new(
+                opts,
+                bucket.ok_or(StorageError::Other(
+                    "Bucket required to initialize S3Compatible storage".to_string(),
+                ))?,
+                prefix,
+                credentials.unwrap_or(Credentials::FromEnv),
+            )
+            .await?,
+        ),
+        ObjectStoreConfig::S3(opts) => Arc::new(
+            S3Storage::new(
+                opts,
+                bucket.ok_or(StorageError::Other(
+                    "Bucket required to initialize S3 storage".to_string(),
+                ))?,
+                prefix,
+                credentials.unwrap_or(Credentials::FromEnv),
+            )
+            .await?,
+        ),
+
+        #[allow(clippy::unimplemented)]
+        ObjectStoreConfig::Gcs {} => unimplemented!(),
+        #[allow(clippy::unimplemented)]
+        ObjectStoreConfig::Azure {} => unimplemented!(),
+        #[allow(clippy::unimplemented)]
+        ObjectStoreConfig::Tigris {} => unimplemented!(),
+    })
 }

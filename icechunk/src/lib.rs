@@ -18,6 +18,7 @@
 //! - The datastructures are represented by concrete types in the [`mod@format`] modules.
 //!   These datastructures use Arrow RecordBatches for representation.
 pub mod change_set;
+pub mod config;
 pub mod conflicts;
 pub mod format;
 pub mod metadata;
@@ -31,7 +32,8 @@ pub mod store;
 pub mod strategies;
 pub mod virtual_chunks;
 
-pub use repository::{Repository, RepositoryConfig};
+pub use config::{ObjectStoreConfig, RepositoryConfig};
+pub use repository::Repository;
 pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
 pub use store::Store;
 
