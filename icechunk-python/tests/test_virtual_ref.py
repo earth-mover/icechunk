@@ -99,6 +99,11 @@ async def test_write_minio_virtual_refs():
         # TODO: we should include the key and other info in the exception
         await store.get("c/0/0/2", prototype=buffer_prototype)
 
+    all_locations = set(session.all_virtual_chunk_locations())
+    assert "s3://testbucket/path/to/python/non-existing" in all_locations
+    assert "s3://testbucket/path/to/python/chunk-1" in all_locations
+    assert "s3://testbucket/path/to/python/chunk-2" in all_locations
+
     _snapshot_id = session.commit("Add virtual refs")
 
 

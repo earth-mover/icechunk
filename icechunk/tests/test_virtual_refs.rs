@@ -1,6 +1,7 @@
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used, clippy::expect_fun_call)]
 mod tests {
+    use futures::TryStreamExt;
     use icechunk::{
         config::{Credentials, S3CompatibleOptions, StaticCredentials},
         format::{
@@ -18,7 +19,13 @@ mod tests {
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     };
-    use std::{collections::HashMap, error::Error, num::NonZeroU64, path::PathBuf, vec};
+    use std::{
+        collections::{HashMap, HashSet},
+        error::Error,
+        num::NonZeroU64,
+        path::PathBuf,
+        vec,
+    };
     use std::{path::Path as StdPath, sync::Arc};
     use tempfile::TempDir;
     use tokio::sync::RwLock;
@@ -577,9 +584,9 @@ mod tests {
         ];
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
-        let ds = repo.writable_session("main").await?;
+        let session = repo.writable_session("main").await?;
         let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+            Store::from_session(Arc::new(RwLock::new(session)), StoreConfig::default());
 
         store
             .set(
@@ -740,6 +747,28 @@ mod tests {
                 VirtualReferenceError::ObjectModified(location)
             ))) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
         ));
+
+        let session = store.session();
+        let locations = session
+            .read()
+            .await
+            .all_virtual_chunk_locations()
+            .await?
+            .try_collect::<HashSet<_>>()
+            .await?;
+        assert_eq!(
+            locations,
+            [
+                "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc".to_string(),
+                "s3://testbucket/path/to/chunk-1".to_string(),
+                "s3://testbucket/path/to/chunk-2".to_string(),
+                "s3://testbucket/path/to/chunk-3".to_string(),
+                format!("file://{}", local_chunks[0].0),
+                format!("file://{}", local_chunks[1].0),
+                format!("file://{}", local_chunks[2].0),
+            ]
+            .into()
+        );
 
         Ok(())
     }

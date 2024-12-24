@@ -125,6 +125,10 @@ class Session:
         """Get a zarr Store object for reading and writing data from the repository using zarr python"""
         return IcechunkStore(self._session.store(config))
 
+    def all_virtual_chunk_locations(self) -> list[str]:
+        """Return the location URLs of all virtual chunks"""
+        return self._session.all_virtual_chunk_locations()
+
     def merge(self, other: Self) -> None:
         """Merge the changes for this session with the changes from another session"""
         self._session.merge(other._session)
