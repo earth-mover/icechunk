@@ -128,18 +128,16 @@ class PySession:
     @property
     def has_uncommitted_changes(self) -> bool: ...
     def discard_changes(self) -> None: ...
-    def store(self, config: StoreConfig | None = None) -> PyStore: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
+    def store(self) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
     def commit(self, message: str) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
     @classmethod
-    def from_bytes(cls, data: bytes, config: StoreConfig | None = None) -> PyStore: ...
+    def from_bytes(cls, data: bytes) -> PyStore: ...
     def __eq__(self, value: object) -> bool: ...
-    @property
-    def config(self) -> StoreConfig: ...
     @property
     def read_only(self) -> bool: ...
     @property
@@ -263,35 +261,6 @@ class Credentials:
 
     class Static:
         def __init__(self, _0: StaticCredentials) -> None: ...
-
-class StoreConfig:
-    """Configuration for an IcechunkStore"""
-
-    def __init__(
-        self,
-        get_partial_values_concurrency: int | None = None,
-    ):
-        """Create a StoreConfig object with the given configuration options
-
-        Parameters
-        ----------
-        get_partial_values_concurrency: int | None
-            The number of concurrent requests to make when fetching partial values
-
-        -------
-        StoreConfig
-            A StoreConfig object with the given configuration options
-        """
-        ...
-
-    @classmethod
-    def from_json(cls, json: str) -> StoreConfig:
-        """Create a StoreConfig object from a JSON string"""
-        ...
-
-    def as_json(self) -> str:
-        """Return the StoreConfig object as a JSON string"""
-        ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""

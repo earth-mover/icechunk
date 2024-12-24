@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use crate::{
     conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
-    store::{PyStore, PyStoreConfig},
+    store::PyStore,
 };
 
 #[pyclass]
@@ -58,10 +58,10 @@ impl PySession {
         self.0.blocking_write().discard_changes();
     }
 
-    #[pyo3(signature = (config = None))]
-    pub fn store(&self, config: Option<PyStoreConfig>) -> PyResult<PyStore> {
-        let store =
-            Store::from_session(self.0.clone(), config.map(|c| c.0).unwrap_or_default());
+    pub fn store(&self) -> PyResult<PyStore> {
+        let session = self.0.blocking_read();
+        let conc = session.config().get_partial_values_concurrency;
+        let store = Store::from_session_and_config(self.0.clone(), conc);
 
         let store = Arc::new(store);
         Ok(PyStore(store))

@@ -211,6 +211,8 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub unsafe_overwrite_refs: bool,
     #[pyo3(get, set)]
+    pub get_partial_values_concurrency: u16,
+    #[pyo3(get, set)]
     pub virtual_chunk_containers: HashMap<String, PyVirtualChunkContainer>,
 }
 
@@ -219,6 +221,7 @@ impl From<PyRepositoryConfig> for RepositoryConfig {
         Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
+            get_partial_values_concurrency: value.get_partial_values_concurrency,
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()
@@ -233,6 +236,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
         Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
+            get_partial_values_concurrency: value.get_partial_values_concurrency,
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()

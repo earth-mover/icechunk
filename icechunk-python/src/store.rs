@@ -8,7 +8,7 @@ use icechunk::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
         ChunkLength, ChunkOffset,
     },
-    store::{StoreConfig, StoreError},
+    store::StoreError,
     Store,
 };
 use pyo3::{
@@ -45,39 +45,6 @@ impl From<ChecksumArgument> for Checksum {
     }
 }
 
-#[pyclass(name = "StoreConfig")]
-#[derive(Clone, Debug)]
-pub struct PyStoreConfig(pub StoreConfig);
-
-#[pymethods]
-impl PyStoreConfig {
-    #[new]
-    #[pyo3(signature = (*, get_partial_values_concurrency = 10))]
-    fn new(get_partial_values_concurrency: u16) -> Self {
-        Self(StoreConfig { get_partial_values_concurrency })
-    }
-
-    #[classmethod]
-    fn from_json(_cls: Bound<'_, PyType>, json: String) -> PyResult<Self> {
-        let config = serde_json::from_str(&json).map_err(|e| {
-            PyValueError::new_err(format!(
-                "Failed to deserialize store config from json: {}",
-                e
-            ))
-        })?;
-        Ok(Self(config))
-    }
-
-    fn as_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.0).map_err(|e| {
-            PyValueError::new_err(format!(
-                "Failed to serialize store config to json: {}",
-                e
-            ))
-        })
-    }
-}
-
 #[pyclass(name = "PyStore")]
 #[derive(Clone)]
 pub struct PyStore(pub Arc<Store>);
@@ -85,15 +52,9 @@ pub struct PyStore(pub Arc<Store>);
 #[pymethods]
 impl PyStore {
     #[classmethod]
-    #[pyo3(signature = (bytes, config = None))]
-    fn from_bytes(
-        _cls: Bound<'_, PyType>,
-        bytes: Vec<u8>,
-        config: Option<PyStoreConfig>,
-    ) -> PyResult<Self> {
+    fn from_bytes(_cls: Bound<'_, PyType>, bytes: Vec<u8>) -> PyResult<Self> {
         let bytes = Bytes::from(bytes);
-        let config = config.map(|c| c.0).unwrap_or_default();
-        let store = Store::from_bytes(bytes, config).map_err(|e| {
+        let store = Store::from_bytes(bytes).map_err(|e| {
             PyValueError::new_err(format!(
                 "Failed to deserialize store from bytes: {}",
                 e
@@ -112,14 +73,6 @@ impl PyStore {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let read_only = self.0.read_only().await;
             Ok(read_only)
-        })
-    }
-
-    #[getter]
-    fn config(&self) -> PyIcechunkStoreResult<PyStoreConfig> {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let config = self.0.config().clone();
-            Ok(PyStoreConfig(config))
         })
     }
 

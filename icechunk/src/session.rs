@@ -155,6 +155,10 @@ impl Session {
         &self.change_set
     }
 
+    pub fn config(&self) -> &RepositoryConfig {
+        &self.config
+    }
+
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage

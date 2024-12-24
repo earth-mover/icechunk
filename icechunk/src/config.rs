@@ -33,13 +33,16 @@ pub enum ObjectStoreConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepositoryConfig {
-    // Chunks smaller than this will be stored inline in the manifst
+    /// Chunks smaller than this will be stored inline in the manifst
     pub inline_chunk_threshold_bytes: u16,
-    // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    // own risk in object stores for which we don't support write-object-if-not-exists. There is
-    // the possibility of race conditions if this variable is set to true and there are concurrent
-    // commit attempts.
+    /// Unsafely overwrite refs on write. This is not recommended, users should only use it at their
+    /// own risk in object stores for which we don't support write-object-if-not-exists. There is
+    /// the possibility of race conditions if this variable is set to true and there are concurrent
+    /// commit attempts.
     pub unsafe_overwrite_refs: bool,
+
+    /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
+    pub get_partial_values_concurrency: u16,
 
     pub virtual_chunk_containers: HashMap<ContainerName, VirtualChunkContainer>,
 }
@@ -49,6 +52,7 @@ impl Default for RepositoryConfig {
         Self {
             inline_chunk_threshold_bytes: 512,
             unsafe_overwrite_refs: false,
+            get_partial_values_concurrency: 10,
             virtual_chunk_containers: mk_default_containers(),
         }
     }

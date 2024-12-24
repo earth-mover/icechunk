@@ -15,7 +15,7 @@ mod tests {
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         session::{get_chunk, SessionError},
         storage::{make_storage, s3::mk_client, ObjectStorage},
-        store::{StoreConfig, StoreError},
+        store::StoreError,
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     };
@@ -421,8 +421,7 @@ mod tests {
 
         let repo = create_minio_repository().await;
         let ds = repo.writable_session("main").await.unwrap();
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -474,8 +473,7 @@ mod tests {
         let repo = create_local_repository(repo_dir.path()).await;
         let ds = repo.writable_session("main").await.unwrap();
 
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -585,8 +583,7 @@ mod tests {
         write_chunks_to_minio(chunks.iter().cloned()).await;
 
         let session = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(session)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(session))).await;
 
         store
             .set(
