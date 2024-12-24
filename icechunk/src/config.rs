@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ pub struct RepositoryConfig {
     // commit attempts.
     pub unsafe_overwrite_refs: bool,
 
-    pub virtual_chunk_containers: Vec<VirtualChunkContainer>,
+    pub virtual_chunk_containers: HashMap<ContainerName, VirtualChunkContainer>,
 }
 
 impl Default for RepositoryConfig {
@@ -55,23 +55,18 @@ impl Default for RepositoryConfig {
 }
 
 impl RepositoryConfig {
-    pub fn add_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
-        self.virtual_chunk_containers.push(cont);
+    pub fn set_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
+        self.virtual_chunk_containers.insert(cont.name.clone(), cont);
     }
 
-    pub fn virtual_chunk_containers(&self) -> &Vec<VirtualChunkContainer> {
-        &self.virtual_chunk_containers
+    pub fn virtual_chunk_containers(
+        &self,
+    ) -> impl Iterator<Item = &VirtualChunkContainer> {
+        self.virtual_chunk_containers.values()
     }
 
     pub fn clear_virtual_chunk_containers(&mut self) {
         self.virtual_chunk_containers.clear();
-    }
-
-    pub fn update_virtual_chunk_container(
-        &mut self,
-        name: ContainerName,
-    ) -> Option<&mut VirtualChunkContainer> {
-        self.virtual_chunk_containers.iter_mut().find(|cont| cont.name == name)
     }
 }
 

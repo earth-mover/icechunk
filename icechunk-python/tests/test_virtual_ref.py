@@ -5,7 +5,15 @@ from object_store import ClientOptions, ObjectStore
 import zarr
 import zarr.core
 import zarr.core.buffer
-from icechunk import ObjectStoreConfig, Storage
+from icechunk import (
+    Credentials,
+    ObjectStoreConfig,
+    RepositoryConfig,
+    S3CompatibleOptions,
+    StaticCredentials,
+    Storage,
+    VirtualChunkContainer,
+)
 from icechunk.repository import Repository
 
 
@@ -29,10 +37,6 @@ def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
 
 
 async def test_write_minio_virtual_refs():
-    # FIXME
-    pytest.xfail(
-        "Temporary flagged as failing while we implement new virtual chunk mechanism"
-    )
     write_chunks_to_minio(
         [
             ("path/to/python/chunk-1", b"first"),
@@ -40,18 +44,23 @@ async def test_write_minio_virtual_refs():
         ]
     )
 
+    config = RepositoryConfig.default()
+    store_config = ObjectStoreConfig.S3Compatible(
+        S3CompatibleOptions(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+        )
+    )
+    container = VirtualChunkContainer("s3", "s3://", store_config)
+    config.set_virtual_chunk_container(container)
+    credentials = {"s3": Credentials.Static(StaticCredentials("minio123", "minio123"))}
+
     # Open the store
     repo = Repository.open_or_create(
         storage=Storage.create(ObjectStoreConfig.InMemory()),
-        # virtual_ref_config=VirtualRefConfig.s3_from_config(
-        #     credentials=S3Credentials(
-        #         access_key_id="minio123",
-        #         secret_access_key="minio123",
-        #     ),
-        #     endpoint_url="http://localhost:9000",
-        #     allow_http=True,
-        #     region="us-east-1",
-        # ),
+        config=config,
+        virtual_chunk_credentials=credentials,
     )
     session = repo.writable_session("main")
     store = session.store()
@@ -94,16 +103,21 @@ async def test_write_minio_virtual_refs():
 
 
 async def test_from_s3_public_virtual_refs(tmpdir):
-    # FIXME
-    pytest.xfail(
-        "Temporary flagged as failing while we implement new virtual chunk mechanism"
+    config = RepositoryConfig.default()
+    store_config = ObjectStoreConfig.S3(
+        S3CompatibleOptions(
+            region="us-east-1",
+            anonymous=True,
+        )
     )
-    # Open the store,
+    container = VirtualChunkContainer(
+        "sample-data", "s3://earthmover-sample-data", store_config
+    )
+    config.set_virtual_chunk_container(container)
+
     repo = Repository.open_or_create(
         storage=Storage.create(ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/virtual")),
-        # virtual_ref_config=VirtualRefConfig.s3_anonymous(
-        #    region="us-east-1", allow_http=False
-        # ),
+        config=config,
     )
     session = repo.writable_session("main")
     store = session.store()

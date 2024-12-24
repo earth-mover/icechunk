@@ -30,39 +30,55 @@ pub struct VirtualChunkContainer {
     pub store: ObjectStoreConfig,
 }
 
-pub fn mk_default_containers() -> Vec<VirtualChunkContainer> {
-    vec![
-        VirtualChunkContainer {
-            name: "s3".to_string(),
-            url_prefix: "s3".to_string(),
-            store: ObjectStoreConfig::S3(S3CompatibleOptions {
-                region: None,
-                endpoint_url: None,
-                anonymous: false,
-                allow_http: false,
-            }),
-        },
-        VirtualChunkContainer {
-            name: "gcs".to_string(),
-            url_prefix: "gcs".to_string(),
-            store: ObjectStoreConfig::Gcs {},
-        },
-        VirtualChunkContainer {
-            name: "az".to_string(),
-            url_prefix: "az".to_string(),
-            store: ObjectStoreConfig::Azure {},
-        },
-        VirtualChunkContainer {
-            name: "tigris".to_string(),
-            url_prefix: "tigris".to_string(),
-            store: ObjectStoreConfig::Tigris {},
-        },
-        VirtualChunkContainer {
-            name: "file".to_string(),
-            url_prefix: "file".to_string(),
-            store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
-        },
+pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> {
+    [
+        (
+            "s3".to_string(),
+            VirtualChunkContainer {
+                name: "s3".to_string(),
+                url_prefix: "s3".to_string(),
+                store: ObjectStoreConfig::S3(S3CompatibleOptions {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                }),
+            },
+        ),
+        (
+            "gcs".to_string(),
+            VirtualChunkContainer {
+                name: "gcs".to_string(),
+                url_prefix: "gcs".to_string(),
+                store: ObjectStoreConfig::Gcs {},
+            },
+        ),
+        (
+            "az".to_string(),
+            VirtualChunkContainer {
+                name: "az".to_string(),
+                url_prefix: "az".to_string(),
+                store: ObjectStoreConfig::Azure {},
+            },
+        ),
+        (
+            "tigris".to_string(),
+            VirtualChunkContainer {
+                name: "tigris".to_string(),
+                url_prefix: "tigris".to_string(),
+                store: ObjectStoreConfig::Tigris {},
+            },
+        ),
+        (
+            "file".to_string(),
+            VirtualChunkContainer {
+                name: "file".to_string(),
+                url_prefix: "file".to_string(),
+                store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+            },
+        ),
     ]
+    .into()
 }
 
 #[async_trait]
@@ -97,10 +113,10 @@ pub struct VirtualChunkResolver {
 
 impl VirtualChunkResolver {
     pub fn new(
-        containers: Vec<VirtualChunkContainer>,
+        containers: impl Iterator<Item = VirtualChunkContainer>,
         credentials: HashMap<ContainerName, Credentials>,
     ) -> Self {
-        let mut containers = containers;
+        let mut containers = containers.collect::<Vec<_>>();
         sort_containers(&mut containers);
         VirtualChunkResolver {
             containers,

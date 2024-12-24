@@ -3,6 +3,44 @@ import datetime
 from collections.abc import AsyncGenerator
 from enum import Enum
 
+class S3CompatibleOptions:
+    def __init__(
+        self,
+        region: str | None = None,
+        endpoint_url: str | None = None,
+        allow_http: bool = False,
+        anonymous: bool = False,
+    ) -> None: ...
+
+class ObjectStoreConfig:
+    class InMemory:
+        def __init__(self) -> None: ...
+
+    class LocalFileSystem:
+        def __init__(self, path: str) -> None: ...
+
+    class S3Compatible:
+        def __init__(self, options: S3CompatibleOptions) -> None: ...
+
+    class S3:
+        def __init__(self, options: S3CompatibleOptions) -> None: ...
+
+    class Gcs:
+        def __init__(self) -> None: ...
+
+    class Azure:
+        def __init__(self) -> None: ...
+
+    class Tigris:
+        def __init__(self) -> None: ...
+
+class VirtualChunkContainer:
+    name: str
+    url_prefix: str
+    store: ObjectStoreConfig
+
+    def __init__(self, name: str, url_prefix: str, store: ObjectStoreConfig): ...
+
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
     def __init__(
@@ -22,6 +60,15 @@ class RepositoryConfig:
         """
         ...
 
+    @property
+    def inline_chunk_threshold_bytes(self) -> int: ...
+    @property
+    def unsafe_overwrite_refs(self) -> bool: ...
+    @property
+    def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer]: ...
+    def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
+    def clear_virtual_chunk_containers(self) -> None: ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -29,6 +76,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, Credentials] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -36,6 +84,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, Credentials] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -43,6 +92,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, Credentials] | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...
@@ -212,37 +262,6 @@ class Credentials:
 
     class Static:
         def __init__(self, _0: StaticCredentials) -> None: ...
-
-class ObjectStoreConfig:
-    class InMemory:
-        def __init__(self) -> None: ...
-
-    class LocalFileSystem:
-        def __init__(self, path: str) -> None: ...
-
-    class S3Compatible:
-        def __init__(self, options: S3CompatibleOptions) -> None: ...
-
-    class S3:
-        def __init__(self, options: S3CompatibleOptions) -> None: ...
-
-    class Gcs:
-        def __init__(self) -> None: ...
-
-    class Azure:
-        def __init__(self) -> None: ...
-
-    class Tigris:
-        def __init__(self) -> None: ...
-
-class S3CompatibleOptions:
-    def __init__(
-        self,
-        region: str | None = None,
-        endpoint_url: str | None = None,
-        allow_http: bool = False,
-        anonymous: bool = False,
-    ) -> None: ...
 
 class StoreConfig:
     """Configuration for an IcechunkStore"""
