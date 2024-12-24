@@ -1,5 +1,6 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
+use futures::TryStreamExt;
 use icechunk::{session::Session, Store};
 use pyo3::{prelude::*, types::PyType};
 use tokio::sync::RwLock;
@@ -64,6 +65,22 @@ impl PySession {
 
         let store = Arc::new(store);
         Ok(PyStore(store))
+    }
+
+    pub fn all_virtual_chunk_locations(&self) -> PyResult<Vec<String>> {
+        let session = self.0.blocking_read();
+
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let res = session
+                .all_virtual_chunk_locations()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            Ok(res)
+        })
     }
 
     pub fn merge(&self, other: &PySession) -> PyResult<()> {

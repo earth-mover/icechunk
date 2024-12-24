@@ -498,6 +498,17 @@ impl Session {
         all_chunks(self.storage.as_ref(), &self.change_set, self.snapshot_id()).await
     }
 
+    pub async fn all_virtual_chunk_locations(
+        &self,
+    ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
+        let stream =
+            self.all_chunks().await?.try_filter_map(|(_, info)| match info.payload {
+                ChunkPayload::Virtual(reference) => ready(Ok(Some(reference.location.0))),
+                _ => ready(Ok(None)),
+            });
+        Ok(stream)
+    }
+
     /// Discard all uncommitted changes and return them as a `ChangeSet`
     pub fn discard_changes(&mut self) -> ChangeSet {
         std::mem::take(&mut self.change_set)
