@@ -2,17 +2,17 @@ from typing import Literal
 
 import pytest
 
-from icechunk import Repository, StorageConfig
+from icechunk import ObjectStoreConfig, Repository, Storage
 
 
 def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:
     if store == "local":
         return Repository.create(
-            storage=StorageConfig.filesystem(path),
+            storage=Storage.create(ObjectStoreConfig.LocalFileSystem(path)),
         )
     if store == "memory":
         return Repository.create(
-            storage=StorageConfig.memory(path),
+            storage=Storage.create(ObjectStoreConfig.InMemory()),
         )
 
 

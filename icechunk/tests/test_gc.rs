@@ -6,30 +6,31 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use icechunk::{
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path},
+    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     ops::gc::{garbage_collect, GCConfig, GCSummary},
     refs::update_branch,
     repository::VersionInfo,
     session::get_chunk,
-    storage::s3::{
-        S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials,
-    },
-    Repository, RepositoryConfig, Storage,
+    storage::make_storage,
+    ObjectStoreConfig, Repository, RepositoryConfig, Storage,
 };
 use pretty_assertions::assert_eq;
 
-fn minio_s3_config() -> S3ClientOptions {
-    S3ClientOptions {
+fn minio_s3_config() -> (S3CompatibleOptions, Credentials) {
+    let config = S3CompatibleOptions {
         region: Some("us-east-1".to_string()),
-        endpoint: Some("http://localhost:9000".to_string()),
-        credentials: S3Credentials::Static(StaticS3Credentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
-            session_token: None,
-        }),
+        endpoint_url: Some("http://localhost:9000".to_string()),
         allow_http: true,
-    }
+        anonymous: false,
+    };
+    let credentials = Credentials::Static(StaticCredentials {
+        access_key_id: "minio123".into(),
+        secret_access_key: "minio123".into(),
+        session_token: None,
+    });
+    (config, credentials)
 }
 
 #[tokio::test]
@@ -37,15 +38,17 @@ fn minio_s3_config() -> S3ClientOptions {
 ///
 /// It runs [`garbage_collect`] to verify it's doing its job.
 pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-        S3Storage::new_s3_store(&S3Config {
-            bucket: "testbucket".to_string(),
-            prefix: "test_gc".to_string(),
-            options: Some(minio_s3_config()),
-        })
-        .await
-        .expect("Creating minio storage failed"),
-    );
+    let prefix = format!("{:?}", ChunkId::random());
+    let (config, credentials) = minio_s3_config();
+    let storage: Arc<dyn Storage + Send + Sync> = make_storage(
+        ObjectStoreConfig::S3Compatible(config),
+        Some("testbucket".to_string()),
+        Some(prefix),
+        Some(credentials),
+    )
+    .await
+    .expect("Creating minio storage failed");
+
     let repo = Repository::create(
         Some(RepositoryConfig {
             inline_chunk_threshold_bytes: 0,

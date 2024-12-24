@@ -5,11 +5,7 @@ from object_store import ClientOptions, ObjectStore
 import zarr
 import zarr.core
 import zarr.core.buffer
-from icechunk import (
-    S3Credentials,
-    StorageConfig,
-    VirtualRefConfig,
-)
+from icechunk import ObjectStoreConfig, Storage
 from icechunk.repository import Repository
 
 
@@ -46,16 +42,16 @@ async def test_write_minio_virtual_refs():
 
     # Open the store
     repo = Repository.open_or_create(
-        storage=StorageConfig.memory("virtual"),
-        virtual_ref_config=VirtualRefConfig.s3_from_config(
-            credentials=S3Credentials(
-                access_key_id="minio123",
-                secret_access_key="minio123",
-            ),
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-            region="us-east-1",
-        ),
+        storage=Storage.create(ObjectStoreConfig.InMemory()),
+        # virtual_ref_config=VirtualRefConfig.s3_from_config(
+        #     credentials=S3Credentials(
+        #         access_key_id="minio123",
+        #         secret_access_key="minio123",
+        #     ),
+        #     endpoint_url="http://localhost:9000",
+        #     allow_http=True,
+        #     region="us-east-1",
+        # ),
     )
     session = repo.writable_session("main")
     store = session.store()
@@ -104,10 +100,10 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     )
     # Open the store,
     repo = Repository.open_or_create(
-        storage=StorageConfig.filesystem(f"{tmpdir}/virtual"),
-        virtual_ref_config=VirtualRefConfig.s3_anonymous(
-            region="us-east-1", allow_http=False
-        ),
+        storage=Storage.create(ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/virtual")),
+        # virtual_ref_config=VirtualRefConfig.s3_anonymous(
+        #    region="us-east-1", allow_http=False
+        # ),
     )
     session = repo.writable_session("main")
     store = session.store()

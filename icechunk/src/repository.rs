@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    config::{Credentials, RepositoryConfig},
     format::{
         snapshot::{Snapshot, SnapshotMetadata},
         IcechunkFormatError, NodeId, SnapshotId,
@@ -21,59 +22,9 @@ use crate::{
     },
     session::Session,
     storage::ETag,
-    virtual_chunks::{
-        mk_default_containers, sort_containers, ContainerName, ObjectStoreCredentials,
-        VirtualChunkContainer, VirtualChunkResolver,
-    },
+    virtual_chunks::{ContainerName, VirtualChunkResolver},
     MemCachingStorage, Storage, StorageError,
 };
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RepositoryConfig {
-    // Chunks smaller than this will be stored inline in the manifst
-    pub inline_chunk_threshold_bytes: u16,
-    // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    // own risk in object stores for which we don't support write-object-if-not-exists. There is
-    // the possibility of race conditions if this variable is set to true and there are concurrent
-    // commit attempts.
-    pub unsafe_overwrite_refs: bool,
-
-    pub virtual_chunk_containers: Vec<VirtualChunkContainer>,
-}
-
-impl Default for RepositoryConfig {
-    fn default() -> Self {
-        let mut containers = mk_default_containers();
-        sort_containers(&mut containers);
-        Self {
-            inline_chunk_threshold_bytes: 512,
-            unsafe_overwrite_refs: false,
-            virtual_chunk_containers: containers,
-        }
-    }
-}
-
-impl RepositoryConfig {
-    pub fn add_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
-        self.virtual_chunk_containers.push(cont);
-        sort_containers(&mut self.virtual_chunk_containers);
-    }
-
-    pub fn virtual_chunk_containers(&self) -> &Vec<VirtualChunkContainer> {
-        &self.virtual_chunk_containers
-    }
-
-    pub fn clear_virtual_chunk_containers(&mut self) {
-        self.virtual_chunk_containers.clear();
-    }
-
-    pub fn update_virtual_chunk_container(
-        &mut self,
-        name: ContainerName,
-    ) -> Option<&mut VirtualChunkContainer> {
-        self.virtual_chunk_containers.iter_mut().find(|cont| cont.name == name)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
@@ -131,7 +82,7 @@ impl Repository {
     pub async fn create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
             return Err(RepositoryError::AlreadyInitialized);
@@ -185,7 +136,7 @@ impl Repository {
     pub async fn open(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         let storage_c = Arc::clone(&storage);
         let handle1 =
@@ -221,7 +172,7 @@ impl Repository {
     pub async fn open_or_create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
             Self::open(config, storage, virtual_chunk_credentials).await
@@ -464,7 +415,7 @@ mod tests {
         sync::Arc,
     };
 
-    use crate::{ObjectStorage, Repository, RepositoryConfig, Storage};
+    use crate::{config::RepositoryConfig, ObjectStorage, Repository, Storage};
 
     // use super::*;
     // TODO: Add Tests

@@ -9,9 +9,13 @@ import zarr
 @pytest.fixture(scope="function")
 def tmp_store(tmpdir):
     repo_path = f"{tmpdir}"
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.StorageConfig.filesystem(repo_path),
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=5),
+        storage=icechunk.Storage.create(
+            icechunk.ObjectStoreConfig.LocalFileSystem(repo_path)
+        ),
+        config=config,
     )
 
     session = repo.writable_session("main")

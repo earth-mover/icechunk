@@ -31,9 +31,9 @@ use crate::{
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError},
-    repository::{RepositoryConfig, RepositoryError},
+    repository::RepositoryError,
     virtual_chunks::VirtualChunkResolver,
-    Storage, StorageError,
+    RepositoryConfig, Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
