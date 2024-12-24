@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{Credentials, GcsCredentials, S3CompatibleOptions, S3Credentials},
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
@@ -9,9 +9,9 @@ use pyo3::{pyclass, pymethods, PyResult};
 
 use crate::errors::PyIcechunkStoreError;
 
-#[pyclass(name = "StaticCredentials")]
+#[pyclass(name = "S3Credentials")]
 #[derive(Clone, Debug)]
-pub struct PyStaticCredentials {
+pub struct PyS3Credentials {
     #[pyo3(get, set)]
     access_key_id: String,
     #[pyo3(get, set)]
@@ -20,9 +20,9 @@ pub struct PyStaticCredentials {
     session_token: Option<String>,
 }
 
-impl From<&PyStaticCredentials> for StaticCredentials {
-    fn from(credentials: &PyStaticCredentials) -> Self {
-        StaticCredentials {
+impl From<&PyS3Credentials> for S3Credentials {
+    fn from(credentials: &PyS3Credentials) -> Self {
+        S3Credentials {
             access_key_id: credentials.access_key_id.clone(),
             secret_access_key: credentials.secret_access_key.clone(),
             session_token: credentials.session_token.clone(),
@@ -30,9 +30,9 @@ impl From<&PyStaticCredentials> for StaticCredentials {
     }
 }
 
-impl From<PyStaticCredentials> for StaticCredentials {
-    fn from(credentials: PyStaticCredentials) -> Self {
-        StaticCredentials {
+impl From<PyS3Credentials> for S3Credentials {
+    fn from(credentials: PyS3Credentials) -> Self {
+        S3Credentials {
             access_key_id: credentials.access_key_id,
             secret_access_key: credentials.secret_access_key,
             session_token: credentials.session_token,
@@ -40,8 +40,32 @@ impl From<PyStaticCredentials> for StaticCredentials {
     }
 }
 
+#[pyclass(name = "GcsCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyGcsCredentials {
+    ServiceAccountFile(String),
+    ServiceAccountKey(String),
+    ApplicationCredentials(String),
+}
+
+impl From<PyGcsCredentials> for GcsCredentials {
+    fn from(credentials: PyGcsCredentials) -> Self {
+        match credentials {
+            PyGcsCredentials::ServiceAccountFile(path) => {
+                GcsCredentials::ServiceAccount(PathBuf::from(path))
+            }
+            PyGcsCredentials::ServiceAccountKey(key) => {
+                GcsCredentials::ServiceAccountKey(key)
+            }
+            PyGcsCredentials::ApplicationCredentials(path) => {
+                GcsCredentials::ApplicationCredentials(PathBuf::from(path))
+            }
+        }
+    }
+}
+
 #[pymethods]
-impl PyStaticCredentials {
+impl PyS3Credentials {
     #[new]
     #[pyo3(signature = (
         access_key_id,
@@ -62,7 +86,8 @@ impl PyStaticCredentials {
 pub enum PyCredentials {
     FromEnv(),
     DontSign(),
-    Static(PyStaticCredentials),
+    S3(PyS3Credentials),
+    Gcs(PyGcsCredentials),
 }
 
 impl From<PyCredentials> for Credentials {
@@ -70,7 +95,8 @@ impl From<PyCredentials> for Credentials {
         match credentials {
             PyCredentials::FromEnv() => Credentials::FromEnv,
             PyCredentials::DontSign() => Credentials::DontSign,
-            PyCredentials::Static(creds) => Credentials::Static(creds.into()),
+            PyCredentials::S3(creds) => Credentials::S3(creds.into()),
+            PyCredentials::Gcs(creds) => Credentials::Gcs(creds.into()),
         }
     }
 }
@@ -131,7 +157,7 @@ pub enum PyObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(PyS3CompatibleOptions),
     S3(PyS3CompatibleOptions),
-    Gcs(),
+    Gcs(Option<Vec<(String, String)>>),
     Azure(),
     Tigris(),
 }
@@ -147,7 +173,7 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::S3Compatible(opts.into())
             }
             PyObjectStoreConfig::S3(opts) => ObjectStoreConfig::S3(opts.into()),
-            PyObjectStoreConfig::Gcs() => ObjectStoreConfig::Gcs {},
+            PyObjectStoreConfig::Gcs(opts) => ObjectStoreConfig::Gcs(opts),
             PyObjectStoreConfig::Azure() => ObjectStoreConfig::Azure {},
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }
@@ -165,7 +191,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
                 PyObjectStoreConfig::S3Compatible(opts.into())
             }
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
-            ObjectStoreConfig::Gcs {} => PyObjectStoreConfig::Gcs(),
+            ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(opts),
             ObjectStoreConfig::Azure {} => PyObjectStoreConfig::Azure(),
             ObjectStoreConfig::Tigris {} => PyObjectStoreConfig::Tigris(),
         }

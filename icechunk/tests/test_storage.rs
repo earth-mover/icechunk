@@ -2,7 +2,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{Credentials, S3CompatibleOptions, S3Credentials},
     format::{
         manifest::Manifest, snapshot::Snapshot, ByteRange, ChunkId, ManifestId,
         SnapshotId,
@@ -26,7 +26,7 @@ async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync
         }),
         Some("testbucket".to_string()),
         Some(prefix.to_string()),
-        Some(Credentials::Static(StaticCredentials {
+        Some(Credentials::S3(S3Credentials {
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,

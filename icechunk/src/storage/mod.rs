@@ -29,7 +29,7 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::Credentials,
+    config::{Credentials, GcsCredentials},
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
         transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
@@ -257,9 +257,44 @@ pub async fn make_storage(
             )
             .await?,
         ),
+        ObjectStoreConfig::Gcs(options) => {
+            let mut options = options.unwrap_or_default();
 
-        #[allow(clippy::unimplemented)]
-        ObjectStoreConfig::Gcs {} => unimplemented!(),
+            #[allow(clippy::expect_used)]
+            match credentials {
+                Some(Credentials::Gcs(GcsCredentials::ServiceAccount(path))) => {
+                    options.push((
+                        "google_service_account".to_string(),
+                        path.into_os_string()
+                            .into_string()
+                            .expect("Invalid path to google service account credentials"),
+                    ));
+                }
+                Some(Credentials::Gcs(GcsCredentials::ServiceAccountKey(key))) => {
+                    options.push(("google_service_account_key".to_string(), key));
+                }
+                Some(Credentials::Gcs(GcsCredentials::ApplicationCredentials(path))) => {
+                    options.push((
+                        "google_application_credentials".to_string(),
+                        path.into_os_string()
+                            .into_string()
+                            .expect("Invalid path to google application credentials"),
+                    ))
+                }
+                _ => {}
+            }
+
+            let bucket = bucket.ok_or(StorageError::Other(
+                "Bucket required to initialize GCS storage".to_string(),
+            ))?;
+            let mut url = format!("gs://{}", bucket);
+            if let Some(prefix) = prefix {
+                url.push('/');
+                url.push_str(&prefix);
+            }
+
+            Arc::new(ObjectStorage::from_url(&url, options)?)
+        }
         #[allow(clippy::unimplemented)]
         ObjectStoreConfig::Azure {} => unimplemented!(),
         #[allow(clippy::unimplemented)]

@@ -26,7 +26,7 @@ class ObjectStoreConfig:
         def __init__(self, options: S3CompatibleOptions) -> None: ...
 
     class Gcs:
-        def __init__(self) -> None: ...
+        def __init__(self, options: list[tuple[str, str]] | None = None) -> None: ...
 
     class Azure:
         def __init__(self) -> None: ...
@@ -223,15 +223,6 @@ class Storage:
 
     Currently supports memory, filesystem, and S3 storage backends.
     Use the class methods to create a StorageConfig object with the desired backend.
-
-    Ex:
-    ```
-    storage_config = StorageConfig.memory("prefix")
-    storage_config = StorageConfig.filesystem("/path/to/root")
-    storage_config = StorageConfig.object_store("s3://bucket/prefix", vec!["my", "options"])
-    storage_config = StorageConfig.s3_from_env("bucket", "prefix")
-    storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
-    ```
     """
 
     @staticmethod
@@ -242,7 +233,7 @@ class Storage:
         credentials: Credentials | None = None,
     ) -> Storage: ...
 
-class StaticCredentials:
+class S3Credentials:
     access_key_id: str
     secret_access_key: str
     session_token: str | None
@@ -254,6 +245,16 @@ class StaticCredentials:
         session_token: str | None = None,
     ): ...
 
+class GcsCredentials:
+    class ServiceAccountFile:
+        def __init__(self, path: str) -> None: ...
+
+    class ServiceAccountKey:
+        def __init__(self, key: str) -> None: ...
+
+    class ApplicationCredentials:
+        def __init__(self, path: str) -> None: ...
+
 class Credentials:
     class FromEnv:
         def __init__(self) -> None: ...
@@ -261,8 +262,11 @@ class Credentials:
     class DontSign:
         def __init__(self) -> None: ...
 
-    class Static:
-        def __init__(self, _0: StaticCredentials) -> None: ...
+    class S3:
+        def __init__(self, _0: S3Credentials) -> None: ...
+
+    class Gcs:
+        def __init__(self, _0: GcsCredentials) -> None: ...
 
 class StoreConfig:
     """Configuration for an IcechunkStore"""

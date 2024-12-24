@@ -6,7 +6,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{Credentials, S3CompatibleOptions, S3Credentials},
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     ops::gc::{garbage_collect, GCConfig, GCSummary},
@@ -25,7 +25,7 @@ fn minio_s3_config() -> (S3CompatibleOptions, Credentials) {
         allow_http: true,
         anonymous: false,
     };
-    let credentials = Credentials::Static(StaticCredentials {
+    let credentials = Credentials::S3(S3Credentials {
         access_key_id: "minio123".into(),
         secret_access_key: "minio123".into(),
         session_token: None,

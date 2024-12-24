@@ -10,7 +10,7 @@ from icechunk import (
     Credentials,
     ObjectStoreConfig,
     S3CompatibleOptions,
-    StaticCredentials,
+    S3Credentials,
     Storage,
 )
 from icechunk.repository import Repository
@@ -78,8 +78,8 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         opts = S3CompatibleOptions(
             endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
         )
-        credentials = Credentials.Static(
-            StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+        credentials = Credentials.S3(
+            S3Credentials(access_key_id="minio123", secret_access_key="minio123")
         )
         repo = Repository.create(
             Storage.create(
