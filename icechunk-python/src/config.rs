@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use icechunk::{
-    config::{Credentials, S3Credentials, S3Options, S3StaticCredentials},
+    config::{Credentials, GcsCredentials, S3Credentials, S3Options, S3StaticCredentials},
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
@@ -36,6 +36,30 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
             access_key_id: credentials.access_key_id,
             secret_access_key: credentials.secret_access_key,
             session_token: credentials.session_token,
+        }
+    }
+}
+
+#[pyclass(name = "GcsCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyGcsCredentials {
+    ServiceAccountFile(String),
+    ServiceAccountKey(String),
+    ApplicationCredentials(String),
+}
+
+impl From<PyGcsCredentials> for GcsCredentials {
+    fn from(credentials: PyGcsCredentials) -> Self {
+        match credentials {
+            PyGcsCredentials::ServiceAccountFile(path) => {
+                GcsCredentials::ServiceAccount(PathBuf::from(path))
+            }
+            PyGcsCredentials::ServiceAccountKey(key) => {
+                GcsCredentials::ServiceAccountKey(key)
+            }
+            PyGcsCredentials::ApplicationCredentials(path) => {
+                GcsCredentials::ApplicationCredentials(PathBuf::from(path))
+            }
         }
     }
 }

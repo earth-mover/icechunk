@@ -8,7 +8,11 @@ from icechunk._icechunk_python import (
     ConflictSolver,
     ConflictType,
     Credentials,
+<<<<<<< HEAD
     IcechunkError,
+=======
+    GcsCredentials,
+>>>>>>> 8575f34 (Workign gcs support)
     ObjectStoreConfig,
     RebaseFailedData,
     RepositoryConfig,
@@ -39,7 +43,11 @@ __all__ = [
     "ConflictSolver",
     "ConflictType",
     "Credentials",
+<<<<<<< HEAD
     "IcechunkError",
+=======
+    "GcsCredentials",
+>>>>>>> 8575f34 (Workign gcs support)
     "IcechunkStore",
     "ObjectStoreConfig",
     "RebaseFailedData",
