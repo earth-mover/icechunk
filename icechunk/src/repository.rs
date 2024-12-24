@@ -126,7 +126,7 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        let containers = config.virtual_chunk_containers.clone();
+        let containers = config.virtual_chunk_containers.values().cloned();
         let virtual_resolver =
             Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
 
@@ -157,7 +157,7 @@ impl Repository {
             handle1.await.expect("Error fetching repo config")?
         {
             let config = config.unwrap_or(default_config);
-            let containers = config.virtual_chunk_containers.clone();
+            let containers = config.virtual_chunk_containers.values().cloned();
             let virtual_resolver = Arc::new(VirtualChunkResolver::new(
                 containers,
                 virtual_chunk_credentials,

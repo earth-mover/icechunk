@@ -1,6 +1,7 @@
 from typing import Self
 
 from icechunk._icechunk_python import (
+    Credentials,
     PyRepository,
     RepositoryConfig,
     SnapshotMetadata,
@@ -18,7 +19,12 @@ class Repository:
         self._repository = repository
 
     @classmethod
-    def create(cls, storage: Storage, config: RepositoryConfig | None = None) -> Self:
+    def create(
+        cls,
+        storage: Storage,
+        config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+    ) -> Self:
         """Create a new Icechunk repository.
 
         If one already exists at the given store location, an error will be raised.
@@ -27,10 +33,21 @@ class Repository:
             storage: The storage configuration for the repository.
             config: The repository configuration. If not provided, a default configuration will be used.
         """
-        return cls(PyRepository.create(storage, config=config))
+        return cls(
+            PyRepository.create(
+                storage,
+                config=config,
+                virtual_chunk_credentials=virtual_chunk_credentials,
+            )
+        )
 
     @classmethod
-    def open(cls, storage: Storage, config: RepositoryConfig | None = None) -> Self:
+    def open(
+        cls,
+        storage: Storage,
+        config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+    ) -> Self:
         """Open an existing Icechunk repository.
 
         If no repository exists at the given storage location, an error will be raised.
@@ -40,13 +57,20 @@ class Repository:
             config: The repository settings. If not provided, a default configuration will be
             loaded from the repository
         """
-        return cls(PyRepository.open(storage, config=config))
+        return cls(
+            PyRepository.open(
+                storage,
+                config=config,
+                virtual_chunk_credentials=virtual_chunk_credentials,
+            )
+        )
 
     @classmethod
     def open_or_create(
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, Credentials] | None = None,
     ) -> Self:
         """Open an existing Icechunk repository or create a new one if it does not exist.
 
@@ -55,7 +79,13 @@ class Repository:
             config: The repository settings. If not provided, a default configuration will be
             loaded from the repository
         """
-        return cls(PyRepository.open_or_create(storage, config=config))
+        return cls(
+            PyRepository.open_or_create(
+                storage,
+                config=config,
+                virtual_chunk_credentials=virtual_chunk_credentials,
+            )
+        )
 
     @staticmethod
     def exists(storage: Storage) -> bool:

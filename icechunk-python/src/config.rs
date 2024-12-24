@@ -1,7 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use icechunk::{
     config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
 use pyo3::{pyclass, pymethods, PyResult};
@@ -74,8 +75,8 @@ impl From<PyCredentials> for Credentials {
     }
 }
 
-#[pyclass(name = "S3CompatibleOptions")]
-#[derive(Clone, Debug)]
+#[pyclass(name = "S3CompatibleOptions", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyS3CompatibleOptions {
     #[pyo3(get, set)]
     pub region: Option<String>,
@@ -112,8 +113,19 @@ impl From<PyS3CompatibleOptions> for S3CompatibleOptions {
     }
 }
 
-#[pyclass(name = "ObjectStoreConfig")]
-#[derive(Clone, Debug)]
+impl From<S3CompatibleOptions> for PyS3CompatibleOptions {
+    fn from(value: S3CompatibleOptions) -> Self {
+        Self {
+            region: value.region,
+            endpoint_url: value.endpoint_url,
+            allow_http: value.allow_http,
+            anonymous: value.anonymous,
+        }
+    }
+}
+
+#[pyclass(name = "ObjectStoreConfig", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PyObjectStoreConfig {
     InMemory(),
     LocalFileSystem(PathBuf),
@@ -142,6 +154,55 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
     }
 }
 
+impl From<ObjectStoreConfig> for PyObjectStoreConfig {
+    fn from(value: ObjectStoreConfig) -> Self {
+        match value {
+            ObjectStoreConfig::InMemory => PyObjectStoreConfig::InMemory(),
+            ObjectStoreConfig::LocalFileSystem(path_buf) => {
+                PyObjectStoreConfig::LocalFileSystem(path_buf)
+            }
+            ObjectStoreConfig::S3Compatible(opts) => {
+                PyObjectStoreConfig::S3Compatible(opts.into())
+            }
+            ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
+            ObjectStoreConfig::Gcs {} => PyObjectStoreConfig::Gcs(),
+            ObjectStoreConfig::Azure {} => PyObjectStoreConfig::Azure(),
+            ObjectStoreConfig::Tigris {} => PyObjectStoreConfig::Tigris(),
+        }
+    }
+}
+
+#[pyclass(name = "VirtualChunkContainer", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyVirtualChunkContainer {
+    #[pyo3(get, set)]
+    pub name: String,
+    #[pyo3(get, set)]
+    pub url_prefix: String,
+    #[pyo3(get, set)]
+    pub store: PyObjectStoreConfig,
+}
+
+#[pymethods]
+impl PyVirtualChunkContainer {
+    #[new]
+    pub fn new(name: String, url_prefix: String, store: PyObjectStoreConfig) -> Self {
+        Self { name, url_prefix, store }
+    }
+}
+
+impl From<PyVirtualChunkContainer> for VirtualChunkContainer {
+    fn from(value: PyVirtualChunkContainer) -> Self {
+        Self { name: value.name, url_prefix: value.url_prefix, store: value.store.into() }
+    }
+}
+
+impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
+    fn from(value: VirtualChunkContainer) -> Self {
+        Self { name: value.name, url_prefix: value.url_prefix, store: value.store.into() }
+    }
+}
+
 #[pyclass(name = "RepositoryConfig")]
 #[derive(Clone, Debug)]
 pub struct PyRepositoryConfig {
@@ -149,7 +210,8 @@ pub struct PyRepositoryConfig {
     pub inline_chunk_threshold_bytes: u16,
     #[pyo3(get, set)]
     pub unsafe_overwrite_refs: bool,
-    //pub virtual_chunk_containers: Vec<VirtualChunkContainer>,
+    #[pyo3(get, set)]
+    pub virtual_chunk_containers: HashMap<String, PyVirtualChunkContainer>,
 }
 
 impl From<PyRepositoryConfig> for RepositoryConfig {
@@ -157,8 +219,11 @@ impl From<PyRepositoryConfig> for RepositoryConfig {
         Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
-            // FIXME:
-            virtual_chunk_containers: vec![],
+            virtual_chunk_containers: value
+                .virtual_chunk_containers
+                .into_iter()
+                .map(|(name, cont)| (name, cont.into()))
+                .collect(),
         }
     }
 }
@@ -168,8 +233,11 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
         Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
-            // FIXME:
-            //virtual_chunk_containers: vec![],
+            virtual_chunk_containers: value
+                .virtual_chunk_containers
+                .into_iter()
+                .map(|(name, cont)| (name, cont.into()))
+                .collect(),
         }
     }
 }
@@ -179,6 +247,18 @@ impl PyRepositoryConfig {
     #[staticmethod]
     fn default() -> Self {
         RepositoryConfig::default().into()
+    }
+
+    pub fn set_virtual_chunk_container(&mut self, cont: PyVirtualChunkContainer) {
+        self.virtual_chunk_containers.insert(cont.name.clone(), cont);
+    }
+
+    pub fn virtual_chunk_containers(&self) -> Vec<PyVirtualChunkContainer> {
+        self.virtual_chunk_containers.values().cloned().collect()
+    }
+
+    pub fn clear_virtual_chunk_containers(&mut self) {
+        self.virtual_chunk_containers.clear();
     }
 }
 
