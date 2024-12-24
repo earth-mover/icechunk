@@ -29,7 +29,7 @@ async fn mk_storage(
         }),
         Some("testbucket".to_string()),
         Some(prefix.to_string()),
-        Some(Credentials::Static(S3Credentials {
+        Some(Credentials::S3(S3Credentials {
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,

@@ -81,7 +81,7 @@ pub async fn mk_client(config: &S3CompatibleOptions, credentials: Credentials) -
     match credentials {
         Credentials::FromEnv => {}
         Credentials::DontSign => aws_config = aws_config.no_credentials(),
-        Credentials::Static(credentials) => {
+        Credentials::S3(credentials) => {
             aws_config =
                 aws_config.credentials_provider(aws_credential_types::Credentials::new(
                     credentials.access_key_id,
@@ -665,7 +665,7 @@ mod tests {
             allow_http: true,
             anonymous: false,
         };
-        let credentials = Credentials::Static(S3Credentials {
+        let credentials = Credentials::S3(S3Credentials {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),
             session_token: Some("session_token".to_string()),

@@ -96,7 +96,7 @@ pub enum Credentials {
     #[serde(rename = "none")]
     DontSign,
     #[serde(rename = "s3")]
-    Static(S3Credentials),
+    S3(S3Credentials),
     #[serde(rename = "gcs")]
     Gcs(GcsCredentials),
 }

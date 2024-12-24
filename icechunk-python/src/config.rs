@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, S3Credentials},
+    config::{Credentials, GcsCredentials, S3CompatibleOptions, S3Credentials},
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
 use pyo3::{pyclass, pymethods, PyResult};
@@ -39,6 +39,30 @@ impl From<PyS3Credentials> for S3Credentials {
     }
 }
 
+#[pyclass(name = "GcsCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyGcsCredentials {
+    ServiceAccountFile(String),
+    ServiceAccountKey(String),
+    ApplicationCredentials(String),
+}
+
+impl From<PyGcsCredentials> for GcsCredentials {
+    fn from(credentials: PyGcsCredentials) -> Self {
+        match credentials {
+            PyGcsCredentials::ServiceAccountFile(path) => {
+                GcsCredentials::ServiceAccount(PathBuf::from(path))
+            }
+            PyGcsCredentials::ServiceAccountKey(key) => {
+                GcsCredentials::ServiceAccountKey(key)
+            }
+            PyGcsCredentials::ApplicationCredentials(path) => {
+                GcsCredentials::ApplicationCredentials(PathBuf::from(path))
+            }
+        }
+    }
+}
+
 #[pymethods]
 impl PyS3Credentials {
     #[new]
@@ -61,7 +85,8 @@ impl PyS3Credentials {
 pub enum PyCredentials {
     FromEnv(),
     DontSign(),
-    Static(PyS3Credentials),
+    S3(PyS3Credentials),
+    Gcs(PyGcsCredentials),
 }
 
 impl From<PyCredentials> for Credentials {
@@ -69,7 +94,8 @@ impl From<PyCredentials> for Credentials {
         match credentials {
             PyCredentials::FromEnv() => Credentials::FromEnv,
             PyCredentials::DontSign() => Credentials::DontSign,
-            PyCredentials::Static(creds) => Credentials::Static(creds.into()),
+            PyCredentials::S3(creds) => Credentials::S3(creds.into()),
+            PyCredentials::Gcs(creds) => Credentials::Gcs(creds.into()),
         }
     }
 }

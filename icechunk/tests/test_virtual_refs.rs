@@ -36,7 +36,7 @@ mod tests {
             allow_http: true,
             anonymous: false,
         };
-        let credentials = Credentials::Static(S3Credentials {
+        let credentials = Credentials::S3(S3Credentials {
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,
@@ -129,7 +129,7 @@ mod tests {
             }),
         }];
 
-        let credentials = Credentials::Static(S3Credentials {
+        let credentials = Credentials::S3(S3Credentials {
             access_key_id: "minio123".to_string(),
             secret_access_key: "minio123".to_string(),
             session_token: None,
@@ -546,7 +546,7 @@ mod tests {
 
         let virtual_creds = HashMap::from([(
             "s3".to_string(),
-            Credentials::Static(S3Credentials {
+            Credentials::S3(S3Credentials {
                 access_key_id: "minio123".to_string(),
                 secret_access_key: "minio123".to_string(),
                 session_token: None,
