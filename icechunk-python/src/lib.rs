@@ -8,7 +8,7 @@ mod streams;
 
 use config::{
     PyCredentials, PyObjectStoreConfig, PyRepositoryConfig, PyS3CompatibleOptions,
-    PyStaticCredentials, PyStorage,
+    PyS3Credentials, PyStorage,
 };
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
@@ -38,7 +38,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_class::<PyConflictDetector>()?;
     m.add_class::<PyVersionSelection>()?;
-    m.add_class::<PyStaticCredentials>()?;
+    m.add_class::<PyS3Credentials>()?;
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3CompatibleOptions>()?;
     m.add_class::<PyObjectStoreConfig>()?;

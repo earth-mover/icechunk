@@ -652,7 +652,7 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{Credentials, S3CompatibleOptions, StaticCredentials};
+    use crate::config::{Credentials, S3CompatibleOptions, S3Credentials};
 
     use super::S3Storage;
 
@@ -665,7 +665,7 @@ mod tests {
             allow_http: true,
             anonymous: false,
         };
-        let credentials = Credentials::Static(StaticCredentials {
+        let credentials = Credentials::Static(S3Credentials {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),
             session_token: Some("session_token".to_string()),
@@ -684,7 +684,7 @@ mod tests {
         println!("{}", serialized);
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token"},"bucket":"bucket","prefix":"prefix"}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"s3","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token"},"bucket":"bucket","prefix":"prefix"}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

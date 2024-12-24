@@ -1,16 +1,16 @@
 use std::{path::PathBuf, sync::Arc};
 
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{Credentials, S3CompatibleOptions, S3Credentials},
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
 use pyo3::{pyclass, pymethods, PyResult};
 
 use crate::errors::PyIcechunkStoreError;
 
-#[pyclass(name = "StaticCredentials")]
+#[pyclass(name = "S3Credentials")]
 #[derive(Clone, Debug)]
-pub struct PyStaticCredentials {
+pub struct PyS3Credentials {
     #[pyo3(get, set)]
     access_key_id: String,
     #[pyo3(get, set)]
@@ -19,9 +19,9 @@ pub struct PyStaticCredentials {
     session_token: Option<String>,
 }
 
-impl From<&PyStaticCredentials> for StaticCredentials {
-    fn from(credentials: &PyStaticCredentials) -> Self {
-        StaticCredentials {
+impl From<&PyS3Credentials> for S3Credentials {
+    fn from(credentials: &PyS3Credentials) -> Self {
+        S3Credentials {
             access_key_id: credentials.access_key_id.clone(),
             secret_access_key: credentials.secret_access_key.clone(),
             session_token: credentials.session_token.clone(),
@@ -29,9 +29,9 @@ impl From<&PyStaticCredentials> for StaticCredentials {
     }
 }
 
-impl From<PyStaticCredentials> for StaticCredentials {
-    fn from(credentials: PyStaticCredentials) -> Self {
-        StaticCredentials {
+impl From<PyS3Credentials> for S3Credentials {
+    fn from(credentials: PyS3Credentials) -> Self {
+        S3Credentials {
             access_key_id: credentials.access_key_id,
             secret_access_key: credentials.secret_access_key,
             session_token: credentials.session_token,
@@ -40,7 +40,7 @@ impl From<PyStaticCredentials> for StaticCredentials {
 }
 
 #[pymethods]
-impl PyStaticCredentials {
+impl PyS3Credentials {
     #[new]
     #[pyo3(signature = (
         access_key_id,
@@ -61,7 +61,7 @@ impl PyStaticCredentials {
 pub enum PyCredentials {
     FromEnv(),
     DontSign(),
-    Static(PyStaticCredentials),
+    Static(PyS3Credentials),
 }
 
 impl From<PyCredentials> for Credentials {

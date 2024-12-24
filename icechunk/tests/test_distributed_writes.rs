@@ -4,7 +4,7 @@ use std::{collections::HashMap, num::NonZeroU64, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{Credentials, S3CompatibleOptions, S3Credentials},
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     repository::VersionInfo,
@@ -29,7 +29,7 @@ async fn mk_storage(
         }),
         Some("testbucket".to_string()),
         Some(prefix.to_string()),
-        Some(Credentials::Static(StaticCredentials {
+        Some(Credentials::Static(S3Credentials {
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,

@@ -74,7 +74,7 @@ impl RepositoryConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct StaticCredentials {
+pub struct S3Credentials {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub session_token: Option<String>,
@@ -95,8 +95,8 @@ pub enum Credentials {
     FromEnv,
     #[serde(rename = "none")]
     DontSign,
-    #[serde(rename = "static")]
-    Static(StaticCredentials),
+    #[serde(rename = "s3")]
+    Static(S3Credentials),
     #[serde(rename = "gcs")]
     Gcs(GcsCredentials),
 }
