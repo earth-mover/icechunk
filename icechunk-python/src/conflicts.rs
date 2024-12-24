@@ -70,6 +70,8 @@ pub struct PyConflict {
     conflict_type: PyConflictType,
     #[pyo3(get)]
     path: String,
+    #[pyo3(get)]
+    conflicted_chunks: Option<Vec<Vec<u32>>>,
 }
 
 #[pymethods]
@@ -89,48 +91,63 @@ impl From<&Conflict> for PyConflict {
             Conflict::NewNodeConflictsWithExistingNode(path) => PyConflict {
                 conflict_type: PyConflictType::NewNodeConflictsWithExistingNode,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::NewNodeInInvalidGroup(path) => PyConflict {
                 conflict_type: PyConflictType::NewNodeInInvalidGroup,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::ZarrMetadataDoubleUpdate(path) => PyConflict {
                 conflict_type: PyConflictType::ZarrMetadataDoubleUpdate,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::ZarrMetadataUpdateOfDeletedArray(path) => PyConflict {
                 conflict_type: PyConflictType::ZarrMetadataUpdateOfDeletedArray,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::UserAttributesDoubleUpdate { path, node_id: _ } => PyConflict {
                 conflict_type: PyConflictType::UserAttributesDoubleUpdate,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::UserAttributesUpdateOfDeletedNode(path) => PyConflict {
                 conflict_type: PyConflictType::UserAttributesUpdateOfDeletedNode,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
-            Conflict::ChunkDoubleUpdate { path, node_id: _, chunk_coordinates: _ } => {
+            Conflict::ChunkDoubleUpdate { path, node_id: _, chunk_coordinates } => {
+                let mut chunk_coordinates =
+                    chunk_coordinates.iter().map(|c| c.0.clone()).collect::<Vec<_>>();
+                chunk_coordinates.sort();
+
                 PyConflict {
                     conflict_type: PyConflictType::ChunkDoubleUpdate,
                     path: path.to_string(),
+                    conflicted_chunks: Some(chunk_coordinates),
                 }
             }
             Conflict::ChunksUpdatedInDeletedArray { path, node_id: _ } => PyConflict {
                 conflict_type: PyConflictType::ChunksUpdatedInDeletedArray,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::ChunksUpdatedInUpdatedArray { path, node_id: _ } => PyConflict {
                 conflict_type: PyConflictType::ChunksUpdatedInUpdatedArray,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::DeleteOfUpdatedArray { path, node_id: _ } => PyConflict {
                 conflict_type: PyConflictType::DeleteOfUpdatedArray,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
             Conflict::DeleteOfUpdatedGroup { path, node_id: _ } => PyConflict {
                 conflict_type: PyConflictType::DeleteOfUpdatedGroup,
                 path: path.to_string(),
+                conflicted_chunks: None,
             },
         }
     }

@@ -52,6 +52,17 @@ def test_detect_conflicts(repo: icechunk.Repository):
             session_b.rebase(icechunk.ConflictDetector())
         except icechunk.RebaseFailedError as e:
             assert len(e.conflicts) == 2
+            assert e.conflicts[0].path == "/foo/bar/some-array"
+            assert (
+                e.conflicts[0].conflict_type
+                == icechunk.ConflictType.UserAttributesDoubleUpdate
+            )
+            assert e.conflicts[0].conflicted_chunks is None
+
+            assert e.conflicts[1].path == "/foo/bar/some-array"
+            assert e.conflicts[1].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
+            assert len(e.conflicts[1].conflicted_chunks) == 100
+
             raise e
 
 
@@ -153,9 +164,36 @@ def test_rebase_chunks_with_ours(
 
     # Make sure it fails if the resolver is not set
     with pytest.raises(icechunk.RebaseFailedError):
-        session_b.rebase(
-            icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.Fail)
-        )
+        try:
+            session_b.rebase(
+                icechunk.BasicConflictSolver(
+                    on_chunk_conflict=icechunk.VersionSelection.Fail
+                )
+            )
+        except icechunk.RebaseFailedError as e:
+            assert e.conflicts[0].path == "/foo/bar/some-array"
+            assert e.conflicts[0].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
+            assert len(e.conflicts) == 1
+
+            np.testing.assert_array_equal(
+                np.array(e.conflicts[0].conflicted_chunks),
+                np.array(
+                    [
+                        [0, 0],
+                        [1, 0],
+                        [2, 0],
+                        [3, 0],
+                        [4, 0],
+                        [5, 0],
+                        [6, 0],
+                        [7, 0],
+                        [8, 0],
+                        [9, 0],
+                    ]
+                ),
+            )
+
+            raise e
 
     solver = icechunk.BasicConflictSolver(
         on_chunk_conflict=on_chunk_conflict,
