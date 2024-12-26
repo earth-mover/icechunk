@@ -120,9 +120,10 @@ class Session:
         """When the session is writable, discard any uncommitted changes"""
         self._session.discard_changes()
 
+    @property
     def store(self) -> IcechunkStore:
         """Get a zarr Store object for reading and writing data from the repository using zarr python"""
-        return IcechunkStore(self._session.store())
+        return IcechunkStore(self._session.store)
 
     def all_virtual_chunk_locations(self) -> list[str]:
         """Return the location URLs of all virtual chunks"""

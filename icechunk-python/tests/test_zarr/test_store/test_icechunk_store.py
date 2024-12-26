@@ -57,7 +57,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        return session.store()
+        return session.store
 
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
@@ -70,7 +70,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        store2 = session.store()
+        store2 = session.store
         # stores dont point to the same session instance, so they are not equal
         assert store != store2
 
@@ -87,7 +87,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        store = session.store()
+        store = session.store
         assert store._is_open
         assert store.read_only == read_only
 
@@ -97,7 +97,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         kwargs = {**store_kwargs}
         repo = Repository.open(**kwargs)
         session = repo.readonly_session(branch="main")
-        store = session.store()
+        store = session.store
 
         assert store.read_only
 

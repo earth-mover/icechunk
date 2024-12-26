@@ -15,7 +15,7 @@ def test_timetravel():
         config=config,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array(
@@ -29,7 +29,7 @@ def test_timetravel():
     assert session.read_only
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
     group = zarr.open_group(store=store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
 
@@ -39,21 +39,21 @@ def test_timetravel():
     new_snapshot_id = session.commit("commit 2")
 
     session = repo.readonly_session(snapshot_id=snapshot_id)
-    store = session.store()
+    store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
     session = repo.readonly_session(snapshot_id=new_snapshot_id)
-    store = session.store()
+    store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 54
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
     group = zarr.open_group(store=store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
 
@@ -68,7 +68,7 @@ def test_timetravel():
 
     repo.create_branch("feature", new_snapshot_id)
     session = repo.writable_session("feature")
-    store = session.store()
+    store = session.store
     assert not store._read_only
     assert session.branch == "feature"
 
@@ -86,7 +86,7 @@ def test_timetravel():
 
     repo.create_tag("v1.0", feature_snapshot_id)
     session = repo.readonly_session(tag="v1.0")
-    store = session.store()
+    store = session.store
     assert store._read_only
     assert session.branch is None
 
@@ -119,14 +119,14 @@ async def test_branch_reset():
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     group = zarr.group(store=store, overwrite=True)
     group.create_group("a")
     prev_snapshot_id = session.commit("group a")
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     group = zarr.open_group(store=store)
     group.create_group("b")
@@ -139,7 +139,7 @@ async def test_branch_reset():
     repo.reset_branch("main", prev_snapshot_id)
 
     session = repo.readonly_session(branch="main")
-    store = session.store()
+    store = session.store
 
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys

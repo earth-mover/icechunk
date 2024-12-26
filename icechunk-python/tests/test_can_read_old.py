@@ -66,7 +66,7 @@ async def write_a_test_repo():
     print("Writing repository to ./tests/data/test-repo")
     repo = mk_repo()
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.group(store=store)
     group1 = root.create_group(
@@ -95,7 +95,7 @@ async def write_a_test_repo():
     session.commit("empty structure")
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
     root = zarr.group(store=store)
     big_chunks = cast(zarr.Array, root["group1/big_chunks"])
     small_chunks = cast(zarr.Array, root["group1/small_chunks"])
@@ -114,7 +114,7 @@ async def write_a_test_repo():
 
     repo.create_branch("my-branch", snapshot_id=snapshot)
     session = repo.writable_session("my-branch")
-    store = session.store()
+    store = session.store
 
     await store.delete("group1/small_chunks/c/4")
     snap4 = session.commit("delete a chunk")
@@ -122,7 +122,7 @@ async def write_a_test_repo():
     repo.create_tag("it works!", snapshot_id=snap4)
 
     session = repo.writable_session("my-branch")
-    store = session.store()
+    store = session.store
     root = zarr.open_group(store=store)
 
     group2 = root.create_group(
@@ -185,7 +185,7 @@ async def test_icechunk_can_read_old_repo():
     assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history[1:]
 
     session = repo.writable_session("my-branch")
-    store = session.store()
+    store = session.store
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
         "group2",

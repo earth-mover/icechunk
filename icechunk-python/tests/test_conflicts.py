@@ -16,7 +16,7 @@ def repo(tmpdir) -> icechunk.Repository:
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
     root = zarr.group(store=store)
     root.create_group("foo/bar")
     root.create_array(
@@ -30,8 +30,8 @@ def repo(tmpdir) -> icechunk.Repository:
 def test_detect_conflicts(repo: icechunk.Repository):
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -69,8 +69,8 @@ def test_detect_conflicts(repo: icechunk.Repository):
 def test_rebase_no_conflicts(repo: icechunk.Repository):
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -85,7 +85,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository):
     session_b.commit("update array")
 
     session_c = repo.readonly_session(branch="main")
-    store_c = session_c.store()
+    store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
     array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
     np.testing.assert_array_equal(array_c[:], 1)
@@ -101,8 +101,8 @@ def test_rebase_user_attrs_with_ours(
 ):
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -147,8 +147,8 @@ def test_rebase_chunks_with_ours(
 ):
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -203,7 +203,7 @@ def test_rebase_chunks_with_ours(
     session_b.commit("after conflict")
 
     session_c = repo.readonly_session(branch="main")
-    store_c = session_c.store()
+    store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
     array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
     assert (

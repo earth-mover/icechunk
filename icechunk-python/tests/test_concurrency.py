@@ -44,7 +44,7 @@ async def test_concurrency():
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     group = zarr.group(store=store, overwrite=True)
     array = group.create_array(

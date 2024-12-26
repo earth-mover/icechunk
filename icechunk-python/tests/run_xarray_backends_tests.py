@@ -51,7 +51,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
                 Storage.create(ObjectStoreConfig.LocalFileSystem(tmpdir))
             )
             session = repo.writable_session("main")
-            yield session.store()
+            yield session.store
 
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
@@ -61,7 +61,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
             pytest.skip("v2 not supported")
         repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         session = repo.writable_session("main")
-        yield session.store()
+        yield session.store
 
     def test_pickle(self):
         pytest.skip(reason="memory icechunk stores cannot be pickled.")
@@ -90,4 +90,4 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
             )
         )
         session = repo.writable_session("main")
-        yield session.store()
+        yield session.store

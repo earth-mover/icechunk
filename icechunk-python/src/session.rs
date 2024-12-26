@@ -58,6 +58,7 @@ impl PySession {
         self.0.blocking_write().discard_changes();
     }
 
+    #[getter]
     pub fn store(&self) -> PyResult<PyStore> {
         let session = self.0.blocking_read();
         let conc = session.config().get_partial_values_concurrency;

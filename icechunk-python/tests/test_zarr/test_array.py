@@ -21,7 +21,7 @@ from zarr.storage import StorePath
 def store(request: pytest.FixtureRequest, tmpdir) -> IcechunkStore:
     repo = parse_repo("local", str(tmpdir))
     session = repo.writable_session("main")
-    return session.store()
+    return session.store
 
 
 @pytest.mark.parametrize("store", ["memory"], indirect=["store"])
