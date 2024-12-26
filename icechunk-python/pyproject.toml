@@ -28,6 +28,7 @@ packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
 test = [
+  "boto3",
   "coverage",
   "mypy",
   "object-store-python",
@@ -69,17 +70,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = [
-  "toolz.*",
-]
+module = ["toolz.*"]
 
 [tool.ruff]
 line-length = 90
-extend-exclude = [
-  "*.ipynb",
-  "doc",
-  "_typed_ops.pyi",
-]
+extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -97,7 +92,7 @@ extend-select = [
   "RUF",
 ]
 extend-safe-fixes = [
-  "TID252",  # absolute imports
+  "TID252", # absolute imports
 ]
 ignore = [
   "E402",    # module level import not at top of file

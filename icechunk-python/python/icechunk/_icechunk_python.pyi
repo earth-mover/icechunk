@@ -167,7 +167,7 @@ class PyStore:
         location: str,
         offset: int,
         length: int,
-        checksum: int | str | datetime.datetime | None = None,
+        checksum: str | datetime.datetime | None = None,
     ) -> None: ...
     async def async_set_virtual_ref(
         self,
@@ -175,7 +175,7 @@ class PyStore:
         location: str,
         offset: int,
         length: int,
-        checksum: int | str | datetime.datetime | None = None,
+        checksum: str | datetime.datetime | None = None,
     ) -> None: ...
     async def delete(self, key: str) -> None: ...
     @property

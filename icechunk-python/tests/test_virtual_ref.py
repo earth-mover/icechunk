@@ -1,12 +1,17 @@
+import os
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import boto3
 import numpy as np
 import pytest
-from object_store import ClientOptions, ObjectStore
 
 import zarr
 import zarr.core
 import zarr.core.buffer
 from icechunk import (
     Credentials,
+    IcechunkError,
     ObjectStoreConfig,
     RepositoryConfig,
     S3CompatibleOptions,
@@ -17,31 +22,32 @@ from icechunk import (
 from icechunk.repository import Repository
 
 
-def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
-    client_options = ClientOptions(
-        allow_http=True,  # type: ignore
+def write_chunks_to_minio(prefix: str, chunks: list[tuple[str, bytes]]) -> list[str]:
+    s3 = boto3.client(
+        "s3",
+        endpoint_url="http://localhost:9000",
+        use_ssl=False,
+        aws_access_key_id="minio123",
+        aws_secret_access_key="minio123",
     )
-    store = ObjectStore(
-        "s3://testbucket",
-        {
-            "access_key_id": "minio123",
-            "secret_access_key": "minio123",
-            "aws_region": "us-east-1",
-            "aws_endpoint": "http://localhost:9000",
-        },
-        client_options=client_options,
-    )
-
+    etags = []
     for key, data in chunks:
-        store.put(key, data)
+        key = os.path.join(prefix, key)
+        etag = s3.put_object(Bucket="testbucket", Key=key, Body=data)["ETag"]
+        etags.append(etag)
+
+    return etags
 
 
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_write_minio_virtual_refs():
-    write_chunks_to_minio(
+    prefix = str(uuid.uuid4())
+    etags = write_chunks_to_minio(
+        prefix,
         [
-            ("path/to/python/chunk-1", b"first"),
-            ("path/to/python/chunk-2", b"second"),
-        ]
+            ("chunk-1", b"first"),
+            ("chunk-2", b"second"),
+        ],
     )
 
     config = RepositoryConfig.default()
@@ -65,17 +71,80 @@ async def test_write_minio_virtual_refs():
     session = repo.writable_session("main")
     store = session.store()
 
-    array = zarr.Array.create(store, shape=(1, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
+    array = zarr.Array.create(store, shape=(5, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
+
+    # We add the virtual chunk refs without checksum, with the right etag, and with the wrong wrong etag and datetime.
+    # This way we can check retrieval operations that should fail
+    old = datetime.now(UTC) - timedelta(weeks=1)
+    new = datetime.now(UTC) + timedelta(minutes=1)
 
     store.set_virtual_ref(
-        "c/0/0/0", "s3://testbucket/path/to/python/chunk-1", offset=0, length=4
+        "c/0/0/0", f"s3://testbucket/{prefix}/chunk-1", offset=0, length=4
     )
     store.set_virtual_ref(
-        "c/0/0/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
+        "c/1/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum=etags[0],
     )
+    store.set_virtual_ref(
+        "c/2/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum="bad etag",
+    )
+    store.set_virtual_ref(
+        "c/3/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum=old,
+    )
+    store.set_virtual_ref(
+        "c/4/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum=new,
+    )
+
+    store.set_virtual_ref(
+        "c/0/0/1", f"s3://testbucket/{prefix}/chunk-2", offset=1, length=4
+    )
+    store.set_virtual_ref(
+        "c/1/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum=etags[1],
+    )
+    store.set_virtual_ref(
+        "c/2/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum="bad etag",
+    )
+    store.set_virtual_ref(
+        "c/3/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum=old,
+    )
+    store.set_virtual_ref(
+        "c/4/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum=new,
+    )
+
     # we write a ref that simulates a lost chunk
     store.set_virtual_ref(
-        "c/0/0/2", "s3://testbucket/path/to/python/non-existing", offset=1, length=4
+        "c/0/0/2", f"s3://testbucket/{prefix}/non-existing", offset=1, length=4
     )
 
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
@@ -83,10 +152,14 @@ async def test_write_minio_virtual_refs():
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
     assert first is not None
     assert first.to_bytes() == b"firs"
+    assert await store.get("c/1/0/0", prototype=buffer_prototype) == first
+    assert await store.get("c/4/0/0", prototype=buffer_prototype) == first
 
     second = await store.get("c/0/0/1", prototype=buffer_prototype)
     assert second is not None
     assert second.to_bytes() == b"econ"
+    assert await store.get("c/1/0/1", prototype=buffer_prototype) == second
+    assert await store.get("c/4/0/1", prototype=buffer_prototype) == second
 
     assert array[0, 0, 0] == 1936877926
     assert array[0, 0, 1] == 1852793701
@@ -95,14 +168,25 @@ async def test_write_minio_virtual_refs():
     assert await store.get("c/0/0/3", prototype=buffer_prototype) is None
 
     # fetching a virtual ref that disappeared should be an exception
-    with pytest.raises(ValueError):
+    with pytest.raises(IcechunkError):
         # TODO: we should include the key and other info in the exception
         await store.get("c/0/0/2", prototype=buffer_prototype)
 
     all_locations = set(session.all_virtual_chunk_locations())
-    assert "s3://testbucket/path/to/python/non-existing" in all_locations
-    assert "s3://testbucket/path/to/python/chunk-1" in all_locations
-    assert "s3://testbucket/path/to/python/chunk-2" in all_locations
+    assert f"s3://testbucket/{prefix}/non-existing" in all_locations
+    assert f"s3://testbucket/{prefix}/chunk-1" in all_locations
+    assert f"s3://testbucket/{prefix}/chunk-2" in all_locations
+
+    # check we cannot get refs with bad etag o that were modified
+
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/2/0/0", prototype=buffer_prototype)
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/3/0/0", prototype=buffer_prototype)
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/2/0/1", prototype=buffer_prototype)
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/3/0/1", prototype=buffer_prototype)
 
     _snapshot_id = session.commit("Add virtual refs")
 

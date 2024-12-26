@@ -26,12 +26,10 @@ use crate::{
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
-#[derive(FromPyObject)]
+#[derive(FromPyObject, Clone, Debug)]
 enum ChecksumArgument {
     #[pyo3(transparent, annotation = "str")]
     String(String),
-    #[pyo3(transparent, annotation = "int")]
-    Int(u32),
     #[pyo3(transparent, annotation = "datetime.datetime")]
     Datetime(chrono::DateTime<Utc>),
 }
@@ -40,9 +38,6 @@ impl From<ChecksumArgument> for Checksum {
     fn from(value: ChecksumArgument) -> Self {
         match value {
             ChecksumArgument::String(etag) => Checksum::ETag(etag),
-            ChecksumArgument::Int(seconds) => {
-                Checksum::LastModified(SecondsSinceEpoch(seconds))
-            }
             ChecksumArgument::Datetime(date_time) => {
                 Checksum::LastModified(SecondsSinceEpoch(date_time.timestamp() as u32))
             }
@@ -51,7 +46,7 @@ impl From<ChecksumArgument> for Checksum {
 }
 
 #[pyclass(name = "StoreConfig")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyStoreConfig(pub StoreConfig);
 
 #[pymethods]
