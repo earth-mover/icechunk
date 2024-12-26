@@ -19,7 +19,7 @@ def tmp_store(tmpdir):
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     yield store, repo_path
 

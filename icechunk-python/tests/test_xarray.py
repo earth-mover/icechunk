@@ -58,15 +58,15 @@ def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
             Storage.create(ObjectStoreConfig.LocalFileSystem(tmpdir))
         )
         session = repo.writable_session("main")
-        to_icechunk(data, store=session.store(), mode="w")
+        to_icechunk(data, store=session.store, mode="w")
 
         # if allow_distributed_write:
         #     with session.allow_distributed_write():
-        #       to_icechunk(data, store=session.store(), mode="w")
+        #       to_icechunk(data, store=session.store, mode="w")
         # else:
-        #     to_icechunk(data, store=session.store(), mode="w")
+        #     to_icechunk(data, store=session.store, mode="w")
 
-        with xr.open_zarr(session.store(), consolidated=False) as ds:
+        with xr.open_zarr(session.store, consolidated=False) as ds:
             yield ds
 
 

@@ -45,7 +45,7 @@ def test_zarr_hierarchy():
     store = (
         Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         .writable_session("main")
-        .store()
+        .store
     )
 
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
@@ -61,7 +61,7 @@ def test_zarr_store():
     store = (
         Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         .writable_session("main")
-        .store()
+        .store
     )
 
     def mk_test_instance_sync() -> ZarrHierarchyStateMachine:

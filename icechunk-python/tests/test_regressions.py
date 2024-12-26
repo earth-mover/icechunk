@@ -68,7 +68,7 @@ async def test_issue_418():
         virtual_chunk_credentials=credentials,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
     time = root.require_array(name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4")
@@ -93,7 +93,7 @@ async def test_issue_418():
     session.commit("Initial commit")
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.Group.open(store=store)
     time = cast(zarr.core.array.Array, root["time"])

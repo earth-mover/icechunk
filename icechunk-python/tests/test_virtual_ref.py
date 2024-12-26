@@ -69,7 +69,7 @@ async def test_write_minio_virtual_refs():
         virtual_chunk_credentials=credentials,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     array = zarr.Array.create(store, shape=(5, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
 
@@ -209,7 +209,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
         config=config,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
     year = root.require_array(
