@@ -1,6 +1,6 @@
 from typing import cast
 
-from object_store import ClientOptions, ObjectStore
+import pytest
 
 import zarr
 import zarr.core
@@ -15,25 +15,7 @@ from icechunk import (
     VirtualChunkContainer,
 )
 from icechunk.repository import Repository
-
-
-def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
-    client_options = ClientOptions(
-        allow_http=True,  # type: ignore
-    )
-    store = ObjectStore(
-        "s3://testbucket",
-        {
-            "access_key_id": "minio123",
-            "secret_access_key": "minio123",
-            "aws_region": "us-east-1",
-            "aws_endpoint": "http://localhost:9000",
-        },
-        client_options=client_options,
-    )
-
-    for key, data in chunks:
-        store.put(key, data)
+from tests.conftest import write_chunks_to_minio
 
 
 async def write_minio_virtual_refs():
@@ -48,6 +30,7 @@ async def write_minio_virtual_refs():
     )
 
 
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_issue_418():
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()

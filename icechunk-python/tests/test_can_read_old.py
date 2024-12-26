@@ -11,46 +11,44 @@ intentionally changed, the repository files must be regenerated. For that, run t
 file as a python script: `python ./tests/test_can_read_old.py`.
 """
 
+from datetime import UTC, datetime
 from typing import cast
 
 import pytest
 from numpy.testing import assert_array_equal
-from object_store import ClientOptions, ObjectStore
 
 import icechunk as ic
 import zarr
 
 
-def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
-    client_options = ClientOptions(
-        allow_http=True,  # type: ignore
-    )
-    store = ObjectStore(
-        "s3://testbucket",
-        {
-            "access_key_id": "minio123",
-            "secret_access_key": "minio123",
-            "aws_region": "us-east-1",
-            "aws_endpoint": "http://localhost:9000",
-        },
-        client_options=client_options,
-    )
-
-    for key, data in chunks:
-        store.put(key, data)
-
-
-def mk_repo():
+def mk_repo(create: bool):
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
 
-    config = ic.RepositoryConfig(
-        inline_chunk_threshold_bytes=12,
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 12
+
+    virtual_store_config = ic.ObjectStoreConfig.S3Compatible(
+        ic.S3CompatibleOptions(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+        )
     )
-    store = ic.Repository.open_or_create(
-        storage=ic.ObjectStoreConfig.LocalFileSystem(store_path), config=config
+    container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
+    config.set_virtual_chunk_container(container)
+    credentials = {
+        "s3": ic.Credentials.Static(ic.StaticCredentials("minio123", "minio123"))
+    }
+
+    operation = ic.Repository.create if create else ic.Repository.open
+    repo = operation(
+        storage=ic.Storage.create(ic.ObjectStoreConfig.LocalFileSystem(store_path)),
+        config=config,
+        virtual_chunk_credentials=credentials,
     )
-    return store
+
+    return repo
 
 
 async def write_a_test_repo():
@@ -64,7 +62,7 @@ async def write_a_test_repo():
     """
 
     print("Writing repository to ./tests/data/test-repo")
-    repo = mk_repo()
+    repo = mk_repo(True)
     session = repo.writable_session("main")
     store = session.store
 
@@ -93,6 +91,8 @@ async def write_a_test_repo():
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
     session.commit("empty structure")
+    session = repo.writable_session("main")
+    store = session.store
 
     session = repo.writable_session("main")
     store = session.store
@@ -103,14 +103,19 @@ async def write_a_test_repo():
     big_chunks[:] = 42.0
     small_chunks[:] = 84
     snapshot = session.commit("fill data")
+    session = repo.writable_session("main")
+    store = session.store
 
-    # store.set_virtual_ref(
-    #     "group1/big_chunks/c/0/0",
-    #     "s3://testbucket/path/to/python/chunk-1",
-    #     offset=0,
-    #     length=5 * 5 * 4,
-    # )
-    # store.commit("set virtual chunk")
+    store.set_virtual_ref(
+        "group1/big_chunks/c/0/0",
+        "s3://testbucket/can_read_old/chunk-1",
+        offset=0,
+        length=5 * 5 * 4,
+        checksum=datetime(9999, 12, 31, tzinfo=UTC),
+    )
+    snapshot = session.commit("set virtual chunk")
+    session = repo.writable_session("main")
+    store = session.store
 
     repo.create_branch("my-branch", snapshot_id=snapshot)
     session = repo.writable_session("my-branch")
@@ -152,13 +157,12 @@ async def write_a_test_repo():
     store.close()
 
 
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_icechunk_can_read_old_repo():
-    # FIXME
-    pytest.xfail(
-        "Temporary flagged as failing while we implement new virtual chunk mechanism"
-    )
+    # we import here so it works when the script is ran by pytest
+    from tests.conftest import write_chunks_to_minio
 
-    repo = mk_repo()
+    repo = mk_repo(False)
     main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [
@@ -174,14 +178,15 @@ async def test_icechunk_can_read_old_repo():
         "some more structure",
         "delete a chunk",
     ] + expected_main_history
+
     assert [
         p.message for p in repo.ancestry(my_branch_snapshot)
     ] == expected_branch_history
 
-    tag_snapshot = repo.tag("it also works!")
+    tag_snapshot = repo.lookup_tag("it also works!")
     assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history
 
-    tag_snapshot = repo.tag("it works!")
+    tag_snapshot = repo.lookup_tag("it works!")
     assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history[1:]
 
     session = repo.writable_session("my-branch")
@@ -213,7 +218,7 @@ async def test_icechunk_can_read_old_repo():
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
     ) == ["c", "zarr.json"]
 
-    root = zarr.group(store=store.as_writable())
+    root = zarr.group(store=store)
     # inner is not initialized, so it's all fill values
     inner = root["group2/group3/group4/group5/inner"]
     assert_array_equal(inner[:], float("nan"))
@@ -232,7 +237,7 @@ async def test_icechunk_can_read_old_repo():
     # big chunks array has a virtual chunk pointing here
     write_chunks_to_minio(
         [
-            ("path/to/python/chunk-1", chunk_data),
+            ("can_read_old/chunk-1", chunk_data),
         ]
     )
 
@@ -242,5 +247,7 @@ async def test_icechunk_can_read_old_repo():
 
 if __name__ == "__main__":
     import asyncio
+
+    # we import here so it works when the script is ran by pytest
 
     asyncio.run(write_a_test_repo())

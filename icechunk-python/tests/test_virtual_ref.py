@@ -1,8 +1,6 @@
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import boto3
 import numpy as np
 import pytest
 
@@ -20,33 +18,16 @@ from icechunk import (
     VirtualChunkContainer,
 )
 from icechunk.repository import Repository
-
-
-def write_chunks_to_minio(prefix: str, chunks: list[tuple[str, bytes]]) -> list[str]:
-    s3 = boto3.client(
-        "s3",
-        endpoint_url="http://localhost:9000",
-        use_ssl=False,
-        aws_access_key_id="minio123",
-        aws_secret_access_key="minio123",
-    )
-    etags = []
-    for key, data in chunks:
-        key = os.path.join(prefix, key)
-        etag = s3.put_object(Bucket="testbucket", Key=key, Body=data)["ETag"]
-        etags.append(etag)
-
-    return etags
+from tests.conftest import write_chunks_to_minio
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_write_minio_virtual_refs():
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
-        prefix,
         [
-            ("chunk-1", b"first"),
-            ("chunk-2", b"second"),
+            (f"{prefix}/chunk-1", b"first"),
+            (f"{prefix}/chunk-2", b"second"),
         ],
     )
 
