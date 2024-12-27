@@ -34,7 +34,10 @@ pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
-pub use storage::{MemCachingStorage, ObjectStorage, Storage, StorageError};
+pub use storage::{
+    new_in_memory_storage, new_local_filesystem_storage, new_s3_storage,
+    MemCachingStorage, ObjectStorage, Storage, StorageError,
+};
 pub use store::Store;
 
 mod private {

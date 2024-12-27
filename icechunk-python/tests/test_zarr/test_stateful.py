@@ -12,7 +12,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from icechunk import ObjectStoreConfig, Repository, Storage
+from icechunk import Repository, Storage
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, ZarrStoreStateMachine
 from zarr.testing.strategies import (
@@ -116,7 +116,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
 
 def test_zarr_hierarchy():
-    repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
+    repo = Repository.create(Storage.in_memory())
 
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(repo)
@@ -128,11 +128,8 @@ def test_zarr_hierarchy():
 
 def test_zarr_store():
     pytest.skip("icechunk is more strict about keys")
-    store = (
-        Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
-        .writable_session("main")
-        .store
-    )
+    repo = Repository.create(Storage.in_memory())
+    store = repo.writable_session("main").store
 
     def mk_test_instance_sync() -> ZarrHierarchyStateMachine:
         return ZarrStoreStateMachine(store)

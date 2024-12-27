@@ -7,7 +7,7 @@ use crate::virtual_chunks::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct S3CompatibleOptions {
+pub struct S3Options {
     pub region: Option<String>,
     pub endpoint_url: Option<String>,
     pub anonymous: bool,
@@ -18,8 +18,8 @@ pub struct S3CompatibleOptions {
 pub enum ObjectStoreConfig {
     InMemory,
     LocalFileSystem(PathBuf),
-    S3Compatible(S3CompatibleOptions),
-    S3(S3CompatibleOptions),
+    S3Compatible(S3Options),
+    S3(S3Options),
     Gcs {
         // TODO:
     },
@@ -75,7 +75,7 @@ impl RepositoryConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct StaticCredentials {
+pub struct S3StaticCredentials {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub session_token: Option<String>,
@@ -83,12 +83,18 @@ pub struct StaticCredentials {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(tag = "type")]
-pub enum Credentials {
+pub enum S3Credentials {
     #[default]
     #[serde(rename = "from_env")]
     FromEnv,
     #[serde(rename = "none")]
     DontSign,
     #[serde(rename = "static")]
-    Static(StaticCredentials),
+    Static(S3StaticCredentials),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum Credentials {
+    S3(S3Credentials),
 }

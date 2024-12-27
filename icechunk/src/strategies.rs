@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::Arc;
 
 use prop::string::string_regex;
 use proptest::prelude::*;
@@ -13,7 +12,8 @@ use crate::metadata::{
     StorageTransformer,
 };
 use crate::session::Session;
-use crate::{ObjectStorage, Repository};
+use crate::storage::new_in_memory_storage;
+use crate::Repository;
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
@@ -30,11 +30,11 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = ObjectStorage::new_in_memory_store(None).unwrap();
+    let storage = new_in_memory_storage().unwrap();
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
-        Repository::create(None, Arc::new(storage), HashMap::new())
+        Repository::create(None, storage, HashMap::new())
             .await
             .expect("Failed to initialize repository")
     })
@@ -48,11 +48,11 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = ObjectStorage::new_in_memory_store(None).unwrap();
+    let storage = new_in_memory_storage().unwrap();
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
-        let repository = Repository::create(None, Arc::new(storage), HashMap::new())
+        let repository = Repository::create(None, storage, HashMap::new())
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")

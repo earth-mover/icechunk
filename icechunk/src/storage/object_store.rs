@@ -68,21 +68,15 @@ impl ObjectStorage {
     /// Create an in memory Storage implementation
     ///
     /// This implementation should not be used in production code.
-    pub fn new_in_memory_store(
-        prefix: Option<String>,
-    ) -> Result<ObjectStorage, StorageError> {
-        #[allow(clippy::expect_used)]
-        let prefix =
-            prefix.or(Some("".to_string())).expect("bad prefix but this should not fail");
-
-        let url = format!("memory:/{prefix}");
-        Self::from_url(&url, vec![])
+    pub fn new_in_memory() -> Result<ObjectStorage, StorageError> {
+        let url = "memory:/";
+        Self::from_url(url, vec![])
     }
 
     /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
-    pub fn new_local_store(prefix: &StdPath) -> Result<ObjectStorage, StorageError> {
+    pub fn new_local_filesystem(prefix: &StdPath) -> Result<ObjectStorage, StorageError> {
         create_dir_all(prefix).map_err(|e| StorageError::Other(e.to_string()))?;
 
         let prefix = std::fs::canonicalize(prefix)
@@ -592,7 +586,7 @@ mod tests {
     #[test]
     fn test_serialize_object_store() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = ObjectStorage::new_local_store(tmp_dir.path()).unwrap();
+        let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).unwrap();
 
         let serialized = serde_json::to_string(&store).unwrap();
 
@@ -626,17 +620,19 @@ mod tests {
     fn test_canonicalize_path() {
         // Absolute path
         let tmp_dir = TempDir::new().unwrap();
-        let store = ObjectStorage::new_local_store(tmp_dir.path());
+        let store = ObjectStorage::new_local_filesystem(tmp_dir.path());
         assert!(store.is_ok());
 
         // Relative path
         let rel_path = "relative/path";
-        let store = ObjectStorage::new_local_store(PathBuf::from(&rel_path).as_path());
+        let store =
+            ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path());
         assert!(store.is_ok());
 
         // Relative with leading ./
         let rel_path = TestLocalPath("./other/path".to_string());
-        let store = ObjectStorage::new_local_store(PathBuf::from(&rel_path).as_path());
+        let store =
+            ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path());
         assert!(store.is_ok());
     }
 }

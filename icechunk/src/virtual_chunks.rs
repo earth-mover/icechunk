@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use url::Url;
 
 use crate::{
-    config::{Credentials, S3CompatibleOptions},
+    config::{Credentials, S3Credentials, S3Options},
     format::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualReferenceError},
         ByteRange,
@@ -30,6 +30,29 @@ pub struct VirtualChunkContainer {
     pub store: ObjectStoreConfig,
 }
 
+pub type VirtualChunkCredentialsError = String;
+
+impl VirtualChunkContainer {
+    pub fn validate_credentials(
+        &self,
+        cred: &Credentials,
+    ) -> Result<(), VirtualChunkCredentialsError> {
+        match (&self.store, cred) {
+            (ObjectStoreConfig::InMemory, _) => {
+                Err("in memory storage does not accept credentials".to_string())
+            }
+            (ObjectStoreConfig::LocalFileSystem(..), _) => {
+                Err("in memory storage does not accept credentials".to_string())
+            }
+            (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
+            (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
+            (ObjectStoreConfig::Gcs {}, _) => Ok(()), // TODO:
+            (ObjectStoreConfig::Azure {}, _) => Ok(()), // TODO
+            (ObjectStoreConfig::Tigris {}, _) => Ok(()), // TODO
+        }
+    }
+}
+
 pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> {
     [
         (
@@ -37,7 +60,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "s3".to_string(),
                 url_prefix: "s3".to_string(),
-                store: ObjectStoreConfig::S3(S3CompatibleOptions {
+                store: ObjectStoreConfig::S3(S3Options {
                     region: None,
                     endpoint_url: None,
                     anonymous: false,
@@ -175,15 +198,22 @@ impl VirtualChunkResolver {
         &self,
         cont: &VirtualChunkContainer,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
-        // FIXME: implement
         #[allow(clippy::unimplemented)]
         match &cont.store {
-            ObjectStoreConfig::S3(opts) => {
-                Ok(Arc::new(S3Fetcher::new(opts, self.credentials.get(&cont.name)).await))
+            ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
+                let creds = match self.credentials.get(&cont.name) {
+                    Some(Credentials::S3(creds)) => creds,
+                    None => {
+                        if opts.anonymous {
+                            &S3Credentials::DontSign
+                        } else {
+                            &S3Credentials::FromEnv
+                        }
+                    }
+                };
+                Ok(Arc::new(S3Fetcher::new(opts, creds).await))
             }
-            ObjectStoreConfig::S3Compatible(opts) => {
-                Ok(Arc::new(S3Fetcher::new(opts, self.credentials.get(&cont.name)).await))
-            }
+            // FIXME: implement
             ObjectStoreConfig::Gcs { .. } => {
                 unimplemented!("support for virtual chunks on gcs")
             }
@@ -209,16 +239,8 @@ pub struct S3Fetcher {
 }
 
 impl S3Fetcher {
-    pub async fn new(
-        opts: &S3CompatibleOptions,
-        credentials: Option<&Credentials>,
-    ) -> Self {
-        let credentials = credentials.cloned().unwrap_or(if opts.anonymous {
-            Credentials::DontSign
-        } else {
-            Credentials::FromEnv
-        });
-        Self { client: Arc::new(mk_client(opts, credentials).await) }
+    pub async fn new(opts: &S3Options, credentials: &S3Credentials) -> Self {
+        Self { client: Arc::new(mk_client(opts, credentials.clone()).await) }
     }
 }
 

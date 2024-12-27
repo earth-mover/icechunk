@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use s3::S3Storage;
-use std::{ffi::OsString, sync::Arc};
+use std::{ffi::OsString, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -29,13 +29,13 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::Credentials,
+    config::{S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
         transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
         SnapshotId,
     },
-    private, ObjectStoreConfig,
+    private,
 };
 
 #[derive(Debug, Error)]
@@ -222,47 +222,27 @@ where
     s.try_filter_map(|info| async move { Ok(convert_list_item(info)) }).boxed()
 }
 
-pub async fn make_storage(
-    config: ObjectStoreConfig,
-    bucket: Option<String>,
+pub fn new_s3_storage(
+    config: S3Options,
+    bucket: String,
     prefix: Option<String>,
-    credentials: Option<Credentials>,
+    credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    Ok(match config {
-        ObjectStoreConfig::InMemory {} => {
-            Arc::new(ObjectStorage::new_in_memory_store(None)?)
-        }
-        ObjectStoreConfig::LocalFileSystem(path) => {
-            Arc::new(ObjectStorage::new_local_store(&path)?)
-        }
-        ObjectStoreConfig::S3Compatible(opts) => Arc::new(
-            S3Storage::new(
-                opts,
-                bucket.ok_or(StorageError::Other(
-                    "Bucket required to initialize S3Compatible storage".to_string(),
-                ))?,
-                prefix,
-                credentials.unwrap_or(Credentials::FromEnv),
-            )
-            .await?,
-        ),
-        ObjectStoreConfig::S3(opts) => Arc::new(
-            S3Storage::new(
-                opts,
-                bucket.ok_or(StorageError::Other(
-                    "Bucket required to initialize S3 storage".to_string(),
-                ))?,
-                prefix,
-                credentials.unwrap_or(Credentials::FromEnv),
-            )
-            .await?,
-        ),
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+    )?;
+    Ok(Arc::new(st))
+}
 
-        #[allow(clippy::unimplemented)]
-        ObjectStoreConfig::Gcs {} => unimplemented!(),
-        #[allow(clippy::unimplemented)]
-        ObjectStoreConfig::Azure {} => unimplemented!(),
-        #[allow(clippy::unimplemented)]
-        ObjectStoreConfig::Tigris {} => unimplemented!(),
-    })
+pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
+    let st = ObjectStorage::new_in_memory()?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storage>> {
+    let st = ObjectStorage::new_local_filesystem(path)?;
+    Ok(Arc::new(st))
 }

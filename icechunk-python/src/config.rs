@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{Credentials, S3Credentials, S3Options, S3StaticCredentials},
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
@@ -9,9 +9,9 @@ use pyo3::{pyclass, pymethods, PyResult};
 
 use crate::errors::PyIcechunkStoreError;
 
-#[pyclass(name = "StaticCredentials")]
+#[pyclass(name = "S3StaticCredentials")]
 #[derive(Clone, Debug)]
-pub struct PyStaticCredentials {
+pub struct PyS3StaticCredentials {
     #[pyo3(get, set)]
     access_key_id: String,
     #[pyo3(get, set)]
@@ -20,9 +20,9 @@ pub struct PyStaticCredentials {
     session_token: Option<String>,
 }
 
-impl From<&PyStaticCredentials> for StaticCredentials {
-    fn from(credentials: &PyStaticCredentials) -> Self {
-        StaticCredentials {
+impl From<&PyS3StaticCredentials> for S3StaticCredentials {
+    fn from(credentials: &PyS3StaticCredentials) -> Self {
+        S3StaticCredentials {
             access_key_id: credentials.access_key_id.clone(),
             secret_access_key: credentials.secret_access_key.clone(),
             session_token: credentials.session_token.clone(),
@@ -30,9 +30,9 @@ impl From<&PyStaticCredentials> for StaticCredentials {
     }
 }
 
-impl From<PyStaticCredentials> for StaticCredentials {
-    fn from(credentials: PyStaticCredentials) -> Self {
-        StaticCredentials {
+impl From<PyS3StaticCredentials> for S3StaticCredentials {
+    fn from(credentials: PyS3StaticCredentials) -> Self {
+        S3StaticCredentials {
             access_key_id: credentials.access_key_id,
             secret_access_key: credentials.secret_access_key,
             session_token: credentials.session_token,
@@ -41,7 +41,7 @@ impl From<PyStaticCredentials> for StaticCredentials {
 }
 
 #[pymethods]
-impl PyStaticCredentials {
+impl PyS3StaticCredentials {
     #[new]
     #[pyo3(signature = (
         access_key_id,
@@ -57,27 +57,41 @@ impl PyStaticCredentials {
     }
 }
 
-#[pyclass(name = "Credentials")]
+#[pyclass(name = "S3Credentials")]
 #[derive(Clone, Debug)]
-pub enum PyCredentials {
+pub enum PyS3Credentials {
     FromEnv(),
     DontSign(),
-    Static(PyStaticCredentials),
+    Static(PyS3StaticCredentials),
 }
 
-impl From<PyCredentials> for Credentials {
-    fn from(credentials: PyCredentials) -> Self {
+impl From<PyS3Credentials> for S3Credentials {
+    fn from(credentials: PyS3Credentials) -> Self {
         match credentials {
-            PyCredentials::FromEnv() => Credentials::FromEnv,
-            PyCredentials::DontSign() => Credentials::DontSign,
-            PyCredentials::Static(creds) => Credentials::Static(creds.into()),
+            PyS3Credentials::FromEnv() => S3Credentials::FromEnv,
+            PyS3Credentials::DontSign() => S3Credentials::DontSign,
+            PyS3Credentials::Static(creds) => S3Credentials::Static(creds.into()),
         }
     }
 }
 
-#[pyclass(name = "S3CompatibleOptions", eq)]
+#[pyclass(name = "Credentials")]
+#[derive(Clone, Debug)]
+pub enum PyCredentials {
+    S3(PyS3Credentials),
+}
+
+impl From<PyCredentials> for Credentials {
+    fn from(value: PyCredentials) -> Self {
+        match value {
+            PyCredentials::S3(cred) => Credentials::S3(cred.into()),
+        }
+    }
+}
+
+#[pyclass(name = "S3Options", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PyS3CompatibleOptions {
+pub struct PyS3Options {
     #[pyo3(get, set)]
     pub region: Option<String>,
     #[pyo3(get, set)]
@@ -89,7 +103,7 @@ pub struct PyS3CompatibleOptions {
 }
 
 #[pymethods]
-impl PyS3CompatibleOptions {
+impl PyS3Options {
     #[new]
     #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false))]
     pub(crate) fn new(
@@ -102,9 +116,9 @@ impl PyS3CompatibleOptions {
     }
 }
 
-impl From<PyS3CompatibleOptions> for S3CompatibleOptions {
-    fn from(options: PyS3CompatibleOptions) -> Self {
-        S3CompatibleOptions {
+impl From<PyS3Options> for S3Options {
+    fn from(options: PyS3Options) -> Self {
+        S3Options {
             region: options.region.clone(),
             endpoint_url: options.endpoint_url.clone(),
             allow_http: options.allow_http,
@@ -113,8 +127,8 @@ impl From<PyS3CompatibleOptions> for S3CompatibleOptions {
     }
 }
 
-impl From<S3CompatibleOptions> for PyS3CompatibleOptions {
-    fn from(value: S3CompatibleOptions) -> Self {
+impl From<S3Options> for PyS3Options {
+    fn from(value: S3Options) -> Self {
         Self {
             region: value.region,
             endpoint_url: value.endpoint_url,
@@ -129,8 +143,8 @@ impl From<S3CompatibleOptions> for PyS3CompatibleOptions {
 pub enum PyObjectStoreConfig {
     InMemory(),
     LocalFileSystem(PathBuf),
-    S3Compatible(PyS3CompatibleOptions),
-    S3(PyS3CompatibleOptions),
+    S3Compatible(PyS3Options),
+    S3(PyS3Options),
     Gcs(),
     Azure(),
     Tigris(),
@@ -272,24 +286,37 @@ pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
 #[pymethods]
 impl PyStorage {
-    #[pyo3(signature = ( config, bucket=None, prefix=None, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
     #[staticmethod]
-    pub fn create(
-        config: PyObjectStoreConfig,
-        bucket: Option<String>,
+    pub fn s3(
+        config: PyS3Options,
+        bucket: String,
         prefix: Option<String>,
-        credentials: Option<PyCredentials>,
+        credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
-        let storage = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            icechunk::storage::make_storage(
-                config.into(),
-                bucket,
-                prefix,
-                credentials.map(|cred| cred.into()),
-            )
-            .await
-            .map_err(PyIcechunkStoreError::StorageError)
-        })?;
+        let storage = icechunk::storage::new_s3_storage(
+            config.into(),
+            bucket,
+            prefix,
+            credentials.map(|cred| cred.into()),
+        )
+        .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
+    #[staticmethod]
+    pub fn in_memory() -> PyResult<Self> {
+        let storage = icechunk::storage::new_in_memory_storage()
+            .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
+    #[staticmethod]
+    pub fn local_filesystem(path: PathBuf) -> PyResult<Self> {
+        let storage = icechunk::storage::new_local_filesystem_storage(&path)
+            .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }

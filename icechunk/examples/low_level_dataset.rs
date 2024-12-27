@@ -9,7 +9,7 @@ use icechunk::{
     },
     repository::VersionInfo,
     session::{Session, SessionError},
-    storage::ObjectStorage,
+    storage::new_in_memory_storage,
     Repository, Storage,
 };
 use itertools::Itertools;
@@ -29,8 +29,7 @@ let mut ds = Repository::create(Arc::clone(&storage));
 "#,
     );
 
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(ObjectStorage::new_in_memory_store(None)?);
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
     let repo = Repository::create(
         None,
         Repository::add_in_mem_asset_caching(Arc::clone(&storage)),

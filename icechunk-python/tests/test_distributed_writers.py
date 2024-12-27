@@ -22,7 +22,7 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo() -> icechunk.Repository:
-    opts = icechunk.S3CompatibleOptions(
+    opts = icechunk.S3Options(
         endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
     )
     credentials = icechunk.Credentials.Static(

@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::{
-    config::{Credentials, S3CompatibleOptions},
+    config::{S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, format_constants, manifest::Manifest,
         snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
@@ -48,8 +48,8 @@ use super::{
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3Storage {
     // config and credentials are stored so we are able to serialize and deserialize the struct
-    config: S3CompatibleOptions,
-    credentials: Credentials,
+    config: S3Options,
+    credentials: S3Credentials,
     bucket: String,
     prefix: String,
 
@@ -60,7 +60,7 @@ pub struct S3Storage {
     client: OnceCell<Client>,
 }
 
-pub async fn mk_client(config: &S3CompatibleOptions, credentials: Credentials) -> Client {
+pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client {
     let region = config
         .region
         .as_ref()
@@ -79,9 +79,9 @@ pub async fn mk_client(config: &S3CompatibleOptions, credentials: Credentials) -
     }
 
     match credentials {
-        Credentials::FromEnv => {}
-        Credentials::DontSign => aws_config = aws_config.no_credentials(),
-        Credentials::Static(credentials) => {
+        S3Credentials::FromEnv => {}
+        S3Credentials::DontSign => aws_config = aws_config.no_credentials(),
+        S3Credentials::Static(credentials) => {
             aws_config =
                 aws_config.credentials_provider(aws_credential_types::Credentials::new(
                     credentials.access_key_id,
@@ -105,11 +105,11 @@ pub async fn mk_client(config: &S3CompatibleOptions, credentials: Credentials) -
 }
 
 impl S3Storage {
-    pub async fn new(
-        config: S3CompatibleOptions,
+    pub fn new(
+        config: S3Options,
         bucket: String,
         prefix: Option<String>,
-        credentials: Credentials,
+        credentials: S3Credentials,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
         Ok(S3Storage {
@@ -650,20 +650,20 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{Credentials, S3CompatibleOptions, StaticCredentials};
+    use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
 
     use super::S3Storage;
 
     #[tokio::test]
     #[allow(clippy::unwrap_used)]
     async fn test_serialize_s3_storage() {
-        let config = S3CompatibleOptions {
+        let config = S3Options {
             region: Some("us-west-2".to_string()),
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
         };
-        let credentials = Credentials::Static(StaticCredentials {
+        let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),
             session_token: Some("session_token".to_string()),
@@ -674,7 +674,6 @@ mod tests {
             Some("prefix".to_string()),
             credentials,
         )
-        .await
         .unwrap();
 
         let serialized = serde_json::to_string(&storage).unwrap();

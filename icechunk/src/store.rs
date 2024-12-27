@@ -1083,17 +1083,17 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use crate::{repository::VersionInfo, ObjectStorage, Repository};
+    use crate::{
+        repository::VersionInfo, storage::new_in_memory_storage, ObjectStorage,
+        Repository,
+    };
 
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = Arc::new(
-            ObjectStorage::new_in_memory_store(Some("prefix".into()))
-                .expect("failed to create in-memory store"),
-        );
+        let storage = new_in_memory_storage().expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -2207,7 +2207,7 @@ mod tests {
     async fn test_serialize() {
         let repo_dir = TempDir::new().expect("could not create temp dir");
         let storage = Arc::new(
-            ObjectStorage::new_local_store(repo_dir.path())
+            ObjectStorage::new_local_filesystem(repo_dir.path())
                 .expect("could not create storage"),
         );
 

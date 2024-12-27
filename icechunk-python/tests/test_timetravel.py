@@ -11,7 +11,7 @@ def test_timetravel():
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
-        storage=ic.Storage.create(ic.ObjectStoreConfig.InMemory()),
+        storage=ic.Storage.in_memory(),
         config=config,
     )
     session = repo.writable_session("main")
@@ -114,7 +114,7 @@ async def test_branch_reset():
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
-        storage=ic.Storage.create(ic.ObjectStoreConfig.InMemory()),
+        storage=ic.Storage.in_memory(),
         config=config,
     )
 
