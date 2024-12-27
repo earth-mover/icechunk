@@ -713,11 +713,20 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = storage.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        let path = node.path.clone();
-        node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
-            .await
-            .map_ok(move |ci| (path.clone(), ci))
+    let res = nodes.filter_map(move |node| async move {
+        // This iterator should yield chunks for existing arrays + any updates.
+        // we check for deletion here in the case that `path` exists in the snapshot,
+        // and was deleted and then recreated in this changeset.
+        if change_set.is_deleted(&node.path, &node.id) {
+            None
+        } else {
+            let path = node.path.clone();
+            Some(
+                node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
+                    .await
+                    .map_ok(move |ci| (path.clone(), ci)),
+            )
+        }
     });
     Ok(res.flatten())
 }
@@ -745,7 +754,8 @@ async fn verified_node_chunk_iterator<'a>(
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
-        NodeData::Array(_, manifests) => {
+        NodeData::Array(meta, manifests) => {
+            let ndim = meta.shape.len();
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
                     .array_chunks_iterator(&node.id, &node.path)
@@ -781,7 +791,7 @@ async fn verified_node_chunk_iterator<'a>(
                                 match manifest {
                                     Ok(manifest) => {
                                         let old_chunks = manifest
-                                            .iter(node_id_c.clone())
+                                            .iter(node_id_c.clone(), ndim)
                                             .filter(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
@@ -1718,12 +1728,25 @@ mod tests {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
+        ds.commit("initialize", None).await?;
+
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group("/a".try_into().unwrap()).await?;
         ds.add_group("/b".try_into().unwrap()).await?;
         ds.add_group("/b/bb".try_into().unwrap()).await?;
+
         ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
         assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
+
+        ds.delete_group("/a".try_into().unwrap()).await?;
+        assert!(ds.change_set.is_empty());
+
+        // try deleting the child group again, since this was a group that was already
+        // deleted, it should be a no-op
+        ds.delete_group("/b/bb".try_into().unwrap()).await?;
+        ds.delete_group("/a".try_into().unwrap()).await?;
+        assert!(ds.change_set.is_empty());
         Ok(())
     }
 

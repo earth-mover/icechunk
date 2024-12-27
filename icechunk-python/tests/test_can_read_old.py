@@ -216,7 +216,7 @@ async def test_icechunk_can_read_old_repo():
     ]
     assert sorted(
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
-    ) == ["c", "zarr.json"]
+    ) == ["zarr.json"]
 
     root = zarr.group(store=store)
     # inner is not initialized, so it's all fill values

@@ -1660,8 +1660,8 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writable_session("main").await?;
-        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
+        let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         store
             .set(
@@ -1671,6 +1671,34 @@ mod tests {
             .await?;
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await?;
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await?;
+        store.set("array/c/1/1/1", data.clone()).await?;
+
+        assert_eq!(
+            all_keys(&store).await.unwrap(),
+            vec![
+                "array/c/0/1/0".to_string(),
+                "array/c/1/1/1".to_string(),
+                "array/zarr.json".to_string(),
+                "zarr.json".to_string()
+            ]
+        );
+
+        session.write().await.commit("foo", None).await?;
+
+        let session = repo.writable_session("main").await?;
+        let store = Store::from_session(Arc::new(RwLock::new(session))).await;
+        store.clear().await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
         store.set("array/zarr.json", zarr_meta).await?;
 
         let data = Bytes::copy_from_slice(b"hello");
