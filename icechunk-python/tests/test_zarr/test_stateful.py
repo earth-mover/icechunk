@@ -29,7 +29,7 @@ PROTOTYPE = default_buffer_prototype()
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     def __init__(self, repo):
         self.repo = repo
-        store = repo.writable_session("main").store()
+        store = repo.writable_session("main").store
         super().__init__(store)
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)

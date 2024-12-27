@@ -24,7 +24,7 @@ async def test_store_clear_metadata_list() -> None:
 async def test_store_clear_chunk_list() -> None:
     repo = parse_repo("memory", "test")
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     array_kwargs = dict(
         name="0", shape=(1, 3, 5, 1), chunks=(1, 3, 2, 1), fill_value=-1, dtype=np.int64
