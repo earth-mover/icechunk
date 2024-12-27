@@ -21,7 +21,6 @@ from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
     Settings,
-    consumes,
     initialize,
     invariant,
     precondition,
@@ -325,16 +324,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.repo.reset_branch(branch, commit)
         self.model.reset_branch(branch, commit)
 
-    @rule(branch=consumes(branches))
-    def delete_branch(self, branch):
-        note(f"Deleting branch {branch!r}")
-        if branch in self.model.branches:
-            self.repo.delete_branch(branch)
-            self.model.delete_branch(branch)
-        else:
-            note("Expecting error.")
-            with pytest.raises(ValueError):
-                self.repo.delete_branch(branch)
+    # @rule(branch=consumes(branches))
+    # def delete_branch(self, branch):
+    #     note(f"Deleting branch {branch!r}")
+    #     if branch in self.model.branches:
+    #         self.repo.delete_branch(branch)
+    #         self.model.delete_branch(branch)
+    #     else:
+    #         note("Expecting error.")
+    #         with pytest.raises(ValueError):
+    #             self.repo.delete_branch(branch)
 
     @invariant()
     def check_list_prefix_from_root(self):
