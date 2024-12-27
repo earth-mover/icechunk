@@ -34,7 +34,7 @@ async def test_store_clear_chunk_list() -> None:
     session.commit("created node /")
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
     await store.clear()
 
     group = zarr.group(store=store)
