@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
-use serde_with::{serde_as, skip_serializing_none, TryFromInto};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -96,46 +96,35 @@ pub enum StoreError {
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StoreConfig {
-    pub get_partial_values_concurrency: u16,
-}
-
-impl Default for StoreConfig {
-    fn default() -> Self {
-        Self { get_partial_values_concurrency: 10 }
-    }
-}
-
 #[derive(Clone)]
 pub struct Store {
     session: Arc<RwLock<Session>>,
-    config: StoreConfig,
+    get_partial_values_concurrency: u16,
 }
 
 impl Store {
-    pub fn from_session(session: Arc<RwLock<Session>>, config: StoreConfig) -> Self {
-        Self { session, config }
+    pub async fn from_session(session: Arc<RwLock<Session>>) -> Self {
+        let conc = session.read().await.config().get_partial_values_concurrency;
+        Self::from_session_and_config(session, conc)
     }
 
-    pub fn from_bytes(bytes: Bytes, config: StoreConfig) -> StoreResult<Self> {
+    pub fn from_session_and_config(
+        session: Arc<RwLock<Session>>,
+        get_partial_values_concurrency: u16,
+    ) -> Self {
+        Self { session, get_partial_values_concurrency }
+    }
+
+    pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
-        // let session = deserialized["session"].clone();
-        // let config = deserialized["config"].clone();
-        // let session: Session = serde_json::from_value(session).map_err(StoreError::from)?;
-        // let config = serde_json::from_value(config).map_err(StoreError::BadMetadata)?;
-        Ok(Self::from_session(Arc::new(RwLock::new(session)), config))
+        let conc = session.config().get_partial_values_concurrency;
+        Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
         let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
         Ok(Bytes::from(bytes))
-    }
-
-    pub fn config(&self) -> &StoreConfig {
-        &self.config
     }
 
     pub fn session(&self) -> Arc<RwLock<Session>> {
@@ -195,7 +184,7 @@ impl Store {
         let num_keys = AtomicUsize::new(0);
         stream
             .for_each_concurrent(
-                self.config.get_partial_values_concurrency as usize,
+                self.get_partial_values_concurrency as usize,
                 |(key, range)| {
                     let index = num_keys.fetch_add(1, Ordering::Release);
                     let results = Arc::clone(&results);
@@ -1367,8 +1356,7 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1408,8 +1396,7 @@ mod tests {
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1449,7 +1436,7 @@ mod tests {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -1523,8 +1510,7 @@ mod tests {
 
         let ds =
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1538,8 +1524,7 @@ mod tests {
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1583,8 +1568,7 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         assert!(store.is_empty("").await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1645,8 +1629,7 @@ mod tests {
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1678,7 +1661,7 @@ mod tests {
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&session), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         store
             .set(
@@ -1707,8 +1690,7 @@ mod tests {
         session.write().await.commit("foo", None).await?;
 
         let session = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(session)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(session))).await;
         store.clear().await?;
 
         store
@@ -1740,8 +1722,7 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1841,8 +1822,7 @@ mod tests {
     async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1874,8 +1854,7 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1932,7 +1911,7 @@ mod tests {
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -1952,7 +1931,7 @@ mod tests {
             { ds.write().await.commit("initial commit", None).await.unwrap() };
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
@@ -1964,15 +1943,13 @@ mod tests {
         let new_snapshot_id = { ds.write().await.commit("update", None).await.unwrap() };
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         let ds = repo
             .readonly_session(&VersionInfo::SnapshotId(new_snapshot_id.clone()))
             .await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         repo.create_tag("tag_0", &new_snapshot_id).await.unwrap();
@@ -1982,7 +1959,7 @@ mod tests {
             .unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(ds.read().await.has_uncommitted_changes(), true);
@@ -1994,14 +1971,13 @@ mod tests {
         repo.create_branch("dev", ds.read().await.snapshot_id()).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("dev").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         store.set("array/c/0/1/0", new_data.clone()).await?;
         let dev_snapshot =
             { ds.write().await.commit("update dev branch", None).await.unwrap() };
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(dev_snapshot)).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
         Ok(())
     }
@@ -2010,7 +1986,7 @@ mod tests {
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2051,7 +2027,7 @@ mod tests {
         ds.write().await.commit("initial commit", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2079,8 +2055,7 @@ mod tests {
         );
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(empty_snap)).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
@@ -2094,7 +2069,7 @@ mod tests {
         // GH347
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         let meta1 = Bytes::copy_from_slice(
             br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
@@ -2125,7 +2100,7 @@ mod tests {
         ds.write().await.commit("initial commit", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         store.delete("zarr.json").await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         store.set("zarr.json", meta2.clone()).await.unwrap();
@@ -2145,7 +2120,7 @@ mod tests {
     async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2158,7 +2133,7 @@ mod tests {
         ds.write().await.commit("root group", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2171,7 +2146,7 @@ mod tests {
         let prev_snap = ds.write().await.commit("group a", None).await?;
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2189,7 +2164,7 @@ mod tests {
         let ds = Arc::new(RwLock::new(
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
         ));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         assert!(!store.exists("b/zarr.json").await?);
         assert!(store.exists("a/zarr.json").await?);
@@ -2200,8 +2175,7 @@ mod tests {
     async fn test_access_mode() {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await.unwrap();
-        let writable_store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let writable_store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         writable_store
             .set(
@@ -2211,14 +2185,12 @@ mod tests {
             .await
             .unwrap();
 
-        let readable_store = Store::from_session(
-            Arc::new(RwLock::new(
-                repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
-                    .await
-                    .unwrap(),
-            )),
-            StoreConfig::default(),
-        );
+        let readable_store = Store::from_session(Arc::new(RwLock::new(
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                .await
+                .unwrap(),
+        )))
+        .await;
         assert_eq!(readable_store.read_only().await, true);
 
         let result = readable_store
@@ -2241,7 +2213,7 @@ mod tests {
 
         let repo = Repository::create(None, storage, HashMap::new()).await.unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         store
             .set(
                 "zarr.json",
@@ -2253,8 +2225,7 @@ mod tests {
         ds.write().await.commit("first", None).await.unwrap();
 
         let store_bytes = store.as_bytes().await.unwrap();
-        let store2: Store =
-            Store::from_bytes(store_bytes, StoreConfig::default()).unwrap();
+        let store2: Store = Store::from_bytes(store_bytes).unwrap();
 
         let zarr_json = store2.get("zarr.json", &ByteRange::ALL).await.unwrap();
         assert_eq!(

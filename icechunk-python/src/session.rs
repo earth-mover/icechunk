@@ -1,5 +1,6 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
+use futures::TryStreamExt;
 use icechunk::{session::Session, Store};
 use pyo3::{prelude::*, types::PyType};
 use tokio::sync::RwLock;
@@ -7,7 +8,7 @@ use tokio::sync::RwLock;
 use crate::{
     conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
-    store::{PyStore, PyStoreConfig},
+    store::PyStore,
 };
 
 #[pyclass]
@@ -57,13 +58,30 @@ impl PySession {
         self.0.blocking_write().discard_changes();
     }
 
-    #[pyo3(signature = (config = None))]
-    pub fn store(&self, config: Option<PyStoreConfig>) -> PyResult<PyStore> {
-        let store =
-            Store::from_session(self.0.clone(), config.map(|c| c.0).unwrap_or_default());
+    #[getter]
+    pub fn store(&self) -> PyResult<PyStore> {
+        let session = self.0.blocking_read();
+        let conc = session.config().get_partial_values_concurrency;
+        let store = Store::from_session_and_config(self.0.clone(), conc);
 
         let store = Arc::new(store);
         Ok(PyStore(store))
+    }
+
+    pub fn all_virtual_chunk_locations(&self) -> PyResult<Vec<String>> {
+        let session = self.0.blocking_read();
+
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let res = session
+                .all_virtual_chunk_locations()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            Ok(res)
+        })
     }
 
     pub fn merge(&self, other: &PySession) -> PyResult<()> {

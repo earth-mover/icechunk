@@ -1,0 +1,28 @@
+inline_chunk_threshold_bytes: 12
+unsafe_overwrite_refs: false
+get_partial_values_concurrency: 10
+virtual_chunk_containers:
+  az:
+    name: az
+    url_prefix: az
+    store: !Azure {}
+  file:
+    name: file
+    url_prefix: file
+    store: !LocalFileSystem ''
+  gcs:
+    name: gcs
+    url_prefix: gcs
+    store: !Gcs {}
+  s3:
+    name: s3
+    url_prefix: s3://
+    store: !S3Compatible
+      region: us-east-1
+      endpoint_url: http://localhost:9000
+      anonymous: false
+      allow_http: true
+  tigris:
+    name: tigris
+    url_prefix: tigris
+    store: !Tigris {}

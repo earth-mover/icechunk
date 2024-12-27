@@ -31,9 +31,9 @@ use crate::{
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError},
-    repository::{RepositoryConfig, RepositoryError},
+    repository::RepositoryError,
     virtual_chunks::VirtualChunkResolver,
-    Storage, StorageError,
+    RepositoryConfig, Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -153,6 +153,10 @@ impl Session {
 
     pub fn changes(&self) -> &ChangeSet {
         &self.change_set
+    }
+
+    pub fn config(&self) -> &RepositoryConfig {
+        &self.config
     }
 
     /// Add a group to the store.
@@ -496,6 +500,17 @@ impl Session {
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
         all_chunks(self.storage.as_ref(), &self.change_set, self.snapshot_id()).await
+    }
+
+    pub async fn all_virtual_chunk_locations(
+        &self,
+    ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
+        let stream =
+            self.all_chunks().await?.try_filter_map(|(_, info)| match info.payload {
+                ChunkPayload::Virtual(reference) => ready(Ok(Some(reference.location.0))),
+                _ => ready(Ok(None)),
+            });
+        Ok(stream)
     }
 
     /// Discard all uncommitted changes and return them as a `ChangeSet`

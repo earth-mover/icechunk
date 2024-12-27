@@ -22,23 +22,23 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo() -> icechunk.Repository:
-    storage_config = icechunk.StorageConfig.s3_from_config(
+    opts = icechunk.S3CompatibleOptions(
+        endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
+    )
+    credentials = icechunk.Credentials.Static(
+        icechunk.StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+    )
+    storage = icechunk.Storage.create(
+        icechunk.ObjectStoreConfig.S3Compatible(opts),
         bucket="testbucket",
         prefix="python-distributed-writers-test__" + str(time.time()),
-        endpoint_url="http://localhost:9000",
-        region="us-east-1",
-        allow_http=True,
-        credentials=icechunk.S3Credentials(
-            access_key_id="minio123",
-            secret_access_key="minio123",
-        ),
+        credentials=credentials,
     )
     repo_config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=5,
     )
-
     repo = icechunk.Repository.open_or_create(
-        storage=storage_config,
+        storage=storage,
         config=repo_config,
     )
 
@@ -57,7 +57,7 @@ async def test_distributed_writers():
     """
     repo = mk_repo()
     session = repo.writable_session(branch="main")
-    store = session.store()
+    store = session.store
 
     shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
     dask_chunks = (CHUNK_DIM_SIZE * CHUNKS_PER_TASK,) * 2
@@ -75,7 +75,7 @@ async def test_distributed_writers():
 
     with Client(n_workers=8):
         session = repo.writable_session(branch="main")
-        store = session.store()
+        store = session.store
         group = zarr.open_group(store=store)
         zarray = cast(zarr.Array, group["array"])
         # with store.preserve_read_only():
@@ -85,7 +85,7 @@ async def test_distributed_writers():
 
         # Lets open a new store to verify the results
         readonly_session = repo.readonly_session(branch="main")
-        store = readonly_session.store()
+        store = readonly_session.store
         all_keys = [key async for key in store.list_prefix("/")]
         assert (
             len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM

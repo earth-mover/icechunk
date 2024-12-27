@@ -1,7 +1,8 @@
 from collections.abc import AsyncIterator, Iterable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from icechunk._icechunk_python import PyStore, StoreConfig
+from icechunk._icechunk_python import PyStore
 from zarr.abc.store import ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import BytesLike
@@ -40,16 +41,13 @@ class IcechunkStore(Store, SyncMixin):
     def __getstate__(self) -> object:
         # we serialize the Rust store as bytes
         d = self.__dict__.copy()
-        d["_config"] = self._store.config.as_json()
         d["_store"] = self._store.as_bytes()
         return d
 
     def __setstate__(self, state: Any) -> None:
         # we have to deserialize the bytes of the Rust store
         store_repr = state["_store"]
-        config_repr = state["_config"]
-        config = StoreConfig.from_json(config_repr)
-        state["_store"] = PyStore.from_bytes(store_repr, config)
+        state["_store"] = PyStore.from_bytes(store_repr)
         state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
 
@@ -179,7 +177,13 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.set_if_not_exists(key, value.to_bytes())
 
     async def async_set_virtual_ref(
-        self, key: str, location: str, *, offset: int, length: int
+        self,
+        key: str,
+        location: str,
+        *,
+        offset: int,
+        length: int,
+        checksum: str | datetime | None = None,
     ) -> None:
         """Store a virtual reference to a chunk.
 
@@ -193,11 +197,21 @@ class IcechunkStore(Store, SyncMixin):
             The offset in bytes from the start of the file location in storage the chunk starts at
         length : int
             The length of the chunk in bytes, measured from the given offset
+        checksum : str | datetime | None
+            The etag or last_medified_at field of the object
         """
-        return await self._store.async_set_virtual_ref(key, location, offset, length)
+        return await self._store.async_set_virtual_ref(
+            key, location, offset, length, checksum
+        )
 
     def set_virtual_ref(
-        self, key: str, location: str, *, offset: int, length: int
+        self,
+        key: str,
+        location: str,
+        *,
+        offset: int,
+        length: int,
+        checksum: str | datetime | None = None,
     ) -> None:
         """Store a virtual reference to a chunk.
 
@@ -211,8 +225,10 @@ class IcechunkStore(Store, SyncMixin):
             The offset in bytes from the start of the file location in storage the chunk starts at
         length : int
             The length of the chunk in bytes, measured from the given offset
+        checksum : str | datetime | None
+            The etag or last_medified_at field of the object
         """
-        return self._store.set_virtual_ref(key, location, offset, length)
+        return self._store.set_virtual_ref(key, location, offset, length, checksum)
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store

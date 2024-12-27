@@ -9,13 +9,17 @@ import zarr
 @pytest.fixture(scope="function")
 def tmp_store(tmpdir):
     repo_path = f"{tmpdir}"
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.StorageConfig.filesystem(repo_path),
-        config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=5),
+        storage=icechunk.Storage.create(
+            icechunk.ObjectStoreConfig.LocalFileSystem(repo_path)
+        ),
+        config=config,
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     yield store, repo_path
 
@@ -78,3 +82,31 @@ def test_inline_chunks(tmp_store):
     # inline_chunk_threshold is 40, we should have 10 chunks in the chunks directory
     assert os.path.isdir(f"{store_path}/chunks")
     assert len(os.listdir(f"/{store_path}/chunks")) == 10
+
+
+def test_virtual_chunk_containers():
+    config = icechunk.RepositoryConfig.default()
+
+    store_config = icechunk.ObjectStoreConfig.S3Compatible(
+        icechunk.S3CompatibleOptions(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+        )
+    )
+    container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
+    config.set_virtual_chunk_container(container)
+    assert len(config.virtual_chunk_containers()) > 1
+    found_cont = [
+        cont for cont in config.virtual_chunk_containers() if cont.name == "custom"
+    ]
+    assert found_cont[0] == container
+
+    config.clear_virtual_chunk_containers()
+    assert [] == config.virtual_chunk_containers()
+
+    config.set_virtual_chunk_container(container)
+    found_cont = [
+        cont for cont in config.virtual_chunk_containers() if cont.name == "custom"
+    ]
+    assert found_cont == [container]

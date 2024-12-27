@@ -2,14 +2,13 @@ import pickle
 
 import pytest
 
-import icechunk
 import zarr
-from icechunk.repository import Repository
+from icechunk import ObjectStoreConfig, Repository, Storage
 
 
-def create_local_repo(path: str) -> icechunk.Repository:
-    return icechunk.Repository.create(
-        storage=icechunk.StorageConfig.filesystem(path),
+def create_local_repo(path: str) -> Repository:
+    return Repository.create(
+        storage=Storage.create(ObjectStoreConfig.LocalFileSystem(path))
     )
 
 
@@ -22,7 +21,7 @@ def tmp_repo(tmpdir) -> Repository:
 
 def test_pickle_read_only(tmp_repo: Repository):
     tmp_session = tmp_repo.writable_session(branch="main")
-    tmp_store = tmp_session.store()
+    tmp_store = tmp_session.store
 
     assert tmp_store._read_only is False
 
@@ -38,7 +37,7 @@ def test_pickle_read_only(tmp_repo: Repository):
 
 def test_pickle(tmp_repo: Repository):
     tmp_session = tmp_repo.writable_session(branch="main")
-    tmp_store = tmp_session.store()
+    tmp_store = tmp_session.store
 
     root = zarr.group(store=tmp_store)
     array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="float32")

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import IcechunkStore, ObjectStoreConfig, Storage
 from icechunk.repository import Repository
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
@@ -42,7 +42,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.fixture
     def store_kwargs(self, tmpdir) -> dict[str, Any]:
         kwargs = {
-            "storage": StorageConfig.filesystem(f"{tmpdir}/store_test"),
+            "storage": Storage.create(
+                ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/store_test")
+            ),
             "read_only": False,
         }
         return kwargs
@@ -55,7 +57,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        return session.store()
+        return session.store
 
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
@@ -68,7 +70,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        store2 = session.store()
+        store2 = session.store
         # stores dont point to the same session instance, so they are not equal
         assert store != store2
 
@@ -85,7 +87,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        store = session.store()
+        store = session.store
         assert store._is_open
         assert store.read_only == read_only
 
@@ -95,7 +97,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         kwargs = {**store_kwargs}
         repo = Repository.open(**kwargs)
         session = repo.readonly_session(branch="main")
-        store = session.store()
+        store = session.store
 
         assert store.read_only
 

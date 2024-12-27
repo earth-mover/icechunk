@@ -5,7 +5,6 @@ from icechunk import (
     ConflictErrorData,
     ConflictSolver,
     RebaseFailedData,
-    StoreConfig,
 )
 from icechunk._icechunk_python import PyConflictError, PyRebaseFailedError, PySession
 from icechunk.store import IcechunkStore
@@ -121,9 +120,14 @@ class Session:
         """When the session is writable, discard any uncommitted changes"""
         self._session.discard_changes()
 
-    def store(self, config: StoreConfig | None = None) -> IcechunkStore:
+    @property
+    def store(self) -> IcechunkStore:
         """Get a zarr Store object for reading and writing data from the repository using zarr python"""
-        return IcechunkStore(self._session.store(config))
+        return IcechunkStore(self._session.store)
+
+    def all_virtual_chunk_locations(self) -> list[str]:
+        """Return the location URLs of all virtual chunks"""
+        return self._session.all_virtual_chunk_locations()
 
     def merge(self, other: Self) -> None:
         """Merge the changes for this session with the changes from another session"""
