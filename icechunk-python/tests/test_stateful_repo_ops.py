@@ -28,7 +28,7 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import Repository, StorageConfig
+from icechunk import ObjectStoreConfig, Repository, Storage
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -192,10 +192,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data) -> str:
-        self.repo = Repository.create(StorageConfig.memory())
+        self.repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
-        HEAD = self.repo.branch_tip(DEFAULT_BRANCH)
+        HEAD = self.repo.lookup_branch(DEFAULT_BRANCH)
         self.model.commits[HEAD] = {}
         self.model.HEAD = HEAD
         self.model.create_branch(DEFAULT_BRANCH, HEAD)
@@ -214,7 +214,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @property
     def sync_store(self):
-        return NewSyncStoreWrapper(self.session.store())
+        return NewSyncStoreWrapper(self.session.store)
 
     @rule(path=metadata_paths, value=v3_array_metadata())
     def set_doc(self, path: str, value: Buffer):
@@ -362,12 +362,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def check_commit_data(self):
         expected_tags = self.model.tags
         actual_tags = {
-            tag: TagModel(commit_id=self.repo.tag(tag)) for tag in self.repo.list_tags()
+            tag: TagModel(commit_id=self.repo.lookup_tag(tag))
+            for tag in self.repo.list_tags()
         }
         assert actual_tags == expected_tags
 
         assert self.model.branches == {
-            k: self.repo.branch_tip(k) for k in self.repo.list_branches()
+            k: self.repo.lookup_branch(k) for k in self.repo.list_branches()
         }
 
         # TODO: assert all snapshot_ids are present?
