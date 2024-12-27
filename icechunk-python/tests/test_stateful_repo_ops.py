@@ -210,7 +210,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return DEFAULT_BRANCH
 
     def new_store(self) -> None:
-        self.session = self.repo.writable_session("main")
+        self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
     @property
     def sync_store(self):
@@ -275,7 +275,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 note(f"Expecting error when checking out branch {ref!r}")
                 self.repo.writable_session(ref)
 
-    @rule(name=simple_text | st.just("main"), commit=commits, target=branches)
+    @rule(name=simple_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r}")
         # we can create a tag and branch with the same name
