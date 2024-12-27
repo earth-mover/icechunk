@@ -221,12 +221,14 @@ class S3StaticCredentials:
     access_key_id: str
     secret_access_key: str
     session_token: str | None
+    expires_after: datetime.datetime | None
 
     def __init__(
         self,
         access_key_id: str,
         secret_access_key: str,
         session_token: str | None = None,
+        expires_after: datetime.datetime | None = None,
     ): ...
 
 class S3Credentials:
@@ -238,6 +240,9 @@ class S3Credentials:
 
     class Static:
         def __init__(self, _0: S3StaticCredentials) -> None: ...
+
+    class Refreshable:
+        def __init__(self, _0: bytes) -> None: ...
 
 class Credentials:
     class S3:
@@ -262,7 +267,7 @@ class Storage:
     @staticmethod
     def s3(
         config: S3Options,
-        eucket: str,
+        bucket: str,
         prefix: str | None,
         credentials: S3Credentials | None = None,
     ) -> Storage: ...

@@ -21,6 +21,7 @@ from icechunk._icechunk_python import (
     VirtualChunkContainer,
     __version__,
 )
+from icechunk.credentials import s3_refreshable_credentials
 from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
 from icechunk.store import IcechunkStore
@@ -50,4 +51,5 @@ __all__ = [
     "VersionSelection",
     "VirtualChunkContainer",
     "__version__",
+    "s3_refreshable_credentials",
 ]

@@ -1,11 +1,20 @@
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use icechunk::{
-    config::{Credentials, S3Credentials, S3Options, S3StaticCredentials},
+    config::{
+        Credentials, CredentialsFetcher, S3Credentials, S3Options, S3StaticCredentials,
+    },
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
-use pyo3::{pyclass, pymethods, PyResult};
+use pyo3::{
+    pyclass, pymethods,
+    types::{PyAnyMethods, PyModule},
+    PyErr, PyResult, Python,
+};
 
 use crate::errors::PyIcechunkStoreError;
 
@@ -18,6 +27,8 @@ pub struct PyS3StaticCredentials {
     secret_access_key: String,
     #[pyo3(get, set)]
     session_token: Option<String>,
+    #[pyo3(get, set)]
+    expires_after: Option<DateTime<Utc>>,
 }
 
 impl From<&PyS3StaticCredentials> for S3StaticCredentials {
@@ -26,6 +37,7 @@ impl From<&PyS3StaticCredentials> for S3StaticCredentials {
             access_key_id: credentials.access_key_id.clone(),
             secret_access_key: credentials.secret_access_key.clone(),
             session_token: credentials.session_token.clone(),
+            expires_after: credentials.expires_after,
         }
     }
 }
@@ -36,6 +48,7 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
             access_key_id: credentials.access_key_id,
             secret_access_key: credentials.secret_access_key,
             session_token: credentials.session_token,
+            expires_after: credentials.expires_after,
         }
     }
 }
@@ -47,13 +60,44 @@ impl PyS3StaticCredentials {
         access_key_id,
         secret_access_key,
         session_token = None,
+        expires_after = None,
     ))]
     fn new(
         access_key_id: String,
         secret_access_key: String,
         session_token: Option<String>,
+        expires_after: Option<DateTime<Utc>>,
     ) -> Self {
-        Self { access_key_id, secret_access_key, session_token }
+        Self { access_key_id, secret_access_key, session_token, expires_after }
+    }
+}
+
+#[pyclass]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PythonCredentialsFetcher {
+    pub pickled_function: Vec<u8>,
+}
+
+#[pymethods]
+impl PythonCredentialsFetcher {
+    #[new]
+    pub fn new(pickled_function: Vec<u8>) -> Self {
+        PythonCredentialsFetcher { pickled_function }
+    }
+}
+
+#[async_trait]
+#[typetag::serde]
+impl CredentialsFetcher for PythonCredentialsFetcher {
+    async fn get(&self) -> Result<S3StaticCredentials, String> {
+        Python::with_gil(|py| {
+            let pickle_module = PyModule::import(py, "pickle")?;
+            let loads_function = pickle_module.getattr("loads")?;
+            let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
+            let creds: PyS3StaticCredentials = fetcher.call0()?.extract()?;
+            Ok(creds.into())
+        })
+        .map_err(|e: PyErr| e.to_string())
     }
 }
 
@@ -63,6 +107,7 @@ pub enum PyS3Credentials {
     FromEnv(),
     DontSign(),
     Static(PyS3StaticCredentials),
+    Refreshable(Vec<u8>),
 }
 
 impl From<PyS3Credentials> for S3Credentials {
@@ -71,6 +116,11 @@ impl From<PyS3Credentials> for S3Credentials {
             PyS3Credentials::FromEnv() => S3Credentials::FromEnv,
             PyS3Credentials::DontSign() => S3Credentials::DontSign,
             PyS3Credentials::Static(creds) => S3Credentials::Static(creds.into()),
+            PyS3Credentials::Refreshable(pickled_function) => {
+                S3Credentials::Refreshable(Arc::new(PythonCredentialsFetcher {
+                    pickled_function,
+                }))
+            }
         }
     }
 }
