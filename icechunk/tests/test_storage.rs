@@ -30,6 +30,7 @@ async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,
+            expires_after: None,
         })),
     )
     .expect("Creating minio storage failed");

@@ -47,6 +47,7 @@ mod tests {
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,
+            expires_after: None,
         });
         (config, credentials)
     }
@@ -145,6 +146,7 @@ mod tests {
             access_key_id: "minio123".to_string(),
             secret_access_key: "minio123".to_string(),
             session_token: None,
+            expires_after: None,
         });
 
         create_repository(storage, containers, Some(credentials)).await
@@ -559,6 +561,7 @@ mod tests {
                 access_key_id: "minio123".to_string(),
                 secret_access_key: "minio123".to_string(),
                 session_token: None,
+                expires_after: None,
             })),
         )]);
 

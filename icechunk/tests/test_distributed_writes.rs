@@ -33,6 +33,7 @@ async fn mk_storage(
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,
+            expires_after: None,
         })),
     )
     .expect("Creating minio storage failed");

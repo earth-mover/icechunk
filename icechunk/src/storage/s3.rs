@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use aws_config::{
     meta::region::RegionProviderChain, retry::ProvideErrorKind, AppName, BehaviorVersion,
 };
+use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
-    config::{Builder, Region},
+    config::{Builder, ProvideCredentials, Region},
     error::SdkError,
     operation::put_object::PutObjectError,
     primitives::ByteStream,
@@ -31,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::{
-    config::{S3Credentials, S3Options},
+    config::{CredentialsFetcher, S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, format_constants, manifest::Manifest,
         snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
@@ -87,9 +88,13 @@ pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client
                     credentials.access_key_id,
                     credentials.secret_access_key,
                     credentials.session_token,
-                    None,
+                    credentials.expires_after.map(|e| e.into()),
                     "user",
                 ));
+        }
+        S3Credentials::Refreshable(fetcher) => {
+            aws_config =
+                aws_config.credentials_provider(ProvideRefreshableCredentials(fetcher));
         }
     }
 
@@ -648,6 +653,36 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
     Some(ListInfo { id, created_at })
 }
 
+#[derive(Debug)]
+struct ProvideRefreshableCredentials(Arc<dyn CredentialsFetcher>);
+
+impl ProvideCredentials for ProvideRefreshableCredentials {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.provide())
+    }
+}
+
+impl ProvideRefreshableCredentials {
+    async fn provide(
+        &self,
+    ) -> Result<aws_credential_types::Credentials, CredentialsError> {
+        let creds = self.0.get().await.map_err(CredentialsError::not_loaded)?;
+        let creds = aws_credential_types::Credentials::new(
+            creds.access_key_id,
+            creds.secret_access_key,
+            creds.session_token,
+            creds.expires_after.map(|e| e.into()),
+            "user",
+        );
+        Ok(creds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
@@ -667,6 +702,7 @@ mod tests {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),
             session_token: Some("session_token".to_string()),
+            expires_after: None,
         });
         let storage = S3Storage::new(
             config,
@@ -678,10 +714,9 @@ mod tests {
 
         let serialized = serde_json::to_string(&storage).unwrap();
 
-        println!("{}", serialized);
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token"},"bucket":"bucket","prefix":"prefix"}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix"}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

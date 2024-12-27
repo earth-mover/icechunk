@@ -1,5 +1,8 @@
-use std::{collections::HashMap, path::PathBuf};
+use core::fmt;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::virtual_chunks::{
@@ -79,9 +82,16 @@ pub struct S3StaticCredentials {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub session_token: Option<String>,
+    pub expires_after: Option<DateTime<Utc>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[async_trait]
+#[typetag::serde(tag = "type")]
+pub trait CredentialsFetcher: fmt::Debug + Sync + Send {
+    async fn get(&self) -> Result<S3StaticCredentials, String>;
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(tag = "type")]
 pub enum S3Credentials {
     #[default]
@@ -91,9 +101,11 @@ pub enum S3Credentials {
     DontSign,
     #[serde(rename = "static")]
     Static(S3StaticCredentials),
+    #[serde(rename = "refreshable")]
+    Refreshable(Arc<dyn CredentialsFetcher>),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum Credentials {
     S3(S3Credentials),
