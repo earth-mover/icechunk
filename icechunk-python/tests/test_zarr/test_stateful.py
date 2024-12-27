@@ -43,7 +43,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         self.store.session.commit("foo")
 
-        self.store = self.repo.writable_session("main").store()
+        self.store = self.repo.writable_session("main").store
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
