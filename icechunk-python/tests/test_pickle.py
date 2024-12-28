@@ -3,13 +3,11 @@ import pickle
 import pytest
 
 import zarr
-from icechunk import ObjectStoreConfig, Repository, Storage
+from icechunk import Repository, Storage
 
 
 def create_local_repo(path: str) -> Repository:
-    return Repository.create(
-        storage=Storage.create(ObjectStoreConfig.LocalFileSystem(path))
-    )
+    return Repository.create(storage=Storage.local_filesystem(path))
 
 
 @pytest.fixture(scope="function")

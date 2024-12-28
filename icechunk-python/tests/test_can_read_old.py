@@ -29,7 +29,7 @@ def mk_repo(create: bool):
     config.inline_chunk_threshold_bytes = 12
 
     virtual_store_config = ic.ObjectStoreConfig.S3Compatible(
-        ic.S3CompatibleOptions(
+        ic.S3Options(
             region="us-east-1",
             endpoint_url="http://localhost:9000",
             allow_http=True,
@@ -38,12 +38,14 @@ def mk_repo(create: bool):
     container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
     config.set_virtual_chunk_container(container)
     credentials = {
-        "s3": ic.Credentials.Static(ic.StaticCredentials("minio123", "minio123"))
+        "s3": ic.Credentials.S3(
+            ic.S3Credentials.Static(ic.S3StaticCredentials("minio123", "minio123"))
+        )
     }
 
     operation = ic.Repository.create if create else ic.Repository.open
     repo = operation(
-        storage=ic.Storage.create(ic.ObjectStoreConfig.LocalFileSystem(store_path)),
+        storage=ic.Storage.local_filesystem(store_path),
         config=config,
         virtual_chunk_credentials=credentials,
     )

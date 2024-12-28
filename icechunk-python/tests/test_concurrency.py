@@ -40,7 +40,7 @@ async def list_store(store, barrier):
 
 async def test_concurrency():
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.Storage.create(icechunk.ObjectStoreConfig.InMemory()),
+        storage=icechunk.Storage.in_memory(),
     )
 
     session = repo.writable_session("main")

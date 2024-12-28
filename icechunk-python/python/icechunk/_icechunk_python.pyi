@@ -3,7 +3,7 @@ import datetime
 from collections.abc import AsyncGenerator
 from enum import Enum
 
-class S3CompatibleOptions:
+class S3Options:
     def __init__(
         self,
         region: str | None = None,
@@ -20,10 +20,10 @@ class ObjectStoreConfig:
         def __init__(self, path: str) -> None: ...
 
     class S3Compatible:
-        def __init__(self, options: S3CompatibleOptions) -> None: ...
+        def __init__(self, options: S3Options) -> None: ...
 
     class S3:
-        def __init__(self, options: S3CompatibleOptions) -> None: ...
+        def __init__(self, options: S3Options) -> None: ...
 
     class Gcs:
         def __init__(self) -> None: ...
@@ -217,6 +217,32 @@ class PyAsyncSnapshotGenerator(
     def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotMetadata: ...
 
+class S3StaticCredentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None
+
+    def __init__(
+        self,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str | None = None,
+    ): ...
+
+class S3Credentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class DontSign:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, _0: S3StaticCredentials) -> None: ...
+
+class Credentials:
+    class S3:
+        def __init__(self, credentials: S3Credentials) -> None: ...
+
 class Storage:
     """Storage configuration for an IcechunkStore
 
@@ -234,34 +260,16 @@ class Storage:
     """
 
     @staticmethod
-    def create(
-        config: ObjectStoreConfig,
-        bucket: str | None = None,
-        prefix: str | None = None,
-        credentials: Credentials | None = None,
+    def s3(
+        config: S3Options,
+        eucket: str,
+        prefix: str | None,
+        credentials: S3Credentials | None = None,
     ) -> Storage: ...
-
-class StaticCredentials:
-    access_key_id: str
-    secret_access_key: str
-    session_token: str | None
-
-    def __init__(
-        self,
-        access_key_id: str,
-        secret_access_key: str,
-        session_token: str | None = None,
-    ): ...
-
-class Credentials:
-    class FromEnv:
-        def __init__(self) -> None: ...
-
-    class DontSign:
-        def __init__(self) -> None: ...
-
-    class Static:
-        def __init__(self, _0: StaticCredentials) -> None: ...
+    @staticmethod
+    def in_memory() -> Storage: ...
+    @staticmethod
+    def local_filesystem(path: str) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""

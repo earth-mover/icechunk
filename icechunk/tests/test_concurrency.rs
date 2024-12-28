@@ -6,7 +6,8 @@ use icechunk::{
         ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
     },
     session::{get_chunk, Session},
-    ObjectStorage, Repository, Storage,
+    storage::new_in_memory_storage,
+    Repository, Storage,
 };
 use pretty_assertions::assert_eq;
 use rand::{thread_rng, Rng};
@@ -34,8 +35,7 @@ const N: usize = 20;
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
 async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
     let repo = Repository::create(None, storage, HashMap::new()).await?;
     let mut ds = repo.writable_session("main").await?;
 

@@ -3,7 +3,7 @@
 mod tests {
     use futures::TryStreamExt;
     use icechunk::{
-        config::{Credentials, S3CompatibleOptions, StaticCredentials},
+        config::{Credentials, S3Credentials, S3Options, S3StaticCredentials},
         format::{
             manifest::{
                 Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
@@ -14,7 +14,7 @@ mod tests {
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         session::{get_chunk, SessionError},
-        storage::{make_storage, s3::mk_client, ObjectStorage},
+        storage::{new_s3_storage, s3::mk_client, ObjectStorage},
         store::StoreError,
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
@@ -36,14 +36,14 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
 
-    fn minio_s3_config() -> (S3CompatibleOptions, Credentials) {
-        let config = S3CompatibleOptions {
+    fn minio_s3_config() -> (S3Options, S3Credentials) {
+        let config = S3Options {
             region: Some("us-east-1".to_string()),
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
         };
-        let credentials = Credentials::Static(StaticCredentials {
+        let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "minio123".into(),
             secret_access_key: "minio123".into(),
             session_token: None,
@@ -54,11 +54,11 @@ mod tests {
     async fn create_repository(
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_containers: Vec<VirtualChunkContainer>,
-        s3_credentials: Option<Credentials>,
+        s3_credentials: Option<S3Credentials>,
     ) -> Repository {
         let mut creds = HashMap::new();
         if let Some(s3_credentials) = s3_credentials {
-            creds.insert("s3".to_string(), s3_credentials);
+            creds.insert("s3".to_string(), Credentials::S3(s3_credentials));
         }
 
         let virtual_chunk_containers = virtual_chunk_containers
@@ -95,7 +95,8 @@ mod tests {
     }
     async fn create_local_repository(path: &StdPath) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-            ObjectStorage::new_local_store(path).expect("Creating local storage failed"),
+            ObjectStorage::new_local_filesystem(path)
+                .expect("Creating local storage failed"),
         );
 
         let containers = vec![
@@ -107,7 +108,7 @@ mod tests {
             VirtualChunkContainer {
                 name: "s3".to_string(),
                 url_prefix: "s3://".to_string(),
-                store: ObjectStoreConfig::S3(S3CompatibleOptions {
+                store: ObjectStoreConfig::S3(S3Options {
                     region: Some("us-east-1".to_string()),
                     endpoint_url: None,
                     anonymous: true,
@@ -121,19 +122,18 @@ mod tests {
     async fn create_minio_repository() -> Repository {
         let prefix = format!("{:?}", ChunkId::random());
         let (config, credentials) = minio_s3_config();
-        let storage: Arc<dyn Storage + Send + Sync> = make_storage(
-            ObjectStoreConfig::S3Compatible(config),
-            Some("testbucket".to_string()),
+        let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
+            config,
+            "testbucket".to_string(),
             Some(prefix),
             Some(credentials),
         )
-        .await
         .expect("Creating minio storage failed");
 
         let containers = vec![VirtualChunkContainer {
             name: "s3".to_string(),
             url_prefix: "s3://".to_string(),
-            store: ObjectStoreConfig::S3Compatible(S3CompatibleOptions {
+            store: ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
                 endpoint_url: Some("http://localhost:9000".to_string()),
                 anonymous: false,
@@ -141,7 +141,7 @@ mod tests {
             }),
         }];
 
-        let credentials = Credentials::Static(StaticCredentials {
+        let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "minio123".to_string(),
             secret_access_key: "minio123".to_string(),
             session_token: None,
@@ -517,20 +517,19 @@ mod tests {
 
         let prefix = format!("{:?}", ChunkId::random());
         let (config, credentials) = minio_s3_config();
-        let storage: Arc<dyn Storage + Send + Sync> = make_storage(
-            ObjectStoreConfig::S3Compatible(config),
-            Some("testbucket".to_string()),
+        let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
+            config,
+            "testbucket".to_string(),
             Some(prefix),
             Some(credentials),
         )
-        .await
         .expect("Creating minio storage failed");
 
         let containers = vec![
             VirtualChunkContainer {
                 name: "s3".to_string(),
                 url_prefix: "s3://".to_string(),
-                store: ObjectStoreConfig::S3Compatible(S3CompatibleOptions {
+                store: ObjectStoreConfig::S3Compatible(S3Options {
                     region: Some(String::from("us-east-1")),
                     endpoint_url: Some("http://localhost:9000".to_string()),
                     anonymous: false,
@@ -545,7 +544,7 @@ mod tests {
             VirtualChunkContainer {
                 name: "public".to_string(),
                 url_prefix: "s3://earthmover-sample-data".to_string(),
-                store: ObjectStoreConfig::S3(S3CompatibleOptions {
+                store: ObjectStoreConfig::S3(S3Options {
                     region: Some(String::from("us-east-1")),
                     endpoint_url: None,
                     anonymous: true,
@@ -556,11 +555,11 @@ mod tests {
 
         let virtual_creds = HashMap::from([(
             "s3".to_string(),
-            Credentials::Static(StaticCredentials {
+            Credentials::S3(S3Credentials::Static(S3StaticCredentials {
                 access_key_id: "minio123".to_string(),
                 secret_access_key: "minio123".to_string(),
                 session_token: None,
-            }),
+            })),
         )]);
 
         let mut config = RepositoryConfig::default();

@@ -12,9 +12,7 @@ def tmp_store(tmpdir):
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.Storage.create(
-            icechunk.ObjectStoreConfig.LocalFileSystem(repo_path)
-        ),
+        storage=icechunk.Storage.local_filesystem(repo_path),
         config=config,
     )
 
@@ -88,7 +86,7 @@ def test_virtual_chunk_containers():
     config = icechunk.RepositoryConfig.default()
 
     store_config = icechunk.ObjectStoreConfig.S3Compatible(
-        icechunk.S3CompatibleOptions(
+        icechunk.S3Options(
             region="us-east-1",
             endpoint_url="http://localhost:9000",
             allow_http=True,

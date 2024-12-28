@@ -7,10 +7,9 @@ import pytest
 
 import zarr
 from icechunk import (
-    Credentials,
-    ObjectStoreConfig,
-    S3CompatibleOptions,
-    StaticCredentials,
+    S3Credentials,
+    S3Options,
+    S3StaticCredentials,
     Storage,
 )
 from icechunk.repository import Repository
@@ -47,9 +46,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(
-                Storage.create(ObjectStoreConfig.LocalFileSystem(tmpdir))
-            )
+            repo = Repository.create(Storage.local_filesystem(tmpdir))
             session = repo.writable_session("main")
             yield session.store
 
@@ -59,7 +56,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
+        repo = Repository.create(Storage.in_memory())
         session = repo.writable_session("main")
         yield session.store
 
@@ -75,15 +72,15 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        opts = S3CompatibleOptions(
+        opts = S3Options(
             endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
         )
-        credentials = Credentials.Static(
-            StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+        credentials = S3Credentials.Static(
+            S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
         )
         repo = Repository.create(
-            Storage.create(
-                ObjectStoreConfig.S3Compatible(opts),
+            Storage.s3(
+                opts,
                 bucket="testbucket",
                 prefix="python-xarray-test__" + str(time.time()),
                 credentials=credentials,

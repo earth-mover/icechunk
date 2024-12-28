@@ -2,12 +2,15 @@ use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use icechunk::{format::ByteRange, ObjectStorage, Repository, RepositoryConfig, Store};
+use icechunk::{
+    format::ByteRange, storage::new_in_memory_storage, Repository, RepositoryConfig,
+    Store,
+};
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let storage = Arc::new(ObjectStorage::new_in_memory_store(None)?);
+    let storage = new_in_memory_storage()?;
     let config = RepositoryConfig {
         inline_chunk_threshold_bytes: 128,
         unsafe_overwrite_refs: true,

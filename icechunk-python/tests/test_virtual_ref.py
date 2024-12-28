@@ -12,8 +12,9 @@ from icechunk import (
     IcechunkError,
     ObjectStoreConfig,
     RepositoryConfig,
-    S3CompatibleOptions,
-    StaticCredentials,
+    S3Credentials,
+    S3Options,
+    S3StaticCredentials,
     Storage,
     VirtualChunkContainer,
 )
@@ -33,7 +34,7 @@ async def test_write_minio_virtual_refs():
 
     config = RepositoryConfig.default()
     store_config = ObjectStoreConfig.S3Compatible(
-        S3CompatibleOptions(
+        S3Options(
             region="us-east-1",
             endpoint_url="http://localhost:9000",
             allow_http=True,
@@ -41,11 +42,15 @@ async def test_write_minio_virtual_refs():
     )
     container = VirtualChunkContainer("s3", "s3://", store_config)
     config.set_virtual_chunk_container(container)
-    credentials = {"s3": Credentials.Static(StaticCredentials("minio123", "minio123"))}
+    credentials = {
+        "s3": Credentials.S3(
+            S3Credentials.Static(S3StaticCredentials("minio123", "minio123"))
+        )
+    }
 
     # Open the store
     repo = Repository.open_or_create(
-        storage=Storage.create(ObjectStoreConfig.InMemory()),
+        storage=Storage.in_memory(),
         config=config,
         virtual_chunk_credentials=credentials,
     )
@@ -175,7 +180,7 @@ async def test_write_minio_virtual_refs():
 async def test_from_s3_public_virtual_refs(tmpdir):
     config = RepositoryConfig.default()
     store_config = ObjectStoreConfig.S3(
-        S3CompatibleOptions(
+        S3Options(
             region="us-east-1",
             anonymous=True,
         )
@@ -186,7 +191,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     config.set_virtual_chunk_container(container)
 
     repo = Repository.open_or_create(
-        storage=Storage.create(ObjectStoreConfig.LocalFileSystem(f"{tmpdir}/virtual")),
+        storage=Storage.local_filesystem(f"{tmpdir}/virtual"),
         config=config,
     )
     session = repo.writable_session("main")

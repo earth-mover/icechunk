@@ -1125,7 +1125,7 @@ mod tests {
         },
         refs::{fetch_ref, Ref},
         repository::VersionInfo,
-        storage::logging::LoggingStorage,
+        storage::{logging::LoggingStorage, new_in_memory_storage},
         strategies::{empty_writable_session, node_paths, zarr_array_metadata},
         ObjectStorage, Repository,
     };
@@ -1138,10 +1138,7 @@ mod tests {
     use tokio::sync::Barrier;
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = Arc::new(
-            ObjectStorage::new_in_memory_store(Some("prefix".into()))
-                .expect("failed to create in-memory store"),
-        );
+        let storage = new_in_memory_storage().expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -1249,7 +1246,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()))?;
+        let storage = new_in_memory_storage()?;
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {
@@ -1331,10 +1328,11 @@ mod tests {
         ));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-        update_branch(&storage, "main", snapshot_id.clone(), None, true).await?;
-        Repository::store_config(&storage, &RepositoryConfig::default(), None).await?;
+        update_branch(storage.as_ref(), "main", snapshot_id.clone(), None, true).await?;
+        Repository::store_config(storage.as_ref(), &RepositoryConfig::default(), None)
+            .await?;
 
-        let repo = Repository::open(None, Arc::new(storage), HashMap::new()).await?;
+        let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
@@ -1467,8 +1465,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -1769,8 +1766,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let repo = Repository::create(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
@@ -1846,8 +1842,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
-        let in_mem_storage =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let in_mem_storage = Arc::new(ObjectStorage::new_in_memory()?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -2161,8 +2156,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
-        let in_mem_storage =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let in_mem_storage = new_in_memory_storage()?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;

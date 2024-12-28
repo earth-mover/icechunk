@@ -22,7 +22,7 @@ use crate::{
     },
     session::Session,
     storage::ETag,
-    virtual_chunks::{ContainerName, VirtualChunkResolver},
+    virtual_chunks::{ContainerName, VirtualChunkContainer, VirtualChunkResolver},
     MemCachingStorage, Storage, StorageError,
 };
 
@@ -126,11 +126,7 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        let containers = config.virtual_chunk_containers.values().cloned();
-        let virtual_resolver =
-            Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
-
-        Ok(Self { config, config_etag, storage, virtual_resolver })
+        Self::new(config, config_etag, storage, virtual_chunk_credentials)
     }
 
     pub async fn open(
@@ -157,13 +153,7 @@ impl Repository {
             handle1.await.expect("Error fetching repo config")?
         {
             let config = config.unwrap_or(default_config);
-            let containers = config.virtual_chunk_containers.values().cloned();
-            let virtual_resolver = Arc::new(VirtualChunkResolver::new(
-                containers,
-                virtual_chunk_credentials,
-            ));
-
-            Ok(Self { config, config_etag, storage, virtual_resolver })
+            Self::new(config, config_etag, storage, virtual_chunk_credentials)
         } else {
             Err(RepositoryError::RepositoryDoesntExist)
         }
@@ -179,6 +169,23 @@ impl Repository {
         } else {
             Self::create(config, storage, virtual_chunk_credentials).await
         }
+    }
+
+    fn new(
+        config: RepositoryConfig,
+        config_etag: ETag,
+        storage: Arc<dyn Storage + Send + Sync>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+    ) -> RepositoryResult<Self> {
+        let containers = config.virtual_chunk_containers.values().cloned();
+        validate_credentials(
+            &config.virtual_chunk_containers,
+            &virtual_chunk_credentials,
+        )?;
+        let virtual_resolver =
+            Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
+
+        Ok(Self { config, config_etag, storage, virtual_resolver })
     }
 
     pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
@@ -395,6 +402,20 @@ impl Repository {
     }
 }
 
+fn validate_credentials(
+    containers: &HashMap<String, VirtualChunkContainer>,
+    creds: &HashMap<String, Credentials>,
+) -> RepositoryResult<()> {
+    for (cont, cred) in creds {
+        if let Some(cont) = containers.get(cont) {
+            if let Err(error) = cont.validate_credentials(cred) {
+                return Err(RepositoryError::StorageError(StorageError::Other(error)));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn raise_if_invalid_snapshot_id(
     storage: &(dyn Storage + Send + Sync),
     snapshot_id: &SnapshotId,
@@ -415,14 +436,15 @@ mod tests {
         sync::Arc,
     };
 
-    use crate::{config::RepositoryConfig, ObjectStorage, Repository, Storage};
+    use crate::{
+        config::RepositoryConfig, storage::new_in_memory_storage, Repository, Storage,
+    };
 
     // use super::*;
     // TODO: Add Tests
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -471,8 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 

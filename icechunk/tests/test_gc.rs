@@ -6,26 +6,26 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use icechunk::{
-    config::{Credentials, S3CompatibleOptions, StaticCredentials},
+    config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     ops::gc::{garbage_collect, GCConfig, GCSummary},
     refs::update_branch,
     repository::VersionInfo,
     session::get_chunk,
-    storage::make_storage,
-    ObjectStoreConfig, Repository, RepositoryConfig, Storage,
+    storage::new_s3_storage,
+    Repository, RepositoryConfig, Storage,
 };
 use pretty_assertions::assert_eq;
 
-fn minio_s3_config() -> (S3CompatibleOptions, Credentials) {
-    let config = S3CompatibleOptions {
+fn minio_s3_config() -> (S3Options, S3Credentials) {
+    let config = S3Options {
         region: Some("us-east-1".to_string()),
         endpoint_url: Some("http://localhost:9000".to_string()),
         allow_http: true,
         anonymous: false,
     };
-    let credentials = Credentials::Static(StaticCredentials {
+    let credentials = S3Credentials::Static(S3StaticCredentials {
         access_key_id: "minio123".into(),
         secret_access_key: "minio123".into(),
         session_token: None,
@@ -40,14 +40,9 @@ fn minio_s3_config() -> (S3CompatibleOptions, Credentials) {
 pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
-    let storage: Arc<dyn Storage + Send + Sync> = make_storage(
-        ObjectStoreConfig::S3Compatible(config),
-        Some("testbucket".to_string()),
-        Some(prefix),
-        Some(credentials),
-    )
-    .await
-    .expect("Creating minio storage failed");
+    let storage: Arc<dyn Storage + Send + Sync> =
+        new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
+            .expect("Creating minio storage failed");
 
     let repo = Repository::create(
         Some(RepositoryConfig {
