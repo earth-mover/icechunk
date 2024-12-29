@@ -7,12 +7,11 @@ import pytest
 
 import zarr
 from icechunk import (
-    S3Credentials,
-    S3Options,
-    S3StaticCredentials,
-    Storage,
+    Repository,
+    in_memory_storage,
+    local_filesystem_storage,
+    s3_storage,
 )
-from icechunk.repository import Repository
 from xarray.tests.test_backends import (
     ZarrBase,
     default_zarr_version,  # noqa: F401; needed otherwise not discovered
@@ -46,7 +45,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(Storage.local_filesystem(tmpdir))
+            repo = Repository.create(local_filesystem_storage(tmpdir))
             session = repo.writable_session("main")
             yield session.store
 
@@ -56,7 +55,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(Storage.in_memory())
+        repo = Repository.create(in_memory_storage())
         session = repo.writable_session("main")
         yield session.store
 
@@ -72,18 +71,15 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
     def create_zarr_target(self):
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
-        opts = S3Options(
-            endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
-        )
-        credentials = S3Credentials.Static(
-            S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
-        )
         repo = Repository.create(
-            Storage.s3(
-                opts,
+            s3_storage(
+                endpoint_url="http://localhost:9000",
+                allow_http=True,
+                region="us-east-1",
                 bucket="testbucket",
                 prefix="python-xarray-test__" + str(time.time()),
-                credentials=credentials,
+                access_key_id="minio123",
+                secret_access_key="minio123",
             )
         )
         session = repo.writable_session("main")

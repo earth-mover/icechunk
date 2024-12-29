@@ -8,6 +8,7 @@ from icechunk import (
     S3StaticCredentials,
     Storage,
     s3_refreshable_credentials,
+    s3_storage,
 )
 
 
@@ -20,23 +21,21 @@ def get_bad_credentials():
 
 
 def test_refreshable_credentials_grant_access():
-    good_creds = s3_refreshable_credentials(get_good_credentials)
-    bad_creds = s3_refreshable_credentials(get_bad_credentials)
-
-    options = S3Options(
-        region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
-    )
-    good_storage = Storage.s3(
-        config=options,
+    good_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
-        credentials=good_creds,
+        get_credentials=get_good_credentials,
     )
-    bad_storage = Storage.s3(
-        config=options,
+    bad_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
-        credentials=bad_creds,
+        get_credentials=get_bad_credentials,
     )
 
     assert not Repository.exists(good_storage)
@@ -54,21 +53,22 @@ def returns_something_else():
 
 
 def test_refreshable_credentials_errors():
-    options = S3Options(
-        region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
-    )
-
-    st = Storage.s3(
-        config=options,
+    st = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
-        credentials=s3_refreshable_credentials(throws),
+        get_credentials=throws,
     )
+
     with pytest.raises(ValueError, match="bad creds"):
         assert not Repository.exists(st)
 
-    st = Storage.s3(
-        config=options,
+    st = Storage.new_s3(
+        config=S3Options(
+            region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
+        ),
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
         credentials=s3_refreshable_credentials(42),
@@ -76,8 +76,10 @@ def test_refreshable_credentials_errors():
     with pytest.raises(ValueError, match="object is not callable"):
         assert not Repository.exists(st)
 
-    st = Storage.s3(
-        config=options,
+    st = Storage.new_s3(
+        config=S3Options(
+            region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
+        ),
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
         credentials=s3_refreshable_credentials(returns_something_else),
@@ -111,16 +113,14 @@ class ExpirableCredentials:
 def test_refreshable_credentials_refresh(tmp_path):
     path = tmp_path / "calls.txt"
     creds_obj = ExpirableCredentials(path)
-    creds = s3_refreshable_credentials(creds_obj)
 
-    options = S3Options(
-        region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
-    )
-    st = Storage.s3(
-        config=options,
+    st = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
-        credentials=creds,
+        get_credentials=creds_obj,
     )
 
     # credentials expire immediately so refresh function keeps getting called

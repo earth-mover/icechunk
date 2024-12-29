@@ -3,17 +3,17 @@ from typing import Literal
 import boto3
 import pytest
 
-from icechunk import Repository, Storage
+from icechunk import Repository, in_memory_storage, local_filesystem_storage
 
 
 def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:
     if store == "local":
         return Repository.create(
-            storage=Storage.local_filesystem(path),
+            storage=local_filesystem_storage(path),
         )
     if store == "memory":
         return Repository.create(
-            storage=Storage.in_memory(),
+            storage=in_memory_storage(),
         )
 
 

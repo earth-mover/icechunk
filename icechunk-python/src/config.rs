@@ -338,7 +338,7 @@ pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 impl PyStorage {
     #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
     #[staticmethod]
-    pub fn s3(
+    pub fn new_s3(
         config: PyS3Options,
         bucket: String,
         prefix: Option<String>,
@@ -356,7 +356,7 @@ impl PyStorage {
     }
 
     #[staticmethod]
-    pub fn in_memory() -> PyResult<Self> {
+    pub fn new_in_memory() -> PyResult<Self> {
         let storage = icechunk::storage::new_in_memory_storage()
             .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -364,7 +364,7 @@ impl PyStorage {
     }
 
     #[staticmethod]
-    pub fn local_filesystem(path: PathBuf) -> PyResult<Self> {
+    pub fn new_local_filesystem(path: PathBuf) -> PyResult<Self> {
         let storage = icechunk::storage::new_local_filesystem_storage(&path)
             .map_err(PyIcechunkStoreError::StorageError)?;
 

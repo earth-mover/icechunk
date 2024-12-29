@@ -244,9 +244,16 @@ class S3Credentials:
     class Refreshable:
         def __init__(self, _0: bytes) -> None: ...
 
+AnyS3Credential = (
+    S3Credentials.Static
+    | S3Credentials.DontSign
+    | S3Credentials.FromEnv
+    | S3Credentials.Refreshable
+)
+
 class Credentials:
     class S3:
-        def __init__(self, credentials: S3Credentials) -> None: ...
+        def __init__(self, credentials: AnyS3Credential) -> None: ...
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -265,16 +272,16 @@ class Storage:
     """
 
     @staticmethod
-    def s3(
+    def new_s3(
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: S3Credentials | None = None,
+        credentials: AnyS3Credential | None = None,
     ) -> Storage: ...
     @staticmethod
-    def in_memory() -> Storage: ...
+    def new_in_memory() -> Storage: ...
     @staticmethod
-    def local_filesystem(path: str) -> Storage: ...
+    def new_local_filesystem(path: str) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""

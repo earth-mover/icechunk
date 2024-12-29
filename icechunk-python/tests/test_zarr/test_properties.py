@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
-from icechunk import IcechunkStore, Repository, Storage
+from icechunk import IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
 
@@ -26,7 +26,7 @@ simple_attrs = st.none()
 
 
 def create() -> IcechunkStore:
-    repo = Repository.create(Storage.in_memory())
+    repo = Repository.create(in_memory_storage())
     return repo.writable_session("main").store
 
 

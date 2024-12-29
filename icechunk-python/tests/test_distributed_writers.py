@@ -2,8 +2,6 @@ import time
 import warnings
 from typing import cast
 
-import pytest
-
 import dask.array
 import icechunk
 import zarr
@@ -22,21 +20,17 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo() -> icechunk.Repository:
-    opts = icechunk.S3Options(
-        endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
-    )
-    credentials = icechunk.Credentials.Static(
-        icechunk.StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
-    )
-    storage = icechunk.Storage.s3(
-        opts,
+    storage = icechunk.s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        region="us-east-1",
         bucket="testbucket",
         prefix="python-distributed-writers-test__" + str(time.time()),
-        credentials=credentials,
+        access_key_id="minio123",
+        secret_access_key="minio123",
     )
-    repo_config = icechunk.RepositoryConfig(
-        inline_chunk_threshold_bytes=5,
-    )
+    repo_config = icechunk.RepositoryConfig.default()
+    repo_config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
         storage=storage,
         config=repo_config,
@@ -45,7 +39,6 @@ def mk_repo() -> icechunk.Repository:
     return repo
 
 
-@pytest.mark.skip(reason="Distributed writes are not yet fully implemented")
 async def test_distributed_writers():
     """Write to an array using uncoordinated writers, distributed via Dask.
 
