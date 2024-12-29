@@ -10,7 +10,7 @@ from icechunk._icechunk_python import (
 
 AnyS3Credential = (
     S3Credentials.Static
-    | S3Credentials.DontSign
+    | S3Credentials.Anonymous
     | S3Credentials.FromEnv
     | S3Credentials.Refreshable
 )
@@ -40,8 +40,8 @@ def s3_static_credentials(
     )
 
 
-def s3_dont_sign_credentials() -> S3Credentials.DontSign:
-    return S3Credentials.DontSign()
+def s3_anonymous_credentials() -> S3Credentials.Anonymous:
+    return S3Credentials.Anonymous()
 
 
 def s3_from_env_credentials() -> S3Credentials.FromEnv:
@@ -54,7 +54,7 @@ def s3_credentials(
     secret_access_key: str | None = None,
     session_token: str | None = None,
     expires_after: datetime | None = None,
-    dont_sign: bool | None = None,
+    anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
 ) -> AnyS3Credential:
@@ -64,13 +64,13 @@ def s3_credentials(
         and secret_access_key is None
         and session_token is None
         and expires_after is None
-        and not dont_sign
+        and not anonymous
         and get_credentials is None
     ):
         return s3_from_env_credentials()
 
     if (
-        dont_sign
+        anonymous
         and access_key_id is None
         and secret_access_key is None
         and session_token is None
@@ -78,7 +78,7 @@ def s3_credentials(
         and not from_env
         and get_credentials is None
     ):
-        return s3_dont_sign_credentials()
+        return s3_anonymous_credentials()
 
     if (
         get_credentials is not None
@@ -87,7 +87,7 @@ def s3_credentials(
         and session_token is None
         and expires_after is None
         and not from_env
-        and not dont_sign
+        and not anonymous
     ):
         return s3_refreshable_credentials(get_credentials)
 
@@ -95,7 +95,7 @@ def s3_credentials(
         access_key_id
         and secret_access_key
         and not from_env
-        and not dont_sign
+        and not anonymous
         and get_credentials is None
     ):
         return s3_static_credentials(

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -8,8 +9,10 @@ import zarr
 
 
 @pytest.fixture
-def repo(tmpdir) -> icechunk.Repository:
-    repo = icechunk.Repository.create(storage=icechunk.local_filesystem_storage(tmpdir))
+def repo(tmpdir: Path) -> icechunk.Repository:
+    repo = icechunk.Repository.create(
+        storage=icechunk.local_filesystem_storage(str(tmpdir))
+    )
 
     session = repo.writable_session("main")
     store = session.store
@@ -23,7 +26,7 @@ def repo(tmpdir) -> icechunk.Repository:
     return repo
 
 
-def test_detect_conflicts(repo: icechunk.Repository):
+def test_detect_conflicts(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
     store_a = session_a.store
@@ -57,12 +60,13 @@ def test_detect_conflicts(repo: icechunk.Repository):
 
             assert e.conflicts[1].path == "/foo/bar/some-array"
             assert e.conflicts[1].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
+            assert e.conflicts[1].conflicted_chunks
             assert len(e.conflicts[1].conflicted_chunks) == 100
 
             raise e
 
 
-def test_rebase_no_conflicts(repo: icechunk.Repository):
+def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
     store_a = session_a.store
@@ -94,7 +98,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository):
 )
 def test_rebase_user_attrs_with_ours(
     repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
-):
+) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
     store_a = session_a.store
@@ -140,7 +144,7 @@ def test_rebase_user_attrs_with_ours(
 )
 def test_rebase_chunks_with_ours(
     repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
-):
+) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
     store_a = session_a.store

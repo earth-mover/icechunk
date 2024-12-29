@@ -7,7 +7,7 @@ import zarr.core.array
 import zarr.core.buffer
 
 
-def test_timetravel():
+def test_timetravel() -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
@@ -63,8 +63,9 @@ def test_timetravel():
     assert session.snapshot_id == new_snapshot_id
 
     session.discard_changes()
-    assert not session.has_uncommitted_changes
-    assert air_temp[200, 6] == 54
+    assert not (session.has_uncommitted_changes)
+    # I don't understand why I need to ignore here
+    assert air_temp[200, 6] == 54  # type: ignore [unreachable]
 
     repo.create_branch("feature", new_snapshot_id)
     session = repo.writable_session("feature")
@@ -110,7 +111,7 @@ def test_timetravel():
     assert tag_snapshot_id == feature_snapshot_id
 
 
-async def test_branch_reset():
+async def test_branch_reset() -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(

@@ -39,7 +39,7 @@ def mk_repo() -> icechunk.Repository:
     return repo
 
 
-async def test_distributed_writers():
+async def test_distributed_writers() -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -66,7 +66,7 @@ async def test_distributed_writers():
     )
     _first_snap = session.commit("array created")
 
-    with Client(n_workers=8):
+    with Client(n_workers=8):  # type: ignore[no-untyped-call]
         session = repo.writable_session(branch="main")
         store = session.store
         group = zarr.open_group(store=store)
@@ -86,7 +86,7 @@ async def test_distributed_writers():
 
         group = zarr.open_group(store=store, mode="r")
 
-        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call, attr-defined]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            assert_eq(roundtripped, dask_array)
+            assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]

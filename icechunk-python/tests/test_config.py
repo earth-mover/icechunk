@@ -1,4 +1,6 @@
 import os
+from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 
@@ -7,7 +9,7 @@ import zarr
 
 
 @pytest.fixture(scope="function")
-def tmp_store(tmpdir):
+def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     repo_path = f"{tmpdir}"
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
@@ -22,7 +24,7 @@ def tmp_store(tmpdir):
     yield store, repo_path
 
 
-def test_no_inline_chunks(tmp_store):
+def test_no_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]
     array = zarr.open_array(
@@ -42,7 +44,7 @@ def test_no_inline_chunks(tmp_store):
     assert len(os.listdir(f"{store_path}/chunks")) == 10
 
 
-def test_inline_chunks(tmp_store):
+def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]
 
@@ -82,7 +84,7 @@ def test_inline_chunks(tmp_store):
     assert len(os.listdir(f"/{store_path}/chunks")) == 10
 
 
-def test_virtual_chunk_containers():
+def test_virtual_chunk_containers() -> None:
     config = icechunk.RepositoryConfig.default()
 
     store_config = icechunk.s3_store(
@@ -93,17 +95,25 @@ def test_virtual_chunk_containers():
     )
     container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
     config.set_virtual_chunk_container(container)
-    assert len(config.virtual_chunk_containers()) > 1
+    print(type(config))
+    print(type(config.virtual_chunk_containers))
+    xxx = config.virtual_chunk_containers
+    print(xxx)
+    assert len(config.virtual_chunk_containers) > 1
     found_cont = [
-        cont for cont in config.virtual_chunk_containers() if cont.name == "custom"
+        cont
+        for (name, cont) in config.virtual_chunk_containers.items()
+        if name == "custom"
     ]
     assert found_cont[0] == container
 
     config.clear_virtual_chunk_containers()
-    assert [] == config.virtual_chunk_containers()
+    assert {} == config.virtual_chunk_containers
 
     config.set_virtual_chunk_container(container)
     found_cont = [
-        cont for cont in config.virtual_chunk_containers() if cont.name == "custom"
+        cont
+        for (name, cont) in config.virtual_chunk_containers.items()
+        if name == "custom"
     ]
     assert found_cont == [container]

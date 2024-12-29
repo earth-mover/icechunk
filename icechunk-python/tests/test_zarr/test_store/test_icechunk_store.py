@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,7 +28,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
 
-    async def get(self, store: IcechunkStore, key: str) -> Buffer:
+    async def get(self, store: IcechunkStore, key: str) -> Buffer | None:
         try:
             result = await store._store.get(key)
             if result is None:
@@ -40,7 +41,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return self.buffer_cls.from_bytes(result)
 
     @pytest.fixture
-    def store_kwargs(self, tmpdir) -> dict[str, Any]:
+    def store_kwargs(self, tmpdir: Path) -> dict[str, Any]:
         kwargs = {
             "storage": local_filesystem_storage(f"{tmpdir}/store_test"),
             "read_only": False,

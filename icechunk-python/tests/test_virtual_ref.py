@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -24,7 +25,7 @@ from tests.conftest import write_chunks_to_minio
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_write_minio_virtual_refs():
+async def test_write_minio_virtual_refs() -> None:
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
         [
@@ -175,7 +176,7 @@ async def test_write_minio_virtual_refs():
     _snapshot_id = session.commit("Add virtual refs")
 
 
-async def test_from_s3_public_virtual_refs(tmpdir):
+async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
     config = RepositoryConfig.default()
     store_config = ObjectStoreConfig.S3(
         S3Options(

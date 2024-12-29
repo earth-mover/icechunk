@@ -66,7 +66,7 @@ def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
             yield ds
 
 
-def test_xarray_to_icechunk():
+def test_xarray_to_icechunk() -> None:
     ds = create_test_data()
     with roundtrip(ds) as actual:
         assert_identical(actual, ds)

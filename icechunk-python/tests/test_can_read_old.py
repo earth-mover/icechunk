@@ -21,7 +21,7 @@ import icechunk as ic
 import zarr
 
 
-def mk_repo(create: bool):
+def mk_repo(create: bool) -> ic.Repository:
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
 
@@ -50,7 +50,7 @@ def mk_repo(create: bool):
     return repo
 
 
-async def write_a_test_repo():
+async def write_a_test_repo() -> None:
     """Write the test repository.
 
     This function tries to explore as many icechunk features as possible, to generate
@@ -157,7 +157,7 @@ async def write_a_test_repo():
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo():
+async def test_icechunk_can_read_old_repo() -> None:
     # we import here so it works when the script is ran by pytest
     from tests.conftest import write_chunks_to_minio
 
@@ -229,14 +229,14 @@ async def test_icechunk_can_read_old_repo():
     # big_chunks array has a virtual chunk, so we need to write it to local MinIO
     # we get the bytes from one of the materialized chunks
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
-    chunk_data = (
-        await store.get("group1/big_chunks/c/0/1", prototype=buffer_prototype)
-    ).to_bytes()
+    chunk_data = await store.get("group1/big_chunks/c/0/1", prototype=buffer_prototype)
+    assert chunk_data
+    chunk_data_bytes = chunk_data.to_bytes()
 
     # big chunks array has a virtual chunk pointing here
     write_chunks_to_minio(
         [
-            ("can_read_old/chunk-1", chunk_data),
+            ("can_read_old/chunk-1", chunk_data_bytes),
         ]
     )
 

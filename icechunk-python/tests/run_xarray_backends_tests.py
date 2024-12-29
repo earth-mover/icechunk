@@ -2,11 +2,14 @@ import contextlib
 import os
 import tempfile
 import time
+from collections.abc import Generator
+from typing import Any
 
 import pytest
 
 import zarr
 from icechunk import (
+    IcechunkStore,
     Repository,
     in_memory_storage,
     local_filesystem_storage,
@@ -27,13 +30,15 @@ class IcechunkStoreBase(ZarrBase):
     @pytest.mark.parametrize("compute", [False, True])
     @pytest.mark.parametrize("use_dask", [False, True])
     @pytest.mark.parametrize("write_empty", [False, True, None])
-    def test_write_region(self, consolidated, compute, use_dask, write_empty) -> None:
+    def test_write_region(
+        self, consolidated: Any, compute: Any, use_dask: Any, write_empty: Any
+    ) -> None:
         if consolidated is not False:
             pytest.skip("consolidated not supported.")
         super().test_write_region(consolidated, compute, use_dask, write_empty)
 
     @pytest.mark.parametrize("consolidated", [False, True, None])
-    def test_roundtrip_consolidated(self, consolidated) -> None:
+    def test_roundtrip_consolidated(self, consolidated: Any) -> None:
         if consolidated is not False:
             pytest.skip("consolidated not supported.")
         super().test_roundtrip_consolidated(consolidated)
@@ -41,7 +46,7 @@ class IcechunkStoreBase(ZarrBase):
 
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
     @contextlib.contextmanager
-    def create_zarr_target(self):
+    def create_zarr_target(self) -> Generator[IcechunkStore]:
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -52,23 +57,23 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
     @contextlib.contextmanager
-    def create_zarr_target(self):
+    def create_zarr_target(self) -> Generator[IcechunkStore]:
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         repo = Repository.create(in_memory_storage())
         session = repo.writable_session("main")
         yield session.store
 
-    def test_pickle(self):
+    def test_pickle(self) -> None:
         pytest.skip(reason="memory icechunk stores cannot be pickled.")
 
-    def test_pickle_dataarray(self):
+    def test_pickle_dataarray(self) -> None:
         pytest.skip(reason="memory icechunk stores cannot be pickled.")
 
 
 class TestIcechunkStoreMinio(IcechunkStoreBase):
     @contextlib.contextmanager
-    def create_zarr_target(self):
+    def create_zarr_target(self) -> Generator[IcechunkStore]:
         if zarr.config.config["default_zarr_version"] == 2:
             pytest.skip("v2 not supported")
         repo = Repository.create(

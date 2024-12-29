@@ -17,7 +17,7 @@ from icechunk.repository import Repository
 from tests.conftest import write_chunks_to_minio
 
 
-async def write_minio_virtual_refs():
+async def write_minio_virtual_refs() -> None:
     write_chunks_to_minio(
         [
             ("path/to/python/new/chunk-1", b"first"),
@@ -30,7 +30,7 @@ async def write_minio_virtual_refs():
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_issue_418():
+async def test_issue_418() -> None:
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
     config = RepositoryConfig.default()

@@ -25,8 +25,8 @@ from icechunk.credentials import (
     AnyCredential,
     AnyS3Credential,
     containers_credentials,
+    s3_anonymous_credentials,
     s3_credentials,
-    s3_dont_sign_credentials,
     s3_from_env_credentials,
     s3_refreshable_credentials,
     s3_static_credentials,
@@ -34,6 +34,7 @@ from icechunk.credentials import (
 from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
 from icechunk.storage import (
+    AnyObjectStoreConfig,
     in_memory_storage,
     local_filesystem_storage,
     s3_storage,
@@ -43,6 +44,7 @@ from icechunk.store import IcechunkStore
 
 __all__ = [
     "AnyCredential",
+    "AnyObjectStoreConfig",
     "AnyS3Credential",
     "BasicConflictSolver",
     "Conflict",
@@ -71,9 +73,9 @@ __all__ = [
     "containers_credentials",
     "in_memory_storage",
     "local_filesystem_storage",
+    "s3_anonymous_credentials",
     "s3_credentials",
     "s3_credentials",
-    "s3_dont_sign_credentials",
     "s3_from_env_credentials",
     "s3_refreshable_credentials",
     "s3_static_credentials",

@@ -11,6 +11,16 @@ from icechunk.credentials import (
     s3_credentials,
 )
 
+AnyObjectStoreConfig = (
+    ObjectStoreConfig.InMemory
+    | ObjectStoreConfig.LocalFileSystem
+    | ObjectStoreConfig.S3
+    | ObjectStoreConfig.S3Compatible
+    | ObjectStoreConfig.Gcs
+    | ObjectStoreConfig.Azure
+    | ObjectStoreConfig.Tigris
+)
+
 
 def in_memory_storage() -> Storage:
     return Storage.new_in_memory()
@@ -42,12 +52,11 @@ def s3_storage(
     region: str | None = None,
     endpoint_url: str | None = None,
     allow_http: bool = False,
-    anonymous: bool = False,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
     session_token: str | None = None,
     expires_after: datetime | None = None,
-    dont_sign: bool | None = None,
+    anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
 ) -> Storage:
@@ -56,7 +65,7 @@ def s3_storage(
         secret_access_key=secret_access_key,
         session_token=session_token,
         expires_after=expires_after,
-        dont_sign=dont_sign,
+        anonymous=anonymous,
         from_env=from_env,
         get_credentials=get_credentials,
     )

@@ -205,7 +205,7 @@ impl VirtualChunkResolver {
                     Some(Credentials::S3(creds)) => creds,
                     None => {
                         if opts.anonymous {
-                            &S3Credentials::DontSign
+                            &S3Credentials::Anonymous
                         } else {
                             &S3Credentials::FromEnv
                         }
