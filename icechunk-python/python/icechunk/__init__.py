@@ -8,6 +8,8 @@ from icechunk._icechunk_python import (
     ConflictSolver,
     ConflictType,
     Credentials,
+    GcsCredentials,
+    GcsStaticCredentials,
     IcechunkError,
     ObjectStoreConfig,
     RebaseFailedData,

@@ -239,9 +239,27 @@ class S3Credentials:
     class Static:
         def __init__(self, _0: S3StaticCredentials) -> None: ...
 
+class GcsStaticCredentials:
+    class ServiceAccount:
+        def __init__(self, path: str) -> None: ...
+
+    class ServiceAccountKey:
+        def __init__(self, key: str) -> None: ...
+
+    class ApplicationCredentials:
+        def __init__(self, path: str) -> None: ...
+
+class GcsCredentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+    class Static:
+        def __init__(self, _0: GcsStaticCredentials) -> None: ...
+
 class Credentials:
     class S3:
         def __init__(self, credentials: S3Credentials) -> None: ...
+    class Gcs:
+        def __init__(self, credentials: GcsCredentials) -> None: ...
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -270,6 +288,12 @@ class Storage:
     def in_memory() -> Storage: ...
     @staticmethod
     def local_filesystem(path: str) -> Storage: ...
+    @staticmethod
+    def gcs(
+        bucket: str,
+        prefix: str | None,
+        credentials: GcsCredentials | None = None,
+    ) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""
