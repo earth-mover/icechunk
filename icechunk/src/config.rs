@@ -20,9 +20,7 @@ pub enum ObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(S3Options),
     S3(S3Options),
-    Gcs {
-        // TODO:
-    },
+    Gcs(Option<Vec<(String, String)>>),
     Azure {
         // TODO:
     },
@@ -81,6 +79,13 @@ pub struct S3StaticCredentials {
     pub session_token: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum GcsCredentials {
+    ServiceAccount(PathBuf),
+    ServiceAccountKey(String),
+    ApplicationCredentials(PathBuf),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(tag = "type")]
 pub enum S3Credentials {
@@ -97,4 +102,6 @@ pub enum S3Credentials {
 #[serde(tag = "type")]
 pub enum Credentials {
     S3(S3Credentials),
+    #[serde(rename = "gcs")]
+    Gcs(GcsCredentials),
 }

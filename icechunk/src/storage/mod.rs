@@ -29,7 +29,7 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::{S3Credentials, S3Options},
+    config::{GcsCredentials, S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
         transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
@@ -244,5 +244,42 @@ pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
 
 pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_local_filesystem(path)?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_gcs_storage(
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<GcsCredentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let mut options = Vec::new();
+    match credentials {
+        Some(GcsCredentials::ServiceAccount(path)) => {
+            options.push((
+                "google_service_account".to_string(),
+                path.into_os_string()
+                    .into_string()
+                    .expect("Invalid path to google service account credentials"),
+            ));
+        }
+        Some(GcsCredentials::ServiceAccountKey(key)) => {
+            options.push(("google_service_account_key".to_string(), key));
+        }
+        Some(GcsCredentials::ApplicationCredentials(path)) => {
+            options.push((
+                "google_application_credentials".to_string(),
+                path.into_os_string()
+                    .into_string()
+                    .expect("Invalid path to google application credentials"),
+            ));
+        }
+        _ => {}
+    }
+    let mut url = format!("gs://{}", bucket);
+    if let Some(prefix) = prefix {
+        url.push('/');
+        url.push_str(&prefix);
+    }
+    let st = ObjectStorage::from_url(&url, options)?;
     Ok(Arc::new(st))
 }
