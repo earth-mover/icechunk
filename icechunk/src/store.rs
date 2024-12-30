@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 use crate::{
     format::{
         manifest::{ChunkPayload, VirtualChunkRef},
-        snapshot::{NodeData, UserAttributesSnapshot, ZarrArrayMetadata},
+        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
     },
     metadata::{
@@ -136,8 +136,8 @@ impl Store {
     }
 
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
-        let res = self.list_dir(prefix).await?.next().await;
-        Ok(res.is_none())
+        let res = self.list_dir(prefix).await?.take(1).collect::<Vec<_>>().await;
+        Ok(res.len() == 0)
     }
 
     pub async fn clear(&self) -> StoreResult<()> {
@@ -401,7 +401,7 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        let meta = self.list_metadata_prefix(prefix).await?;
+        let meta = self.list_metadata_prefix(prefix, false).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
         // FIXME: this is wrong, we are realizing all keys in memory
         // it should be lazy instead
@@ -412,11 +412,6 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
-        // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
-        // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
-        // evolution
         let res = self.list_dir_items(prefix).await?.map_ok(|item| match item {
             ListDirItem::Key(k) => k,
             ListDirItem::Prefix(p) => p,
@@ -428,31 +423,90 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
-        // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
-        // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
-        // evolution
+        let session = Arc::clone(&self.session).read_owned().await;
+        let absolute_prefix =
+            if !prefix.starts_with("/") { &format!("/{}", prefix) } else { prefix };
+        let prefix = prefix.trim_end_matches("/");
 
-        let idx: usize = if prefix == "/" { 0 } else { prefix.len() };
-
-        let parents: HashSet<_> = self
-            .list_prefix(prefix)
-            .await?
-            .map_ok(move |s| {
-                // If the prefix is "/", get rid of it. This can happen when prefix is missing
-                // the trailing slash (as it does in zarr-python impl)
-                let rem = &s[idx..].trim_start_matches('/');
-                match rem.split_once('/') {
-                    Some((prefix, _)) => ListDirItem::Prefix(prefix.to_string()),
-                    None => ListDirItem::Key(rem.to_string()),
+        #[allow(clippy::expect_used)]
+        let path =
+            Path::try_from(absolute_prefix).expect("could not create path from prefix");
+        let results = match session.get_node(&path).await {
+            Ok(NodeSnapshot {
+                id: node_id,
+                node_data: NodeData::Array(.., manifests),
+                ..
+            }) => {
+                // if this is an array we know what to yield
+                let mut res = vec![ListDirItem::Key("zarr.json".to_string())];
+                if session.array_has_chunks_set(&node_id) || !manifests.is_empty() {
+                    res.push(ListDirItem::Prefix("c".to_string()));
                 }
-            })
-            .try_collect()
-            .await?;
-        // We tould return a Stream<Item = String> with this implementation, but the present
-        // signature is better if we change the impl
-        Ok(futures::stream::iter(parents.into_iter().map(Ok)))
+                res
+            }
+            Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => {
+                // if the prefix is the path to a group we need to discover any nodes with the prefix as node path
+                // listing chunks is unnecessary
+                self.list_metadata_prefix(prefix, true)
+                    .await?
+                    .try_filter_map(|x| async move {
+                        let x = x.trim_end_matches("/zarr.json").to_string();
+                        let res = if x == "zarr.json" {
+                            Some(ListDirItem::Key("zarr.json".to_string()))
+                        } else if x.matches("/").count() == 0 {
+                            Some(ListDirItem::Prefix(x))
+                        } else {
+                            None
+                        };
+                        Ok(res)
+                    })
+                    .try_collect::<Vec<_>>()
+                    .await?
+            }
+            Err(_) => {
+                // Finally if there is no node at the prefix we look for chunks belonging to an ancestor node
+                // FIXME: This iterates over every chunk of the array and is wasteful
+                let node = session.get_closest_ancestor_node(&path).await;
+                if let Ok(node) = node {
+                    let node_path = node.path.clone();
+                    session
+                        .array_chunk_iterator(&node.path)
+                        .await
+                        .try_filter_map(|chunk| async {
+                            let chunk_key = Key::Chunk {
+                                node_path: node_path.clone(),
+                                coords: chunk.coord,
+                            }
+                            .to_string();
+                            let res = if is_prefix_match(&chunk_key, prefix) {
+                                Some({
+                                    let trimmed = chunk_key
+                                        .trim_start_matches(prefix)
+                                        .trim_start_matches("/");
+                                    if let Some((chunk_prefix, _)) =
+                                        trimmed.split_once("/")
+                                    {
+                                        ListDirItem::Prefix(chunk_prefix.to_string())
+                                    } else {
+                                        ListDirItem::Key(trimmed.to_string())
+                                    }
+                                })
+                            } else {
+                                None
+                            };
+                            Ok(res)
+                        })
+                        .try_collect::<HashSet<_>>()
+                        .await?
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    // no ancestor node found, this is a bad prefix, return nothing
+                    vec![]
+                }
+            }
+        };
+        Ok(futures::stream::iter(results.into_iter().map(Ok)))
     }
 
     async fn set_array_meta(
@@ -504,6 +558,7 @@ impl Store {
     async fn list_metadata_prefix<'a, 'b: 'a>(
         &'a self,
         prefix: &'b str,
+        strip_prefix: bool,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
@@ -512,7 +567,11 @@ impl Store {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
-                    yield meta_key;
+                    if strip_prefix {
+                        yield meta_key.trim_start_matches(prefix).trim_start_matches("/").to_string();
+                    } else {
+                        yield meta_key;
+                    }
                 }
             }
         };
@@ -1737,10 +1796,12 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await?;
         store.set("array/c/1/1/1", data.clone()).await?;
+        store.set("array/c/0/0/1", data.clone()).await?;
 
         assert_eq!(
             all_keys(&store).await.unwrap(),
             vec![
+                "array/c/0/0/1".to_string(),
                 "array/c/0/1/0".to_string(),
                 "array/c/1/1/1".to_string(),
                 "array/zarr.json".to_string(),
@@ -1815,6 +1876,12 @@ mod tests {
             store.list_dir_items("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec![ListDirItem::Prefix("1".to_string()),]);
+
+        let mut dir =
+            store.list_dir_items("array/c/1/1").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![ListDirItem::Key("1".to_string()),]);
+
         Ok(())
     }
 

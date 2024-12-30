@@ -48,6 +48,10 @@ impl ChangeSet {
         self.updated_attributes.keys()
     }
 
+    pub fn array_has_chunks_set(&self, id: &NodeId) -> bool {
+        self.set_chunks.contains_key(id)
+    }
+
     pub fn chunk_changes(
         &self,
     ) -> impl Iterator<Item = (&NodeId, &HashMap<ChunkIndices, Option<ChunkPayload>>)>
