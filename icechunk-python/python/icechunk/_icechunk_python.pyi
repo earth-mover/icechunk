@@ -290,7 +290,11 @@ class GcsCredentials:
 
 class Credentials:
     class S3:
+<<<<<<< HEAD
         def __init__(self, credentials: AnyS3Credential) -> None: ...
+=======
+        def __init__(self, credentials: S3Credentials) -> None: ...
+>>>>>>> e4d8a7e (Lint, have no idea what these errors are)
 
     class Gcs:
         def __init__(self, credentials: GcsCredentials) -> None: ...
