@@ -25,8 +25,13 @@ from icechunk._icechunk_python import (
 )
 from icechunk.credentials import (
     AnyCredential,
+    AnyGcsCredential,
+    AnyGcsStaticCredential,
     AnyS3Credential,
     containers_credentials,
+    gcs_credentials,
+    gcs_from_env_credentials,
+    gcs_static_credentials,
     s3_anonymous_credentials,
     s3_credentials,
     s3_from_env_credentials,
@@ -46,6 +51,8 @@ from icechunk.store import IcechunkStore
 
 __all__ = [
     "AnyCredential",
+    "AnyGcsCredential",
+    "AnyGcsStaticCredential",
     "AnyObjectStoreConfig",
     "AnyS3Credential",
     "BasicConflictSolver",
@@ -75,6 +82,9 @@ __all__ = [
     "VirtualChunkContainer",
     "__version__",
     "containers_credentials",
+    "gcs_credentials",
+    "gcs_from_env_credentials",
+    "gcs_static_credentials",
     "in_memory_storage",
     "local_filesystem_storage",
     "s3_anonymous_credentials",

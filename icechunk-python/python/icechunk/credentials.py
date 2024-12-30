@@ -4,6 +4,8 @@ from datetime import datetime
 
 from icechunk._icechunk_python import (
     Credentials,
+    GcsCredentials,
+    GcsStaticCredentials,
     S3Credentials,
     S3StaticCredentials,
 )
@@ -14,7 +16,16 @@ AnyS3Credential = (
     | S3Credentials.FromEnv
     | S3Credentials.Refreshable
 )
-AnyCredential = Credentials.S3
+
+AnyGcsStaticCredential = (
+    GcsStaticCredentials.ServiceAccount
+    | GcsStaticCredentials.ServiceAccountKey
+    | GcsStaticCredentials.ApplicationCredentials
+)
+
+AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
+
+AnyCredential = Credentials.S3 | Credentials.Gcs
 
 
 def s3_refreshable_credentials(
@@ -106,6 +117,55 @@ def s3_credentials(
         )
 
     raise ValueError("Conflicting arguments to s3_credentials function")
+
+
+def gcs_static_credentials(
+    *,
+    service_account_file: str | None = None,
+    service_account_key: str | None = None,
+    application_credentials: str | None = None,
+) -> AnyGcsStaticCredential:
+    if service_account_file is not None:
+        return GcsStaticCredentials.ServiceAccount(service_account_file)
+    if service_account_key is not None:
+        return GcsStaticCredentials.ServiceAccountKey(service_account_key)
+    if application_credentials is not None:
+        return GcsStaticCredentials.ApplicationCredentials(application_credentials)
+    raise ValueError("Conflicting arguments to gcs_static_credentials function")
+
+
+def gcs_from_env_credentials() -> GcsCredentials.FromEnv:
+    return GcsCredentials.FromEnv()
+
+
+def gcs_credentials(
+    *,
+    service_account_file: str | None = None,
+    service_account_key: str | None = None,
+    application_credentials: str | None = None,
+    from_env: bool | None = None,
+) -> AnyGcsCredential:
+    if (from_env is None or from_env) and (
+        service_account_file is None
+        and service_account_key is None
+        and application_credentials is None
+    ):
+        return gcs_from_env_credentials()
+
+    if (
+        service_account_file is not None
+        or service_account_key is not None
+        or application_credentials is not None
+    ) and (from_env is None or not from_env):
+        return GcsCredentials.Static(
+            gcs_static_credentials(
+                service_account_file=service_account_file,
+                service_account_key=service_account_key,
+                application_credentials=application_credentials,
+            )
+        )
+
+    raise ValueError("Conflicting arguments to gcs_credentials function")
 
 
 def containers_credentials(

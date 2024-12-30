@@ -281,12 +281,20 @@ class GcsStaticCredentials:
     class ApplicationCredentials:
         def __init__(self, path: str) -> None: ...
 
+AnyGcsStaticCredential = (
+    GcsStaticCredentials.ServiceAccount
+    | GcsStaticCredentials.ServiceAccountKey
+    | GcsStaticCredentials.ApplicationCredentials
+)
+
 class GcsCredentials:
     class FromEnv:
         def __init__(self) -> None: ...
 
     class Static:
-        def __init__(self, _0: GcsStaticCredentials) -> None: ...
+        def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
+
+AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
 
 class Credentials:
     class S3:
@@ -295,7 +303,7 @@ class Credentials:
     class Gcs:
         def __init__(self, credentials: GcsCredentials) -> None: ...
 
-AnyCredential = Credentials.S3
+AnyCredential = Credentials.S3 | Credentials.Gcs
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -330,7 +338,7 @@ class Storage:
         cls,
         bucket: str,
         prefix: str | None,
-        credentials: GcsCredentials | None = None,
+        credentials: AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
