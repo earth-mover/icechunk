@@ -26,7 +26,7 @@ class ObjectStoreConfig:
         def __init__(self, options: S3Options) -> None: ...
 
     class Gcs:
-        def __init__(self) -> None: ...
+        def __init__(self, options: dict[str, str] | None) -> None: ...
 
     class Azure:
         def __init__(self) -> None: ...
@@ -296,7 +296,7 @@ class Storage:
         prefix: str | None,
         credentials: GcsCredentials | None = None,
         *,
-        config: list[tuple[str, str]] | None = None,
+        config: dict[str, str] | None = None,
     ) -> Storage: ...
 
 class VersionSelection(Enum):

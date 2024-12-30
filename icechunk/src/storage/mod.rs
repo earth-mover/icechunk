@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use s3::S3Storage;
-use std::{ffi::OsString, path::Path, sync::Arc};
+use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -251,14 +251,14 @@ pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
-    config: Option<Vec<(String, String)>>,
+    config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let url = format!(
         "gs://{}{}",
         bucket,
         prefix.map(|p| format!("/{}", p)).unwrap_or("".to_string())
     );
-    let mut options = config.unwrap_or_default();
+    let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
 
     match credentials {
         Some(GcsCredentials::FromEnv) => (),

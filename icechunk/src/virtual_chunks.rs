@@ -74,7 +74,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "gcs".to_string(),
                 url_prefix: "gcs".to_string(),
-                store: ObjectStoreConfig::Gcs(vec![]),
+                store: ObjectStoreConfig::Gcs(HashMap::new()),
             },
         ),
         (

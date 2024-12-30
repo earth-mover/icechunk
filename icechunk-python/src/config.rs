@@ -190,7 +190,7 @@ pub enum PyObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(PyS3Options),
     S3(PyS3Options),
-    Gcs(Option<Vec<(String, String)>>),
+    Gcs(Option<HashMap<String, String>>),
     Azure(),
     Tigris(),
 }
@@ -374,7 +374,7 @@ impl PyStorage {
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
-        config: Option<Vec<(String, String)>>,
+        config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_gcs_storage(
             bucket,
