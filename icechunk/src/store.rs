@@ -1809,19 +1809,22 @@ mod tests {
             ]
         );
 
-        let mut dir = store.list_dir("/").await?.try_collect::<Vec<_>>().await?;
-        dir.sort();
-        assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
+        for prefix in ["/", ""] {
+            let mut dir = store.list_dir(prefix).await?.try_collect::<Vec<_>>().await?;
+            dir.sort();
+            assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
 
-        let mut dir = store.list_dir_items("/").await?.try_collect::<Vec<_>>().await?;
-        dir.sort();
-        assert_eq!(
-            dir,
-            vec![
-                ListDirItem::Key("zarr.json".to_string()),
-                ListDirItem::Prefix("array".to_string())
-            ]
-        );
+            let mut dir =
+                store.list_dir_items(prefix).await?.try_collect::<Vec<_>>().await?;
+            dir.sort();
+            assert_eq!(
+                dir,
+                vec![
+                    ListDirItem::Key("zarr.json".to_string()),
+                    ListDirItem::Prefix("array".to_string())
+                ]
+            );
+        }
 
         let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
