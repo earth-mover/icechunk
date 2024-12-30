@@ -12,8 +12,8 @@ use icechunk::{
 };
 use pyo3::{
     pyclass, pymethods,
-    types::{PyAnyMethods, PyModule},
-    PyErr, PyResult, Python,
+    types::{PyAnyMethods, PyModule, PyType},
+    Bound, PyErr, PyResult, Python,
 };
 
 use crate::errors::PyIcechunkStoreError;
@@ -105,7 +105,7 @@ impl CredentialsFetcher for PythonCredentialsFetcher {
 #[derive(Clone, Debug)]
 pub enum PyS3Credentials {
     FromEnv(),
-    DontSign(),
+    Anonymous(),
     Static(PyS3StaticCredentials),
     Refreshable(Vec<u8>),
 }
@@ -114,7 +114,7 @@ impl From<PyS3Credentials> for S3Credentials {
     fn from(credentials: PyS3Credentials) -> Self {
         match credentials {
             PyS3Credentials::FromEnv() => S3Credentials::FromEnv,
-            PyS3Credentials::DontSign() => S3Credentials::DontSign,
+            PyS3Credentials::Anonymous() => S3Credentials::Anonymous,
             PyS3Credentials::Static(creds) => S3Credentials::Static(creds.into()),
             PyS3Credentials::Refreshable(pickled_function) => {
                 S3Credentials::Refreshable(Arc::new(PythonCredentialsFetcher {
@@ -321,10 +321,6 @@ impl PyRepositoryConfig {
         self.virtual_chunk_containers.insert(cont.name.clone(), cont);
     }
 
-    pub fn virtual_chunk_containers(&self) -> Vec<PyVirtualChunkContainer> {
-        self.virtual_chunk_containers.values().cloned().collect()
-    }
-
     pub fn clear_virtual_chunk_containers(&mut self) {
         self.virtual_chunk_containers.clear();
     }
@@ -337,8 +333,9 @@ pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 #[pymethods]
 impl PyStorage {
     #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
-    #[staticmethod]
-    pub fn s3(
+    #[classmethod]
+    pub fn new_s3(
+        _cls: &Bound<'_, PyType>,
         config: PyS3Options,
         bucket: String,
         prefix: Option<String>,
@@ -355,16 +352,19 @@ impl PyStorage {
         Ok(PyStorage(storage))
     }
 
-    #[staticmethod]
-    pub fn in_memory() -> PyResult<Self> {
+    #[classmethod]
+    pub fn new_in_memory(_cls: &Bound<'_, PyType>) -> PyResult<Self> {
         let storage = icechunk::storage::new_in_memory_storage()
             .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }
 
-    #[staticmethod]
-    pub fn local_filesystem(path: PathBuf) -> PyResult<Self> {
+    #[classmethod]
+    pub fn new_local_filesystem(
+        _cls: &Bound<'_, PyType>,
+        path: PathBuf,
+    ) -> PyResult<Self> {
         let storage = icechunk::storage::new_local_filesystem_storage(&path)
             .map_err(PyIcechunkStoreError::StorageError)?;
 

@@ -6,20 +6,18 @@ import zarr
 import zarr.core
 import zarr.core.array
 from icechunk import (
-    Credentials,
-    ObjectStoreConfig,
     RepositoryConfig,
-    S3Credentials,
-    S3Options,
-    S3StaticCredentials,
-    Storage,
     VirtualChunkContainer,
+    containers_credentials,
+    in_memory_storage,
+    s3_credentials,
+    s3_store,
 )
 from icechunk.repository import Repository
 from tests.conftest import write_chunks_to_minio
 
 
-async def write_minio_virtual_refs():
+async def write_minio_virtual_refs() -> None:
     write_chunks_to_minio(
         [
             ("path/to/python/new/chunk-1", b"first"),
@@ -32,26 +30,24 @@ async def write_minio_virtual_refs():
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_issue_418():
+async def test_issue_418() -> None:
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
     config = RepositoryConfig.default()
-    store_config = ObjectStoreConfig.S3Compatible(
-        S3Options(
-            region="us-east-1",
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-        )
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        s3_compatible=True,
     )
     container = VirtualChunkContainer("s3", "s3://", store_config)
     config.set_virtual_chunk_container(container)
-    credentials = {
-        "s3": Credentials.S3(
-            S3Credentials.Static(S3StaticCredentials("minio123", "minio123"))
-        )
-    }
+    credentials = containers_credentials(
+        s3=s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+    )
+
     repo = Repository.create(
-        storage=Storage.in_memory(),
+        storage=in_memory_storage(),
         config=config,
         virtual_chunk_credentials=credentials,
     )

@@ -98,7 +98,7 @@ pub enum S3Credentials {
     #[serde(rename = "from_env")]
     FromEnv,
     #[serde(rename = "none")]
-    DontSign,
+    Anonymous,
     #[serde(rename = "static")]
     Static(S3StaticCredentials),
     #[serde(rename = "refreshable")]
