@@ -5,7 +5,8 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use icechunk::{
     config::{
-        Credentials, CredentialsFetcher, S3Credentials, S3Options, S3StaticCredentials,
+        Credentials, CredentialsFetcher, GcsCredentials, GcsStaticCredentials,
+        S3Credentials, S3Options, S3StaticCredentials,
     },
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
@@ -125,16 +126,58 @@ impl From<PyS3Credentials> for S3Credentials {
     }
 }
 
+#[pyclass(name = "GcsStaticCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyGcsStaticCredentials {
+    ServiceAccount(String),
+    ServiceAccountKey(String),
+    ApplicationCredentials(String),
+}
+
+impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
+    fn from(value: PyGcsStaticCredentials) -> Self {
+        match value {
+            PyGcsStaticCredentials::ServiceAccount(path) => {
+                GcsStaticCredentials::ServiceAccount(path.into())
+            }
+            PyGcsStaticCredentials::ServiceAccountKey(key) => {
+                GcsStaticCredentials::ServiceAccountKey(key)
+            }
+            PyGcsStaticCredentials::ApplicationCredentials(path) => {
+                GcsStaticCredentials::ApplicationCredentials(path.into())
+            }
+        }
+    }
+}
+
+#[pyclass(name = "GcsCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyGcsCredentials {
+    FromEnv(),
+    Static(PyGcsStaticCredentials),
+}
+
+impl From<PyGcsCredentials> for GcsCredentials {
+    fn from(value: PyGcsCredentials) -> Self {
+        match value {
+            PyGcsCredentials::FromEnv() => GcsCredentials::FromEnv,
+            PyGcsCredentials::Static(creds) => GcsCredentials::Static(creds.into()),
+        }
+    }
+}
+
 #[pyclass(name = "Credentials")]
 #[derive(Clone, Debug)]
 pub enum PyCredentials {
     S3(PyS3Credentials),
+    Gcs(PyGcsCredentials),
 }
 
 impl From<PyCredentials> for Credentials {
     fn from(value: PyCredentials) -> Self {
         match value {
             PyCredentials::S3(cred) => Credentials::S3(cred.into()),
+            PyCredentials::Gcs(cred) => Credentials::Gcs(cred.into()),
         }
     }
 }
@@ -195,7 +238,7 @@ pub enum PyObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(PyS3Options),
     S3(PyS3Options),
-    Gcs(),
+    Gcs(Option<HashMap<String, String>>),
     Azure(),
     Tigris(),
 }
@@ -211,7 +254,9 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::S3Compatible(opts.into())
             }
             PyObjectStoreConfig::S3(opts) => ObjectStoreConfig::S3(opts.into()),
-            PyObjectStoreConfig::Gcs() => ObjectStoreConfig::Gcs {},
+            PyObjectStoreConfig::Gcs(opts) => {
+                ObjectStoreConfig::Gcs(opts.unwrap_or_default())
+            }
             PyObjectStoreConfig::Azure() => ObjectStoreConfig::Azure {},
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }
@@ -229,7 +274,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
                 PyObjectStoreConfig::S3Compatible(opts.into())
             }
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
-            ObjectStoreConfig::Gcs {} => PyObjectStoreConfig::Gcs(),
+            ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
             ObjectStoreConfig::Azure {} => PyObjectStoreConfig::Azure(),
             ObjectStoreConfig::Tigris {} => PyObjectStoreConfig::Tigris(),
         }
@@ -367,6 +412,25 @@ impl PyStorage {
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_local_filesystem_storage(&path)
             .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
+    pub fn new_gcs(
+        bucket: String,
+        prefix: Option<String>,
+        credentials: Option<PyGcsCredentials>,
+        config: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let storage = icechunk::storage::new_gcs_storage(
+            bucket,
+            prefix,
+            credentials.map(|cred| cred.into()),
+            config,
+        )
+        .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }

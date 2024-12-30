@@ -271,9 +271,29 @@ AnyS3Credential = (
     | S3Credentials.Refreshable
 )
 
+class GcsStaticCredentials:
+    class ServiceAccount:
+        def __init__(self, path: str) -> None: ...
+
+    class ServiceAccountKey:
+        def __init__(self, key: str) -> None: ...
+
+    class ApplicationCredentials:
+        def __init__(self, path: str) -> None: ...
+
+class GcsCredentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, _0: GcsStaticCredentials) -> None: ...
+
 class Credentials:
     class S3:
         def __init__(self, credentials: AnyS3Credential) -> None: ...
+
+    class Gcs:
+        def __init__(self, credentials: GcsCredentials) -> None: ...
 
 AnyCredential = Credentials.S3
 
@@ -305,6 +325,15 @@ class Storage:
     def new_in_memory(cls) -> Storage: ...
     @classmethod
     def new_local_filesystem(cls, path: str) -> Storage: ...
+    @classmethod
+    def new_gcs(
+        cls,
+        bucket: str,
+        prefix: str | None,
+        credentials: GcsCredentials | None = None,
+        *,
+        config: dict[str, str] | None = None,
+    ) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""

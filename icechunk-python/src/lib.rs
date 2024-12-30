@@ -7,8 +7,9 @@ mod store;
 mod streams;
 
 use config::{
-    PyCredentials, PyObjectStoreConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyVirtualChunkContainer, PythonCredentialsFetcher,
+    PyCredentials, PyGcsCredentials, PyGcsStaticCredentials, PyObjectStoreConfig,
+    PyRepositoryConfig, PyS3Credentials, PyS3Options, PyS3StaticCredentials, PyStorage,
+    PyVirtualChunkContainer, PythonCredentialsFetcher,
 };
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
@@ -39,6 +40,8 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyS3StaticCredentials>()?;
     m.add_class::<PythonCredentialsFetcher>()?;
     m.add_class::<PyS3Credentials>()?;
+    m.add_class::<PyGcsCredentials>()?;
+    m.add_class::<PyGcsStaticCredentials>()?;
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3Options>()?;
     m.add_class::<PyObjectStoreConfig>()?;
