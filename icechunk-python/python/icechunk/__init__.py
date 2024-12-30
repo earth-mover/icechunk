@@ -42,6 +42,7 @@ from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    gcs_storage,
     in_memory_storage,
     local_filesystem_storage,
     s3_storage,
@@ -85,6 +86,7 @@ __all__ = [
     "gcs_credentials",
     "gcs_from_env_credentials",
     "gcs_static_credentials",
+    "gcs_storage",
     "in_memory_storage",
     "local_filesystem_storage",
     "s3_anonymous_credentials",
