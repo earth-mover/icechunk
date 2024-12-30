@@ -2,18 +2,19 @@ from typing import Literal
 
 import boto3
 import pytest
+from mypy_boto3_s3.client import S3Client
 
-from icechunk import Repository, Storage
+from icechunk import Repository, in_memory_storage, local_filesystem_storage
 
 
 def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:
     if store == "local":
         return Repository.create(
-            storage=Storage.local_filesystem(path),
+            storage=local_filesystem_storage(path),
         )
     if store == "memory":
         return Repository.create(
-            storage=Storage.in_memory(),
+            storage=in_memory_storage(),
         )
 
 
@@ -27,7 +28,7 @@ def repo(request: pytest.FixtureRequest, tmpdir: str) -> tuple[Repository, str]:
 minio_client = None
 
 
-def get_minio_client():
+def get_minio_client() -> S3Client:
     global minio_client
     if minio_client is None:
         minio_client = boto3.client(

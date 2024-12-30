@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,22 +9,23 @@ import zarr
 import zarr.core
 import zarr.core.buffer
 from icechunk import (
-    Credentials,
     IcechunkError,
     ObjectStoreConfig,
     RepositoryConfig,
-    S3Credentials,
     S3Options,
-    S3StaticCredentials,
-    Storage,
     VirtualChunkContainer,
+    containers_credentials,
+    in_memory_storage,
+    local_filesystem_storage,
+    s3_credentials,
+    s3_store,
 )
 from icechunk.repository import Repository
 from tests.conftest import write_chunks_to_minio
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_write_minio_virtual_refs():
+async def test_write_minio_virtual_refs() -> None:
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
         [
@@ -33,24 +35,21 @@ async def test_write_minio_virtual_refs():
     )
 
     config = RepositoryConfig.default()
-    store_config = ObjectStoreConfig.S3Compatible(
-        S3Options(
-            region="us-east-1",
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-        )
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        s3_compatible=True,
     )
     container = VirtualChunkContainer("s3", "s3://", store_config)
     config.set_virtual_chunk_container(container)
-    credentials = {
-        "s3": Credentials.S3(
-            S3Credentials.Static(S3StaticCredentials("minio123", "minio123"))
-        )
-    }
+    credentials = containers_credentials(
+        s3=s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+    )
 
     # Open the store
     repo = Repository.open_or_create(
-        storage=Storage.in_memory(),
+        storage=in_memory_storage(),
         config=config,
         virtual_chunk_credentials=credentials,
     )
@@ -177,7 +176,7 @@ async def test_write_minio_virtual_refs():
     _snapshot_id = session.commit("Add virtual refs")
 
 
-async def test_from_s3_public_virtual_refs(tmpdir):
+async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
     config = RepositoryConfig.default()
     store_config = ObjectStoreConfig.S3(
         S3Options(
@@ -191,7 +190,7 @@ async def test_from_s3_public_virtual_refs(tmpdir):
     config.set_virtual_chunk_container(container)
 
     repo = Repository.open_or_create(
-        storage=Storage.local_filesystem(f"{tmpdir}/virtual"),
+        storage=local_filesystem_storage(f"{tmpdir}/virtual"),
         config=config,
     )
     session = repo.writable_session("main")

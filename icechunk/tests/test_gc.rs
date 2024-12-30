@@ -29,6 +29,7 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         access_key_id: "minio123".into(),
         secret_access_key: "minio123".into(),
         session_token: None,
+        expires_after: None,
     });
     (config, credentials)
 }
