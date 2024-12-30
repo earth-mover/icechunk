@@ -29,7 +29,7 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import Repository, Storage
+from icechunk import Repository, in_memory_storage
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -199,7 +199,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data) -> str:
-        self.repo = Repository.create(Storage.in_memory())
+        self.repo = Repository.create(in_memory_storage())
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         HEAD = self.repo.lookup_branch(DEFAULT_BRANCH)

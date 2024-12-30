@@ -34,12 +34,22 @@ class ObjectStoreConfig:
     class Tigris:
         def __init__(self) -> None: ...
 
+AnyObjectStoreConfig = (
+    ObjectStoreConfig.InMemory
+    | ObjectStoreConfig.LocalFileSystem
+    | ObjectStoreConfig.S3
+    | ObjectStoreConfig.S3Compatible
+    | ObjectStoreConfig.Gcs
+    | ObjectStoreConfig.Azure
+    | ObjectStoreConfig.Tigris
+)
+
 class VirtualChunkContainer:
     name: str
     url_prefix: str
     store: ObjectStoreConfig
 
-    def __init__(self, name: str, url_prefix: str, store: ObjectStoreConfig): ...
+    def __init__(self, name: str, url_prefix: str, store: AnyObjectStoreConfig): ...
 
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
@@ -60,12 +70,22 @@ class RepositoryConfig:
         """
         ...
 
+    @staticmethod
+    def default() -> RepositoryConfig: ...
     @property
     def inline_chunk_threshold_bytes(self) -> int: ...
+    @inline_chunk_threshold_bytes.setter
+    def inline_chunk_threshold_bytes(self, value: int) -> None: ...
     @property
     def unsafe_overwrite_refs(self) -> bool: ...
+    @unsafe_overwrite_refs.setter
+    def unsafe_overwrite_refs(self, value: bool) -> None: ...
     @property
     def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer]: ...
+    @virtual_chunk_containers.setter
+    def virtual_chunk_containers(
+        self, value: dict[str, VirtualChunkContainer]
+    ) -> None: ...
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
     def clear_virtual_chunk_containers(self) -> None: ...
 
@@ -76,7 +96,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -84,7 +104,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -92,7 +112,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...
@@ -221,27 +241,41 @@ class S3StaticCredentials:
     access_key_id: str
     secret_access_key: str
     session_token: str | None
+    expires_after: datetime.datetime | None
 
     def __init__(
         self,
         access_key_id: str,
         secret_access_key: str,
         session_token: str | None = None,
+        expires_after: datetime.datetime | None = None,
     ): ...
 
 class S3Credentials:
     class FromEnv:
         def __init__(self) -> None: ...
 
-    class DontSign:
+    class Anonymous:
         def __init__(self) -> None: ...
 
     class Static:
-        def __init__(self, _0: S3StaticCredentials) -> None: ...
+        def __init__(self, credentials: S3StaticCredentials) -> None: ...
+
+    class Refreshable:
+        def __init__(self, pickled_function: bytes) -> None: ...
+
+AnyS3Credential = (
+    S3Credentials.Static
+    | S3Credentials.Anonymous
+    | S3Credentials.FromEnv
+    | S3Credentials.Refreshable
+)
 
 class Credentials:
     class S3:
-        def __init__(self, credentials: S3Credentials) -> None: ...
+        def __init__(self, credentials: AnyS3Credential) -> None: ...
+
+AnyCredential = Credentials.S3
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -259,17 +293,18 @@ class Storage:
     ```
     """
 
-    @staticmethod
-    def s3(
+    @classmethod
+    def new_s3(
+        cls,
         config: S3Options,
-        eucket: str,
+        bucket: str,
         prefix: str | None,
-        credentials: S3Credentials | None = None,
+        credentials: AnyS3Credential | None = None,
     ) -> Storage: ...
-    @staticmethod
-    def in_memory() -> Storage: ...
-    @staticmethod
-    def local_filesystem(path: str) -> Storage: ...
+    @classmethod
+    def new_in_memory(cls) -> Storage: ...
+    @classmethod
+    def new_local_filesystem(cls, path: str) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""
@@ -396,7 +431,7 @@ class Conflict:
         ...
 
     @property
-    def conflicted_chunks(self) -> list[list[int]]:
+    def conflicted_chunks(self) -> list[list[int]] | None:
         """If the conflict is a chunk conflict, this will return the list of chunk indices that are in conflict"""
         ...
 

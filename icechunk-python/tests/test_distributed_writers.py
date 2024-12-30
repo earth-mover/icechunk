@@ -2,8 +2,6 @@ import time
 import warnings
 from typing import cast
 
-import pytest
-
 import dask.array
 import icechunk
 import zarr
@@ -22,21 +20,17 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo() -> icechunk.Repository:
-    opts = icechunk.S3Options(
-        endpoint_url="http://localhost:9000", allow_http=True, region="us-east-1"
-    )
-    credentials = icechunk.Credentials.Static(
-        icechunk.StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
-    )
-    storage = icechunk.Storage.create(
-        icechunk.ObjectStoreConfig.S3Compatible(opts),
+    storage = icechunk.s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        region="us-east-1",
         bucket="testbucket",
         prefix="python-distributed-writers-test__" + str(time.time()),
-        credentials=credentials,
+        access_key_id="minio123",
+        secret_access_key="minio123",
     )
-    repo_config = icechunk.RepositoryConfig(
-        inline_chunk_threshold_bytes=5,
-    )
+    repo_config = icechunk.RepositoryConfig.default()
+    repo_config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
         storage=storage,
         config=repo_config,
@@ -45,8 +39,7 @@ def mk_repo() -> icechunk.Repository:
     return repo
 
 
-@pytest.mark.skip(reason="Distributed writes are not yet fully implemented")
-async def test_distributed_writers():
+async def test_distributed_writers() -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -73,7 +66,7 @@ async def test_distributed_writers():
     )
     _first_snap = session.commit("array created")
 
-    with Client(n_workers=8):
+    with Client(n_workers=8):  # type: ignore[no-untyped-call]
         session = repo.writable_session(branch="main")
         store = session.store
         group = zarr.open_group(store=store)
@@ -93,7 +86,7 @@ async def test_distributed_writers():
 
         group = zarr.open_group(store=store, mode="r")
 
-        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call, attr-defined]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            assert_eq(roundtripped, dask_array)
+            assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]

@@ -12,9 +12,9 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from icechunk import Repository, Storage
+from icechunk import Repository, in_memory_storage
 from zarr.core.buffer import default_buffer_prototype
-from zarr.testing.stateful import ZarrHierarchyStateMachine, ZarrStoreStateMachine
+from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
     node_names,
     np_array_and_chunks,
@@ -27,19 +27,20 @@ PROTOTYPE = default_buffer_prototype()
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
-    def __init__(self, repo):
+    def __init__(self, repo: Repository) -> None:
         self.repo = repo
         store = repo.writable_session("main").store
         super().__init__(store)
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
-    def commit_with_check(self, data):
+    def commit_with_check(self, data) -> None:
         note("committing and checking list_prefix")
 
         lsbefore = sorted(self._sync_iter(self.store.list_prefix("")))
         path = data.draw(st.sampled_from(lsbefore))
         get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
+        assert get_before
 
         self.store.session.commit("foo")
 
@@ -47,6 +48,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
+        assert get_after
 
         if lsbefore != lsafter:
             lsexpect = sorted(self._sync_iter(self.model.list_prefix("")))
@@ -56,6 +58,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
         if get_before != get_after:
             get_expect = self._sync(self.model.get(path, prototype=PROTOTYPE))
+            assert get_expect
             raise ValueError(
                 f"Value changed before and after commit for path {path}"
                 f" \n\n Before : {get_before.to_bytes()!r} \n\n "
@@ -85,7 +88,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     #####  TODO: port everything below to zarr
     @rule()
-    def clear(self):
+    def clear(self) -> None:
         import zarr
 
         self._sync(self.store.clear())
@@ -115,8 +118,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
 
 
-def test_zarr_hierarchy():
-    repo = Repository.create(Storage.in_memory())
+def test_zarr_hierarchy() -> None:
+    repo = Repository.create(in_memory_storage())
 
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(repo)
@@ -126,14 +129,14 @@ def test_zarr_hierarchy():
     )
 
 
-def test_zarr_store():
+def test_zarr_store() -> None:
     pytest.skip("icechunk is more strict about keys")
-    repo = Repository.create(Storage.in_memory())
-    store = repo.writable_session("main").store
+    # repo = Repository.create(in_memory_storage())
+    # store = repo.writable_session("main").store
 
-    def mk_test_instance_sync() -> ZarrHierarchyStateMachine:
-        return ZarrStoreStateMachine(store)
+    # def mk_test_instance_sync() -> ZarrHierarchyStateMachine:
+    #     return ZarrStoreStateMachine(store)
 
-    run_state_machine_as_test(
-        mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
-    )
+    # run_state_machine_as_test(
+    #     mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
+    # )

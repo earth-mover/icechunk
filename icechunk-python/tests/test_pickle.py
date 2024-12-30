@@ -1,23 +1,24 @@
 import pickle
+from pathlib import Path
 
 import pytest
 
 import zarr
-from icechunk import Repository, Storage
+from icechunk import Repository, local_filesystem_storage
 
 
 def create_local_repo(path: str) -> Repository:
-    return Repository.create(storage=Storage.local_filesystem(path))
+    return Repository.create(storage=local_filesystem_storage(path))
 
 
 @pytest.fixture(scope="function")
-def tmp_repo(tmpdir) -> Repository:
+def tmp_repo(tmpdir: Path) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(store_path)
     return repo
 
 
-def test_pickle_read_only(tmp_repo: Repository):
+def test_pickle_read_only(tmp_repo: Repository) -> None:
     tmp_session = tmp_repo.writable_session(branch="main")
     tmp_store = tmp_session.store
 
@@ -33,7 +34,7 @@ def test_pickle_read_only(tmp_repo: Repository):
     assert tmp_store._read_only is False
 
 
-def test_pickle(tmp_repo: Repository):
+def test_pickle(tmp_repo: Repository) -> None:
     tmp_session = tmp_repo.writable_session(branch="main")
     tmp_store = tmp_session.store
 

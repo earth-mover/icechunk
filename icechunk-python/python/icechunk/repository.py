@@ -1,12 +1,12 @@
 from typing import Self
 
 from icechunk._icechunk_python import (
-    Credentials,
     PyRepository,
     RepositoryConfig,
     SnapshotMetadata,
     Storage,
 )
+from icechunk.credentials import AnyCredential
 from icechunk.session import Session
 
 
@@ -23,7 +23,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> Self:
         """Create a new Icechunk repository.
 
@@ -46,7 +46,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> Self:
         """Open an existing Icechunk repository.
 
@@ -70,7 +70,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, Credentials] | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> Self:
         """Open an existing Icechunk repository or create a new one if it does not exist.
 

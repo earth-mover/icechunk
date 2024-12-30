@@ -41,7 +41,10 @@ async def test_store_clear_chunk_list() -> None:
     array = group.create_array(**array_kwargs, exists_ok=True)
     assert len([_ async for _ in store.list_prefix("/")]) == 2
     array[:] = rng.integers(
-        low=0, high=1234, size=array_kwargs["shape"], dtype=array_kwargs["dtype"]
+        low=0,
+        high=1234,
+        size=array_kwargs["shape"],
+        dtype=array_kwargs["dtype"],  # type: ignore [call-overload]
     )
     keys = [_ async for _ in store.list_prefix("/")]
     assert len(keys) == 2 + 3, keys

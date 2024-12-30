@@ -1273,15 +1273,18 @@ name = "icechunk-python"
 version = "0.1.0-alpha.7"
 dependencies = [
  "async-stream",
+ "async-trait",
  "bytes",
  "chrono",
  "futures",
  "icechunk",
  "pyo3",
  "pyo3-async-runtimes",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "typetag",
 ]
 
 [[package]]
