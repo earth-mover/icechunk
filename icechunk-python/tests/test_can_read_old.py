@@ -40,7 +40,7 @@ def mk_repo(create: bool):
     credentials = {
         "s3": ic.Credentials.S3(
             ic.S3Credentials.Static(ic.S3StaticCredentials("minio123", "minio123"))
-        )
+        ),
     }
 
     operation = ic.Repository.create if create else ic.Repository.open

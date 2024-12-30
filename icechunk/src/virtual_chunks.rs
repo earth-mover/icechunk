@@ -46,9 +46,9 @@ impl VirtualChunkContainer {
             }
             (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
-            (ObjectStoreConfig::Gcs, Credentials::Gcs(_)) => Ok(()), // TODO:
-            (ObjectStoreConfig::Azure {}, _) => Ok(()),              // TODO
-            (ObjectStoreConfig::Tigris {}, _) => Ok(()),             // TODO
+            (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()), // TODO:
+            (ObjectStoreConfig::Azure {}, _) => Ok(()),                 // TODO
+            (ObjectStoreConfig::Tigris {}, _) => Ok(()),                // TODO
             _ => Err("credentials do not match store type".to_string()),
         }
     }
@@ -74,7 +74,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "gcs".to_string(),
                 url_prefix: "gcs".to_string(),
-                store: ObjectStoreConfig::Gcs,
+                store: ObjectStoreConfig::Gcs(vec![]),
             },
         ),
         (
@@ -218,7 +218,7 @@ impl VirtualChunkResolver {
                 Ok(Arc::new(S3Fetcher::new(opts, creds).await))
             }
             // FIXME: implement
-            ObjectStoreConfig::Gcs { .. } => {
+            ObjectStoreConfig::Gcs(..) => {
                 unimplemented!("support for virtual chunks on gcs")
             }
             ObjectStoreConfig::Azure { .. } => {

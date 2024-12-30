@@ -190,7 +190,7 @@ pub enum PyObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(PyS3Options),
     S3(PyS3Options),
-    Gcs(),
+    Gcs(Option<Vec<(String, String)>>),
     Azure(),
     Tigris(),
 }
@@ -206,7 +206,9 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::S3Compatible(opts.into())
             }
             PyObjectStoreConfig::S3(opts) => ObjectStoreConfig::S3(opts.into()),
-            PyObjectStoreConfig::Gcs() => ObjectStoreConfig::Gcs,
+            PyObjectStoreConfig::Gcs(opts) => {
+                ObjectStoreConfig::Gcs(opts.unwrap_or_default())
+            }
             PyObjectStoreConfig::Azure() => ObjectStoreConfig::Azure {},
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }
@@ -224,7 +226,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
                 PyObjectStoreConfig::S3Compatible(opts.into())
             }
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
-            ObjectStoreConfig::Gcs => PyObjectStoreConfig::Gcs(),
+            ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
             ObjectStoreConfig::Azure {} => PyObjectStoreConfig::Azure(),
             ObjectStoreConfig::Tigris {} => PyObjectStoreConfig::Tigris(),
         }
@@ -367,16 +369,18 @@ impl PyStorage {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (bucket, prefix, credentials=None))]
+    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
     pub fn gcs(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
+        config: Option<Vec<(String, String)>>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_gcs_storage(
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
+            config,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 

@@ -251,13 +251,14 @@ pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
+    config: Option<Vec<(String, String)>>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let url = format!(
         "gs://{}{}",
         bucket,
         prefix.map(|p| format!("/{}", p)).unwrap_or("".to_string())
     );
-    let mut options = vec![];
+    let mut options = config.unwrap_or_default();
 
     match credentials {
         Some(GcsCredentials::FromEnv) => (),

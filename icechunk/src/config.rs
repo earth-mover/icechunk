@@ -20,7 +20,7 @@ pub enum ObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(S3Options),
     S3(S3Options),
-    Gcs,
+    Gcs(Vec<(String, String)>),
     Azure {
         // TODO:
     },

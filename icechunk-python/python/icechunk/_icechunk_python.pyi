@@ -295,6 +295,8 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: GcsCredentials | None = None,
+        *,
+        config: list[tuple[str, str]] | None = None,
     ) -> Storage: ...
 
 class VersionSelection(Enum):
