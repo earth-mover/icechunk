@@ -170,7 +170,7 @@ def gcs_credentials(
 
 def containers_credentials(
     m: Mapping[str, AnyS3Credential] = {}, **kwargs: AnyS3Credential
-) -> dict[str, AnyCredential]:
+) -> dict[str, Credentials.S3]:
     res = {}
     for name, cred in {**m, **kwargs}.items():
         if isinstance(cred, AnyS3Credential):
