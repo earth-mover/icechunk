@@ -261,7 +261,6 @@ pub fn new_gcs_storage(
     let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
 
     match credentials {
-        Some(GcsCredentials::FromEnv) => (),
         Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
             options.push((
                 "google_service_account".to_string(),
@@ -285,7 +284,7 @@ pub fn new_gcs_storage(
                 })?,
             ));
         }
-        None => {}
+        None | Some(GcsCredentials::FromEnv) => {}
     };
 
     Ok(Arc::new(ObjectStorage::from_url(&url, options)?))

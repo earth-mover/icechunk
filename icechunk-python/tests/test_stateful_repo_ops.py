@@ -29,11 +29,7 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-<<<<<<< HEAD
 from icechunk import Repository, in_memory_storage
-=======
-from icechunk import Repository, Storage
->>>>>>> e4d8a7e (Lint, have no idea what these errors are)
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -203,11 +199,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data) -> str:
-<<<<<<< HEAD
         self.repo = Repository.create(in_memory_storage())
-=======
-        self.repo = Repository.create(Storage.in_memory())
->>>>>>> e4d8a7e (Lint, have no idea what these errors are)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         HEAD = self.repo.lookup_branch(DEFAULT_BRANCH)
