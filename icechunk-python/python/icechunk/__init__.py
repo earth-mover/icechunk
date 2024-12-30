@@ -8,6 +8,8 @@ from icechunk._icechunk_python import (
     ConflictSolver,
     ConflictType,
     Credentials,
+    GcsCredentials,
+    GcsStaticCredentials,
     IcechunkError,
     ObjectStoreConfig,
     RebaseFailedData,
@@ -23,8 +25,13 @@ from icechunk._icechunk_python import (
 )
 from icechunk.credentials import (
     AnyCredential,
+    AnyGcsCredential,
+    AnyGcsStaticCredential,
     AnyS3Credential,
     containers_credentials,
+    gcs_credentials,
+    gcs_from_env_credentials,
+    gcs_static_credentials,
     s3_anonymous_credentials,
     s3_credentials,
     s3_from_env_credentials,
@@ -35,6 +42,7 @@ from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    gcs_storage,
     in_memory_storage,
     local_filesystem_storage,
     s3_storage,
@@ -44,6 +52,8 @@ from icechunk.store import IcechunkStore
 
 __all__ = [
     "AnyCredential",
+    "AnyGcsCredential",
+    "AnyGcsStaticCredential",
     "AnyObjectStoreConfig",
     "AnyS3Credential",
     "BasicConflictSolver",
@@ -54,6 +64,8 @@ __all__ = [
     "ConflictSolver",
     "ConflictType",
     "Credentials",
+    "GcsCredentials",
+    "GcsStaticCredentials",
     "IcechunkError",
     "IcechunkStore",
     "ObjectStoreConfig",
@@ -71,6 +83,10 @@ __all__ = [
     "VirtualChunkContainer",
     "__version__",
     "containers_credentials",
+    "gcs_credentials",
+    "gcs_from_env_credentials",
+    "gcs_static_credentials",
+    "gcs_storage",
     "in_memory_storage",
     "local_filesystem_storage",
     "s3_anonymous_credentials",

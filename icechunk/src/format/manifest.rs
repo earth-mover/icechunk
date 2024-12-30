@@ -29,6 +29,8 @@ pub enum VirtualReferenceError {
     NoContainerForUrl(String),
     #[error("error parsing virtual ref URL {0}")]
     CannotParseUrl(#[from] url::ParseError),
+    #[error("invalid credentials for virtual reference of type {0}")]
+    InvalidCredentials(String),
     #[error("virtual reference has no path segments {0}")]
     NoPathSegments(String),
     #[error("unsupported scheme for virtual chunk refs: {0}")]

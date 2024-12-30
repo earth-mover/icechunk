@@ -271,11 +271,39 @@ AnyS3Credential = (
     | S3Credentials.Refreshable
 )
 
+class GcsStaticCredentials:
+    class ServiceAccount:
+        def __init__(self, path: str) -> None: ...
+
+    class ServiceAccountKey:
+        def __init__(self, key: str) -> None: ...
+
+    class ApplicationCredentials:
+        def __init__(self, path: str) -> None: ...
+
+AnyGcsStaticCredential = (
+    GcsStaticCredentials.ServiceAccount
+    | GcsStaticCredentials.ServiceAccountKey
+    | GcsStaticCredentials.ApplicationCredentials
+)
+
+class GcsCredentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
+
+AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
+
 class Credentials:
     class S3:
         def __init__(self, credentials: AnyS3Credential) -> None: ...
 
-AnyCredential = Credentials.S3
+    class Gcs:
+        def __init__(self, credentials: GcsCredentials) -> None: ...
+
+AnyCredential = Credentials.S3 | Credentials.Gcs
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -305,6 +333,15 @@ class Storage:
     def new_in_memory(cls) -> Storage: ...
     @classmethod
     def new_local_filesystem(cls, path: str) -> Storage: ...
+    @classmethod
+    def new_gcs(
+        cls,
+        bucket: str,
+        prefix: str | None,
+        credentials: AnyGcsCredential | None = None,
+        *,
+        config: dict[str, str] | None = None,
+    ) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""

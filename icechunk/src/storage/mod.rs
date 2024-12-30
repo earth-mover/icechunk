@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use s3::S3Storage;
-use std::{ffi::OsString, path::Path, sync::Arc};
+use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -29,7 +29,7 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::{S3Credentials, S3Options},
+    config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
         transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
@@ -245,4 +245,47 @@ pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
 pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_local_filesystem(path)?;
     Ok(Arc::new(st))
+}
+
+pub fn new_gcs_storage(
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<GcsCredentials>,
+    config: Option<HashMap<String, String>>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let url = format!(
+        "gs://{}{}",
+        bucket,
+        prefix.map(|p| format!("/{}", p)).unwrap_or("".to_string())
+    );
+    let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
+
+    match credentials {
+        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
+            options.push((
+                "google_service_account".to_string(),
+                path.into_os_string().into_string().map_err(|_| {
+                    StorageError::Other("invalid service account path".to_string())
+                })?,
+            ));
+        }
+        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(key))) => {
+            options.push(("google_service_account_key".to_string(), key));
+        }
+        Some(GcsCredentials::Static(GcsStaticCredentials::ApplicationCredentials(
+            path,
+        ))) => {
+            options.push((
+                "google_application_credentials".to_string(),
+                path.into_os_string().into_string().map_err(|_| {
+                    StorageError::Other(
+                        "invalid application credentials path".to_string(),
+                    )
+                })?,
+            ));
+        }
+        None | Some(GcsCredentials::FromEnv) => {}
+    };
+
+    Ok(Arc::new(ObjectStorage::from_url(&url, options)?))
 }

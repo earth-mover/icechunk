@@ -23,9 +23,7 @@ pub enum ObjectStoreConfig {
     LocalFileSystem(PathBuf),
     S3Compatible(S3Options),
     S3(S3Options),
-    Gcs {
-        // TODO:
-    },
+    Gcs(HashMap<String, String>),
     Azure {
         // TODO:
     },
@@ -105,8 +103,24 @@ pub enum S3Credentials {
     Refreshable(Arc<dyn CredentialsFetcher>),
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum GcsStaticCredentials {
+    ServiceAccount(PathBuf),
+    ServiceAccountKey(String),
+    ApplicationCredentials(PathBuf),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum GcsCredentials {
+    #[serde(rename = "from_env")]
+    FromEnv,
+    #[serde(rename = "static")]
+    Static(GcsStaticCredentials),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum Credentials {
     S3(S3Credentials),
+    Gcs(GcsCredentials),
 }

@@ -46,9 +46,10 @@ impl VirtualChunkContainer {
             }
             (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
-            (ObjectStoreConfig::Gcs {}, _) => Ok(()), // TODO:
-            (ObjectStoreConfig::Azure {}, _) => Ok(()), // TODO
-            (ObjectStoreConfig::Tigris {}, _) => Ok(()), // TODO
+            (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()), // TODO:
+            (ObjectStoreConfig::Azure {}, _) => Ok(()),                 // TODO
+            (ObjectStoreConfig::Tigris {}, _) => Ok(()),                // TODO
+            _ => Err("credentials do not match store type".to_string()),
         }
     }
 }
@@ -73,7 +74,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "gcs".to_string(),
                 url_prefix: "gcs".to_string(),
-                store: ObjectStoreConfig::Gcs {},
+                store: ObjectStoreConfig::Gcs(HashMap::new()),
             },
         ),
         (
@@ -203,6 +204,9 @@ impl VirtualChunkResolver {
             ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
                 let creds = match self.credentials.get(&cont.name) {
                     Some(Credentials::S3(creds)) => creds,
+                    Some(_) => {
+                        Err(VirtualReferenceError::InvalidCredentials("S3".to_string()))?
+                    }
                     None => {
                         if opts.anonymous {
                             &S3Credentials::Anonymous

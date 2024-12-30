@@ -8,6 +8,7 @@ from icechunk._icechunk_python import (
     Storage,
 )
 from icechunk.credentials import (
+    gcs_credentials,
     s3_credentials,
 )
 
@@ -72,4 +73,25 @@ def s3_storage(
     options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
     return Storage.new_s3(
         config=options, bucket=bucket, prefix=prefix, credentials=credentials
+    )
+
+
+def gcs_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    service_account_file: str | None = None,
+    service_account_key: str | None = None,
+    application_credentials: str | None = None,
+    from_env: bool | None = None,
+    config: dict[str, str] | None = None,
+) -> Storage:
+    credentials = gcs_credentials(
+        service_account_file=service_account_file,
+        service_account_key=service_account_key,
+        application_credentials=application_credentials,
+        from_env=from_env,
+    )
+    return Storage.new_gcs(
+        bucket=bucket, prefix=prefix, credentials=credentials, config=config
     )
