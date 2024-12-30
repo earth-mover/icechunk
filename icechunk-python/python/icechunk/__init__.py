@@ -36,6 +36,8 @@ __all__ = [
     "ConflictSolver",
     "ConflictType",
     "Credentials",
+    "GcsCredentials",
+    "GcsStaticCredentials",
     "IcechunkError",
     "IcechunkStore",
     "ObjectStoreConfig",

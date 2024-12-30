@@ -252,12 +252,14 @@ class GcsStaticCredentials:
 class GcsCredentials:
     class FromEnv:
         def __init__(self) -> None: ...
+
     class Static:
         def __init__(self, _0: GcsStaticCredentials) -> None: ...
 
 class Credentials:
     class S3:
         def __init__(self, credentials: S3Credentials) -> None: ...
+
     class Gcs:
         def __init__(self, credentials: GcsCredentials) -> None: ...
 
