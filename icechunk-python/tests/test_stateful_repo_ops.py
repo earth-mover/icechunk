@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import textwrap
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,7 +29,7 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import ObjectStoreConfig, Repository, Storage
+from icechunk import Repository, Storage
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -120,6 +121,12 @@ class Model:
         # Should we model the branch as an ordered list of commits?
         self.branches: dict[str, str] = {}
 
+    def __repr__(self) -> str:
+        return textwrap.dedent(f"""
+        <Model branch: {self.branch!r}, HEAD: {self.HEAD!r}, changes_made: {self.changes_made!r}>
+        Branches: {tuple(self.branches.keys())!r}
+        Tags: {tuple(self.tags.keys())!r}""").strip("\n")
+
     def __setitem__(self, key, value):
         self.changes_made = True
         self.store[key] = value
@@ -192,7 +199,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data) -> str:
-        self.repo = Repository.create(Storage.create(ObjectStoreConfig.InMemory()))
+        self.repo = Repository.create(Storage.in_memory())
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         HEAD = self.repo.lookup_branch(DEFAULT_BRANCH)
@@ -323,6 +330,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(f"resetting branch {self.model.branch} from {self.model.HEAD} to {commit}")
         self.repo.reset_branch(branch, commit)
         self.model.reset_branch(branch, commit)
+        # TODO: if we reset the current branch, we hold on to an invalid session
+        #       this is confusing UX. any attempts to commit will create a conflict
+        if self.model.branch == branch:
+            self.session = self.repo.writable_session(branch)
+            self.model.checkout_branch(branch)
 
     # @rule(branch=consumes(branches))
     # def delete_branch(self, branch):
