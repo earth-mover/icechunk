@@ -49,7 +49,8 @@ impl ChangeSet {
     }
 
     pub fn array_has_modified_chunks(&self, path_and_id: &(Path, NodeId)) -> bool {
-        !self.deleted_arrays.contains(path_and_id) && self.set_chunks.contains_key(&path_and_id.1)
+        !self.deleted_arrays.contains(path_and_id)
+            && self.set_chunks.contains_key(&path_and_id.1)
     }
 
     pub fn chunk_changes(
