@@ -242,6 +242,10 @@ impl Session {
             .map(|node| self.change_set.update_array(node.id, metadata))
     }
 
+    pub fn array_has_modified_chunks(&self, path_and_id: &(Path, NodeId)) -> bool {
+        self.change_set.array_has_modified_chunks(path_and_id)
+    }
+
     /// Delete an array in the hierarchy
     ///
     /// Deletes of non existing array will succeed.

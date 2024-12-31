@@ -434,14 +434,16 @@ impl Store {
         let path = Path::try_from(absolute_prefix)?;
         let results = match session.get_node(&path).await {
             Ok(NodeSnapshot {
-                path: node_path, node_data: NodeData::Array(..), ..
+                id: node_id,
+                path: node_path,
+                node_data: NodeData::Array(.., manifests),
+                ..
             }) => {
                 // if this is an array we know what to yield
                 let mut res = vec![ListDirItem::Key("zarr.json".to_string())];
-                let chunks = session.array_chunk_iterator(&node_path).await;
-                pin_mut!(chunks);
-                // TODO: can we tell if the array has chunks, without downloading a manifest?
-                if chunks.next().await.is_some() {
+                if session.array_has_modified_chunks(&(node_path, node_id))
+                    || !manifests.is_empty()
+                {
                     res.push(ListDirItem::Prefix("c".to_string()));
                 }
                 res
