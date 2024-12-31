@@ -58,7 +58,10 @@ testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
-filterwarnings = ["error"]
+filterwarnings = [
+"error",
+"ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
+]
 
 [tool.pyright]
 venvPath = "."

@@ -427,9 +427,9 @@ impl Store {
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
         let session = Arc::clone(&self.session).read_owned().await;
+        let prefix = prefix.trim_end_matches("/");
         let absolute_prefix =
             if !prefix.starts_with("/") { &format!("/{}", prefix) } else { prefix };
-        let prefix = prefix.trim_end_matches("/");
 
         let path = Path::try_from(absolute_prefix)?;
         let results = match session.get_node(&path).await {
@@ -481,18 +481,20 @@ impl Store {
                             }
                             .to_string();
                             let res = if is_prefix_match(&chunk_key, prefix) {
-                                Some({
+                                {
                                     let trimmed = chunk_key
                                         .trim_start_matches(prefix)
                                         .trim_start_matches("/");
                                     if let Some((chunk_prefix, _)) =
                                         trimmed.split_once("/")
                                     {
-                                        ListDirItem::Prefix(chunk_prefix.to_string())
+                                        Some(ListDirItem::Prefix(chunk_prefix.to_string()))
+                                    } else if trimmed != "" {
+                                        Some(ListDirItem::Key(trimmed.to_string()))
                                     } else {
-                                        ListDirItem::Key(trimmed.to_string())
+                                        None
                                     }
-                                })
+                                }
                             } else {
                                 None
                             };
@@ -1886,6 +1888,12 @@ mod tests {
             store.list_dir_items("array/c/1/1").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec![ListDirItem::Key("1".to_string()),]);
+
+        // When a path to a chunk is passed, return nothing
+        let mut dir =
+            store.list_dir_items("array/c/1/1/1").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![]);
 
         Ok(())
     }
