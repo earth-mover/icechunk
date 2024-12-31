@@ -103,6 +103,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     #####  TODO: port everything below to zarr
     @rule()
     def clear(self) -> None:
+        note("clearing")
         import zarr
 
         self._sync(self.store.clear())
@@ -121,24 +122,35 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # TODO: MemoryStore is broken?
         # assert not self._sync(self.model.is_empty("/"))
 
+    def draw_directory(self, data) -> str:
+        group_st = (
+            st.sampled_from(sorted(self.all_groups)) if self.all_groups else st.nothing()
+        )
+        array_st = (
+            st.sampled_from(sorted(self.all_arrays)) if self.all_arrays else st.nothing()
+        )
+        array_or_group = data.draw(st.one_of(group_st, array_st))
+        if data.draw(st.booleans()) and array_or_group in self.all_arrays:
+            arr = zarr.open_array(path=array_or_group, store=self.model)
+            path = data.draw(
+                st.one_of(
+                    st.sampled_from([array_or_group]),
+                    chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape).map(
+                        lambda x: f"{array_or_group}/c/"
+                    ),
+                )
+            )
+        else:
+            path = array_or_group
+        return path
+
     @precondition(lambda self: bool(self.all_groups))
     @rule(data=st.data())
-    def check_list_dir_group(self, data) -> None:
-        group = data.draw(st.sampled_from(sorted(self.all_groups)))
+    def check_list_dir(self, data) -> None:
+        group = self.draw_directory(data)
+        note(f"list_dir for {group=!r}")
         model_ls = sorted(self._sync_iter(self.model.list_dir(group)))
         store_ls = sorted(self._sync_iter(self.store.list_dir(group)))
-        assert model_ls == store_ls, (model_ls, store_ls)
-
-    @precondition(lambda self: bool(self.all_arrays))
-    @rule(data=st.data())
-    def check_list_dir_array(self, data) -> None:
-        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        arr = zarr.open_array(path=array, store=self.model)
-        chunk_path = data.draw(chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape))
-        path = f"{array}/c/{chunk_path}"
-        note(f"list_dir for {path=!r}")
-        model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
-        store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
         assert model_ls == store_ls, (model_ls, store_ls)
 
     @precondition(lambda self: bool(self.all_arrays))
@@ -157,28 +169,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     @rule(data=st.data())
     def delete_dir(self, data) -> None:
-        array_or_group = data.draw(
-            st.one_of(
-                st.sampled_from(sorted(self.all_groups))
-                if self.all_groups
-                else st.nothing(),
-                st.sampled_from(sorted(self.all_arrays))
-                if self.all_arrays
-                else st.nothing(),
-            )
-        )
-        if data.draw(st.booleans()) and array_or_group in self.all_arrays:
-            arr = zarr.open_array(path=array_or_group, store=self.model)
-            path = data.draw(
-                st.one_of(
-                    st.sampled_from([array_or_group]),
-                    chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape).map(
-                        lambda x: f"{array_or_group}/c/"
-                    ),
-                )
-            )
-        else:
-            path = array_or_group
+        path = self.draw_directory(data)
         note(f"delete_dir with {path=!r}")
         self._sync(self.model.delete_dir(path))
         self._sync(self.store.delete_dir(path))
