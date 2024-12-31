@@ -194,7 +194,6 @@ def update(args: argparse.Namespace) -> None:
         )
         for time in range(args.t_from, args.t_to, 1)
     ]
-    print(tasks)
 
     client = Client(n_workers=args.workers, threads_per_worker=1)
 
