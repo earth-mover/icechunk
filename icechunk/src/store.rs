@@ -23,7 +23,7 @@ use crate::{
     format::{
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
+        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path, PathError,
     },
     metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
@@ -72,6 +72,8 @@ pub enum StoreError {
     RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
+    #[error("could not create path from prefix")]
+    PathError(#[from] PathError),
     #[error("all commits must be made on a branch")]
     NotOnBranch,
     #[error("bad metadata: `{0}`")]
@@ -429,18 +431,17 @@ impl Store {
             if !prefix.starts_with("/") { &format!("/{}", prefix) } else { prefix };
         let prefix = prefix.trim_end_matches("/");
 
-        #[allow(clippy::expect_used)]
-        let path =
-            Path::try_from(absolute_prefix).expect("could not create path from prefix");
+        let path = Path::try_from(absolute_prefix)?;
         let results = match session.get_node(&path).await {
             Ok(NodeSnapshot {
-                id: node_id,
-                node_data: NodeData::Array(.., manifests),
-                ..
+                path: node_path, node_data: NodeData::Array(..), ..
             }) => {
                 // if this is an array we know what to yield
                 let mut res = vec![ListDirItem::Key("zarr.json".to_string())];
-                if session.array_has_chunks_set(&node_id) || !manifests.is_empty() {
+                let chunks = session.array_chunk_iterator(&node_path).await;
+                pin_mut!(chunks);
+                // TODO: can we tell if the array has chunks, without downloading a manifest?
+                if chunks.next().await.is_some() {
                     res.push(ListDirItem::Prefix("c".to_string()));
                 }
                 res
