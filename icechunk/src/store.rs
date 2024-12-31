@@ -485,14 +485,20 @@ impl Store {
                                     let trimmed = chunk_key
                                         .trim_start_matches(prefix)
                                         .trim_start_matches("/");
-                                    if let Some((chunk_prefix, _)) =
+                                    if trimmed.is_empty() {
+                                        // we were provided with a prefix that is a path to a chunk key
+                                        None
+                                    } else if let Some((chunk_prefix, _)) =
+                                        // if we can split it, this is a valid prefix to return
                                         trimmed.split_once("/")
                                     {
-                                        Some(ListDirItem::Prefix(chunk_prefix.to_string()))
-                                    } else if trimmed != "" {
-                                        Some(ListDirItem::Key(trimmed.to_string()))
+                                        Some(ListDirItem::Prefix(
+                                            chunk_prefix.to_string(),
+                                        ))
                                     } else {
-                                        None
+                                        // if the prefix matches, and we can't split it
+                                        // this is a chunk key result that must be returned
+                                        Some(ListDirItem::Key(trimmed.to_string()))
                                     }
                                 }
                             } else {
