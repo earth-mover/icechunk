@@ -26,12 +26,16 @@ PROTOTYPE = default_buffer_prototype()
 
 
 @st.composite
-def chunk_paths(draw: st.DrawFn, ndim: int, numblocks: tuple[int, ...]) -> str:
+def chunk_paths(
+    draw: st.DrawFn, ndim: int, numblocks: tuple[int, ...], subset: bool = True
+) -> str:
     blockidx = draw(
         st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
     )
-    subset = draw(st.integers(min_value=1, max_value=ndim))
-    return "/".join(map(str, blockidx[:subset]))
+    subset_slicer = (
+        slice(draw(st.integers(min_value=1, max_value=ndim))) if subset else slice(None)
+    )
+    return "/".join(map(str, blockidx[subset_slicer]))
 
 
 # TODO: more before/after commit invariants?
@@ -132,9 +136,23 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         arr = zarr.open_array(path=array, store=self.model)
         chunk_path = data.draw(chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape))
         path = f"{array}/c/{chunk_path}"
+        note(f"list_dir for {path=!r}")
         model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
         store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
         assert model_ls == store_ls, (model_ls, store_ls)
+
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def delete_chunk(self, data) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        arr = zarr.open_array(path=array, store=self.model)
+        chunk_path = data.draw(
+            chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape, subset=False)
+        )
+        path = f"{array}/c/{chunk_path}"
+        note(f"deleting chunk {path=!r}")
+        self._sync(self.model.delete(path))
+        self._sync(self.store.delete(path))
 
     @invariant()
     def check_list_prefix_from_root(self) -> None:
