@@ -436,14 +436,15 @@ impl Store {
             Ok(NodeSnapshot {
                 id: node_id,
                 path: node_path,
-                node_data: NodeData::Array(.., manifests),
+                node_data: NodeData::Array(..),
                 ..
             }) => {
                 // if this is an array we know what to yield
                 let mut res = vec![ListDirItem::Key("zarr.json".to_string())];
-                if session.array_has_modified_chunks(&(node_path, node_id))
-                    || !manifests.is_empty()
-                {
+                // The `c` prefix will exist when an array was created and a chunk was written
+                // either (1) in the changeset or (2) as part of a previous snapshot.
+                // It will not exist if (3) the array is recorded as deleted in the change_set.
+                if session.array_has_modified_chunks(node_path, node_id).await? {
                     res.push(ListDirItem::Prefix("c".to_string()));
                 }
                 res
