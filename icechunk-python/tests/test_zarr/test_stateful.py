@@ -12,6 +12,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
+import zarr
 from icechunk import Repository, in_memory_storage
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine
@@ -22,6 +23,15 @@ from zarr.testing.strategies import (
 )
 
 PROTOTYPE = default_buffer_prototype()
+
+
+@st.composite
+def chunk_paths(draw: st.DrawFn, ndim: int, numblocks: tuple[int, ...]) -> str:
+    blockidx = draw(
+        st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
+    )
+    subset = draw(st.integers(min_value=1, max_value=ndim))
+    return "/".join(map(str, blockidx[:subset]))
 
 
 # TODO: more before/after commit invariants?
@@ -106,6 +116,25 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert not self._sync(self.store.is_empty("/"))
         # TODO: MemoryStore is broken?
         # assert not self._sync(self.model.is_empty("/"))
+
+    @precondition(lambda self: bool(self.all_groups))
+    @rule(data=st.data())
+    def check_list_dir_group(self, data) -> None:
+        group = data.draw(st.sampled_from(sorted(self.all_groups)))
+        model_ls = sorted(self._sync_iter(self.model.list_dir(group)))
+        store_ls = sorted(self._sync_iter(self.store.list_dir(group)))
+        assert model_ls == store_ls, (model_ls, store_ls)
+
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def check_list_dir_array(self, data) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        arr = zarr.open_array(path=array, store=self.model)
+        chunk_path = data.draw(chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape))
+        path = f"{array}/c/{chunk_path}"
+        model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
+        store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
+        assert model_ls == store_ls, (model_ls, store_ls)
 
     @invariant()
     def check_list_prefix_from_root(self) -> None:
