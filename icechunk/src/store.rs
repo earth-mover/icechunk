@@ -12,7 +12,7 @@ use std::{
 
 use async_stream::try_stream;
 use bytes::Bytes;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -136,8 +136,9 @@ impl Store {
     }
 
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
-        let res = self.list_dir(prefix).await?.take(1).collect::<Vec<_>>().await;
-        Ok(res.len() == 0)
+        let list = self.list_dir(prefix).await?;
+        pin_mut!(list);
+        Ok(list.next().await.is_none())
     }
 
     pub async fn clear(&self) -> StoreResult<()> {
