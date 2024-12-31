@@ -33,7 +33,7 @@ def chunk_paths(
         st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
     )
     subset_slicer = (
-        slice(draw(st.integers(min_value=1, max_value=ndim))) if subset else slice(None)
+        slice(draw(st.integers(min_value=0, max_value=ndim))) if subset else slice(None)
     )
     return "/".join(map(str, blockidx[subset_slicer]))
 
@@ -153,6 +153,42 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"deleting chunk {path=!r}")
         self._sync(self.model.delete(path))
         self._sync(self.store.delete(path))
+
+    @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
+    @rule(data=st.data())
+    def delete_dir(self, data) -> None:
+        array_or_group = data.draw(
+            st.one_of(
+                st.sampled_from(sorted(self.all_groups))
+                if self.all_groups
+                else st.nothing(),
+                st.sampled_from(sorted(self.all_arrays))
+                if self.all_arrays
+                else st.nothing(),
+            )
+        )
+        if data.draw(st.booleans()) and array_or_group in self.all_arrays:
+            arr = zarr.open_array(path=array_or_group, store=self.model)
+            path = data.draw(
+                st.one_of(
+                    st.sampled_from([array_or_group]),
+                    chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape).map(
+                        lambda x: f"{array_or_group}/c/"
+                    ),
+                )
+            )
+        else:
+            path = array_or_group
+        note(f"delete_dir with {path=!r}")
+        self._sync(self.model.delete_dir(path))
+        self._sync(self.store.delete_dir(path))
+
+        matches = set()
+        for node in self.all_groups | self.all_arrays:
+            if node.startswith(path):
+                matches.add(node)
+        self.all_groups = self.all_groups - matches
+        self.all_arrays = self.all_arrays - matches
 
     @invariant()
     def check_list_prefix_from_root(self) -> None:
