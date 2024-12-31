@@ -147,11 +147,19 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: bool(self.all_groups))
     @rule(data=st.data())
     def check_list_dir(self, data) -> None:
-        group = self.draw_directory(data)
-        note(f"list_dir for {group=!r}")
-        model_ls = sorted(self._sync_iter(self.model.list_dir(group)))
-        store_ls = sorted(self._sync_iter(self.store.list_dir(group)))
-        assert model_ls == store_ls, (model_ls, store_ls)
+        path = self.draw_directory(data)
+        note(f"list_dir for {path=!r}")
+        model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
+        store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
+        if model_ls != store_ls and set(model_ls).symmetric_difference(set(store_ls)) != {
+            "c"
+        }:
+            # Consider .list_dir("path/to/array") for an array with a single chunk.
+            # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
+            # If that chunk was deleted, then `"c"` is not returned.
+            # LocalStore will not have this behaviour :/
+            # So we ignore this inconsistency.
+            assert model_ls == store_ls, (model_ls, store_ls)
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
