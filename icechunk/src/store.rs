@@ -433,21 +433,16 @@ impl Store {
 
         let path = Path::try_from(absolute_prefix)?;
         let results = match session.get_node(&path).await {
-            Ok(NodeSnapshot {
-                id: node_id,
-                path: node_path,
-                node_data: NodeData::Array(..),
-                ..
-            }) => {
+            Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => {
                 // if this is an array we know what to yield
-                let mut res = vec![ListDirItem::Key("zarr.json".to_string())];
-                // The `c` prefix will exist when an array was created and a chunk was written
-                // either (1) in the changeset or (2) as part of a previous snapshot.
-                // It will not exist if (3) the array is recorded as deleted in the change_set.
-                if session.array_has_modified_chunks(node_path, node_id).await? {
-                    res.push(ListDirItem::Prefix("c".to_string()));
-                }
-                res
+                vec![
+                    ListDirItem::Key("zarr.json".to_string()),
+                    // The `c` prefix will exist when an array was created and a chunk was written
+                    // either (1) in the changeset or (2) as part of a previous snapshot.
+                    // It will not exist if (3) the array is recorded as deleted in the change_set.
+                    // We ignore these details and simply return "c/" always
+                    ListDirItem::Prefix("c".to_string()),
+                ]
             }
             Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => {
                 // if the prefix is the path to a group we need to discover any nodes with the prefix as node path

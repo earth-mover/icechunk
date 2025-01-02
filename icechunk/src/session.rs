@@ -242,26 +242,6 @@ impl Session {
             .map(|node| self.change_set.update_array(node.id, metadata))
     }
 
-    pub async fn array_has_modified_chunks(
-        &self,
-        path: Path,
-        id: NodeId,
-    ) -> SessionResult<bool> {
-        let array = self.get_array(&path).await?;
-        if let NodeSnapshot { node_data: NodeData::Array(_, manifests), .. } = array {
-            debug_assert_eq!(array.id, id);
-            let path_and_id = &(path, id);
-            Ok(!self.change_set.array_is_deleted(path_and_id)
-                && (self.change_set.array_has_modified_chunks(path_and_id)
-                    || !manifests.is_empty()))
-        } else {
-            Err(SessionError::NotAnArray {
-                node: array,
-                message: "This cannot be reached.".to_string(),
-            })
-        }
-    }
-
     /// Delete an array in the hierarchy
     ///
     /// Deletes of non existing array will succeed.
