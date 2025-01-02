@@ -1,5 +1,6 @@
 volumes:
   minio_data:
+  gcs_data:
 
 services:
   minio:
@@ -23,3 +24,22 @@ services:
     ports:
       - '9000:9000'
       - '9001:9001'
+
+  fake-gcs:
+    container_name: icechunk_gcs
+    # See https://github.com/apache/arrow-rs/issues/5263
+    image: tustvold/fake-gcs-server
+    ports:
+      - '4443:4443'
+    volumes:
+      - gcs_data:/data
+    entrypoint: |
+        /bin/sh -c '
+        for bucket in testbucket externalbucket
+        do
+          echo creating bucket "$$bucket";
+          mkdir -p /data/"$$bucket"
+        done;
+
+        /bin/fake-gcs-server -data /data -scheme http -port 4443 -public-host localhost:4443
+        '
