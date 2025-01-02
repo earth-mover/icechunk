@@ -179,6 +179,16 @@ impl Session {
         }
     }
 
+    pub async fn delete_node(&mut self, node: NodeSnapshot) -> SessionResult<()> {
+        match node {
+            NodeSnapshot { node_data: NodeData::Group, path: node_path, .. } => {
+                Ok(self.delete_group(node_path).await?)
+            }
+            NodeSnapshot { node_data: NodeData::Array(..), path: node_path, .. } => {
+                Ok(self.delete_array(node_path).await?)
+            }
+        }
+    }
     /// Delete a group in the hierarchy
     ///
     /// Deletes of non existing groups will succeed.
@@ -256,6 +266,18 @@ impl Session {
         Ok(())
     }
 
+    pub async fn delete_chunks(
+        &mut self,
+        node_path: &Path,
+        coords: Vec<ChunkIndices>,
+    ) -> SessionResult<()> {
+        let node = self.get_array(node_path).await?;
+        for coord in coords {
+            self.set_node_chunk_ref(node.clone(), coord, None).await?
+        }
+        Ok(())
+    }
+
     /// Record the write or delete of user attributes to array or group
     pub async fn set_user_attributes(
         &mut self,
@@ -267,7 +289,7 @@ impl Session {
         Ok(())
     }
 
-    // Record the write, referenceing or delete of a chunk
+    // Record the write, referencing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
     pub async fn set_chunk_ref(
@@ -277,17 +299,27 @@ impl Session {
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
         let node_snapshot = self.get_array(&path).await?;
+        self.set_node_chunk_ref(node_snapshot, coord, data).await
+    }
 
-        if let NodeData::Array(zarr_metadata, _) = node_snapshot.node_data {
+    // Helper function that accepts a NodeSnapshot instead of a path,
+    // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
+    async fn set_node_chunk_ref(
+        &mut self,
+        node: NodeSnapshot,
+        coord: ChunkIndices,
+        data: Option<ChunkPayload>,
+    ) -> SessionResult<()> {
+        if let NodeData::Array(zarr_metadata, _) = node.node_data {
             if zarr_metadata.valid_chunk_coord(&coord) {
-                self.change_set.set_chunk_ref(node_snapshot.id, coord, data);
+                self.change_set.set_chunk_ref(node.id, coord, data);
                 Ok(())
             } else {
-                Err(SessionError::InvalidIndex { coords: coord, path: path.clone() })
+                Err(SessionError::InvalidIndex { coords: coord, path: node.path.clone() })
             }
         } else {
             Err(SessionError::NotAnArray {
-                node: node_snapshot,
+                node: node.clone(),
                 message: "getting an array".to_string(),
             })
         }

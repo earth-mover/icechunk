@@ -340,12 +340,7 @@ impl Store {
         let mut guard = self.session.write().await;
         let node = guard.get_node(&path).await;
         match node {
-            Ok(NodeSnapshot { node_data: NodeData::Group, path: node_path, .. }) => {
-                Ok(guard.deref_mut().delete_group(node_path).await?)
-            }
-            Ok(NodeSnapshot {
-                node_data: NodeData::Array(..), path: node_path, ..
-            }) => Ok(guard.deref_mut().delete_array(node_path).await?),
+            Ok(node) => Ok(guard.deref_mut().delete_node(node).await?),
             Err(SessionError::NodeNotFound { .. }) => {
                 // other cases are
                 // 1. delete("/path/to/array/c")
@@ -361,13 +356,13 @@ impl Store {
                         .array_chunk_iterator(&node.path)
                         .await
                         .try_filter_map(|chunk| async {
+                            let coords = chunk.coord.clone();
                             let chunk_key = Key::Chunk {
                                 node_path: node_path.clone(),
                                 coords: chunk.coord,
-                            }
-                            .to_string();
-                            let res = if is_prefix_match(&chunk_key, prefix) {
-                                Some(chunk_key)
+                            };
+                            let res = if is_prefix_match(&chunk_key.to_string(), prefix) {
+                                Some(coords)
                             } else {
                                 None
                             };
@@ -375,10 +370,7 @@ impl Store {
                         })
                         .try_collect::<Vec<_>>()
                         .await?;
-                    for item in to_delete.iter() {
-                        delete_key(item, guard.deref_mut()).await?;
-                    }
-                    Ok(())
+                    Ok(guard.deref_mut().delete_chunks(&node_path, to_delete).await?)
                 } else {
                     // for cases 3, 4 this is a no-op
                     Ok(())
@@ -389,9 +381,24 @@ impl Store {
     }
 
     pub async fn delete(&self, key: &str) -> StoreResult<()> {
-        {
-            let mut guard = self.session.write().await;
-            delete_key(key, guard.deref_mut()).await
+        // we need to hold the lock while we do the node search and the write
+        // to avoid race conditions with other writers
+        // (remember this method takes &self and not &mut self)
+        let mut session = self.session.write().await;
+        match Key::parse(key)? {
+            Key::Metadata { node_path } => {
+                let node = session.get_node(&node_path).await;
+
+                // When there is no node at the given key, we don't consider it an error, instead we just do nothing
+                if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
+                    return Ok(());
+                };
+                Ok(session.delete_node(node.map_err(StoreError::SessionError)?).await?)
+            }
+            Key::Chunk { node_path, coords } => {
+                Ok(session.delete_chunks(&node_path, vec![coords]).await?)
+            }
+            Key::ZarrV2(_) => Ok(()),
         }
     }
 
@@ -631,42 +638,6 @@ impl Store {
             }
         };
         Ok(res)
-    }
-}
-
-pub async fn delete_key(key: &str, session: &mut Session) -> StoreResult<()> {
-    if session.read_only() {
-        return Err(StoreError::ReadOnly);
-    }
-    match Key::parse(key)? {
-        Key::Metadata { node_path } => {
-            // we need to hold the lock while we do the node search and the write
-            // to avoid race conditions with other writers
-            // (remember this method takes &self and not &mut self)
-            let node = session.get_node(&node_path).await;
-
-            // When there is no node at the given key, we don't consider it an error, instead we just do nothing
-            if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
-                return Ok(());
-            };
-
-            let node = node.map_err(StoreError::SessionError)?;
-            match node.node_data {
-                NodeData::Array(_, _) => Ok(session.delete_array(node_path).await?),
-                NodeData::Group => Ok(session.delete_group(node_path).await?),
-            }
-        }
-        Key::Chunk { node_path, coords } => {
-            match session.set_chunk_ref(node_path, coords, None).await {
-                Ok(_) => Ok(()),
-                Err(SessionError::NodeNotFound { path: _, message: _ }) => {
-                    // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
-                    Ok(())
-                }
-                Err(err) => Err(StoreError::SessionError(err)),
-            }
-        }
-        Key::ZarrV2(_) => Ok(()),
     }
 }
 
