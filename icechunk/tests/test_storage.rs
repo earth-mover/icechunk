@@ -2,7 +2,10 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    config::{S3Credentials, S3Options, S3StaticCredentials},
+    config::{
+        GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options,
+        S3StaticCredentials,
+    },
     format::{
         manifest::Manifest, snapshot::Snapshot, ByteRange, ChunkId, ManifestId,
         SnapshotId,
@@ -10,13 +13,13 @@ use icechunk::{
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
-    storage::{new_in_memory_storage, new_s3_storage, StorageResult},
+    storage::{new_gcs_storage, new_in_memory_storage, new_s3_storage, StorageResult},
     Repository, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 
 #[allow(clippy::expect_used)]
-async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -38,17 +41,37 @@ async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync
     Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
+#[allow(clippy::expect_used)]
+async fn mk_gcs_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_gcs_storage(
+        //"icechunk-demo".to_string(),
+        "testbucket".to_string(),
+        Some(prefix.to_string()),
+        // Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(
+        //     "/Users/matthew.earthmover/Developer/keys/icechunk-service-account.json"
+        //         .into(),
+        // ))),
+        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(r#"{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""}"#.to_string()))),
+        None,
+    )
+    .expect("Creating emulated gcs storage failed");
+
+    Ok(Repository::add_in_mem_asset_caching(storage))
+}
+
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Fn(Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
     let prefix = format!("{:?}", ChunkId::random());
-    let s1 = mk_storage(prefix.as_str()).await?;
+    let s1 = mk_s3_storage(prefix.as_str()).await?;
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().unwrap();
+    let s3 = mk_gcs_storage(prefix.as_str()).await?;
     f(s1).await?;
     f(s2).await?;
+    f(s3).await?;
     Ok(())
 }
 
