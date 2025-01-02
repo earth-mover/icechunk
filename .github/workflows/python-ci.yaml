@@ -3,7 +3,7 @@
 #
 #    maturin generate-ci github --pytest
 #
-name: Python CI
+name: Python CI and library release
 
 on:
   workflow_dispatch:
