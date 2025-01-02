@@ -527,7 +527,10 @@ impl Storage for ObjectStorage {
                 object_store::Error::AlreadyExists { path, .. } => {
                     StorageError::RefAlreadyExists(path)
                 }
-                _ => e.into(),
+                _ => {
+                    println!("Error writing ref: {:?}", e);
+                    e.into()
+                }
             })
             .map(|_| ())
     }
