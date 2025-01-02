@@ -345,15 +345,20 @@ impl Store {
                 // other cases are
                 // 1. delete("/path/to/array/c")
                 // 2. delete("/path/to/array/c/0/0")
-                // 3. delete("/path/to/arr")
+                // 3. delete("/path/to/arr") or "/not-an-array-yet"
                 // 4. delete("non-existent-prefix")
                 // for cases 1, 2 we can find an ancestor array node and filter its chunks
                 // for cases 3, 4 this call is a no-op
                 let node = guard.get_closest_ancestor_node(&path).await;
-                if let Ok(node) = node {
-                    let node_path = node.path.clone();
+                if let Ok(NodeSnapshot {
+                    path: node_path,
+                    node_data: NodeData::Array(..),
+                    ..
+                }) = node
+                {
+                    let node_path = node_path.clone();
                     let to_delete = guard
-                        .array_chunk_iterator(&node.path)
+                        .array_chunk_iterator(&node_path)
                         .await
                         .try_filter_map(|chunk| async {
                             let coords = chunk.coord.clone();
