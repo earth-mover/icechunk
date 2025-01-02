@@ -358,6 +358,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
 #[pymethods]
 impl PyRepositoryConfig {
     #[staticmethod]
+    /// Create a default `RepositoryConfig` instance
     fn default() -> Self {
         RepositoryConfig::default().into()
     }
