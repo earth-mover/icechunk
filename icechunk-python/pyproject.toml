@@ -20,7 +20,7 @@ dependencies = ["zarr==3.0.0b3"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
 readme = "../README.md"
@@ -28,6 +28,7 @@ packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
 test = [
+  "boto3",
   "coverage",
   "mypy",
   "object-store-python",
@@ -40,6 +41,8 @@ test = [
   "distributed>=2024.11.0",
   "xarray>=2024.11.0",
   "hypothesis",
+  "pandas-stubs",
+  "boto3-stubs[s3]",
 ]
 
 [tool.maturin]
@@ -55,7 +58,10 @@ testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
-filterwarnings = ["error"]
+filterwarnings = [
+"error",
+"ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
+]
 
 [tool.pyright]
 venvPath = "."
@@ -69,17 +75,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = [
-  "toolz.*",
-]
+module = ["toolz.*"]
 
 [tool.ruff]
 line-length = 90
-extend-exclude = [
-  "*.ipynb",
-  "doc",
-  "_typed_ops.pyi",
-]
+extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -97,7 +97,7 @@ extend-select = [
   "RUF",
 ]
 extend-safe-fixes = [
-  "TID252",  # absolute imports
+  "TID252", # absolute imports
 ]
 ignore = [
   "E402",    # module level import not at top of file

@@ -7,14 +7,16 @@ import zarr
 N = 15
 
 
-async def write_to_store(array, x, y, barrier):
+async def write_to_store(
+    array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier
+) -> None:
     await barrier.wait()
     await asyncio.sleep(random.uniform(0, 0.5))
     array[x, y] = x * y
     # await asyncio.sleep(0)
 
 
-async def read_store(array, x, y, barrier):
+async def read_store(array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier) -> None:
     await barrier.wait()
     while True:
         # print(f"reading {x},{y}")
@@ -24,27 +26,27 @@ async def read_store(array, x, y, barrier):
         await asyncio.sleep(random.uniform(0, 0.1))
 
 
-async def list_store(store, barrier):
+async def list_store(store: icechunk.IcechunkStore, barrier: asyncio.Barrier) -> None:
     expected = set(
         ["zarr.json", "array/zarr.json"]
         + [f"array/c/{x}/{y}" for x in range(N) for y in range(N)]
     )
     await barrier.wait()
     while True:
-        current = set([k async for k in store.list_prefix("")])
+        current: set[str] | None = set([k async for k in store.list_prefix("")])
         if current == expected:
             break
         current = None
         await asyncio.sleep(0.1)
 
 
-async def test_concurrency():
+async def test_concurrency() -> None:
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.StorageConfig.memory(prefix="concurrency"),
+        storage=icechunk.in_memory_storage(),
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     group = zarr.group(store=store, overwrite=True)
     array = group.create_array(
@@ -70,6 +72,7 @@ async def test_concurrency():
 
     _res = session.commit("commit")
 
+    assert isinstance(group["array"], zarr.Array)
     array = group["array"]
     assert isinstance(array, zarr.Array)
 

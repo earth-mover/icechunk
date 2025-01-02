@@ -24,7 +24,7 @@ from zarr.storage import StorePath, make_store_path
 def store(request: pytest.FixtureRequest) -> IcechunkStore:
     repo = parse_repo(request.param, "test")
     session = repo.writable_session("main")
-    return session.store()
+    return session.store
 
 
 @pytest.fixture(params=[True, False])
@@ -308,6 +308,7 @@ def test_group_setitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     arr = np.ones((2, 4))
     group["key"] = arr
     assert list(group.array_keys()) == ["key"]
+    assert isinstance(group["key"], Array)
     assert group["key"].shape == (2, 4)
     np.testing.assert_array_equal(group["key"][:], arr)
 
@@ -322,8 +323,10 @@ def test_group_setitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
         arr = np.zeros((3, 5))
         group[key] = arr
         assert key in list(group.array_keys())
-        assert group[key].shape == (3, 5)
-        np.testing.assert_array_equal(group[key], arr)
+        a = group[key]
+        assert isinstance(a, Array)
+        assert a.shape == (3, 5)
+        np.testing.assert_array_equal(a, arr)  # type: ignore [arg-type]
 
 
 def test_group_contains(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
@@ -460,16 +463,16 @@ def test_group_creation_existing_node(
 
     if exists_ok:
         pytest.xfail("exists_ok is not implemented for Group.from_store")
-        node_new = Group.from_store(
-            spath / "extant",
-            attributes=new_attributes,
-            zarr_format=zarr_format,
-            exists_ok=exists_ok,
-        )
-        assert node_new.attrs == new_attributes
+        # node_new = Group.from_store(
+        #     spath / "extant",
+        #     attributes=new_attributes,
+        #     zarr_format=zarr_format,
+        #     exists_ok=exists_ok,
+        # )
+        # assert node_new.attrs == new_attributes
     else:
         with pytest.raises(expected_exception):
-            node_new = Group.from_store(
+            Group.from_store(
                 spath / "extant",
                 attributes=new_attributes,
                 zarr_format=zarr_format,
@@ -631,7 +634,7 @@ async def test_group_members_async(store: IcechunkStore) -> None:
 
 
 class TestGroupMetadata:
-    def test_from_dict_extra_fields(self):
+    def test_from_dict_extra_fields(self) -> None:
         data = {
             "attributes": {"key": "value"},
             "_nczarr_superblock": {"version": "2.0.0"},

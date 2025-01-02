@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
-use serde_with::{serde_as, skip_serializing_none, TryFromInto};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -23,7 +23,7 @@ use crate::{
     format::{
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path,
+        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path, PathError,
     },
     metadata::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
@@ -72,6 +72,8 @@ pub enum StoreError {
     RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
+    #[error("could not create path from prefix")]
+    PathError(#[from] PathError),
     #[error("all commits must be made on a branch")]
     NotOnBranch,
     #[error("bad metadata: `{0}`")]
@@ -96,46 +98,35 @@ pub enum StoreError {
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StoreConfig {
-    pub get_partial_values_concurrency: u16,
-}
-
-impl Default for StoreConfig {
-    fn default() -> Self {
-        Self { get_partial_values_concurrency: 10 }
-    }
-}
-
 #[derive(Clone)]
 pub struct Store {
     session: Arc<RwLock<Session>>,
-    config: StoreConfig,
+    get_partial_values_concurrency: u16,
 }
 
 impl Store {
-    pub fn from_session(session: Arc<RwLock<Session>>, config: StoreConfig) -> Self {
-        Self { session, config }
+    pub async fn from_session(session: Arc<RwLock<Session>>) -> Self {
+        let conc = session.read().await.config().get_partial_values_concurrency;
+        Self::from_session_and_config(session, conc)
     }
 
-    pub fn from_bytes(bytes: Bytes, config: StoreConfig) -> StoreResult<Self> {
+    pub fn from_session_and_config(
+        session: Arc<RwLock<Session>>,
+        get_partial_values_concurrency: u16,
+    ) -> Self {
+        Self { session, get_partial_values_concurrency }
+    }
+
+    pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
-        // let session = deserialized["session"].clone();
-        // let config = deserialized["config"].clone();
-        // let session: Session = serde_json::from_value(session).map_err(StoreError::from)?;
-        // let config = serde_json::from_value(config).map_err(StoreError::BadMetadata)?;
-        Ok(Self::from_session(Arc::new(RwLock::new(session)), config))
+        let conc = session.config().get_partial_values_concurrency;
+        Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
         let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
         Ok(Bytes::from(bytes))
-    }
-
-    pub fn config(&self) -> &StoreConfig {
-        &self.config
     }
 
     pub fn session(&self) -> Arc<RwLock<Session>> {
@@ -147,8 +138,7 @@ impl Store {
     }
 
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
-        let res = self.list_dir(prefix).await?.next().await;
-        Ok(res.is_none())
+        Ok(self.list_dir(prefix).await?.next().await.is_none())
     }
 
     pub async fn clear(&self) -> StoreResult<()> {
@@ -195,7 +185,7 @@ impl Store {
         let num_keys = AtomicUsize::new(0);
         stream
             .for_each_concurrent(
-                self.config.get_partial_values_concurrency as usize,
+                self.get_partial_values_concurrency as usize,
                 |(key, range)| {
                     let index = num_keys.fetch_add(1, Ordering::Release);
                     let results = Arc::clone(&results);
@@ -425,7 +415,7 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
-        let meta = self.list_metadata_prefix(prefix).await?;
+        let meta = self.list_metadata_prefix(prefix, false).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
         // FIXME: this is wrong, we are realizing all keys in memory
         // it should be lazy instead
@@ -436,11 +426,6 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
-        // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
-        // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
-        // evolution
         let res = self.list_dir_items(prefix).await?.map_ok(|item| match item {
             ListDirItem::Key(k) => k,
             ListDirItem::Prefix(p) => p,
@@ -452,31 +437,95 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
-        // FIXME: this is not lazy, it goes through every chunk. This should be implemented using
-        // metadata only, and ignore the chunks, but we should decide on that based on Zarr3 spec
-        // evolution
+        let prefix = prefix.trim_end_matches("/");
+        let absolute_prefix =
+            if !prefix.starts_with("/") { &format!("/{}", prefix) } else { prefix };
 
-        let idx: usize = if prefix == "/" { 0 } else { prefix.len() };
-
-        let parents: HashSet<_> = self
-            .list_prefix(prefix)
-            .await?
-            .map_ok(move |s| {
-                // If the prefix is "/", get rid of it. This can happen when prefix is missing
-                // the trailing slash (as it does in zarr-python impl)
-                let rem = &s[idx..].trim_start_matches('/');
-                match rem.split_once('/') {
-                    Some((prefix, _)) => ListDirItem::Prefix(prefix.to_string()),
-                    None => ListDirItem::Key(rem.to_string()),
+        let path = Path::try_from(absolute_prefix)?;
+        let session = Arc::clone(&self.session).read_owned().await;
+        let results = match session.get_node(&path).await {
+            Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => {
+                // if this is an array we know what to yield
+                vec![
+                    ListDirItem::Key("zarr.json".to_string()),
+                    // The `c` prefix will exist when an array was created and a chunk was written
+                    // either (1) in the changeset or (2) as part of a previous snapshot.
+                    // It will not exist if (3) the array is recorded as deleted in the change_set.
+                    // We ignore these details and simply return "c/" always
+                    ListDirItem::Prefix("c".to_string()),
+                ]
+            }
+            Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => {
+                // if the prefix is the path to a group we need to discover any nodes with the prefix as node path
+                // listing chunks is unnecessary
+                self.list_metadata_prefix(prefix, true)
+                    .await?
+                    .try_filter_map(|x| async move {
+                        let x = x.trim_end_matches("/zarr.json").to_string();
+                        let res = if x == "zarr.json" {
+                            Some(ListDirItem::Key("zarr.json".to_string()))
+                        } else if x.matches("/").count() == 0 {
+                            Some(ListDirItem::Prefix(x))
+                        } else {
+                            None
+                        };
+                        Ok(res)
+                    })
+                    .try_collect::<Vec<_>>()
+                    .await?
+            }
+            Err(_) => {
+                // Finally if there is no node at the prefix we look for chunks belonging to an ancestor node
+                // FIXME: This iterates over every chunk of the array and is wasteful
+                let node = session.get_closest_ancestor_node(&path).await;
+                if let Ok(node) = node {
+                    let node_path = node.path.clone();
+                    session
+                        .array_chunk_iterator(&node.path)
+                        .await
+                        .try_filter_map(|chunk| async {
+                            let chunk_key = Key::Chunk {
+                                node_path: node_path.clone(),
+                                coords: chunk.coord,
+                            }
+                            .to_string();
+                            let res = if is_prefix_match(&chunk_key, prefix) {
+                                {
+                                    let trimmed = chunk_key
+                                        .trim_start_matches(prefix)
+                                        .trim_start_matches("/");
+                                    if trimmed.is_empty() {
+                                        // we were provided with a prefix that is a path to a chunk key
+                                        None
+                                    } else if let Some((chunk_prefix, _)) =
+                                        // if we can split it, this is a valid prefix to return
+                                        trimmed.split_once("/")
+                                    {
+                                        Some(ListDirItem::Prefix(
+                                            chunk_prefix.to_string(),
+                                        ))
+                                    } else {
+                                        // if the prefix matches, and we can't split it
+                                        // this is a chunk key result that must be returned
+                                        Some(ListDirItem::Key(trimmed.to_string()))
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+                            Ok(res)
+                        })
+                        .try_collect::<HashSet<_>>()
+                        .await?
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    // no ancestor node found, this is a bad prefix, return nothing
+                    vec![]
                 }
-            })
-            .try_collect()
-            .await?;
-        // We tould return a Stream<Item = String> with this implementation, but the present
-        // signature is better if we change the impl
-        Ok(futures::stream::iter(parents.into_iter().map(Ok)))
+            }
+        };
+        Ok(futures::stream::iter(results.into_iter().map(Ok)))
     }
 
     async fn set_array_meta(
@@ -528,6 +577,7 @@ impl Store {
     async fn list_metadata_prefix<'a, 'b: 'a>(
         &'a self,
         prefix: &'b str,
+        strip_prefix: bool,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
@@ -536,7 +586,11 @@ impl Store {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
-                    yield meta_key;
+                    if strip_prefix {
+                        yield meta_key.trim_start_matches(prefix).trim_start_matches("/").to_string();
+                    } else {
+                        yield meta_key;
+                    }
                 }
             }
         };
@@ -1143,7 +1197,10 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use crate::{repository::VersionInfo, ObjectStorage, Repository};
+    use crate::{
+        repository::VersionInfo, storage::new_in_memory_storage, ObjectStorage,
+        Repository,
+    };
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1169,10 +1226,7 @@ mod tests {
     }
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = Arc::new(
-            ObjectStorage::new_in_memory_store(Some("prefix".into()))
-                .expect("failed to create in-memory store"),
-        );
+        let storage = new_in_memory_storage().expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -1435,8 +1489,7 @@ mod tests {
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
@@ -1476,8 +1529,7 @@ mod tests {
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
@@ -1517,7 +1569,7 @@ mod tests {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -1591,8 +1643,7 @@ mod tests {
 
         let ds =
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(),
             small_data
@@ -1606,8 +1657,7 @@ mod tests {
     async fn test_chunk_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1652,7 +1702,7 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
         let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+            Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         add_group(&store, "").await.unwrap();
         add_group(&store, "group").await.unwrap();
@@ -1706,8 +1756,7 @@ mod tests {
     async fn test_metadata_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         assert!(store.is_empty("").await.unwrap());
         assert!(!store.exists("zarr.json").await.unwrap());
@@ -1768,8 +1817,7 @@ mod tests {
     async fn test_set_array_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1800,9 +1848,8 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_list() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
-        let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         store
             .set(
@@ -1812,6 +1859,34 @@ mod tests {
             .await?;
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set("array/zarr.json", zarr_meta.clone()).await?;
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set("array/c/0/1/0", data.clone()).await?;
+        store.set("array/c/1/1/1", data.clone()).await?;
+
+        assert_eq!(
+            all_keys(&store).await.unwrap(),
+            vec![
+                "array/c/0/1/0".to_string(),
+                "array/c/1/1/1".to_string(),
+                "array/zarr.json".to_string(),
+                "zarr.json".to_string()
+            ]
+        );
+
+        session.write().await.commit("foo", None).await?;
+
+        let session = repo.writable_session("main").await?;
+        let store = Store::from_session(Arc::new(RwLock::new(session))).await;
+        store.clear().await?;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await?;
         store.set("array/zarr.json", zarr_meta).await?;
 
         let data = Bytes::copy_from_slice(b"hello");
@@ -1835,8 +1910,7 @@ mod tests {
     async fn test_list_dir() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1851,10 +1925,12 @@ mod tests {
         let data = Bytes::copy_from_slice(b"hello");
         store.set("array/c/0/1/0", data.clone()).await?;
         store.set("array/c/1/1/1", data.clone()).await?;
+        store.set("array/c/0/0/1", data.clone()).await?;
 
         assert_eq!(
             all_keys(&store).await.unwrap(),
             vec![
+                "array/c/0/0/1".to_string(),
                 "array/c/0/1/0".to_string(),
                 "array/c/1/1/1".to_string(),
                 "array/zarr.json".to_string(),
@@ -1862,19 +1938,22 @@ mod tests {
             ]
         );
 
-        let mut dir = store.list_dir("/").await?.try_collect::<Vec<_>>().await?;
-        dir.sort();
-        assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
+        for prefix in ["/", ""] {
+            let mut dir = store.list_dir(prefix).await?.try_collect::<Vec<_>>().await?;
+            dir.sort();
+            assert_eq!(dir, vec!["array".to_string(), "zarr.json".to_string()]);
 
-        let mut dir = store.list_dir_items("/").await?.try_collect::<Vec<_>>().await?;
-        dir.sort();
-        assert_eq!(
-            dir,
-            vec![
-                ListDirItem::Key("zarr.json".to_string()),
-                ListDirItem::Prefix("array".to_string())
-            ]
-        );
+            let mut dir =
+                store.list_dir_items(prefix).await?.try_collect::<Vec<_>>().await?;
+            dir.sort();
+            assert_eq!(
+                dir,
+                vec![
+                    ListDirItem::Key("zarr.json".to_string()),
+                    ListDirItem::Prefix("array".to_string())
+                ]
+            );
+        }
 
         let mut dir = store.list_dir("array").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
@@ -1929,6 +2008,18 @@ mod tests {
             store.list_dir_items("array/c/1/").await?.try_collect::<Vec<_>>().await?;
         dir.sort();
         assert_eq!(dir, vec![ListDirItem::Prefix("1".to_string()),]);
+
+        let mut dir =
+            store.list_dir_items("array/c/1/1").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![ListDirItem::Key("1".to_string()),]);
+
+        // When a path to a chunk is passed, return nothing
+        let mut dir =
+            store.list_dir_items("array/c/1/1/1").await?.try_collect::<Vec<_>>().await?;
+        dir.sort();
+        assert_eq!(dir, vec![]);
+
         Ok(())
     }
 
@@ -1936,8 +2027,7 @@ mod tests {
     async fn test_list_dir_with_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -1969,8 +2059,7 @@ mod tests {
     async fn test_get_partial_values() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         store
             .set(
@@ -2027,7 +2116,7 @@ mod tests {
     async fn test_commit_and_checkout() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2047,7 +2136,7 @@ mod tests {
             { ds.write().await.commit("initial commit", None).await.unwrap() };
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         let new_data = Bytes::copy_from_slice(b"world");
         store.set_if_not_exists("array/c/0/1/0", new_data.clone()).await.unwrap();
@@ -2059,15 +2148,13 @@ mod tests {
         let new_snapshot_id = { ds.write().await.commit("update", None).await.unwrap() };
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
         let ds = repo
             .readonly_session(&VersionInfo::SnapshotId(new_snapshot_id.clone()))
             .await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         repo.create_tag("tag_0", &new_snapshot_id).await.unwrap();
@@ -2077,7 +2164,7 @@ mod tests {
             .unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         let _newest_data = Bytes::copy_from_slice(b"earth");
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(ds.read().await.has_uncommitted_changes(), true);
@@ -2089,14 +2176,13 @@ mod tests {
         repo.create_branch("dev", ds.read().await.snapshot_id()).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("dev").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         store.set("array/c/0/1/0", new_data.clone()).await?;
         let dev_snapshot =
             { ds.write().await.commit("update dev branch", None).await.unwrap() };
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(dev_snapshot)).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
         Ok(())
     }
@@ -2105,7 +2191,7 @@ mod tests {
     async fn test_clear() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2146,7 +2232,7 @@ mod tests {
         ds.write().await.commit("initial commit", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2174,8 +2260,7 @@ mod tests {
         );
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(empty_snap)).await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
             empty
@@ -2189,7 +2274,7 @@ mod tests {
         // GH347
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         let meta1 = Bytes::copy_from_slice(
             br#"{"zarr_format":3,"node_type":"group","attributes":{"foo":42}}"#,
@@ -2220,7 +2305,7 @@ mod tests {
         ds.write().await.commit("initial commit", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         store.delete("zarr.json").await.unwrap();
         store.delete("array/zarr.json").await.unwrap();
         store.set("zarr.json", meta2.clone()).await.unwrap();
@@ -2240,7 +2325,7 @@ mod tests {
     async fn test_branch_reset() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2253,7 +2338,7 @@ mod tests {
         ds.write().await.commit("root group", None).await.unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2266,7 +2351,7 @@ mod tests {
         let prev_snap = ds.write().await.commit("group a", None).await?;
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         store
             .set(
@@ -2284,7 +2369,7 @@ mod tests {
         let ds = Arc::new(RwLock::new(
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
         ));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
 
         assert!(!store.exists("b/zarr.json").await?);
         assert!(store.exists("a/zarr.json").await?);
@@ -2295,8 +2380,7 @@ mod tests {
     async fn test_access_mode() {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await.unwrap();
-        let writable_store =
-            Store::from_session(Arc::new(RwLock::new(ds)), StoreConfig::default());
+        let writable_store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         writable_store
             .set(
@@ -2306,14 +2390,12 @@ mod tests {
             .await
             .unwrap();
 
-        let readable_store = Store::from_session(
-            Arc::new(RwLock::new(
-                repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
-                    .await
-                    .unwrap(),
-            )),
-            StoreConfig::default(),
-        );
+        let readable_store = Store::from_session(Arc::new(RwLock::new(
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                .await
+                .unwrap(),
+        )))
+        .await;
         assert_eq!(readable_store.read_only().await, true);
 
         let result = readable_store
@@ -2330,13 +2412,13 @@ mod tests {
     async fn test_serialize() {
         let repo_dir = TempDir::new().expect("could not create temp dir");
         let storage = Arc::new(
-            ObjectStorage::new_local_store(repo_dir.path())
+            ObjectStorage::new_local_filesystem(repo_dir.path())
                 .expect("could not create storage"),
         );
 
         let repo = Repository::create(None, storage, HashMap::new()).await.unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         store
             .set(
                 "zarr.json",
@@ -2348,8 +2430,7 @@ mod tests {
         ds.write().await.commit("first", None).await.unwrap();
 
         let store_bytes = store.as_bytes().await.unwrap();
-        let store2: Store =
-            Store::from_bytes(store_bytes, StoreConfig::default()).unwrap();
+        let store2: Store = Store::from_bytes(store_bytes).unwrap();
 
         let zarr_json = store2.get("zarr.json", &ByteRange::ALL).await.unwrap();
         assert_eq!(

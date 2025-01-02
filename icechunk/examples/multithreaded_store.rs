@@ -3,26 +3,22 @@ use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures::StreamExt;
 use icechunk::{
-    format::ByteRange, store::StoreConfig, ObjectStorage, Repository, RepositoryConfig,
+    format::ByteRange, storage::new_in_memory_storage, Repository, RepositoryConfig,
     Store,
 };
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let storage = Arc::new(ObjectStorage::new_in_memory_store(None)?);
-    let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: 128,
-            unsafe_overwrite_refs: true,
-            ..Default::default()
-        }),
-        storage,
-        HashMap::new(),
-    )
-    .await?;
+    let storage = new_in_memory_storage()?;
+    let config = RepositoryConfig {
+        inline_chunk_threshold_bytes: 128,
+        unsafe_overwrite_refs: true,
+        ..Default::default()
+    };
+    let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
-    let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+    let store = Store::from_session(Arc::clone(&ds)).await;
 
     store
         .set(
@@ -38,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initially this will loop, because no chunks are written.
     let mut set = JoinSet::new();
     for i in 500..600 {
-        let store = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+        let store = Store::from_session(Arc::clone(&ds)).await;
         set.spawn(async move {
             let mut attempts = 0u64;
             loop {
@@ -75,8 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // We start two tasks that write all the needed chunks, sleeping between writes.
-    let store1 = Store::from_session(Arc::clone(&ds), StoreConfig::default());
-    let store2 = Store::from_session(Arc::clone(&ds), StoreConfig::default());
+    let store1 = Store::from_session(Arc::clone(&ds)).await;
+    let store2 = Store::from_session(Arc::clone(&ds)).await;
 
     let writer1 = tokio::spawn(async move { writer("1", 500..550, &store1).await });
     let writer2 = tokio::spawn(async move { writer("2", 550..600, &store2).await });

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError, Client};
@@ -11,98 +11,98 @@ use tokio::sync::RwLock;
 use url::Url;
 
 use crate::{
+    config::{Credentials, S3Credentials, S3Options},
     format::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualReferenceError},
         ByteRange,
     },
     private,
-    storage::s3::{
-        mk_client, range_to_header, S3ClientOptions, S3Credentials, StaticS3Credentials,
-    },
+    storage::s3::{mk_client, range_to_header},
+    ObjectStoreConfig,
 };
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ObjectStorePlatform {
-    // FIXME: official names
-    S3,
-    GoogleCloudStorage,
-    Azure,
-    Tigris,
-    LocalFileSystem,
-}
 
 pub type ContainerName = String;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VirtualChunkContainer {
     pub name: ContainerName,
-    pub object_store: ObjectStorePlatform,
-    pub region: Option<String>,
-    pub prefix: String,
-    pub endpoint_url: Option<String>,
-    pub anonymous: bool,
-    pub allow_http: bool,
+    pub url_prefix: String,
+    pub store: ObjectStoreConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub enum ObjectStoreCredentials {
-    FromEnv,
-    Anonymous,
-    Static {
-        access_key_id: String,
-        secret_access_key: String,
-        session_token: Option<String>,
-    },
+pub type VirtualChunkCredentialsError = String;
+
+impl VirtualChunkContainer {
+    pub fn validate_credentials(
+        &self,
+        cred: &Credentials,
+    ) -> Result<(), VirtualChunkCredentialsError> {
+        match (&self.store, cred) {
+            (ObjectStoreConfig::InMemory, _) => {
+                Err("in memory storage does not accept credentials".to_string())
+            }
+            (ObjectStoreConfig::LocalFileSystem(..), _) => {
+                Err("in memory storage does not accept credentials".to_string())
+            }
+            (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
+            (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
+            (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()), // TODO:
+            (ObjectStoreConfig::Azure {}, _) => Ok(()),                 // TODO
+            (ObjectStoreConfig::Tigris {}, _) => Ok(()),                // TODO
+            _ => Err("credentials do not match store type".to_string()),
+        }
+    }
 }
 
-pub fn mk_default_containers() -> Vec<VirtualChunkContainer> {
-    vec![
-        VirtualChunkContainer {
-            name: "s3".to_string(),
-            object_store: ObjectStorePlatform::S3,
-            region: None,
-            prefix: "s3".to_string(),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-        },
-        VirtualChunkContainer {
-            name: "gcs".to_string(),
-            object_store: ObjectStorePlatform::GoogleCloudStorage,
-            region: None,
-            prefix: "gcs".to_string(),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-        },
-        VirtualChunkContainer {
-            name: "az".to_string(),
-            object_store: ObjectStorePlatform::Azure,
-            region: None,
-            prefix: "az".to_string(),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-        },
-        VirtualChunkContainer {
-            name: "tigris".to_string(),
-            object_store: ObjectStorePlatform::Tigris,
-            region: None,
-            prefix: "tigris".to_string(),
-            endpoint_url: None,
-            anonymous: true,
-            allow_http: false,
-        },
-        VirtualChunkContainer {
-            name: "file".to_string(),
-            object_store: ObjectStorePlatform::LocalFileSystem,
-            region: None,
-            prefix: "file".to_string(),
-            endpoint_url: None,
-            anonymous: true,
-            allow_http: false,
-        },
+pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> {
+    [
+        (
+            "s3".to_string(),
+            VirtualChunkContainer {
+                name: "s3".to_string(),
+                url_prefix: "s3".to_string(),
+                store: ObjectStoreConfig::S3(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                }),
+            },
+        ),
+        (
+            "gcs".to_string(),
+            VirtualChunkContainer {
+                name: "gcs".to_string(),
+                url_prefix: "gcs".to_string(),
+                store: ObjectStoreConfig::Gcs(HashMap::new()),
+            },
+        ),
+        (
+            "az".to_string(),
+            VirtualChunkContainer {
+                name: "az".to_string(),
+                url_prefix: "az".to_string(),
+                store: ObjectStoreConfig::Azure {},
+            },
+        ),
+        (
+            "tigris".to_string(),
+            VirtualChunkContainer {
+                name: "tigris".to_string(),
+                url_prefix: "tigris".to_string(),
+                store: ObjectStoreConfig::Tigris {},
+            },
+        ),
+        (
+            "file".to_string(),
+            VirtualChunkContainer {
+                name: "file".to_string(),
+                url_prefix: "file".to_string(),
+                store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+            },
+        ),
     ]
+    .into()
 }
 
 #[async_trait]
@@ -117,29 +117,31 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
 
 /// Sort containers in reverse order of prefix length
 pub(crate) fn sort_containers(containers: &mut [VirtualChunkContainer]) {
-    containers.sort_by_key(|cont| -(cont.prefix.len() as i64));
+    containers.sort_by_key(|cont| -(cont.url_prefix.len() as i64));
 }
 
 fn find_container<'a>(
     chunk_location: &str,
     containers: &'a [VirtualChunkContainer],
 ) -> Option<&'a VirtualChunkContainer> {
-    containers.iter().find(|cont| chunk_location.starts_with(cont.prefix.as_str()))
+    containers.iter().find(|cont| chunk_location.starts_with(cont.url_prefix.as_str()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VirtualChunkResolver {
     containers: Vec<VirtualChunkContainer>,
-    credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+    credentials: HashMap<ContainerName, Credentials>,
     #[serde(skip)]
     fetchers: RwLock<HashMap<ContainerName, Arc<dyn ChunkFetcher>>>,
 }
 
 impl VirtualChunkResolver {
     pub fn new(
-        containers: Vec<VirtualChunkContainer>,
-        credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        containers: impl Iterator<Item = VirtualChunkContainer>,
+        credentials: HashMap<ContainerName, Credentials>,
     ) -> Self {
+        let mut containers = containers.collect::<Vec<_>>();
+        sort_containers(&mut containers);
         VirtualChunkResolver {
             containers,
             credentials,
@@ -197,23 +199,39 @@ impl VirtualChunkResolver {
         &self,
         cont: &VirtualChunkContainer,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
-        // FIXME: implement
         #[allow(clippy::unimplemented)]
-        match cont.object_store {
-            ObjectStorePlatform::S3 => {
-                Ok(Arc::new(S3Fetcher::new(cont, self.credentials.get(&cont.name)).await))
+        match &cont.store {
+            ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
+                let creds = match self.credentials.get(&cont.name) {
+                    Some(Credentials::S3(creds)) => creds,
+                    Some(_) => {
+                        Err(VirtualReferenceError::InvalidCredentials("S3".to_string()))?
+                    }
+                    None => {
+                        if opts.anonymous {
+                            &S3Credentials::Anonymous
+                        } else {
+                            &S3Credentials::FromEnv
+                        }
+                    }
+                };
+                Ok(Arc::new(S3Fetcher::new(opts, creds).await))
             }
-            ObjectStorePlatform::GoogleCloudStorage => {
+            // FIXME: implement
+            ObjectStoreConfig::Gcs { .. } => {
                 unimplemented!("support for virtual chunks on gcs")
             }
-            ObjectStorePlatform::Azure => {
+            ObjectStoreConfig::Azure { .. } => {
                 unimplemented!("support for virtual chunks on gcs")
             }
-            ObjectStorePlatform::Tigris => {
+            ObjectStoreConfig::Tigris { .. } => {
                 unimplemented!("support for virtual chunks on Tigris")
             }
-            ObjectStorePlatform::LocalFileSystem => {
+            ObjectStoreConfig::LocalFileSystem { .. } => {
                 Ok(Arc::new(LocalFSFetcher::new(cont).await))
+            }
+            ObjectStoreConfig::InMemory {} => {
+                unimplemented!("support for virtual chunks on Tigris")
             }
         }
     }
@@ -225,36 +243,8 @@ pub struct S3Fetcher {
 }
 
 impl S3Fetcher {
-    pub async fn new(
-        cont: &VirtualChunkContainer,
-        credentials: Option<&ObjectStoreCredentials>,
-    ) -> Self {
-        let config = S3ClientOptions {
-            region: cont.region.clone(),
-            endpoint: cont.endpoint_url.clone(),
-            credentials: match credentials {
-                None => {
-                    if cont.anonymous {
-                        S3Credentials::Anonymous
-                    } else {
-                        S3Credentials::FromEnv
-                    }
-                }
-                Some(ObjectStoreCredentials::FromEnv) => S3Credentials::FromEnv,
-                Some(ObjectStoreCredentials::Static {
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
-                }) => S3Credentials::Static(StaticS3Credentials {
-                    access_key_id: access_key_id.clone(),
-                    secret_access_key: secret_access_key.clone(),
-                    session_token: session_token.clone(),
-                }),
-                Some(ObjectStoreCredentials::Anonymous) => S3Credentials::Anonymous,
-            },
-            allow_http: cont.allow_http,
-        };
-        Self { client: Arc::new(mk_client(Some(&config)).await) }
+    pub async fn new(opts: &S3Options, credentials: &S3Credentials) -> Self {
+        Self { client: Arc::new(mk_client(opts, credentials.clone()).await) }
     }
 }
 

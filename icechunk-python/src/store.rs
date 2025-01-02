@@ -1,10 +1,14 @@
 use std::{borrow::Cow, sync::Arc};
 
 use bytes::Bytes;
+use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
-    format::{ChunkLength, ChunkOffset},
-    store::{StoreConfig, StoreError},
+    format::{
+        manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
+        ChunkLength, ChunkOffset,
+    },
+    store::StoreError,
     Store,
 };
 use pyo3::{
@@ -22,36 +26,22 @@ use crate::{
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
-#[pyclass(name = "StoreConfig")]
-#[derive(Clone)]
-pub struct PyStoreConfig(pub StoreConfig);
+#[derive(FromPyObject, Clone, Debug)]
+enum ChecksumArgument {
+    #[pyo3(transparent, annotation = "str")]
+    String(String),
+    #[pyo3(transparent, annotation = "datetime.datetime")]
+    Datetime(chrono::DateTime<Utc>),
+}
 
-#[pymethods]
-impl PyStoreConfig {
-    #[new]
-    #[pyo3(signature = (*, get_partial_values_concurrency = 10))]
-    fn new(get_partial_values_concurrency: u16) -> Self {
-        Self(StoreConfig { get_partial_values_concurrency })
-    }
-
-    #[classmethod]
-    fn from_json(_cls: Bound<'_, PyType>, json: String) -> PyResult<Self> {
-        let config = serde_json::from_str(&json).map_err(|e| {
-            PyValueError::new_err(format!(
-                "Failed to deserialize store config from json: {}",
-                e
-            ))
-        })?;
-        Ok(Self(config))
-    }
-
-    fn as_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.0).map_err(|e| {
-            PyValueError::new_err(format!(
-                "Failed to serialize store config to json: {}",
-                e
-            ))
-        })
+impl From<ChecksumArgument> for Checksum {
+    fn from(value: ChecksumArgument) -> Self {
+        match value {
+            ChecksumArgument::String(etag) => Checksum::ETag(etag),
+            ChecksumArgument::Datetime(date_time) => {
+                Checksum::LastModified(SecondsSinceEpoch(date_time.timestamp() as u32))
+            }
+        }
     }
 }
 
@@ -62,15 +52,9 @@ pub struct PyStore(pub Arc<Store>);
 #[pymethods]
 impl PyStore {
     #[classmethod]
-    #[pyo3(signature = (bytes, config = None))]
-    fn from_bytes(
-        _cls: Bound<'_, PyType>,
-        bytes: Vec<u8>,
-        config: Option<PyStoreConfig>,
-    ) -> PyResult<Self> {
+    fn from_bytes(_cls: Bound<'_, PyType>, bytes: Vec<u8>) -> PyResult<Self> {
         let bytes = Bytes::from(bytes);
-        let config = config.map(|c| c.0).unwrap_or_default();
-        let store = Store::from_bytes(bytes, config).map_err(|e| {
+        let store = Store::from_bytes(bytes).map_err(|e| {
             PyValueError::new_err(format!(
                 "Failed to deserialize store from bytes: {}",
                 e
@@ -89,14 +73,6 @@ impl PyStore {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let read_only = self.0.read_only().await;
             Ok(read_only)
-        })
-    }
-
-    #[getter]
-    fn config(&self) -> PyIcechunkStoreResult<PyStoreConfig> {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let config = self.0.config().clone();
-            Ok(PyStoreConfig(config))
         })
     }
 
@@ -254,31 +230,30 @@ impl PyStore {
         })
     }
 
+    #[pyo3(signature = (key, location, offset, length, checksum = None))]
     fn set_virtual_ref(
         &self,
-        _key: String,
-        _location: String,
-        _offset: ChunkOffset,
-        _length: ChunkLength,
+        key: String,
+        location: String,
+        offset: ChunkOffset,
+        length: ChunkLength,
+        checksum: Option<ChecksumArgument>,
     ) -> PyIcechunkStoreResult<()> {
-        let _store = Arc::clone(&self.0);
+        let store = Arc::clone(&self.0);
 
-        // pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-        //     let virtual_ref = VirtualChunkRef {
-        //         location: VirtualChunkLocation::Absolute(location),
-        //         offset,
-        //         length,
-        //     };
-        //     store
-        //         .write()
-        //         .await
-        //         .set_virtual_ref(&key, virtual_ref)
-        //         .await
-        //         .map_err(PyIcechunkStoreError::from)?;
-        //     Ok(())
-        // })
-
-        Err(PyIcechunkStoreError::PyValueError("Not yet implemented".to_string()))
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let virtual_ref = VirtualChunkRef {
+                location: VirtualChunkLocation(location),
+                offset,
+                length,
+                checksum: checksum.map(|cs| cs.into()),
+            };
+            store
+                .set_virtual_ref(&key, virtual_ref)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
     }
 
     fn delete<'py>(

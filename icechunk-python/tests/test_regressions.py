@@ -1,39 +1,23 @@
 from typing import cast
 
 import pytest
-from object_store import ClientOptions, ObjectStore
 
 import zarr
 import zarr.core
 import zarr.core.array
 from icechunk import (
-    S3Credentials,
-    StorageConfig,
-    VirtualRefConfig,
+    RepositoryConfig,
+    VirtualChunkContainer,
+    containers_credentials,
+    in_memory_storage,
+    s3_credentials,
+    s3_store,
 )
 from icechunk.repository import Repository
+from tests.conftest import write_chunks_to_minio
 
 
-def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
-    client_options = ClientOptions(
-        allow_http=True,  # type: ignore
-    )
-    store = ObjectStore(
-        "s3://testbucket",
-        {
-            "access_key_id": "minio123",
-            "secret_access_key": "minio123",
-            "aws_region": "us-east-1",
-            "aws_endpoint": "http://localhost:9000",
-        },
-        client_options=client_options,
-    )
-
-    for key, data in chunks:
-        store.put(key, data)
-
-
-async def write_minio_virtual_refs():
+async def write_minio_virtual_refs() -> None:
     write_chunks_to_minio(
         [
             ("path/to/python/new/chunk-1", b"first"),
@@ -45,28 +29,30 @@ async def write_minio_virtual_refs():
     )
 
 
-async def test_issue_418():
-    # FIXME
-    pytest.xfail(
-        "Temporary flagged as failing while we implement new virtual chunk mechanism"
-    )
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_issue_418() -> None:
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
+    config = RepositoryConfig.default()
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        s3_compatible=True,
+    )
+    container = VirtualChunkContainer("s3", "s3://", store_config)
+    config.set_virtual_chunk_container(container)
+    credentials = containers_credentials(
+        s3=s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+    )
 
     repo = Repository.create(
-        storage=StorageConfig.memory("test"),
-        virtual_ref_config=VirtualRefConfig.s3_from_config(
-            credentials=S3Credentials(
-                access_key_id="minio123",
-                secret_access_key="minio123",
-            ),
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-            region="us-east-1",
-        ),
+        storage=in_memory_storage(),
+        config=config,
+        virtual_chunk_credentials=credentials,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
     time = root.require_array(name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4")
@@ -91,7 +77,7 @@ async def test_issue_418():
     session.commit("Initial commit")
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.Group.open(store=store)
     time = cast(zarr.core.array.Array, root["time"])

@@ -1,7 +1,55 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator
 from enum import Enum
+
+class S3Options:
+    def __init__(
+        self,
+        region: str | None = None,
+        endpoint_url: str | None = None,
+        allow_http: bool = False,
+        anonymous: bool = False,
+    ) -> None: ...
+
+class ObjectStoreConfig:
+    class InMemory:
+        def __init__(self) -> None: ...
+
+    class LocalFileSystem:
+        def __init__(self, path: str) -> None: ...
+
+    class S3Compatible:
+        def __init__(self, options: S3Options) -> None: ...
+
+    class S3:
+        def __init__(self, options: S3Options) -> None: ...
+
+    class Gcs:
+        def __init__(self) -> None: ...
+
+    class Azure:
+        def __init__(self) -> None: ...
+
+    class Tigris:
+        def __init__(self) -> None: ...
+
+AnyObjectStoreConfig = (
+    ObjectStoreConfig.InMemory
+    | ObjectStoreConfig.LocalFileSystem
+    | ObjectStoreConfig.S3
+    | ObjectStoreConfig.S3Compatible
+    | ObjectStoreConfig.Gcs
+    | ObjectStoreConfig.Azure
+    | ObjectStoreConfig.Tigris
+)
+
+class VirtualChunkContainer:
+    name: str
+    url_prefix: str
+    store: ObjectStoreConfig
+
+    def __init__(self, name: str, url_prefix: str, store: AnyObjectStoreConfig): ...
 
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
@@ -22,38 +70,61 @@ class RepositoryConfig:
         """
         ...
 
+    @staticmethod
+    def default() -> RepositoryConfig: ...
+    @property
+    def inline_chunk_threshold_bytes(self) -> int: ...
+    @inline_chunk_threshold_bytes.setter
+    def inline_chunk_threshold_bytes(self, value: int) -> None: ...
+    @property
+    def unsafe_overwrite_refs(self) -> bool: ...
+    @unsafe_overwrite_refs.setter
+    def unsafe_overwrite_refs(self, value: bool) -> None: ...
+    @property
+    def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer]: ...
+    @virtual_chunk_containers.setter
+    def virtual_chunk_containers(
+        self, value: dict[str, VirtualChunkContainer]
+    ) -> None: ...
+    def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
+    def clear_virtual_chunk_containers(self) -> None: ...
+
 class PyRepository:
     @classmethod
     def create(
         cls,
-        storage: StorageConfig,
+        storage: Storage,
         *,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
         cls,
-        storage: StorageConfig,
+        storage: Storage,
         *,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
         cls,
-        storage: StorageConfig,
+        storage: Storage,
         *,
         config: RepositoryConfig | None = None,
+        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> PyRepository: ...
     @staticmethod
-    def exists(storage: StorageConfig) -> bool: ...
+    def exists(storage: Storage) -> bool: ...
     def ancestry(self, snapshot_id: str) -> list[SnapshotMetadata]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
-    def list_branches(self) -> list[str]: ...
-    def branch_tip(self, branch: str) -> str: ...
+    def list_branches(self) -> set[str]: ...
+    def lookup_branch(self, branch: str) -> str: ...
     def reset_branch(self, branch: str, snapshot_id: str) -> None: ...
+    def delete_branch(self, branch: str) -> None: ...
     def create_tag(self, tag: str, snapshot_id: str) -> None: ...
-    def list_tags(self) -> list[str]: ...
-    def tag(self, tag: str) -> str: ...
+    def list_tags(self) -> set[str]: ...
+    def lookup_tag(self, tag: str) -> str: ...
     def readonly_session(
         self,
         *,
@@ -77,17 +148,17 @@ class PySession:
     @property
     def has_uncommitted_changes(self) -> bool: ...
     def discard_changes(self) -> None: ...
-    def store(self, config: StoreConfig | None = None) -> PyStore: ...
+    def all_virtual_chunk_locations(self) -> list[str]: ...
+    @property
+    def store(self) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
     def commit(self, message: str) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
     @classmethod
-    def from_bytes(cls, data: bytes, config: StoreConfig | None = None) -> PyStore: ...
+    def from_bytes(cls, data: bytes) -> PyStore: ...
     def __eq__(self, value: object) -> bool: ...
-    @property
-    def config(self) -> StoreConfig: ...
     @property
     def read_only(self) -> bool: ...
     @property
@@ -115,7 +186,7 @@ class PyStore:
         location: str,
         offset: int,
         length: int,
-        checksum: int | str | datetime.datetime | None = None,
+        checksum: str | datetime.datetime | None = None,
     ) -> None: ...
     async def async_set_virtual_ref(
         self,
@@ -123,7 +194,7 @@ class PyStore:
         location: str,
         offset: int,
         length: int,
-        checksum: int | str | datetime.datetime | None = None,
+        checksum: str | datetime.datetime | None = None,
     ) -> None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
@@ -167,7 +238,75 @@ class PyAsyncSnapshotGenerator(
     def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotMetadata: ...
 
-class StorageConfig:
+class S3StaticCredentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None
+    expires_after: datetime.datetime | None
+
+    def __init__(
+        self,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str | None = None,
+        expires_after: datetime.datetime | None = None,
+    ): ...
+
+class S3Credentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Anonymous:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, credentials: S3StaticCredentials) -> None: ...
+
+    class Refreshable:
+        def __init__(self, pickled_function: bytes) -> None: ...
+
+AnyS3Credential = (
+    S3Credentials.Static
+    | S3Credentials.Anonymous
+    | S3Credentials.FromEnv
+    | S3Credentials.Refreshable
+)
+
+class GcsStaticCredentials:
+    class ServiceAccount:
+        def __init__(self, path: str) -> None: ...
+
+    class ServiceAccountKey:
+        def __init__(self, key: str) -> None: ...
+
+    class ApplicationCredentials:
+        def __init__(self, path: str) -> None: ...
+
+AnyGcsStaticCredential = (
+    GcsStaticCredentials.ServiceAccount
+    | GcsStaticCredentials.ServiceAccountKey
+    | GcsStaticCredentials.ApplicationCredentials
+)
+
+class GcsCredentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
+
+AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
+
+class Credentials:
+    class S3:
+        def __init__(self, credentials: AnyS3Credential) -> None: ...
+
+    class Gcs:
+        def __init__(self, credentials: GcsCredentials) -> None: ...
+
+AnyCredential = Credentials.S3 | Credentials.Gcs
+
+class Storage:
     """Storage configuration for an IcechunkStore
 
     Currently supports memory, filesystem, and S3 storage backends.
@@ -184,169 +323,26 @@ class StorageConfig:
     """
 
     @classmethod
-    def memory(cls, prefix: str) -> StorageConfig:
-        """Create a StorageConfig object for an in-memory storage backend with the given prefix"""
-        ...
-
+    def new_s3(
+        cls,
+        config: S3Options,
+        bucket: str,
+        prefix: str | None,
+        credentials: AnyS3Credential | None = None,
+    ) -> Storage: ...
     @classmethod
-    def filesystem(cls, root: str) -> StorageConfig:
-        """Create a StorageConfig object for a local filesystem storage backend with the given root directory"""
-        ...
-
+    def new_in_memory(cls) -> Storage: ...
     @classmethod
-    def object_store(cls, url: str, options: Iterable[tuple[str, str]]) -> StorageConfig:
-        """Create a StorageConfig object for an Object Storage compatible storage backend
-        with the given URL and options"""
-        ...
-
+    def new_local_filesystem(cls, path: str) -> Storage: ...
     @classmethod
-    def s3_from_env(
+    def new_gcs(
         cls,
         bucket: str,
-        prefix: str,
-        endpoint_url: str | None,
-        allow_http: bool = False,
-        region: str | None = None,
-    ) -> StorageConfig:
-        """Create a StorageConfig object for an S3 Object Storage compatible storage backend
-        with the given bucket and prefix
-
-        This assumes that the necessary credentials are available in the environment:
-            AWS_REGION
-            AWS_ACCESS_KEY_ID,
-            AWS_SECRET_ACCESS_KEY,
-            AWS_SESSION_TOKEN (optional)
-            AWS_ENDPOINT_URL (optional)
-            AWS_ALLOW_HTTP (optional)
-        """
-        ...
-
-    @classmethod
-    def s3_from_config(
-        cls,
-        bucket: str,
-        prefix: str,
-        credentials: S3Credentials,
-        endpoint_url: str | None,
-        allow_http: bool = False,
-        region: str | None = None,
-    ) -> StorageConfig:
-        """Create a StorageConfig object for an S3 Object Storage compatible storage
-        backend with the given bucket, prefix, and configuration
-
-        This method will directly use the provided credentials to authenticate with the S3 service,
-        ignoring any environment variables.
-        """
-        ...
-
-    @classmethod
-    def s3_anonymous(
-        cls,
-        bucket: str,
-        prefix: str,
-        endpoint_url: str | None,
-        allow_http: bool = False,
-        region: str | None = None,
-    ) -> StorageConfig:
-        """Create a StorageConfig object for an S3 Object Storage compatible storage
-        using anonymous access
-        """
-        ...
-
-class S3Credentials:
-    access_key_id: str
-    secret_access_key: str
-    session_token: str | None
-
-    def __init__(
-        self,
-        access_key_id: str,
-        secret_access_key: str,
-        session_token: str | None = None,
-    ): ...
-
-class VirtualRefConfig:
-    class S3:
-        """Config for an S3 Object Storage compatible storage backend"""
-
-        credentials: S3Credentials | None
-        endpoint_url: str | None
-        allow_http: bool | None
-        region: str | None
-
-    @classmethod
-    def s3_from_env(cls) -> VirtualRefConfig:
-        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage backend
-        with the given bucket and prefix
-
-        This assumes that the necessary credentials are available in the environment:
-            AWS_REGION or AWS_DEFAULT_REGION
-            AWS_ACCESS_KEY_ID,
-            AWS_SECRET_ACCESS_KEY,
-            AWS_SESSION_TOKEN (optional)
-            AWS_ENDPOINT_URL (optional)
-            AWS_ALLOW_HTTP (optional)
-        """
-        ...
-
-    @classmethod
-    def s3_from_config(
-        cls,
-        credentials: S3Credentials,
+        prefix: str | None,
+        credentials: AnyGcsCredential | None = None,
         *,
-        endpoint_url: str | None = None,
-        allow_http: bool | None = None,
-        region: str | None = None,
-    ) -> VirtualRefConfig:
-        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
-        backend with the given bucket, prefix, and configuration
-
-        This method will directly use the provided credentials to authenticate with the S3 service,
-        ignoring any environment variables.
-        """
-        ...
-
-    @classmethod
-    def s3_anonymous(
-        cls,
-        *,
-        endpoint_url: str | None = None,
-        allow_http: bool | None = None,
-        region: str | None = None,
-    ) -> VirtualRefConfig:
-        """Create a VirtualReferenceConfig object for an S3 Object Storage compatible storage
-        using anonymous access
-        """
-        ...
-
-class StoreConfig:
-    """Configuration for an IcechunkStore"""
-
-    def __init__(
-        self,
-        get_partial_values_concurrency: int | None = None,
-    ):
-        """Create a StoreConfig object with the given configuration options
-
-        Parameters
-        ----------
-        get_partial_values_concurrency: int | None
-            The number of concurrent requests to make when fetching partial values
-
-        -------
-        StoreConfig
-            A StoreConfig object with the given configuration options
-        """
-        ...
-
-    @classmethod
-    def from_json(cls, json: str) -> StoreConfig:
-        """Create a StoreConfig object from a JSON string"""
-        ...
-
-    def as_json(self) -> str:
-        """Return the StoreConfig object as a JSON string"""
-        ...
+        config: dict[str, str] | None = None,
+    ) -> Storage: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""
@@ -470,6 +466,11 @@ class Conflict:
     @property
     def path(self) -> str:
         """The path of the node that caused the conflict"""
+        ...
+
+    @property
+    def conflicted_chunks(self) -> list[list[int]] | None:
+        """If the conflict is a chunk conflict, this will return the list of chunk indices that are in conflict"""
         ...
 
 class RebaseFailedData:

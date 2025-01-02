@@ -1,4 +1,8 @@
-use std::{collections::HashMap, iter, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -7,69 +11,20 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    config::{Credentials, RepositoryConfig},
     format::{
         snapshot::{Snapshot, SnapshotMetadata},
         IcechunkFormatError, NodeId, SnapshotId,
     },
     refs::{
-        create_tag, fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
-        BranchVersion, Ref, RefError,
+        create_tag, delete_branch, fetch_branch_tip, fetch_tag, list_branches, list_tags,
+        update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
     storage::ETag,
-    virtual_chunks::{
-        mk_default_containers, sort_containers, ContainerName, ObjectStoreCredentials,
-        VirtualChunkContainer, VirtualChunkResolver,
-    },
+    virtual_chunks::{ContainerName, VirtualChunkContainer, VirtualChunkResolver},
     MemCachingStorage, Storage, StorageError,
 };
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RepositoryConfig {
-    // Chunks smaller than this will be stored inline in the manifst
-    pub inline_chunk_threshold_bytes: u16,
-    // Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    // own risk in object stores for which we don't support write-object-if-not-exists. There is
-    // the possibility of race conditions if this variable is set to true and there are concurrent
-    // commit attempts.
-    pub unsafe_overwrite_refs: bool,
-
-    pub virtual_chunk_containers: Vec<VirtualChunkContainer>,
-}
-
-impl Default for RepositoryConfig {
-    fn default() -> Self {
-        let mut containers = mk_default_containers();
-        sort_containers(&mut containers);
-        Self {
-            inline_chunk_threshold_bytes: 512,
-            unsafe_overwrite_refs: false,
-            virtual_chunk_containers: containers,
-        }
-    }
-}
-
-impl RepositoryConfig {
-    pub fn add_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
-        self.virtual_chunk_containers.push(cont);
-        sort_containers(&mut self.virtual_chunk_containers);
-    }
-
-    pub fn virtual_chunk_containers(&self) -> &Vec<VirtualChunkContainer> {
-        &self.virtual_chunk_containers
-    }
-
-    pub fn clear_virtual_chunk_containers(&mut self) {
-        self.virtual_chunk_containers.clear();
-    }
-
-    pub fn update_virtual_chunk_container(
-        &mut self,
-        name: ContainerName,
-    ) -> Option<&mut VirtualChunkContainer> {
-        self.virtual_chunk_containers.iter_mut().find(|cont| cont.name == name)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
@@ -127,7 +82,7 @@ impl Repository {
     pub async fn create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
             return Err(RepositoryError::AlreadyInitialized);
@@ -171,17 +126,13 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        let containers = config.virtual_chunk_containers.clone();
-        let virtual_resolver =
-            Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
-
-        Ok(Self { config, config_etag, storage, virtual_resolver })
+        Self::new(config, config_etag, storage, virtual_chunk_credentials)
     }
 
     pub async fn open(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         let storage_c = Arc::clone(&storage);
         let handle1 =
@@ -202,13 +153,7 @@ impl Repository {
             handle1.await.expect("Error fetching repo config")?
         {
             let config = config.unwrap_or(default_config);
-            let containers = config.virtual_chunk_containers.clone();
-            let virtual_resolver = Arc::new(VirtualChunkResolver::new(
-                containers,
-                virtual_chunk_credentials,
-            ));
-
-            Ok(Self { config, config_etag, storage, virtual_resolver })
+            Self::new(config, config_etag, storage, virtual_chunk_credentials)
         } else {
             Err(RepositoryError::RepositoryDoesntExist)
         }
@@ -217,13 +162,30 @@ impl Repository {
     pub async fn open_or_create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, ObjectStoreCredentials>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
             Self::open(config, storage, virtual_chunk_credentials).await
         } else {
             Self::create(config, storage, virtual_chunk_credentials).await
         }
+    }
+
+    fn new(
+        config: RepositoryConfig,
+        config_etag: ETag,
+        storage: Arc<dyn Storage + Send + Sync>,
+        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+    ) -> RepositoryResult<Self> {
+        let containers = config.virtual_chunk_containers.values().cloned();
+        validate_credentials(
+            &config.virtual_chunk_containers,
+            &virtual_chunk_credentials,
+        )?;
+        let virtual_resolver =
+            Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
+
+        Ok(Self { config, config_etag, storage, virtual_resolver })
     }
 
     pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
@@ -329,13 +291,13 @@ impl Repository {
     }
 
     /// List all branches in the repository.
-    pub async fn list_branches(&self) -> RepositoryResult<Vec<String>> {
+    pub async fn list_branches(&self) -> RepositoryResult<HashSet<String>> {
         let branches = list_branches(self.storage.as_ref()).await?;
         Ok(branches)
     }
 
     /// Get the snapshot id of the tip of a branch
-    pub async fn branch_tip(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version = fetch_branch_tip(self.storage.as_ref(), branch).await?;
         Ok(branch_version.snapshot)
     }
@@ -349,7 +311,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<BranchVersion> {
         raise_if_invalid_snapshot_id(self.storage.as_ref(), snapshot_id).await?;
-        let branch_tip = self.branch_tip(branch).await?;
+        let branch_tip = self.lookup_branch(branch).await?;
         let version = update_branch(
             self.storage.as_ref(),
             branch,
@@ -360,6 +322,14 @@ impl Repository {
         .await?;
 
         Ok(version)
+    }
+
+    /// Delete a branch from the repository.
+    /// This will remove the branch reference and the branch history. It will not remove the
+    /// chunks or snapshots associated with the branch.
+    pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
+        delete_branch(self.storage.as_ref(), branch).await?;
+        Ok(())
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -379,12 +349,12 @@ impl Repository {
     }
 
     /// List all tags in the repository.
-    pub async fn list_tags(&self) -> RepositoryResult<Vec<String>> {
+    pub async fn list_tags(&self) -> RepositoryResult<HashSet<String>> {
         let tags = list_tags(self.storage.as_ref()).await?;
         Ok(tags)
     }
 
-    pub async fn tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
         Ok(ref_data.snapshot)
     }
@@ -432,6 +402,20 @@ impl Repository {
     }
 }
 
+fn validate_credentials(
+    containers: &HashMap<String, VirtualChunkContainer>,
+    creds: &HashMap<String, Credentials>,
+) -> RepositoryResult<()> {
+    for (cont, cred) in creds {
+        if let Some(cont) = containers.get(cont) {
+            if let Err(error) = cont.validate_credentials(cred) {
+                return Err(RepositoryError::StorageError(StorageError::Other(error)));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn raise_if_invalid_snapshot_id(
     storage: &(dyn Storage + Send + Sync),
     snapshot_id: &SnapshotId,
@@ -446,16 +430,21 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        error::Error,
+        sync::Arc,
+    };
 
-    use crate::{ObjectStorage, Repository, RepositoryConfig, Storage};
+    use crate::{
+        config::RepositoryConfig, storage::new_in_memory_storage, Repository, Storage,
+    };
 
     // use super::*;
     // TODO: Add Tests
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -499,6 +488,52 @@ mod tests {
         // verify loading again gets the value from persistent config
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes, 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+
+        let initial_branches = repo.list_branches().await?;
+        assert_eq!(initial_branches, HashSet::from(["main".into()]));
+
+        let initial_tags = repo.list_tags().await?;
+        assert_eq!(initial_tags, HashSet::new());
+
+        // Create some branches
+        let initial_snapshot = repo.lookup_branch("main").await?;
+        repo.create_branch("branch1", &initial_snapshot).await?;
+        repo.create_branch("branch2", &initial_snapshot).await?;
+
+        let branches = repo.list_branches().await?;
+        assert_eq!(
+            branches,
+            HashSet::from([
+                "main".to_string(),
+                "branch1".to_string(),
+                "branch2".to_string()
+            ])
+        );
+
+        // Delete a branch
+        repo.delete_branch("branch1").await?;
+
+        let branches = repo.list_branches().await?;
+        assert_eq!(branches, HashSet::from(["main".to_string(), "branch2".to_string()]));
+
+        // Create some tags
+        repo.create_tag("tag1", &initial_snapshot).await?;
+
+        let tags = repo.list_tags().await?;
+        assert_eq!(tags, HashSet::from(["tag1".to_string()]));
+
+        // get the snapshot id of the tag
+        let tag_snapshot = repo.lookup_tag("tag1").await?;
+        assert_eq!(tag_snapshot, initial_snapshot);
+
         Ok(())
     }
 }

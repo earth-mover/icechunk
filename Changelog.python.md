@@ -1,5 +1,23 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a8
+
+### Features
+
+- New Python API using `Repository`, `Session` and `Store` as separate entities
+- New Python API for configuring and opening `Repositories`
+- Added support for object store credential refresh
+- Persistent repository config
+- Commit conflict resolution and rebase support
+- Added experimental support for Google Cloud Storage
+- Add optional checksums for virtual chunks, either using Etag or last-updated-at
+- Support for multiple virtual chunk locations using virtual chunk containers concept
+- Added function `all_virtual_chunk_locations` to `Session` to retrieve all locations where the repo has data
+
+### Fixes
+
+- Refs were stored in the wrong prefix
+
 ## Python Icechunk Library 0.1.0a7
 
 ### Fixes

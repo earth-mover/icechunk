@@ -255,13 +255,12 @@ mod test {
             manifest::{ChunkInfo, ChunkPayload},
             ChunkIndices, NodeId,
         },
-        storage::{logging::LoggingStorage, ObjectStorage, Storage},
+        storage::{logging::LoggingStorage, new_in_memory_storage, Storage},
     };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_caches() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),
@@ -323,8 +322,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),

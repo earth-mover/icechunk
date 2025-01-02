@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import pickle
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
@@ -27,7 +28,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
 
-    async def get(self, store: IcechunkStore, key: str) -> Buffer:
+    async def get(self, store: IcechunkStore, key: str) -> Buffer | None:
         try:
             result = await store._store.get(key)
             if result is None:
@@ -40,9 +41,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return self.buffer_cls.from_bytes(result)
 
     @pytest.fixture
-    def store_kwargs(self, tmpdir) -> dict[str, Any]:
+    def store_kwargs(self, tmpdir: Path) -> dict[str, Any]:
         kwargs = {
-            "storage": StorageConfig.filesystem(f"{tmpdir}/store_test"),
+            "storage": local_filesystem_storage(f"{tmpdir}/store_test"),
             "read_only": False,
         }
         return kwargs
@@ -55,7 +56,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        return session.store()
+        return session.store
 
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
@@ -68,7 +69,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        store2 = session.store()
+        store2 = session.store
         # stores dont point to the same session instance, so they are not equal
         assert store != store2
 
@@ -85,7 +86,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
-        store = session.store()
+        store = session.store
         assert store._is_open
         assert store.read_only == read_only
 
@@ -95,7 +96,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         kwargs = {**store_kwargs}
         repo = Repository.open(**kwargs)
         session = repo.readonly_session(branch="main")
-        store = session.store()
+        store = session.store
 
         assert store.read_only
 
@@ -189,6 +190,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         out = [k async for k in store.list_dir("")]
         assert out == []
 
+        await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+
         await store.set(
             "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
@@ -196,7 +199,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             "goo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
 
-        keys_expected = ["foo", "goo"]
+        keys_expected = ["foo", "goo", "zarr.json"]
         keys_observed = [k async for k in store.list_dir("")]
         assert set(keys_observed) == set(keys_expected)
 
@@ -300,6 +303,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     async def test_is_empty(self, store: IcechunkStore) -> None:
         assert await store.is_empty("")
+        await self.set(
+            store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        await self.set(
+            store, "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
         await self.set(
             store, "foo/bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )

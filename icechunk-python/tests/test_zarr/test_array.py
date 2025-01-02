@@ -2,6 +2,7 @@
 import json
 import math
 import pickle
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -18,10 +19,10 @@ from zarr.storage import StorePath
 
 # @pytest.fixture(params=["local"])
 @pytest.fixture
-def store(request: pytest.FixtureRequest, tmpdir) -> IcechunkStore:
+def store(request: pytest.FixtureRequest, tmpdir: Path) -> IcechunkStore:
     repo = parse_repo("local", str(tmpdir))
     session = repo.writable_session("main")
-    return session.store()
+    return session.store
 
 
 @pytest.mark.parametrize("store", ["memory"], indirect=["store"])
@@ -55,18 +56,18 @@ def test_array_creation_existing_node(
     if exists_ok:
         # This is currently not supported by IcechunkStore
         pytest.xfail("IcechunkStore does not support exists_ok=True")
-        arr_new = Array.create(
-            spath / "extant",
-            shape=new_shape,
-            dtype=new_dtype,
-            exists_ok=exists_ok,
-            zarr_format=zarr_format,
-        )
-        assert arr_new.shape == new_shape
-        assert arr_new.dtype == new_dtype
+        # arr_new = Array.create(
+        #     spath / "extant",
+        #     shape=new_shape,
+        #     dtype=new_dtype,
+        #     exists_ok=exists_ok,
+        #     zarr_format=zarr_format,
+        # )
+        # assert arr_new.shape == new_shape
+        # assert arr_new.dtype == new_dtype
     else:
         with pytest.raises(expected_exception):
-            arr_new = Array.create(
+            Array.create(
                 spath / "extant",
                 shape=new_shape,
                 dtype=new_dtype,
@@ -154,5 +155,6 @@ async def test_special_complex_fill_values_roundtrip(
     content = await store.get("zarr.json", prototype=default_buffer_prototype())
     assert content is not None
     actual = json.loads(content.to_bytes())
+    assert actual
     pytest.xfail("IcechunkStore does not support complex fill types")
-    assert actual["fill_value"] == expected
+    # assert actual["fill_value"] == expected

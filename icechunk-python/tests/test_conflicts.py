@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -8,13 +9,13 @@ import zarr
 
 
 @pytest.fixture
-def repo(tmpdir) -> icechunk.Repository:
+def repo(tmpdir: Path) -> icechunk.Repository:
     repo = icechunk.Repository.create(
-        storage=icechunk.StorageConfig.filesystem(str(tmpdir)),
+        storage=icechunk.local_filesystem_storage(str(tmpdir))
     )
 
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
     root = zarr.group(store=store)
     root.create_group("foo/bar")
     root.create_array(
@@ -25,11 +26,11 @@ def repo(tmpdir) -> icechunk.Repository:
     return repo
 
 
-def test_detect_conflicts(repo: icechunk.Repository):
+def test_detect_conflicts(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -50,14 +51,26 @@ def test_detect_conflicts(repo: icechunk.Repository):
             session_b.rebase(icechunk.ConflictDetector())
         except icechunk.RebaseFailedError as e:
             assert len(e.conflicts) == 2
+            assert e.conflicts[0].path == "/foo/bar/some-array"
+            assert (
+                e.conflicts[0].conflict_type
+                == icechunk.ConflictType.UserAttributesDoubleUpdate
+            )
+            assert e.conflicts[0].conflicted_chunks is None
+
+            assert e.conflicts[1].path == "/foo/bar/some-array"
+            assert e.conflicts[1].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
+            assert e.conflicts[1].conflicted_chunks
+            assert len(e.conflicts[1].conflicted_chunks) == 100
+
             raise e
 
 
-def test_rebase_no_conflicts(repo: icechunk.Repository):
+def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -72,7 +85,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository):
     session_b.commit("update array")
 
     session_c = repo.readonly_session(branch="main")
-    store_c = session_c.store()
+    store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
     array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
     np.testing.assert_array_equal(array_c[:], 1)
@@ -85,11 +98,11 @@ def test_rebase_no_conflicts(repo: icechunk.Repository):
 )
 def test_rebase_user_attrs_with_ours(
     repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
-):
+) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -131,11 +144,11 @@ def test_rebase_user_attrs_with_ours(
 )
 def test_rebase_chunks_with_ours(
     repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
-):
+) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
-    store_a = session_a.store()
-    store_b = session_b.store()
+    store_a = session_a.store
+    store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
     array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
@@ -151,9 +164,36 @@ def test_rebase_chunks_with_ours(
 
     # Make sure it fails if the resolver is not set
     with pytest.raises(icechunk.RebaseFailedError):
-        session_b.rebase(
-            icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.Fail)
-        )
+        try:
+            session_b.rebase(
+                icechunk.BasicConflictSolver(
+                    on_chunk_conflict=icechunk.VersionSelection.Fail
+                )
+            )
+        except icechunk.RebaseFailedError as e:
+            assert e.conflicts[0].path == "/foo/bar/some-array"
+            assert e.conflicts[0].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
+            assert len(e.conflicts) == 1
+
+            np.testing.assert_array_equal(
+                np.array(e.conflicts[0].conflicted_chunks),
+                np.array(
+                    [
+                        [0, 0],
+                        [1, 0],
+                        [2, 0],
+                        [3, 0],
+                        [4, 0],
+                        [5, 0],
+                        [6, 0],
+                        [7, 0],
+                        [8, 0],
+                        [9, 0],
+                    ]
+                ),
+            )
+
+            raise e
 
     solver = icechunk.BasicConflictSolver(
         on_chunk_conflict=on_chunk_conflict,
@@ -163,7 +203,7 @@ def test_rebase_chunks_with_ours(
     session_b.commit("after conflict")
 
     session_c = repo.readonly_session(branch="main")
-    store_c = session_c.store()
+    store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
     array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
     assert (

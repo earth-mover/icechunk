@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -200,27 +202,39 @@ pub async fn update_branch(
     }
 }
 
-pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<Ref>> {
+pub async fn list_refs(storage: &(dyn Storage + Send + Sync)) -> RefResult<HashSet<Ref>> {
     let all = storage.ref_names().await?;
     all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()
 }
 
-pub async fn list_tags(storage: &(dyn Storage + Send + Sync)) -> RefResult<Vec<String>> {
-    let all = storage.ref_names().await?;
-    Ok(all
-        .iter()
-        .filter_map(|path| path.strip_prefix("tag.").map(|name| name.to_string()))
-        .collect())
+pub async fn list_tags(
+    storage: &(dyn Storage + Send + Sync),
+) -> RefResult<HashSet<String>> {
+    let tags = list_refs(storage)
+        .await?
+        .into_iter()
+        .filter_map(|r| match r {
+            Ref::Tag(name) => Some(name),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+
+    Ok(tags)
 }
 
 pub async fn list_branches(
     storage: &(dyn Storage + Send + Sync),
-) -> RefResult<Vec<String>> {
-    let all = storage.ref_names().await?;
-    Ok(all
-        .iter()
-        .filter_map(|path| path.strip_prefix("branch.").map(|name| name.to_string()))
-        .collect())
+) -> RefResult<HashSet<String>> {
+    let branches = list_refs(storage)
+        .await?
+        .into_iter()
+        .filter_map(|r| match r {
+            Ref::Branch(name) => Some(name),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+
+    Ok(branches)
 }
 
 async fn branch_history<'a, 'b>(
@@ -244,6 +258,23 @@ async fn last_branch_version(
     // TODO! optimize
     let mut all = Box::pin(branch_history(storage, branch).await?);
     all.try_next().await?.ok_or(RefError::RefNotFound(branch.to_string()))
+}
+
+pub async fn delete_branch(
+    storage: &(dyn Storage + Send + Sync),
+    branch: &str,
+) -> RefResult<()> {
+    let key = branch_root(branch)?;
+    let key_ref = key.as_str();
+    let refs = storage
+        .ref_versions(key_ref)
+        .await?
+        .filter_map(|v| async move {
+            v.ok().map(|v| format!("{}/{}", key_ref, v).as_str().to_string())
+        })
+        .boxed();
+    storage.delete_refs(refs).await?;
+    Ok(())
 }
 
 pub async fn fetch_tag(
@@ -304,10 +335,9 @@ mod tests {
 
     use futures::Future;
     use pretty_assertions::assert_eq;
-    use rand::distributions::{Alphanumeric, DistString};
     use tempfile::{tempdir, TempDir};
 
-    use crate::ObjectStorage;
+    use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
 
     use super::*;
 
@@ -346,17 +376,13 @@ mod tests {
         F: FnMut(Arc<dyn Storage + Send + Sync>) -> Fut,
     >(
         mut f: F,
-    ) -> ((Arc<ObjectStorage>, R), (Arc<ObjectStorage>, R, TempDir)) {
-        let prefix: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 10);
-        let mem_storage =
-            Arc::new(ObjectStorage::new_in_memory_store(Some(prefix)).unwrap());
+    ) -> ((Arc<dyn Storage>, R), (Arc<dyn Storage>, R, TempDir)) {
+        let mem_storage = new_in_memory_storage().unwrap();
         let res1 = f(Arc::clone(&mem_storage) as Arc<dyn Storage + Send + Sync>).await;
 
         let dir = tempdir().expect("cannot create temp dir");
-        let local_storage = Arc::new(
-            ObjectStorage::new_local_store(dir.path())
-                .expect("Cannot create local Storage"),
-        );
+        let local_storage = new_local_filesystem_storage(dir.path())
+            .expect("Cannot create local Storage");
 
         let res2 = f(Arc::clone(&local_storage) as Arc<dyn Storage + Send + Sync>).await;
         ((mem_storage, res1), (local_storage, res2, dir))
@@ -370,7 +396,7 @@ mod tests {
 
             let res = fetch_tag(storage.as_ref(), "tag1").await;
             assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
-            assert_eq!(list_refs(storage.as_ref()).await?, vec![]);
+            assert_eq!(list_refs(storage.as_ref()).await?, HashSet::new());
 
             create_tag(storage.as_ref(), "tag1", s1.clone(), false).await?;
             create_tag(storage.as_ref(), "tag2", s2.clone(), false).await?;
@@ -393,7 +419,7 @@ mod tests {
 
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // attempts to recreate a tag fail
@@ -403,7 +429,7 @@ mod tests {
             ));
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // attempting to create a branch that doesn't exist, with a fake parent
@@ -413,7 +439,7 @@ mod tests {
             assert!(res.is_err());
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())]
+                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // create a branch successfully
@@ -441,11 +467,11 @@ mod tests {
 
             assert_eq!(
                 list_refs(storage.as_ref()).await?,
-                vec![
+                HashSet::from([
                     Ref::Branch("branch1".to_string()),
                     Ref::Tag("tag1".to_string()),
                     Ref::Tag("tag2".to_string())
-                ]
+                ])
             );
 
             // update a branch successfully
@@ -515,6 +541,13 @@ mod tests {
                 fetch_ref(storage.as_ref(), "branch1").await?,
                 (Ref::Branch("branch1".to_string()), RefData { snapshot: sid.clone() })
             );
+
+            // delete a branch
+            delete_branch(storage.as_ref(), "branch1").await?;
+            assert!(matches!(
+                fetch_ref(storage.as_ref(), "branch1").await,
+                Err(RefError::RefNotFound(name)) if name == "branch1"
+            ));
 
             Ok(())
         }).await;

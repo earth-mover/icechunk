@@ -2,8 +2,6 @@ import time
 import warnings
 from typing import cast
 
-import pytest
-
 import dask.array
 import icechunk
 import zarr
@@ -22,31 +20,26 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo() -> icechunk.Repository:
-    storage_config = icechunk.StorageConfig.s3_from_config(
+    storage = icechunk.s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        region="us-east-1",
         bucket="testbucket",
         prefix="python-distributed-writers-test__" + str(time.time()),
-        endpoint_url="http://localhost:9000",
-        region="us-east-1",
-        allow_http=True,
-        credentials=icechunk.S3Credentials(
-            access_key_id="minio123",
-            secret_access_key="minio123",
-        ),
+        access_key_id="minio123",
+        secret_access_key="minio123",
     )
-    repo_config = icechunk.RepositoryConfig(
-        inline_chunk_threshold_bytes=5,
-    )
-
+    repo_config = icechunk.RepositoryConfig.default()
+    repo_config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
-        storage=storage_config,
+        storage=storage,
         config=repo_config,
     )
 
     return repo
 
 
-@pytest.mark.skip(reason="Distributed writes are not yet fully implemented")
-async def test_distributed_writers():
+async def test_distributed_writers() -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -57,7 +50,7 @@ async def test_distributed_writers():
     """
     repo = mk_repo()
     session = repo.writable_session(branch="main")
-    store = session.store()
+    store = session.store
 
     shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
     dask_chunks = (CHUNK_DIM_SIZE * CHUNKS_PER_TASK,) * 2
@@ -73,9 +66,9 @@ async def test_distributed_writers():
     )
     _first_snap = session.commit("array created")
 
-    with Client(n_workers=8):
+    with Client(n_workers=8):  # type: ignore[no-untyped-call]
         session = repo.writable_session(branch="main")
-        store = session.store()
+        store = session.store
         group = zarr.open_group(store=store)
         zarray = cast(zarr.Array, group["array"])
         # with store.preserve_read_only():
@@ -85,7 +78,7 @@ async def test_distributed_writers():
 
         # Lets open a new store to verify the results
         readonly_session = repo.readonly_session(branch="main")
-        store = readonly_session.store()
+        store = readonly_session.store
         all_keys = [key async for key in store.list_prefix("/")]
         assert (
             len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
@@ -93,7 +86,7 @@ async def test_distributed_writers():
 
         group = zarr.open_group(store=store, mode="r")
 
-        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call, attr-defined]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            assert_eq(roundtripped, dask_array)
+            assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]

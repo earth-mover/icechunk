@@ -10,7 +10,8 @@ use aws_sdk_s3::{
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
-use std::{ffi::OsString, sync::Arc};
+use s3::S3Storage;
+use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -28,6 +29,7 @@ pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
+    config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
         transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
@@ -195,6 +197,10 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         self.delete_objects(SNAPSHOT_PREFIX, chunks.map(|id| id.to_string()).boxed())
             .await
     }
+
+    async fn delete_refs(&self, refs: BoxStream<'_, String>) -> StorageResult<usize> {
+        self.delete_objects(REF_PREFIX, refs).await
+    }
 }
 
 fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
@@ -214,4 +220,72 @@ where
 {
     // FIXME: flag error, don't skip
     s.try_filter_map(|info| async move { Ok(convert_list_item(info)) }).boxed()
+}
+
+pub fn new_s3_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+    )?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
+    let st = ObjectStorage::new_in_memory()?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storage>> {
+    let st = ObjectStorage::new_local_filesystem(path)?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_gcs_storage(
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<GcsCredentials>,
+    config: Option<HashMap<String, String>>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let url = format!(
+        "gs://{}{}",
+        bucket,
+        prefix.map(|p| format!("/{}", p)).unwrap_or("".to_string())
+    );
+    let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
+
+    match credentials {
+        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
+            options.push((
+                "google_service_account".to_string(),
+                path.into_os_string().into_string().map_err(|_| {
+                    StorageError::Other("invalid service account path".to_string())
+                })?,
+            ));
+        }
+        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(key))) => {
+            options.push(("google_service_account_key".to_string(), key));
+        }
+        Some(GcsCredentials::Static(GcsStaticCredentials::ApplicationCredentials(
+            path,
+        ))) => {
+            options.push((
+                "google_application_credentials".to_string(),
+                path.into_os_string().into_string().map_err(|_| {
+                    StorageError::Other(
+                        "invalid application credentials path".to_string(),
+                    )
+                })?,
+            ));
+        }
+        None | Some(GcsCredentials::FromEnv) => {}
+    };
+
+    Ok(Arc::new(ObjectStorage::from_url(&url, options)?))
 }

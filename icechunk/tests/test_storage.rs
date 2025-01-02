@@ -1,8 +1,8 @@
 use std::{collections::HashSet, future::Future, sync::Arc};
 
 use bytes::Bytes;
-use chrono::Utc;
 use icechunk::{
+    config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{
         manifest::Manifest, snapshot::Snapshot, ByteRange, ChunkId, ManifestId,
         SnapshotId,
@@ -10,35 +10,32 @@ use icechunk::{
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
-    storage::{
-        s3::{S3ClientOptions, S3Config, S3Credentials, S3Storage, StaticS3Credentials},
-        StorageResult,
-    },
-    ObjectStorage, Storage, StorageError,
+    storage::{new_in_memory_storage, new_s3_storage, StorageResult},
+    Repository, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 
-async fn mk_storage() -> StorageResult<S3Storage> {
-    S3Storage::new_s3_store(&S3Config {
-        bucket: "testbucket".to_string(),
-        prefix: "test_s3_storage__".to_string() + Utc::now().to_rfc3339().as_str(),
-        options: Some(S3ClientOptions {
+#[allow(clippy::expect_used)]
+async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
+        S3Options {
             region: Some("us-east-1".to_string()),
-            endpoint: Some("http://localhost:9000".to_string()),
-            credentials: S3Credentials::Static(StaticS3Credentials {
-                access_key_id: "minio123".into(),
-                secret_access_key: "minio123".into(),
-                session_token: None,
-            }),
+            endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
-        }),
-    })
-    .await
-}
+            anonymous: false,
+        },
+        "testbucket".to_string(),
+        Some(prefix.to_string()),
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "minio123".into(),
+            secret_access_key: "minio123".into(),
+            session_token: None,
+            expires_after: None,
+        })),
+    )
+    .expect("Creating minio storage failed");
 
-fn mk_in_memory_storage() -> ObjectStorage {
-    #![allow(clippy::unwrap_used)]
-    ObjectStorage::new_in_memory_store(Some("prefix".to_string())).unwrap()
+    Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
@@ -46,8 +43,10 @@ where
     F: Fn(Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-    let s1 = Arc::new(mk_storage().await?);
-    let s2 = Arc::new(mk_in_memory_storage());
+    let prefix = format!("{:?}", ChunkId::random());
+    let s1 = mk_storage(prefix.as_str()).await?;
+    #[allow(clippy::unwrap_used)]
+    let s2 = new_in_memory_storage().unwrap();
     f(s1).await?;
     f(s2).await?;
     Ok(())
@@ -288,7 +287,8 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
 pub async fn test_write_config_fails_on_bad_etag_when_non_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MiniIO but seems to work on S3
-    let storage = mk_in_memory_storage();
+    #[allow(clippy::unwrap_used)]
+    let storage = new_in_memory_storage().unwrap();
     let etag = storage
         .update_config(
             Bytes::copy_from_slice(b"hello"),

@@ -13,9 +13,9 @@ use async_trait::async_trait;
 use aws_config::{
     meta::region::RegionProviderChain, retry::ProvideErrorKind, AppName, BehaviorVersion,
 };
-use aws_credential_types::Credentials;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
-    config::{Builder, Region},
+    config::{Builder, ProvideCredentials, Region},
     error::SdkError,
     operation::put_object::PutObjectError,
     primitives::ByteStream,
@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::{
+    config::{CredentialsFetcher, S3Credentials, S3Options},
     format::{
         attributes::AttributesTable, format_constants, manifest::Manifest,
         snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
@@ -46,9 +47,13 @@ use super::{
 };
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct S3Storage {
-    config: S3Config,
+    // config and credentials are stored so we are able to serialize and deserialize the struct
+    config: S3Options,
+    credentials: S3Credentials,
+    bucket: String,
+    prefix: String,
+
     #[serde(skip)]
     /// We need to use OnceCell to allow async initialization, because serde
     /// does not support async cfunction calls from deserialization. This gives
@@ -56,51 +61,14 @@ pub struct S3Storage {
     client: OnceCell<Client>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct StaticS3Credentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
-#[serde(tag = "type")]
-pub enum S3Credentials {
-    #[default]
-    #[serde(rename = "from_env")]
-    FromEnv,
-    #[serde(rename = "anonymous")]
-    Anonymous,
-    #[serde(rename = "static")]
-    Static(StaticS3Credentials),
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3ClientOptions {
-    pub region: Option<String>,
-    pub endpoint: Option<String>,
-    pub credentials: S3Credentials,
-    pub allow_http: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3Config {
-    pub bucket: String,
-    pub prefix: String,
-    pub options: Option<S3ClientOptions>,
-}
-
-pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
+pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client {
     let region = config
+        .region
         .as_ref()
-        .and_then(|c| c.region.as_ref())
         .map(|r| RegionProviderChain::first_try(Some(Region::new(r.clone()))))
         .unwrap_or_else(RegionProviderChain::default_provider);
 
-    let endpoint = config.as_ref().and_then(|c| c.endpoint.clone());
-    let allow_http = config.as_ref().map(|c| c.allow_http).unwrap_or(false);
-    let credentials =
-        config.as_ref().map(|c| c.credentials.clone()).unwrap_or(S3Credentials::FromEnv);
+    let endpoint = config.endpoint_url.clone();
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
@@ -115,19 +83,24 @@ pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
         S3Credentials::FromEnv => {}
         S3Credentials::Anonymous => aws_config = aws_config.no_credentials(),
         S3Credentials::Static(credentials) => {
-            aws_config = aws_config.credentials_provider(Credentials::new(
-                credentials.access_key_id,
-                credentials.secret_access_key,
-                credentials.session_token,
-                None,
-                "user",
-            ));
+            aws_config =
+                aws_config.credentials_provider(aws_credential_types::Credentials::new(
+                    credentials.access_key_id,
+                    credentials.secret_access_key,
+                    credentials.session_token,
+                    credentials.expires_after.map(|e| e.into()),
+                    "user",
+                ));
+        }
+        S3Credentials::Refreshable(fetcher) => {
+            aws_config =
+                aws_config.credentials_provider(ProvideRefreshableCredentials(fetcher));
         }
     }
 
     let mut s3_builder = Builder::from(&aws_config.load().await);
 
-    if allow_http {
+    if config.allow_http {
         s3_builder = s3_builder.force_path_style(true);
     }
 
@@ -137,12 +110,20 @@ pub async fn mk_client(config: Option<&S3ClientOptions>) -> Client {
 }
 
 impl S3Storage {
-    pub async fn new_s3_store(config: &S3Config) -> Result<S3Storage, StorageError> {
+    pub fn new(
+        config: S3Options,
+        bucket: String,
+        prefix: Option<String>,
+        credentials: S3Credentials,
+    ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
-        client
-            .set(mk_client(config.options.as_ref()).await)
-            .map_err(|e| StorageError::Other(e.to_string()))?;
-        Ok(S3Storage { client, config: config.clone() })
+        Ok(S3Storage {
+            client,
+            config,
+            bucket,
+            prefix: prefix.unwrap_or_default(),
+            credentials,
+        })
     }
 
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
@@ -150,12 +131,14 @@ impl S3Storage {
     /// the original client is returned immediately.
     async fn get_client(&self) -> &Client {
         self.client
-            .get_or_init(|| async { mk_client(self.config.options.as_ref()).await })
+            .get_or_init(|| async {
+                mk_client(&self.config, self.credentials.clone()).await
+            })
             .await
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.config.prefix.as_str(), file_prefix, id]);
+        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
@@ -189,7 +172,7 @@ impl S3Storage {
     }
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.config.prefix.as_str(), REF_PREFIX, ref_key]);
+        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
@@ -198,7 +181,7 @@ impl S3Storage {
             .get_client()
             .await
             .get_object()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .key(key)
             .send()
             .await?
@@ -213,12 +196,8 @@ impl S3Storage {
         key: &str,
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
-        let mut b = self
-            .get_client()
-            .await
-            .get_object()
-            .bucket(self.config.bucket.clone())
-            .key(key);
+        let mut b =
+            self.get_client().await.get_object().bucket(self.bucket.clone()).key(key);
 
         if let Some(header) = range_to_header(range) {
             b = b.range(header)
@@ -236,12 +215,8 @@ impl S3Storage {
         metadata: I,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
-        let mut b = self
-            .get_client()
-            .await
-            .put_object()
-            .bucket(self.config.bucket.clone())
-            .key(key);
+        let mut b =
+            self.get_client().await.put_object().bucket(self.bucket.clone()).key(key);
 
         if let Some(ct) = content_type {
             b = b.content_type(ct)
@@ -279,7 +254,7 @@ impl S3Storage {
             .get_client()
             .await
             .delete_objects()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .delete(delete)
             .send()
             .await?;
@@ -310,7 +285,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .get_object()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .key(key)
             .send()
             .await;
@@ -337,7 +312,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .put_object()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .key(key)
             .content_type("application/yaml")
             .body(config.into());
@@ -506,7 +481,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .get_object()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .key(key.clone())
             .send()
             .await;
@@ -531,7 +506,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .list_objects_v2()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .prefix(prefix.clone())
             .delimiter("/")
             .into_paginator()
@@ -564,7 +539,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .list_objects_v2()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .prefix(prefix.clone())
             .into_paginator()
             .send();
@@ -593,7 +568,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .put_object()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .key(key.clone());
 
         if !overwrite_refs {
@@ -621,7 +596,7 @@ impl Storage for S3Storage {
         &'a self,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let prefix = PathBuf::from_iter([self.config.prefix.as_str(), prefix])
+        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
             .into_os_string()
             .into_string()
             .map_err(StorageError::BadPrefix)?;
@@ -629,7 +604,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .list_objects_v2()
-            .bucket(self.config.bucket.clone())
+            .bucket(self.bucket.clone())
             .prefix(prefix)
             .into_paginator()
             .send()
@@ -673,33 +648,70 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
     Some(ListInfo { id, created_at })
 }
 
+#[derive(Debug)]
+struct ProvideRefreshableCredentials(Arc<dyn CredentialsFetcher>);
+
+impl ProvideCredentials for ProvideRefreshableCredentials {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.provide())
+    }
+}
+
+impl ProvideRefreshableCredentials {
+    async fn provide(
+        &self,
+    ) -> Result<aws_credential_types::Credentials, CredentialsError> {
+        let creds = self.0.get().await.map_err(CredentialsError::not_loaded)?;
+        let creds = aws_credential_types::Credentials::new(
+            creds.access_key_id,
+            creds.secret_access_key,
+            creds.session_token,
+            creds.expires_after.map(|e| e.into()),
+            "user",
+        );
+        Ok(creds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{S3ClientOptions, S3Config, S3Credentials, S3Storage};
+    use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
+
+    use super::S3Storage;
 
     #[tokio::test]
+    #[allow(clippy::unwrap_used)]
     async fn test_serialize_s3_storage() {
-        let config = S3Config {
-            bucket: "bucket".to_string(),
-            prefix: "prefix".to_string(),
-            options: Some(S3ClientOptions {
-                region: Some("us-west-2".to_string()),
-                endpoint: Some("http://localhost:9000".to_string()),
-                credentials: S3Credentials::Static(super::StaticS3Credentials {
-                    access_key_id: "access_key_id".to_string(),
-                    secret_access_key: "secret_access_key".to_string(),
-                    session_token: Some("session_token".to_string()),
-                }),
-                allow_http: true,
-            }),
+        let config = S3Options {
+            region: Some("us-west-2".to_string()),
+            endpoint_url: Some("http://localhost:9000".to_string()),
+            allow_http: true,
+            anonymous: false,
         };
-        let storage = S3Storage::new_s3_store(&config).await.unwrap();
+        let credentials = S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "access_key_id".to_string(),
+            secret_access_key: "secret_access_key".to_string(),
+            session_token: Some("session_token".to_string()),
+            expires_after: None,
+        });
+        let storage = S3Storage::new(
+            config,
+            "bucket".to_string(),
+            Some("prefix".to_string()),
+            credentials,
+        )
+        .unwrap();
 
         let serialized = serde_json::to_string(&storage).unwrap();
 
         assert_eq!(
             serialized,
-            r#"{"bucket":"bucket","prefix":"prefix","options":{"region":"us-west-2","endpoint":"http://localhost:9000","credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token"},"allow_http":true}}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix"}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

@@ -2,8 +2,6 @@ from collections.abc import Generator
 
 import pytest
 
-from icechunk.repository import Repository
-
 pytest.importorskip("xarray")
 
 import contextlib
@@ -14,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 import xarray as xr
-from icechunk import StorageConfig
+from icechunk import Repository, local_filesystem_storage
 from icechunk.xarray import to_icechunk
 from xarray.testing import assert_identical
 
@@ -54,21 +52,21 @@ def create_test_data(
 @contextlib.contextmanager
 def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(StorageConfig.filesystem(tmpdir))
+        repo = Repository.create(local_filesystem_storage(tmpdir))
         session = repo.writable_session("main")
-        to_icechunk(data, store=session.store(), mode="w")
+        to_icechunk(data, store=session.store, mode="w")
 
         # if allow_distributed_write:
         #     with session.allow_distributed_write():
-        #       to_icechunk(data, store=session.store(), mode="w")
+        #       to_icechunk(data, store=session.store, mode="w")
         # else:
-        #     to_icechunk(data, store=session.store(), mode="w")
+        #     to_icechunk(data, store=session.store, mode="w")
 
-        with xr.open_zarr(session.store(), consolidated=False) as ds:
+        with xr.open_zarr(session.store, consolidated=False) as ds:
             yield ds
 
 
-def test_xarray_to_icechunk():
+def test_xarray_to_icechunk() -> None:
     ds = create_test_data()
     with roundtrip(ds) as actual:
         assert_identical(actual, ds)

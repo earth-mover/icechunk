@@ -1,28 +1,26 @@
 import pickle
+from pathlib import Path
 
 import pytest
 
-import icechunk
 import zarr
-from icechunk.repository import Repository
+from icechunk import Repository, local_filesystem_storage
 
 
-def create_local_repo(path: str) -> icechunk.Repository:
-    return icechunk.Repository.create(
-        storage=icechunk.StorageConfig.filesystem(path),
-    )
+def create_local_repo(path: str) -> Repository:
+    return Repository.create(storage=local_filesystem_storage(path))
 
 
 @pytest.fixture(scope="function")
-def tmp_repo(tmpdir) -> Repository:
+def tmp_repo(tmpdir: Path) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(store_path)
     return repo
 
 
-def test_pickle_read_only(tmp_repo: Repository):
+def test_pickle_read_only(tmp_repo: Repository) -> None:
     tmp_session = tmp_repo.writable_session(branch="main")
-    tmp_store = tmp_session.store()
+    tmp_store = tmp_session.store
 
     assert tmp_store._read_only is False
 
@@ -36,9 +34,9 @@ def test_pickle_read_only(tmp_repo: Repository):
     assert tmp_store._read_only is False
 
 
-def test_pickle(tmp_repo: Repository):
+def test_pickle(tmp_repo: Repository) -> None:
     tmp_session = tmp_repo.writable_session(branch="main")
-    tmp_store = tmp_session.store()
+    tmp_store = tmp_session.store
 
     root = zarr.group(store=tmp_store)
     array = root.ones(name="ones", shape=(10, 10), chunks=(5, 5), dtype="float32")

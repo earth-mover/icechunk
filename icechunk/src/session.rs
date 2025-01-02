@@ -31,9 +31,9 @@ use crate::{
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError},
-    repository::{RepositoryConfig, RepositoryError},
+    repository::RepositoryError,
     virtual_chunks::VirtualChunkResolver,
-    Storage, StorageError,
+    RepositoryConfig, Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -49,6 +49,8 @@ pub enum SessionError {
     SnapshotNotFound { id: SnapshotId },
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
+    #[error("no ancestor node was found for `{prefix}`")]
+    AncestorNodeNotFound { prefix: Path },
     #[error("node not found at `{path}`: {message}")]
     NodeNotFound { path: Path, message: String },
     #[error("there is not an array at `{node:?}`: {message}")]
@@ -153,6 +155,10 @@ impl Session {
 
     pub fn changes(&self) -> &ChangeSet {
         &self.change_set
+    }
+
+    pub fn config(&self) -> &RepositoryConfig {
+        &self.config
     }
 
     /// Add a group to the store.
@@ -287,6 +293,22 @@ impl Session {
         }
     }
 
+    pub async fn get_closest_ancestor_node(
+        &self,
+        path: &Path,
+    ) -> SessionResult<NodeSnapshot> {
+        let mut ancestors = path.ancestors();
+        // the first element is the `path` itself, which we have already tested
+        ancestors.next();
+        for parent in ancestors {
+            let node = self.get_node(&parent).await;
+            if node.is_ok() {
+                return node;
+            }
+        }
+        Err(SessionError::AncestorNodeNotFound { prefix: path.clone() })
+    }
+
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         get_node(self.storage.as_ref(), &self.change_set, self.snapshot_id(), path).await
     }
@@ -311,6 +333,19 @@ impl Session {
             }),
             other => other,
         }
+    }
+
+    pub async fn array_chunk_iterator<'a>(
+        &'a self,
+        path: &Path,
+    ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
+        node_chunk_iterator(
+            self.storage.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            path,
+        )
+        .await
     }
 
     pub async fn get_chunk_ref(
@@ -496,6 +531,17 @@ impl Session {
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
         all_chunks(self.storage.as_ref(), &self.change_set, self.snapshot_id()).await
+    }
+
+    pub async fn all_virtual_chunk_locations(
+        &self,
+    ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
+        let stream =
+            self.all_chunks().await?.try_filter_map(|(_, info)| match info.payload {
+                ChunkPayload::Virtual(reference) => ready(Ok(Some(reference.location.0))),
+                _ => ready(Ok(None)),
+            });
+        Ok(stream)
     }
 
     /// Discard all uncommitted changes and return them as a `ChangeSet`
@@ -698,11 +744,20 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = storage.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        let path = node.path.clone();
-        node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
-            .await
-            .map_ok(move |ci| (path.clone(), ci))
+    let res = nodes.filter_map(move |node| async move {
+        // This iterator should yield chunks for existing arrays + any updates.
+        // we check for deletion here in the case that `path` exists in the snapshot,
+        // and was deleted and then recreated in this changeset.
+        if change_set.is_deleted(&node.path, &node.id) {
+            None
+        } else {
+            let path = node.path.clone();
+            Some(
+                node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
+                    .await
+                    .map_ok(move |ci| (path.clone(), ci)),
+            )
+        }
     });
     Ok(res.flatten())
 }
@@ -730,7 +785,8 @@ async fn verified_node_chunk_iterator<'a>(
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
-        NodeData::Array(_, manifests) => {
+        NodeData::Array(meta, manifests) => {
+            let ndim = meta.shape.len();
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
                     .array_chunks_iterator(&node.id, &node.path)
@@ -766,7 +822,7 @@ async fn verified_node_chunk_iterator<'a>(
                                 match manifest {
                                     Ok(manifest) => {
                                         let old_chunks = manifest
-                                            .iter(node_id_c.clone())
+                                            .iter(node_id_c.clone(), ndim)
                                             .filter(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
@@ -1100,7 +1156,7 @@ mod tests {
         },
         refs::{fetch_ref, Ref},
         repository::VersionInfo,
-        storage::logging::LoggingStorage,
+        storage::{logging::LoggingStorage, new_in_memory_storage},
         strategies::{empty_writable_session, node_paths, zarr_array_metadata},
         ObjectStorage, Repository,
     };
@@ -1113,10 +1169,7 @@ mod tests {
     use tokio::sync::Barrier;
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = Arc::new(
-            ObjectStorage::new_in_memory_store(Some("prefix".into()))
-                .expect("failed to create in-memory store"),
-        );
+        let storage = new_in_memory_storage().expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -1224,7 +1277,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage = ObjectStorage::new_in_memory_store(Some("prefix".into()))?;
+        let storage = new_in_memory_storage()?;
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {
@@ -1306,10 +1359,11 @@ mod tests {
         ));
         let snapshot_id = ObjectId::random();
         storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-        update_branch(&storage, "main", snapshot_id.clone(), None, true).await?;
-        Repository::store_config(&storage, &RepositoryConfig::default(), None).await?;
+        update_branch(storage.as_ref(), "main", snapshot_id.clone(), None, true).await?;
+        Repository::store_config(storage.as_ref(), &RepositoryConfig::default(), None)
+            .await?;
 
-        let repo = Repository::open(None, Arc::new(storage), HashMap::new()).await?;
+        let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
@@ -1442,8 +1496,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -1703,12 +1756,25 @@ mod tests {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root()).await?;
+        ds.commit("initialize", None).await?;
+
+        let mut ds = repository.writable_session("main").await?;
         ds.add_group("/a".try_into().unwrap()).await?;
         ds.add_group("/b".try_into().unwrap()).await?;
         ds.add_group("/b/bb".try_into().unwrap()).await?;
+
         ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
         assert!(ds.get_group(&"/b/bb".try_into().unwrap()).await.is_err());
+
+        ds.delete_group("/a".try_into().unwrap()).await?;
+        assert!(ds.change_set.is_empty());
+
+        // try deleting the child group again, since this was a group that was already
+        // deleted, it should be a no-op
+        ds.delete_group("/b/bb".try_into().unwrap()).await?;
+        ds.delete_group("/a".try_into().unwrap()).await?;
+        assert!(ds.change_set.is_empty());
         Ok(())
     }
 
@@ -1731,8 +1797,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let repo = Repository::create(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
@@ -1808,8 +1873,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
-        let in_mem_storage =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let in_mem_storage = Arc::new(ObjectStorage::new_in_memory()?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -2123,8 +2187,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
-        let in_mem_storage =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into()))?);
+        let in_mem_storage = new_in_memory_storage()?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;

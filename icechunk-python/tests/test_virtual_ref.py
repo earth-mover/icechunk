@@ -1,76 +1,135 @@
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
 import numpy as np
 import pytest
-from object_store import ClientOptions, ObjectStore
 
 import zarr
 import zarr.core
 import zarr.core.buffer
 from icechunk import (
-    S3Credentials,
-    StorageConfig,
-    VirtualRefConfig,
+    IcechunkError,
+    ObjectStoreConfig,
+    RepositoryConfig,
+    S3Options,
+    VirtualChunkContainer,
+    containers_credentials,
+    in_memory_storage,
+    local_filesystem_storage,
+    s3_credentials,
+    s3_store,
 )
 from icechunk.repository import Repository
+from tests.conftest import write_chunks_to_minio
 
 
-def write_chunks_to_minio(chunks: list[tuple[str, bytes]]):
-    client_options = ClientOptions(
-        allow_http=True,  # type: ignore
-    )
-    store = ObjectStore(
-        "s3://testbucket",
-        {
-            "access_key_id": "minio123",
-            "secret_access_key": "minio123",
-            "aws_region": "us-east-1",
-            "aws_endpoint": "http://localhost:9000",
-        },
-        client_options=client_options,
-    )
-
-    for key, data in chunks:
-        store.put(key, data)
-
-
-async def test_write_minio_virtual_refs():
-    # FIXME
-    pytest.xfail(
-        "Temporary flagged as failing while we implement new virtual chunk mechanism"
-    )
-    write_chunks_to_minio(
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_write_minio_virtual_refs() -> None:
+    prefix = str(uuid.uuid4())
+    etags = write_chunks_to_minio(
         [
-            ("path/to/python/chunk-1", b"first"),
-            ("path/to/python/chunk-2", b"second"),
-        ]
+            (f"{prefix}/chunk-1", b"first"),
+            (f"{prefix}/chunk-2", b"second"),
+        ],
+    )
+
+    config = RepositoryConfig.default()
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        s3_compatible=True,
+    )
+    container = VirtualChunkContainer("s3", "s3://", store_config)
+    config.set_virtual_chunk_container(container)
+    credentials = containers_credentials(
+        s3=s3_credentials(access_key_id="minio123", secret_access_key="minio123")
     )
 
     # Open the store
     repo = Repository.open_or_create(
-        storage=StorageConfig.memory("virtual"),
-        virtual_ref_config=VirtualRefConfig.s3_from_config(
-            credentials=S3Credentials(
-                access_key_id="minio123",
-                secret_access_key="minio123",
-            ),
-            endpoint_url="http://localhost:9000",
-            allow_http=True,
-            region="us-east-1",
-        ),
+        storage=in_memory_storage(),
+        config=config,
+        virtual_chunk_credentials=credentials,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
-    array = zarr.Array.create(store, shape=(1, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
+    array = zarr.Array.create(store, shape=(5, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
+
+    # We add the virtual chunk refs without checksum, with the right etag, and with the wrong wrong etag and datetime.
+    # This way we can check retrieval operations that should fail
+    old = datetime.now(UTC) - timedelta(weeks=1)
+    new = datetime.now(UTC) + timedelta(minutes=1)
 
     store.set_virtual_ref(
-        "c/0/0/0", "s3://testbucket/path/to/python/chunk-1", offset=0, length=4
+        "c/0/0/0", f"s3://testbucket/{prefix}/chunk-1", offset=0, length=4
     )
     store.set_virtual_ref(
-        "c/0/0/1", "s3://testbucket/path/to/python/chunk-2", offset=1, length=4
+        "c/1/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum=etags[0],
     )
+    store.set_virtual_ref(
+        "c/2/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum="bad etag",
+    )
+    store.set_virtual_ref(
+        "c/3/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum=old,
+    )
+    store.set_virtual_ref(
+        "c/4/0/0",
+        f"s3://testbucket/{prefix}/chunk-1",
+        offset=0,
+        length=4,
+        checksum=new,
+    )
+
+    store.set_virtual_ref(
+        "c/0/0/1", f"s3://testbucket/{prefix}/chunk-2", offset=1, length=4
+    )
+    store.set_virtual_ref(
+        "c/1/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum=etags[1],
+    )
+    store.set_virtual_ref(
+        "c/2/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum="bad etag",
+    )
+    store.set_virtual_ref(
+        "c/3/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum=old,
+    )
+    store.set_virtual_ref(
+        "c/4/0/1",
+        f"s3://testbucket/{prefix}/chunk-2",
+        offset=1,
+        length=4,
+        checksum=new,
+    )
+
     # we write a ref that simulates a lost chunk
     store.set_virtual_ref(
-        "c/0/0/2", "s3://testbucket/path/to/python/non-existing", offset=1, length=4
+        "c/0/0/2", f"s3://testbucket/{prefix}/non-existing", offset=1, length=4
     )
 
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
@@ -78,10 +137,14 @@ async def test_write_minio_virtual_refs():
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
     assert first is not None
     assert first.to_bytes() == b"firs"
+    assert await store.get("c/1/0/0", prototype=buffer_prototype) == first
+    assert await store.get("c/4/0/0", prototype=buffer_prototype) == first
 
     second = await store.get("c/0/0/1", prototype=buffer_prototype)
     assert second is not None
     assert second.to_bytes() == b"econ"
+    assert await store.get("c/1/0/1", prototype=buffer_prototype) == second
+    assert await store.get("c/4/0/1", prototype=buffer_prototype) == second
 
     assert array[0, 0, 0] == 1936877926
     assert array[0, 0, 1] == 1852793701
@@ -90,27 +153,48 @@ async def test_write_minio_virtual_refs():
     assert await store.get("c/0/0/3", prototype=buffer_prototype) is None
 
     # fetching a virtual ref that disappeared should be an exception
-    with pytest.raises(ValueError):
+    with pytest.raises(IcechunkError):
         # TODO: we should include the key and other info in the exception
         await store.get("c/0/0/2", prototype=buffer_prototype)
+
+    all_locations = set(session.all_virtual_chunk_locations())
+    assert f"s3://testbucket/{prefix}/non-existing" in all_locations
+    assert f"s3://testbucket/{prefix}/chunk-1" in all_locations
+    assert f"s3://testbucket/{prefix}/chunk-2" in all_locations
+
+    # check we cannot get refs with bad etag o that were modified
+
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/2/0/0", prototype=buffer_prototype)
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/3/0/0", prototype=buffer_prototype)
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/2/0/1", prototype=buffer_prototype)
+    with pytest.raises(IcechunkError, match="chunk has changed"):
+        await store.get("c/3/0/1", prototype=buffer_prototype)
 
     _snapshot_id = session.commit("Add virtual refs")
 
 
-async def test_from_s3_public_virtual_refs(tmpdir):
-    # FIXME
-    pytest.xfail(
-        "Temporary flagged as failing while we implement new virtual chunk mechanism"
+async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
+    config = RepositoryConfig.default()
+    store_config = ObjectStoreConfig.S3(
+        S3Options(
+            region="us-east-1",
+            anonymous=True,
+        )
     )
-    # Open the store,
+    container = VirtualChunkContainer(
+        "sample-data", "s3://earthmover-sample-data", store_config
+    )
+    config.set_virtual_chunk_container(container)
+
     repo = Repository.open_or_create(
-        storage=StorageConfig.filesystem(f"{tmpdir}/virtual"),
-        virtual_ref_config=VirtualRefConfig.s3_anonymous(
-            region="us-east-1", allow_http=False
-        ),
+        storage=local_filesystem_storage(f"{tmpdir}/virtual"),
+        config=config,
     )
     session = repo.writable_session("main")
-    store = session.store()
+    store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
     year = root.require_array(

@@ -64,6 +64,6 @@ jobs:
           git config --global user.name "Joe Hamman"
 
       - name: publish to crates
-        run: cargo release --no-confirm --tag-prefix icechunk-rust --execute
+        run: cargo release --no-confirm --tag-prefix icechunk-rust --execute --no-sign-tag
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
