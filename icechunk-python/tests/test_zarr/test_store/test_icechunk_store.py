@@ -190,6 +190,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         out = [k async for k in store.list_dir("")]
         assert out == []
 
+        await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
+
         await store.set(
             "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
@@ -197,7 +199,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             "goo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
 
-        keys_expected = ["foo", "goo"]
+        keys_expected = ["foo", "goo", "zarr.json"]
         keys_observed = [k async for k in store.list_dir("")]
         assert set(keys_observed) == set(keys_expected)
 
@@ -301,6 +303,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     async def test_is_empty(self, store: IcechunkStore) -> None:
         assert await store.is_empty("")
+        await self.set(
+            store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
+        await self.set(
+            store, "foo/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        )
         await self.set(
             store, "foo/bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )

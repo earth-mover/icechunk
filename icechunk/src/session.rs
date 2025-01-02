@@ -49,6 +49,8 @@ pub enum SessionError {
     SnapshotNotFound { id: SnapshotId },
     #[error("error in icechunk file")]
     FormatError(#[from] IcechunkFormatError),
+    #[error("no ancestor node was found for `{prefix}`")]
+    AncestorNodeNotFound { prefix: Path },
     #[error("node not found at `{path}`: {message}")]
     NodeNotFound { path: Path, message: String },
     #[error("there is not an array at `{node:?}`: {message}")]
@@ -291,6 +293,22 @@ impl Session {
         }
     }
 
+    pub async fn get_closest_ancestor_node(
+        &self,
+        path: &Path,
+    ) -> SessionResult<NodeSnapshot> {
+        let mut ancestors = path.ancestors();
+        // the first element is the `path` itself, which we have already tested
+        ancestors.next();
+        for parent in ancestors {
+            let node = self.get_node(&parent).await;
+            if node.is_ok() {
+                return node;
+            }
+        }
+        Err(SessionError::AncestorNodeNotFound { prefix: path.clone() })
+    }
+
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         get_node(self.storage.as_ref(), &self.change_set, self.snapshot_id(), path).await
     }
@@ -315,6 +333,19 @@ impl Session {
             }),
             other => other,
         }
+    }
+
+    pub async fn array_chunk_iterator<'a>(
+        &'a self,
+        path: &Path,
+    ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
+        node_chunk_iterator(
+            self.storage.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            path,
+        )
+        .await
     }
 
     pub async fn get_chunk_ref(
