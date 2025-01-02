@@ -158,7 +158,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
             # If that chunk was deleted, then `"c"` is not returned.
             # LocalStore will not have this behaviour :/
-            # So we ignore this inconsistency.
+            # In Icechunk, we always return the `c` so ignore this inconsistency.
             assert model_ls == store_ls, (model_ls, store_ls)
 
     @precondition(lambda self: bool(self.all_arrays))
@@ -197,6 +197,16 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert sorted(model_list) == sorted(store_list), (
             sorted(model_list),
             sorted(store_list),
+        )
+
+        # check that our internal state matches that of the store and model
+        assert all(
+            f"{path}/zarr.json" in model_list
+            for path in self.all_groups | self.all_arrays
+        )
+        assert all(
+            f"{path}/zarr.json" in store_list
+            for path in self.all_groups | self.all_arrays
         )
 
 

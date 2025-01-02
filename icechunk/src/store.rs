@@ -426,12 +426,12 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
-        let session = Arc::clone(&self.session).read_owned().await;
         let prefix = prefix.trim_end_matches("/");
         let absolute_prefix =
             if !prefix.starts_with("/") { &format!("/{}", prefix) } else { prefix };
 
         let path = Path::try_from(absolute_prefix)?;
+        let session = Arc::clone(&self.session).read_owned().await;
         let results = match session.get_node(&path).await {
             Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => {
                 // if this is an array we know what to yield
