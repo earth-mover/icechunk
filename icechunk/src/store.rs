@@ -1701,8 +1701,7 @@ mod tests {
     async fn test_delete_dir() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
-        let store =
-            Store::from_session(Arc::new(RwLock::new(ds))).await;
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
         add_group(&store, "").await.unwrap();
         add_group(&store, "group").await.unwrap();
