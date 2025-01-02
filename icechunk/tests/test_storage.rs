@@ -11,12 +11,12 @@ use icechunk::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
     storage::{new_in_memory_storage, new_s3_storage, StorageResult},
-    Repository, Storage, StorageError,
+    ObjectStorage, Repository, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 
 #[allow(clippy::expect_used)]
-async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -38,17 +38,43 @@ async fn mk_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync
     Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
+#[allow(clippy::expect_used)]
+async fn mk_s3_object_store_storage(
+    prefix: &str,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    // Add 2 so prefix does not match native s3 storage tests
+    let url = format!("s3://testbucket/{}2", prefix);
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        ObjectStorage::from_url(
+            &url,
+            vec![
+                ("aws_access_key_id".to_string(), "minio123".to_string()),
+                ("aws_secret_access_key".to_string(), "minio123".to_string()),
+                ("aws_region".to_string(), "us-east-1".to_string()),
+                ("aws_endpoint".to_string(), "http://localhost:9000".to_string()),
+                ("allow_http".to_string(), "true".to_string()),
+                ("conditional_put".to_string(), "etag".to_string()),
+            ],
+        )
+        .expect("Creating minio s3 storage with object_store failed"),
+    );
+
+    Ok(Repository::add_in_mem_asset_caching(storage))
+}
+
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Fn(Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
     let prefix = format!("{:?}", ChunkId::random());
-    let s1 = mk_storage(prefix.as_str()).await?;
+    let s1 = mk_s3_storage(prefix.as_str()).await?;
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().unwrap();
+    let s3 = mk_s3_object_store_storage(prefix.as_str()).await?;
     f(s1).await?;
     f(s2).await?;
+    f(s3).await?;
     Ok(())
 }
 
