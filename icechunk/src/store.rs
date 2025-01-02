@@ -12,7 +12,7 @@ use std::{
 
 use async_stream::try_stream;
 use bytes::Bytes;
-use futures::{future::ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -331,39 +331,47 @@ impl Store {
         if self.read_only().await {
             return Err(StoreError::ReadOnly);
         }
-
+        let prefix = prefix.trim_start_matches("/").trim_end_matches("/");
         // TODO: Handling preceding "/" is ugly!
-        let path = format!("/{}", prefix.trim_start_matches("/"))
+        let path = format!("/{}", prefix)
             .try_into()
             .map_err(|_| StoreError::BadKeyPrefix(prefix.to_owned()))?;
 
-        {
-            let mut guard = self.session.write().await;
-            let node = guard.get_node(&path).await;
-            match node {
-                Ok(NodeSnapshot {
-                    node_data: NodeData::Group, path: node_path, ..
-                }) => Ok(guard.deref_mut().delete_group(node_path).await?),
-                Ok(NodeSnapshot {
-                    node_data: NodeData::Array(..),
-                    path: node_path,
-                    ..
-                }) => Ok(guard.deref_mut().delete_array(node_path).await?),
-                Err(SessionError::NodeNotFound { .. }) => {
-                    // other cases are
-                    // 1. delete("/path/to/array/c")
-                    // 2. delete("/path/to/array/c/0/0")
-                    let prefix = prefix.trim_start_matches("/");
+        let mut guard = self.session.write().await;
+        let node = guard.get_node(&path).await;
+        match node {
+            Ok(NodeSnapshot { node_data: NodeData::Group, path: node_path, .. }) => {
+                Ok(guard.deref_mut().delete_group(node_path).await?)
+            }
+            Ok(NodeSnapshot {
+                node_data: NodeData::Array(..), path: node_path, ..
+            }) => Ok(guard.deref_mut().delete_array(node_path).await?),
+            Err(SessionError::NodeNotFound { .. }) => {
+                // other cases are
+                // 1. delete("/path/to/array/c")
+                // 2. delete("/path/to/array/c/0/0")
+                // 3. delete("/path/to/arr")
+                // 4. delete("non-existent-prefix")
+                // for cases 1, 2 we can find an ancestor array node and filter its chunks
+                // for cases 3, 4 this call is a no-op
+                let node = guard.get_closest_ancestor_node(&path).await;
+                if let Ok(node) = node {
+                    let node_path = node.path.clone();
                     let to_delete = guard
-                        .deref_mut()
-                        .all_chunks()
-                        .await?
-                        .try_filter_map(|(node_path, chunk)| {
-                            let key = format!(
-                                "{}",
-                                Key::Chunk { node_path, coords: chunk.coord }
-                            );
-                            ready(Ok(is_prefix_match(&key, prefix).then_some(key)))
+                        .array_chunk_iterator(&node.path)
+                        .await
+                        .try_filter_map(|chunk| async {
+                            let chunk_key = Key::Chunk {
+                                node_path: node_path.clone(),
+                                coords: chunk.coord,
+                            }
+                            .to_string();
+                            let res = if is_prefix_match(&chunk_key, prefix) {
+                                Some(chunk_key)
+                            } else {
+                                None
+                            };
+                            Ok(res)
                         })
                         .try_collect::<Vec<_>>()
                         .await?;
@@ -371,9 +379,12 @@ impl Store {
                         delete_key(item, guard.deref_mut()).await?;
                     }
                     Ok(())
+                } else {
+                    // for cases 3, 4 this is a no-op
+                    Ok(())
                 }
-                Err(err) => Err(err)?,
             }
+            Err(err) => Err(err)?,
         }
     }
 
