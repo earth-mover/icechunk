@@ -1,12 +1,13 @@
 # Configuration
 
 When creating and opening Icechunk stores, there are a two different sets of configuration to be aware of:
-- `StorageConfig` - for configuring access to the object store or filesystem
-- `StoreConfig` - for configuring the behavior of the Icechunk Store itself
+
+- [`StorageConfig`](./reference.md#icechunk.StorageConfig) - for configuring access to the object store or filesystem
+- [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) - for configuring the behavior of the Icechunk Repository itself
 
 ## Storage Config
 
-Icechunk can be confirgured to work with a both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
+Icechunk can be confirgured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
 
 ### S3 Storage
 
@@ -15,8 +16,8 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "From environment"
 
     With this option, the credentials for connecting to S3 are detected automatically from your environment.
-    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2).
-    
+    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.StorageConfig.s3_from_env)
+
     ```python
     icechunk.StorageConfig.s3_from_env(
         bucket="icechunk-test",
@@ -26,8 +27,8 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Provide credentials"
 
-    With this option, you provide your credentials and other details explicitly.
-    
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.StorageConfig.s3_from_config)
+
     ```python
     icechunk.StorageConfig.s3_from_config(
         bucket="icechunk-test",
@@ -47,8 +48,8 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "Anonymous"
 
     With this option, you connect to S3 anonymously (without credentials).
-    This is suitable for public data.
-    
+    This is suitable for public data. [See the API](./reference.md#icechunk.StorageConfig.s3_anonymous)
+
     ```python
     icechunk.StorageConfig.s3_anonymous(
         bucket="icechunk-test",
@@ -59,7 +60,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 ### Filesystem Storage
 
-Icechunk can also be used on a local filesystem by providing a path to the location of the store
+Icechunk can also be used on a [local filesystem](./reference.md#icechunk.StorageConfig.filesystem) by providing a path to the location of the store
 
 === "Local filesystem"
 
@@ -67,9 +68,9 @@ Icechunk can also be used on a local filesystem by providing a path to the locat
     icechunk.StorageConfig.filesystem("/path/to/my/dataset")
     ```
 
-## Store Config
+## Repository Config
 
-Separate from the storage config, the Store can also be configured with options which control its runtime behavior.
+Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
 
 ### Writing chunks inline
 
@@ -80,7 +81,7 @@ This is the default behavior for chunks smaller than 512 bytes, but it can be ov
 === "Never write chunks inline"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         inline_chunk_threshold_bytes=0,
         ...
     )
@@ -89,7 +90,7 @@ This is the default behavior for chunks smaller than 512 bytes, but it can be ov
 === "Write bigger chunks inline"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         inline_chunk_threshold_bytes=1024,
         ...
     )
@@ -102,7 +103,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 === "S3 from environment"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_from_env(),
         ...
     )
@@ -111,7 +112,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 === "S3 with credentials"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_from_config(
             credential=S3Credentials(
                 access_key_id='my-access-key',
@@ -126,7 +127,7 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 === "S3 Anonymous"
 
     ```python
-    StoreConfig(
+    RepositoryConfig(
         virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
         ...
     )
@@ -136,11 +137,11 @@ Icechunk allows for reading "Virtual" data from [existing archival datasets](./v
 
 Now we can now create or open an Icechunk store using our config.
 
-### Creating a new store
+### Creating a new repo
 
 !!! note
 
-    Icechunk stores cannot be created in the same location where another store already exists.
+    Icechunk repos cannot be created in the same location where another store already exists.
 
 === "Creating with S3 storage"
 
@@ -151,9 +152,8 @@ Now we can now create or open an Icechunk store using our config.
         region='us-east-1',
     )
 
-    store = icechunk.IcechunkStore.create(
-        storage=storage, 
-        mode="w", 
+    repo = icechunk.Repository.create(
+        storage=storage,
     )
     ```
 
@@ -161,17 +161,45 @@ Now we can now create or open an Icechunk store using our config.
 
     ```python
     storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.StoreConfig(
+    config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=1024,
     )
 
-    store = icechunk.IcechunkStore.create(
-        storage=storage, 
-        mode="w", 
+    repo = icechunk.Repository.create(
+        storage=storage,
     )
     ```
 
-### Opening an existing store
+If you are not sure if the repo exists yet, an `icechunk Repository` can created or opened if it already exists:
+
+=== "Open or creating with S3 storage"
+
+    ```python
+    storage = icechunk.StorageConfig.s3_from_env(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        region='us-east-1',
+    )
+
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+    )
+    ```
+
+=== "Open or creating with local filesystem"
+
+    ```python
+    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
+    config = icechunk.RepositoryConfig(
+        inline_chunk_threshold_bytes=1024,
+    )
+
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+    )
+    ```
+
+### Opening an existing repo
 
 === "Opening from S3 Storage"
 
@@ -182,13 +210,12 @@ Now we can now create or open an Icechunk store using our config.
         region='us-east-1',
     )
 
-    config = icechunk.StoreConfig(
+    config = icechunk.RepositoryConfig(
         virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
     )
 
-    store = icechunk.IcechunkStore.open_existing(
-        storage=storage, 
-        mode="r+", 
+    repo = icechunk.Repository.open_existing(
+        storage=storage,
         config=config,
     )
     ```
@@ -197,17 +224,12 @@ Now we can now create or open an Icechunk store using our config.
 
     ```python
     storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.StoreConfig(
+    config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=1024,
     )
 
     store = icechunk.IcechunkStore.open_existing(
         storage=storage,
-        mode='r+',
         config=config,
     )
     ```
-
-#### Access Mode
-
-Note that in all of the above examples, a `mode` is provided to instruct the access level of the user to the store. This mode instructs whether the store should be opened in read only mode, and the store should start with a clean slate (although Icechunk prevents the possibility of accidentally overwriting any data that was previously comimtted to the store forever). For more about the access modes, see the [`zarr-python` docs](https://zarr.readthedocs.io/en/v3/_autoapi/zarr/abc/store/index.html#zarr.abc.store.AccessMode).

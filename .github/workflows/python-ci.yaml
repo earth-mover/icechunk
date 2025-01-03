@@ -3,13 +3,9 @@
 #
 #    maturin generate-ci github --pytest
 #
-name: Python CI
+name: Python CI and library release
 
 on:
-  release:
-    types:
-      # published triggers for both releases and prereleases
-      - published
   workflow_dispatch:
   schedule:
     # run every day at 4am
@@ -50,7 +46,7 @@ jobs:
           docker compose up -d minio
       - name: Wait for MinIO to be ready
         run: |
-          for i in {1..10}; do
+          for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
               break
               fi
@@ -71,7 +67,6 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          working-directory: icechunk-python
           name: wheels-linux-${{ matrix.platform.target }}
           path: icechunk-python/dist
 
@@ -140,7 +135,7 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: macos-12
+          - runner: macos-13
             target: x86_64
           - runner: macos-14
             target: aarch64
@@ -181,14 +176,14 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'release' }}
+    permissions:
+      id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: actions/download-artifact@v4
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*

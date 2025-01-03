@@ -1,5 +1,7 @@
 """
-This example uses Dask to write or update an array in an Icechunk repository.
+This example uses Dask as a task orchestration framework
+to write or update an array in an Icechunk repository.
+To write an Xarray object with dask array use `icechunk.xarray.to_icechunk`
 
 To understand all the available options run:
 ```
@@ -36,8 +38,9 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
-import icechunk
 import numpy as np
+
+import icechunk
 import zarr
 from dask.distributed import Client
 from dask.distributed import print as dprint
@@ -46,31 +49,37 @@ from dask.distributed import print as dprint
 @dataclass
 class Task:
     """A task distributed to Dask workers"""
-    store: icechunk.IcechunkStore   # The worker will use this Icechunk store to read/write to the dataset
-    time: int                       # The position in the coordinate dimension where the read/write should happen
-    seed: int                       # An RNG seed used to generate or recreate random data for the array
+
+    session: (
+        icechunk.Session
+    )  # The worker will use this Icechunk session to read/write to the dataset
+    time: (
+        int  # The position in the coordinate dimension where the read/write should happen
+    )
+    seed: int  # An RNG seed used to generate or recreate random data for the array
 
 
-def generate_task_array(task: Task, shape: tuple[int,...]) -> np.typing.ArrayLike:
+def generate_task_array(task: Task, shape: tuple[int, ...]) -> np.typing.ArrayLike:
     """Generates a randm array with the given shape and using the seed in the Task"""
     np.random.seed(task.seed)
     return np.random.rand(*shape)
 
 
-def execute_write_task(task: Task) -> icechunk.IcechunkStore:
+def execute_write_task(task: Task) -> icechunk.Session:
     """Execute task as a write task.
 
     This will read the time coordinade from `task` and write a "pancake" in that position,
     using random data. Random data is generated using the task seed.
 
-    Returns the Icechunk store after the write is done.
+    Returns the Icechunk session after the write is done.
 
-    As you can see Icechunk stores can be passed to remote workers, and returned from them.
-    The reason to return the store is that we'll need all the remote stores, when they are
+    As you can see Icechunk session can be passed to remote workers, and returned from them.
+    The reason to return the session is that we'll need all the remote session, when they are
     done, to be able to do a single, global commit to Icechunk.
     """
 
-    store = task.store
+    session = task.session
+    store = session.store
 
     group = zarr.group(store=store, overwrite=False)
     array = cast(zarr.Array, group["array"])
@@ -78,7 +87,7 @@ def execute_write_task(task: Task) -> icechunk.IcechunkStore:
     data = generate_task_array(task, array.shape[0:2])
     array[:, :, task.time] = data
     dprint(f"Writing at t={task.time} done")
-    return store
+    return session
 
 
 def execute_read_task(task: Task) -> None:
@@ -87,10 +96,11 @@ def execute_read_task(task: Task) -> None:
     This will read the time coordinade from `task` and read a "pancake" in that position.
     Then it will assert the data is valid by re-generating the random data from the passed seed.
 
-    As you can see Icechunk stores can be passed to remote workers.
+    As you can see Icechunk sessions can be passed to remote workers.
     """
 
-    store = task.store
+    session = task.session
+    store = session.store
     group = zarr.group(store=store, overwrite=False)
     array = cast(zarr.Array, group["array"])
 
@@ -101,36 +111,41 @@ def execute_read_task(task: Task) -> None:
 
 
 def storage_config(args: argparse.Namespace) -> dict[str, Any]:
-    """Return the Icechunk store S3 configuration map"""
+    """Return the Icechunk S3 configuration map"""
     bucket = args.url.netloc
     prefix = args.url.path[1:]
     return {
         "bucket": bucket,
         "prefix": prefix,
+        "region": "us-east-1",
     }
 
 
-def store_config(args: argparse.Namespace) -> dict[str, Any]:
-    """Return the Icechunk store configuration.
+def repository_config(args: argparse.Namespace) -> icechunk.RepositoryConfig:
+    """Return the Icechunk repo configuration.
 
     We lower the default to make sure we write chunks and not inline them.
     """
-    return {"inline_chunk_threshold_bytes": 1}
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    return config
 
 
 def create(args: argparse.Namespace) -> None:
     """Execute the create subcommand.
 
-    Creates an Icechunk store, a root group and an array named "array"
+    Creates an Icechunk repo, a root group and an array named "array"
     with the shape passed as arguments.
 
     Commits the Icechunk repository when done.
     """
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.s3_from_env(**storage_config(args)),
-        mode="w",
-        config=icechunk.StoreConfig(**store_config(args)),
+    repo = icechunk.Repository.create(
+        storage=icechunk.s3_storage(**storage_config(args)),
+        config=repository_config(args),
     )
+
+    session = repo.writable_session("main")
+    store = session.store
 
     group = zarr.group(store=store, overwrite=True)
     shape = (
@@ -147,8 +162,8 @@ def create(args: argparse.Namespace) -> None:
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snapshot = store.commit("array created")
-    print("Array initialized")
+    first_snapshot = session.commit("array created")
+    print(f"Array initialized, snapshot {first_snapshot}")
 
 
 def update(args: argparse.Namespace) -> None:
@@ -159,26 +174,21 @@ def update(args: argparse.Namespace) -> None:
     can still use a lower level API to do the writes:
     * We split the work into small `Task`s, one 'pancake' per task, at a given t coordinate.
     * We use Dask's `map` to ship the `Task` to a worker
-    * The `Task` includes a copy of the Icechunk Store, so workers can do the writes
-    * When workers are done, they send their store back
-    * When all workers are done (Dask's `gather`), we take all Stores and do a distributed commit in Icechunk
+    * The `Task` includes a copy of the Icechunk Session, so workers can do the writes
+    * When workers are done, they send their Session back
+    * When all workers are done (Dask's `gather`), we take all Sessions and do a distributed commit in Icechunk
     """
-    storage_conf = storage_config(args)
-    store_conf = store_config(args)
 
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
-        mode="r+",
-        config=icechunk.StoreConfig(**store_conf),
+    repo = icechunk.Repository.open(
+        storage=icechunk.s3_storage(**storage_config(args)),
+        config=repository_config(args),
     )
 
-    group = zarr.group(store=store, overwrite=False)
-    array = cast(zarr.Array, group["array"])
-    print(f"Found an array with shape: {array.shape}")
+    session = repo.writable_session("main")
 
     tasks = [
         Task(
-            store=store,
+            session=session,
             time=time,
             seed=time,
         )
@@ -188,13 +198,15 @@ def update(args: argparse.Namespace) -> None:
     client = Client(n_workers=args.workers, threads_per_worker=1)
 
     map_result = client.map(execute_write_task, tasks)
-    worker_stores = client.gather(map_result)
+    worker_sessions = client.gather(map_result)
 
     print("Starting distributed commit")
-    # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
+    # we can use the current session as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    commit_res = store.distributed_commit("distributed commit", [ws.change_set_bytes() for ws in worker_stores])
+    for worker_session in worker_sessions:
+        session.merge(worker_session)
+    commit_res = session.commit("distributed commit")
     assert commit_res
     print("Distributed commit done")
 
@@ -209,14 +221,13 @@ def verify(args: argparse.Namespace) -> None:
     * We use Dask's `map` to ship the `Task` to a worker
     * The `Task` includes a copy of the Icechunk Store, so workers can do the Icechunk reads
     """
-    storage_conf = storage_config(args)
-    store_conf = store_config(args)
-
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=icechunk.StorageConfig.s3_from_env(**storage_conf),
-        mode="r",
-        config=icechunk.StoreConfig(**store_conf),
+    repo = icechunk.Repository.open(
+        storage=icechunk.s3_storage(**storage_config(args)),
+        config=repository_config(args),
     )
+
+    session = repo.writable_session("main")
+    store = session.store
 
     group = zarr.group(store=store, overwrite=False)
     array = cast(zarr.Array, group["array"])
@@ -224,7 +235,7 @@ def verify(args: argparse.Namespace) -> None:
 
     tasks = [
         Task(
-            store=store,
+            session=session,
             time=time,
             seed=time,
         )
@@ -245,7 +256,12 @@ def main() -> None:
     """
 
     global_parser = argparse.ArgumentParser(prog="dask_write")
-    global_parser.add_argument("--url", type=str, help="url for the repository: s3://bucket/optional-prefix/repository-name", required=True)
+    global_parser.add_argument(
+        "--url",
+        type=str,
+        help="url for the repository: s3://bucket/optional-prefix/repository-name",
+        required=True,
+    )
     subparsers = global_parser.add_subparsers(title="subcommands", required=True)
 
     create_parser = subparsers.add_parser("create", help="create repo and array")
@@ -310,7 +326,14 @@ def main() -> None:
 
     args = global_parser.parse_args()
     url = urlparse(args.url, "s3")
-    if url.scheme != "s3" or url.netloc == '' or url.path == '' or url.params != '' or url.query != '' or url.fragment != '':
+    if (
+        url.scheme != "s3"
+        or url.netloc == ""
+        or url.path == ""
+        or url.params != ""
+        or url.query != ""
+        or url.fragment != ""
+    ):
         raise ValueError(f"Invalid url {args.url}")
 
     args.url = url

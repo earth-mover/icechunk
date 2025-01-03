@@ -4,23 +4,32 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use quick_cache::sync::Cache;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
         attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
-        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
+        transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
+        SnapshotId,
     },
     private,
 };
 
-use super::{Storage, StorageError, StorageResult};
+use super::{ETag, ListInfo, Storage, StorageError, StorageResult};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
 pub struct MemCachingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
+    #[serde(skip)]
     snapshot_cache: Cache<SnapshotId, Arc<Snapshot>>,
+    #[serde(skip)]
     manifest_cache: Cache<ManifestId, Arc<Manifest>>,
+    #[serde(skip)]
+    transactions_cache: Cache<SnapshotId, Arc<TransactionLog>>,
+    #[serde(skip)]
     attributes_cache: Cache<AttributesId, Arc<AttributesTable>>,
+    #[serde(skip)]
     chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
 }
 
@@ -29,6 +38,7 @@ impl MemCachingStorage {
         backend: Arc<dyn Storage + Send + Sync>,
         num_snapshots: u16,
         num_manifests: u16,
+        num_transactions: u16,
         num_attributes: u16,
         num_chunks: u16,
     ) -> Self {
@@ -36,16 +46,44 @@ impl MemCachingStorage {
             backend,
             snapshot_cache: Cache::new(num_snapshots as usize),
             manifest_cache: Cache::new(num_manifests as usize),
+            transactions_cache: Cache::new(num_transactions as usize),
             attributes_cache: Cache::new(num_attributes as usize),
             chunk_cache: Cache::new(num_chunks as usize),
         }
+    }
+
+    pub fn new_with_defaults(backend: Arc<dyn Storage + Send + Sync>) -> Self {
+        Self::new(backend, 2, 2, 0, 2, 0)
     }
 }
 
 impl private::Sealed for MemCachingStorage {}
 
+impl<'de> Deserialize<'de> for MemCachingStorage {
+    fn deserialize<D>(deserializer: D) -> Result<MemCachingStorage, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let backend: Arc<dyn Storage + Sync + Send> =
+            Deserialize::deserialize(deserializer)?;
+        Ok(Self::new_with_defaults(backend))
+    }
+}
+
 #[async_trait]
+#[typetag::serde]
 impl Storage for MemCachingStorage {
+    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+        self.backend.fetch_config().await
+    }
+    async fn update_config(
+        &self,
+        config: Bytes,
+        etag: Option<&str>,
+    ) -> StorageResult<ETag> {
+        self.backend.update_config(config, etag).await
+    }
+
     async fn fetch_snapshot(
         &self,
         id: &SnapshotId,
@@ -84,6 +122,20 @@ impl Storage for MemCachingStorage {
                 let manifest = self.backend.fetch_manifests(id).await?;
                 let _fail_is_ok = guard.insert(Arc::clone(&manifest));
                 Ok(manifest)
+            }
+        }
+    }
+
+    async fn fetch_transaction_log(
+        &self,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<TransactionLog>> {
+        match self.transactions_cache.get_value_or_guard_async(id).await {
+            Ok(log) => Ok(log),
+            Err(guard) => {
+                let log = self.backend.fetch_transaction_log(id).await?;
+                let _fail_is_ok = guard.insert(Arc::clone(&log));
+                Ok(log)
             }
         }
     }
@@ -134,6 +186,16 @@ impl Storage for MemCachingStorage {
         Ok(())
     }
 
+    async fn write_transaction_log(
+        &self,
+        id: SnapshotId,
+        log: Arc<TransactionLog>,
+    ) -> StorageResult<()> {
+        self.backend.write_transaction_log(id.clone(), Arc::clone(&log)).await?;
+        self.transactions_cache.insert(id, log);
+        Ok(())
+    }
+
     async fn write_chunk(&self, id: ChunkId, bytes: Bytes) -> Result<(), StorageError> {
         self.backend.write_chunk(id.clone(), bytes.clone()).await?;
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
@@ -163,6 +225,21 @@ impl Storage for MemCachingStorage {
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         self.backend.ref_versions(ref_name).await
     }
+
+    async fn list_objects<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend.list_objects(prefix).await
+    }
+
+    async fn delete_objects(
+        &self,
+        prefix: &str,
+        ids: BoxStream<'_, String>,
+    ) -> StorageResult<usize> {
+        self.backend.delete_objects(prefix, ids).await
+    }
 }
 
 #[cfg(test)]
@@ -174,23 +251,24 @@ mod test {
 
     use super::*;
     use crate::{
-        format::manifest::ChunkInfo,
-        repository::{ChunkIndices, ChunkPayload},
-        storage::{logging::LoggingStorage, ObjectStorage, Storage},
+        format::{
+            manifest::{ChunkInfo, ChunkPayload},
+            ChunkIndices, NodeId,
+        },
+        storage::{logging::LoggingStorage, new_in_memory_storage, Storage},
     };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_caches() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let ci1 = ChunkInfo {
-            node: 1,
+            node: NodeId::random(),
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
         };
         let ci2 = ChunkInfo {
-            node: 1,
+            node: NodeId::random(),
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
@@ -202,7 +280,7 @@ mod test {
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 0, 2, 0, 0);
+        let caching = MemCachingStorage::new(Arc::clone(&logging_c), 0, 2, 0, 0, 0);
 
         let manifest = Arc::new(vec![ci2].into_iter().collect());
         let id = ManifestId::random();
@@ -244,22 +322,21 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> =
-            Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
 
         let ci1 = ChunkInfo {
-            node: 1,
+            node: NodeId::random(),
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
         };
-        let ci2 = ChunkInfo { node: 2, ..ci1.clone() };
-        let ci3 = ChunkInfo { node: 3, ..ci1.clone() };
-        let ci4 = ChunkInfo { node: 4, ..ci1.clone() };
-        let ci5 = ChunkInfo { node: 5, ..ci1.clone() };
-        let ci6 = ChunkInfo { node: 6, ..ci1.clone() };
-        let ci7 = ChunkInfo { node: 7, ..ci1.clone() };
-        let ci8 = ChunkInfo { node: 8, ..ci1.clone() };
-        let ci9 = ChunkInfo { node: 9, ..ci1.clone() };
+        let ci2 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci3 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci4 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci5 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci6 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci7 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci8 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
         let id1 = ManifestId::random();
         let table1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());
@@ -278,6 +355,7 @@ mod test {
             // the cache can only fit 2 manifests.
             0,
             2,
+            0,
             0,
             0,
         );

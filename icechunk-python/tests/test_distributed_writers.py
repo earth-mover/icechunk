@@ -1,22 +1,13 @@
-import asyncio
 import time
-from dataclasses import dataclass
+import warnings
 from typing import cast
 
+import dask.array
 import icechunk
-import numpy as np
 import zarr
+from dask.array.utils import assert_eq
 from dask.distributed import Client
-
-
-@dataclass
-class Task:
-    # fixme: useee StorageConfig and StoreConfig once those are pickable
-    storage_config: dict
-    store_config: dict
-    area: tuple[slice, slice]
-    seed: int
-
+from icechunk.dask import store_dask
 
 # We create a 2-d array with this many chunks along each direction
 CHUNKS_PER_DIM = 10
@@ -28,46 +19,27 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-def mk_store(mode: str, task: Task):
-    storage_config = icechunk.StorageConfig.s3_from_config(
-        **task.storage_config,
-        credentials=icechunk.S3Credentials(
-            access_key_id="minio123",
-            secret_access_key="minio123",
-        ),
+def mk_repo() -> icechunk.Repository:
+    storage = icechunk.s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix="python-distributed-writers-test__" + str(time.time()),
+        access_key_id="minio123",
+        secret_access_key="minio123",
     )
-    store_config = icechunk.StoreConfig(**task.store_config)
-
-    store = icechunk.IcechunkStore.open_or_create(
-        storage=storage_config,
-        mode="a",
-        config=store_config,
+    repo_config = icechunk.RepositoryConfig.default()
+    repo_config.inline_chunk_threshold_bytes = 5
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+        config=repo_config,
     )
 
-    return store
+    return repo
 
 
-def generate_task_array(task: Task):
-    np.random.seed(task.seed)
-    nx = len(range(*task.area[0].indices(1000)))
-    ny = len(range(*task.area[1].indices(1000)))
-    return np.random.rand(nx, ny)
-
-
-async def execute_task(task: Task):
-    store = mk_store("w", task)
-
-    group = zarr.group(store=store, overwrite=False)
-    array = cast(zarr.Array, group["array"])
-    array[task.area] = generate_task_array(task)
-    return store.change_set_bytes()
-
-
-def run_task(task: Task):
-    return asyncio.run(execute_task(task))
-
-
-async def test_distributed_writers():
+async def test_distributed_writers() -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -76,82 +48,45 @@ async def test_distributed_writers():
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
+    repo = mk_repo()
+    session = repo.writable_session(branch="main")
+    store = session.store
 
-    client = Client(n_workers=8)
-    storage_config = {
-        "bucket": "testbucket",
-        "prefix": "python-distributed-writers-test__" + str(time.time()),
-        "endpoint_url": "http://localhost:9000",
-        "region": "us-east-1",
-        "allow_http": True,
-    }
-    store_config = {"inline_chunk_threshold_bytes": 5}
-
-    ranges = [
-        (
-            slice(
-                x,
-                min(
-                    x + CHUNKS_PER_TASK * CHUNK_DIM_SIZE,
-                    CHUNK_DIM_SIZE * CHUNKS_PER_DIM,
-                ),
-            ),
-            slice(
-                y,
-                min(
-                    y + CHUNKS_PER_TASK * CHUNK_DIM_SIZE,
-                    CHUNK_DIM_SIZE * CHUNKS_PER_DIM,
-                ),
-            ),
-        )
-        for x in range(
-            0, CHUNK_DIM_SIZE * CHUNKS_PER_DIM, CHUNKS_PER_TASK * CHUNK_DIM_SIZE
-        )
-        for y in range(
-            0, CHUNK_DIM_SIZE * CHUNKS_PER_DIM, CHUNKS_PER_TASK * CHUNK_DIM_SIZE
-        )
-    ]
-    tasks = [
-        Task(
-            storage_config=storage_config,
-            store_config=store_config,
-            area=area,
-            seed=idx,
-        )
-        for idx, area in enumerate(ranges)
-    ]
-    store = mk_store("r+", tasks[0])
+    shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
+    dask_chunks = (CHUNK_DIM_SIZE * CHUNKS_PER_TASK,) * 2
+    dask_array = dask.array.random.random(shape, chunks=dask_chunks)
     group = zarr.group(store=store, overwrite=True)
 
-    n = CHUNKS_PER_DIM * CHUNK_DIM_SIZE
-    array = group.create_array(
+    zarray = group.create_array(
         "array",
-        shape=(n, n),
+        shape=shape,
         chunk_shape=(CHUNK_DIM_SIZE, CHUNK_DIM_SIZE),
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snap = store.commit("array created")
+    _first_snap = session.commit("array created")
 
-    map_result = client.map(run_task, tasks)
-    change_sets_bytes = client.gather(map_result)
+    with Client(n_workers=8):  # type: ignore[no-untyped-call]
+        session = repo.writable_session(branch="main")
+        store = session.store
+        group = zarr.open_group(store=store)
+        zarray = cast(zarr.Array, group["array"])
+        # with store.preserve_read_only():
+        store_dask(session, sources=[dask_array], targets=[zarray])
+        commit_res = session.commit("distributed commit")
+        assert commit_res
 
-    # we can use the current store as the commit coordinator, because it doesn't have any pending changes,
-    # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
-    # important thing is to not count changes twice
-    commit_res = store.distributed_commit("distributed commit", change_sets_bytes)
-    assert commit_res
+        # Lets open a new store to verify the results
+        readonly_session = repo.readonly_session(branch="main")
+        store = readonly_session.store
+        all_keys = [key async for key in store.list_prefix("/")]
+        assert (
+            len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
+        )  # group meta + array meta + each chunk
 
-    # Lets open a new store to verify the results
-    store = mk_store("r", tasks[0])
-    all_keys = [key async for key in store.list_prefix("/")]
-    assert (
-        len(all_keys) == 1 + 1 + CHUNKS_PER_DIM * CHUNKS_PER_DIM
-    )  # group meta + array meta + each chunk
+        group = zarr.open_group(store=store, mode="r")
 
-    group = zarr.group(store=store, overwrite=False)
-
-    for task in tasks:
-        actual = array[task.area]
-        expected = generate_task_array(task)
-        np.testing.assert_array_equal(actual, expected)
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call, attr-defined]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]

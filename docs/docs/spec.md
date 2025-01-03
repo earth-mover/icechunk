@@ -1,6 +1,9 @@
+---
+title: Specification
+---
 # Icechunk Specification
 
-!!! note "Note" 
+**!!! Note:**
     The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
 
 ## Introduction
@@ -29,7 +32,7 @@ The goals of the specification are as follows:
 
 ### Non Goals
 
-1. **Low Latency** - Icechunk is designed to support analytical workloads for large repositories. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr. 
+1. **Low Latency** - Icechunk is designed to support analytical workloads for large repositories. We accept that the extra layers of metadata files and indirection will introduce additional cold-start latency compared to regular Zarr.
 1. **No Catalog** - The spec does not extend beyond a single repository or provide a way to organize multiple repositories into a hierarchy.
 1. **Access Controls** - Access control is the responsibility of the storage medium.
 The spec is not designed to enable fine-grained access restrictions (e.g. only read specific arrays) within a single repository.
@@ -95,7 +98,7 @@ flowchart TD
     chunk3[Chunk File 3]
     chunk4[Chunk File 4]
     end
-    
+
     branch -- snapshot ID --> snapshot2
     snapshot1 --> attrs
     snapshot1 --> manifestA
@@ -106,7 +109,7 @@ flowchart TD
     manifestA --> chunk2
     manifestB --> chunk3
     manifestB --> chunk4
-    
+
 ```
 
 ### File Layout
@@ -212,7 +215,7 @@ Tags cannot be deleted once created.
 ### Snapshot Files
 
 The snapshot file fully describes the schema of the repository, including all arrays and groups.
- 
+
 The snapshot file is currently encoded using [MessagePack](https://msgpack.org/), but this may change before Icechunk version 1.0. Given the alpha status of this spec, the best way to understand the information stored
 in the snapshot file is through the data structure used internally by the Icechunk library for serialization. This data structure will most certainly change before the spec stabilization:
 
@@ -299,7 +302,7 @@ Applications may choose to arrange chunks within files in different ways to opti
 
 A new repository is initialized by creating a new [possibly empty] snapshot file and then creating the first file in the main branch sequence.
 
-If another client attempts to initialize a repository in the same location, only one can succeed. 
+If another client attempts to initialize a repository in the same location, only one can succeed.
 
 ### Read from Repository
 
@@ -307,7 +310,7 @@ If another client attempts to initialize a repository in the same location, only
 
 If the specific snapshot ID is known, a client can open it directly in read only mode.
 
-1. Use the specified shapshot ID to fetch the snapshot file.
+1. Use the specified snapshot ID to fetch the snapshot file.
 1. Fetch desired attributes and values from arrays.
 
 #### From Branch
@@ -316,13 +319,13 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 
 1. List the object store prefix `refs/branch.$BRANCH_NAME/` to obtain the latest branch file in the sequence. Due to the encoding of the sequence number, this should be the _first file_ in lexicographical order.
 1. Read the branch file JSON contents to obtain the snapshot ID.
-1. Use the shapshot ID to fetch the snapshot file.
+1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch desired attributes and values from arrays.
 
 #### From Tag
 
 1. Read the tag file found at `refs/tag.$TAG_NAME/ref.json` to obtain the snapshot ID.
-1. Use the shapshot ID to fetch the snapshot file.
+1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch desired attributes and values from arrays.
 
 ### Write New Snapshot

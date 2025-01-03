@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-python"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.8"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -18,20 +18,24 @@ name = "_icechunk_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-bytes = "1.7.2"
+bytes = "1.8.0"
 chrono = { version = "0.4.38" }
-futures = "0.3.30"
-icechunk = { path = "../icechunk", version = "0.1.0-alpha.1" }
-pyo3 = { version = "0.21", features = [
+futures = "0.3.31"
+icechunk = { path = "../icechunk", version = "0.1.0-alpha.8" }
+pyo3 = { version = "0.23", features = [
   "chrono",
-  "extension-module",
+  #  do we really need this one?
+  #  "extension-module",
   "experimental-async",
 ] }
-pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
-async-stream = "0.3.5"
-thiserror = "1.0.64"
-tokio = "1.40"
-serde_json = "1.0.128"
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+async-stream = "0.3.6"
+thiserror = "2.0.3"
+tokio = "1.41"
+serde_json = "1.0.133"
+async-trait = "0.1.83"
+typetag = "0.2.18"
+serde = { version = "1.0.215", features = ["derive", "rc"] }
 
 [lints]
 workspace = true
