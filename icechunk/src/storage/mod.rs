@@ -1,3 +1,4 @@
+use ::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
@@ -263,20 +264,20 @@ pub fn new_gcs_storage(
     match credentials {
         Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
             options.push((
-                "google_service_account".to_string(),
+                GoogleConfigKey::ServiceAccount.as_ref().to_string(),
                 path.into_os_string().into_string().map_err(|_| {
                     StorageError::Other("invalid service account path".to_string())
                 })?,
             ));
         }
         Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(key))) => {
-            options.push(("google_service_account_key".to_string(), key));
+            options.push((GoogleConfigKey::ServiceAccountKey.as_ref().to_string(), key));
         }
         Some(GcsCredentials::Static(GcsStaticCredentials::ApplicationCredentials(
             path,
         ))) => {
             options.push((
-                "google_application_credentials".to_string(),
+                GoogleConfigKey::ApplicationCredentials.as_ref().to_string(),
                 path.into_os_string().into_string().map_err(|_| {
                     StorageError::Other(
                         "invalid application credentials path".to_string(),
@@ -284,7 +285,19 @@ pub fn new_gcs_storage(
                 })?,
             ));
         }
-        None | Some(GcsCredentials::FromEnv) => {}
+        None | Some(GcsCredentials::FromEnv) => {
+            let builder = GoogleCloudStorageBuilder::from_env();
+
+            for key in &[
+                GoogleConfigKey::ServiceAccount,
+                GoogleConfigKey::ServiceAccountKey,
+                GoogleConfigKey::ApplicationCredentials,
+            ] {
+                if let Some(value) = builder.get_config_value(key) {
+                    options.push((key.as_ref().to_string(), value));
+                }
+            }
+        }
     };
 
     Ok(Arc::new(ObjectStorage::from_url(&url, options)?))
