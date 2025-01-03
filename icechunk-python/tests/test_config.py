@@ -95,10 +95,6 @@ def test_virtual_chunk_containers() -> None:
     )
     container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
     config.set_virtual_chunk_container(container)
-    print(type(config))
-    print(type(config.virtual_chunk_containers))
-    xxx = config.virtual_chunk_containers
-    print(xxx)
     assert len(config.virtual_chunk_containers) > 1
     found_cont = [
         cont

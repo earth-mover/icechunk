@@ -1,7 +1,12 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    num::{NonZeroU16, NonZeroU64},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use icechunk::{
     config::{
@@ -378,7 +383,7 @@ pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
 #[pymethods]
 impl PyStorage {
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None, max_concurrent_requests_for_object=None, min_concurrent_request_size=None))]
     #[classmethod]
     pub fn new_s3(
         _cls: &Bound<'_, PyType>,
@@ -386,12 +391,16 @@ impl PyStorage {
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
+        max_concurrent_requests_for_object: Option<NonZeroU16>,
+        min_concurrent_request_size: Option<NonZeroU64>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_s3_storage(
             config.into(),
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
+            max_concurrent_requests_for_object,
+            min_concurrent_request_size,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -418,18 +427,22 @@ impl PyStorage {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
+    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None, max_concurrent_requests_for_object=None, min_concurrent_request_size=None))]
     pub fn new_gcs(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
         config: Option<HashMap<String, String>>,
+        max_concurrent_requests_for_object: Option<u16>,
+        min_concurrent_request_size: Option<u64>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_gcs_storage(
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
             config,
+            max_concurrent_requests_for_object,
+            min_concurrent_request_size,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 

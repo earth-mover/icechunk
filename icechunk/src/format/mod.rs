@@ -214,6 +214,8 @@ pub enum IcechunkFormatError {
     NodeNotFound { path: Path },
     #[error("chunk coordinates not found `{coords:?}`")]
     ChunkCoordinatesNotFound { coords: ChunkIndices },
+    #[error("manifest information cannot be found in snapshot `{manifest_id}`")]
+    ManifestInfoNotFound { manifest_id: ManifestId },
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;

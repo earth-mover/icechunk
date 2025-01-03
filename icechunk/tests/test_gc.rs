@@ -41,9 +41,15 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
 pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
-    let storage: Arc<dyn Storage + Send + Sync> =
-        new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
-            .expect("Creating minio storage failed");
+    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
+        config,
+        "testbucket".to_string(),
+        Some(prefix),
+        Some(credentials),
+        None,
+        None,
+    )
+    .expect("Creating minio storage failed");
 
     let repo = Repository::create(
         Some(RepositoryConfig {

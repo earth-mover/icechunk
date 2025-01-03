@@ -84,12 +84,13 @@ impl Storage for LoggingStorage {
     async fn fetch_manifests(
         &self,
         id: &ManifestId,
+        size: u64,
     ) -> Result<Arc<Manifest>, StorageError> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("fetch_manifests".to_string(), id.0.to_vec()));
-        self.backend.fetch_manifests(id).await
+        self.backend.fetch_manifests(id, size).await
     }
 
     async fn fetch_chunk(
@@ -132,7 +133,7 @@ impl Storage for LoggingStorage {
         &self,
         id: ManifestId,
         table: Arc<Manifest>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<u64, StorageError> {
         self.backend.write_manifests(id, table).await
     }
 

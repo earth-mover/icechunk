@@ -1,5 +1,6 @@
 use std::{
     future::ready,
+    num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path, PathBuf},
     sync::{
@@ -23,9 +24,9 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{
-    stream::{self, BoxStream},
+    stream::{self, BoxStream, FuturesOrdered},
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,8 @@ use crate::{
 };
 
 use super::{
-    ETag, ListInfo, StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX,
-    REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    split_in_multiple_requests, ETag, ListInfo, StorageResult, CHUNK_PREFIX, CONFIG_PATH,
+    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,12 +54,14 @@ pub struct S3Storage {
     credentials: S3Credentials,
     bucket: String,
     prefix: String,
+    max_concurrent_requests_for_object: u16,
+    min_concurrent_request_size: u64,
 
     #[serde(skip)]
     /// We need to use OnceCell to allow async initialization, because serde
     /// does not support async cfunction calls from deserialization. This gives
     /// us a way to lazily initialize the client.
-    client: OnceCell<Client>,
+    client: OnceCell<Arc<Client>>,
 }
 
 pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client {
@@ -115,6 +118,8 @@ impl S3Storage {
         bucket: String,
         prefix: Option<String>,
         credentials: S3Credentials,
+        max_concurrent_requests_for_object: Option<NonZeroU16>,
+        min_concurrent_request_size: Option<NonZeroU64>,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
         Ok(S3Storage {
@@ -123,16 +128,26 @@ impl S3Storage {
             bucket,
             prefix: prefix.unwrap_or_default(),
             credentials,
+            // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
+            // 8-16 MB requests
+            // 85-90 MB/s per request
+            // these numbers would saturate a 12.5 Gbps network
+            max_concurrent_requests_for_object: max_concurrent_requests_for_object
+                .map(|n| n.get())
+                .unwrap_or(18),
+            min_concurrent_request_size: min_concurrent_request_size
+                .map(|n| n.get())
+                .unwrap_or(12 * 1024 * 1024),
         })
     }
 
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
-    async fn get_client(&self) -> &Client {
+    async fn get_client(&self) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
-                mk_client(&self.config, self.credentials.clone()).await
+                Arc::new(mk_client(&self.config, self.credentials.clone()).await)
             })
             .await
     }
@@ -196,14 +211,35 @@ impl S3Storage {
         key: &str,
         range: &ByteRange,
     ) -> StorageResult<Bytes> {
-        let mut b =
-            self.get_client().await.get_object().bucket(self.bucket.clone()).key(key);
+        get_object_range(self.get_client().await, self.bucket.clone(), key, range).await
+    }
 
-        if let Some(header) = range_to_header(range) {
-            b = b.range(header)
-        };
+    async fn get_object_concurrently(
+        &self,
+        key: &str,
+        size: u64,
+    ) -> StorageResult<Bytes> {
+        let client = self.get_client().await;
+        let mut results = split_in_multiple_requests(
+            size,
+            self.min_concurrent_request_size,
+            self.max_concurrent_requests_for_object,
+        )
+        .map(|(req_offset, req_size)| async move {
+            let range = ByteRange::from_offset_with_length(req_offset, req_size);
+            let key = key.to_string();
+            let client = Arc::clone(client);
+            let bucket = self.bucket.clone();
+            get_object_range(client.as_ref(), bucket, &key, &range).await
+        })
+        .collect::<FuturesOrdered<_>>();
 
-        Ok(b.send().await?.body.collect().await?.into_bytes())
+        let mut res = BytesMut::with_capacity(size as usize);
+        while let Some(bytes) = results.try_next().await? {
+            res.extend_from_slice(bytes.as_ref());
+        }
+
+        Ok(res.into())
     }
 
     async fn put_object<
@@ -371,9 +407,13 @@ impl Storage for S3Storage {
         todo!()
     }
 
-    async fn fetch_manifests(&self, id: &ManifestId) -> StorageResult<Arc<Manifest>> {
+    async fn fetch_manifests(
+        &self,
+        id: &ManifestId,
+        size: u64,
+    ) -> StorageResult<Arc<Manifest>> {
         let key = self.get_manifest_path(id)?;
-        let bytes = self.get_object(key.as_str()).await?;
+        let bytes = self.get_object_concurrently(key.as_str(), size).await?;
         // TODO: optimize using from_read
         let res = rmp_serde::from_slice(bytes.as_ref())?;
         Ok(Arc::new(res))
@@ -428,20 +468,22 @@ impl Storage for S3Storage {
         &self,
         id: ManifestId,
         manifest: Arc<Manifest>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<u64, StorageError> {
         let key = self.get_manifest_path(&id)?;
         let bytes = rmp_serde::to_vec(manifest.as_ref())?;
         let metadata = [(
             format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
             manifest.icechunk_manifest_format_version.to_string(),
         )];
+        let len = bytes.len() as u64;
         self.put_object(
             key.as_str(),
             Some(format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE),
             metadata,
             bytes,
         )
-        .await
+        .await?;
+        Ok(len)
     }
 
     async fn write_transaction_log(
@@ -678,14 +720,29 @@ impl ProvideRefreshableCredentials {
     }
 }
 
+async fn get_object_range(
+    client: &Client,
+    bucket: String,
+    key: &str,
+    range: &ByteRange,
+) -> StorageResult<Bytes> {
+    let mut b = client.get_object().bucket(bucket).key(key);
+
+    if let Some(header) = range_to_header(range) {
+        b = b.range(header)
+    };
+
+    Ok(b.send().await?.body.collect().await?.into_bytes())
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
 
-    use super::S3Storage;
+    use super::*;
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
     async fn test_serialize_s3_storage() {
         let config = S3Options {
             region: Some("us-west-2".to_string()),
@@ -704,6 +761,8 @@ mod tests {
             "bucket".to_string(),
             Some("prefix".to_string()),
             credentials,
+            Some(NonZeroU16::new(20).unwrap()),
+            Some(NonZeroU64::new(1).unwrap()),
         )
         .unwrap();
 
@@ -711,7 +770,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix"}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","max_concurrent_requests_for_object":20,"min_concurrent_request_size":1}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
