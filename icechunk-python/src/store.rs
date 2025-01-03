@@ -269,6 +269,19 @@ impl PyStore {
         })
     }
 
+    fn delete_dir<'py>(
+        &'py self,
+        py: Python<'py>,
+        prefix: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            store.delete_dir(&prefix).await.map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
+    }
+
     #[getter]
     fn supports_partial_writes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_partial_writes = self.0.supports_partial_writes()?;

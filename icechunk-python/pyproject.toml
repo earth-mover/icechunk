@@ -53,14 +53,16 @@ exclude = ["README.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope="function"
 minversion = "7"
 testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 filterwarnings = [
-"error",
-"ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
+  "error",
+  "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
+  "ignore:Port 8787 is already in use:UserWarning:",
 ]
 
 [tool.pyright]

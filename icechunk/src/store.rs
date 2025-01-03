@@ -327,45 +327,84 @@ impl Store {
         }
     }
 
-    pub async fn delete(&self, key: &str) -> StoreResult<()> {
+    pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
             return Err(StoreError::ReadOnly);
         }
+        let prefix = prefix.trim_start_matches("/").trim_end_matches("/");
+        // TODO: Handling preceding "/" is ugly!
+        let path = format!("/{}", prefix)
+            .try_into()
+            .map_err(|_| StoreError::BadKeyPrefix(prefix.to_owned()))?;
 
+        let mut guard = self.session.write().await;
+        let node = guard.get_node(&path).await;
+        match node {
+            Ok(node) => Ok(guard.deref_mut().delete_node(node).await?),
+            Err(SessionError::NodeNotFound { .. }) => {
+                // other cases are
+                // 1. delete("/path/to/array/c")
+                // 2. delete("/path/to/array/c/0/0")
+                // 3. delete("/path/to/arr") or "/not-an-array-yet"
+                // 4. delete("non-existent-prefix")
+                // for cases 1, 2 we can find an ancestor array node and filter its chunks
+                // for cases 3, 4 this call is a no-op
+                let node = guard.get_closest_ancestor_node(&path).await;
+                if let Ok(NodeSnapshot {
+                    path: node_path,
+                    node_data: NodeData::Array(..),
+                    ..
+                }) = node
+                {
+                    let node_path = node_path.clone();
+                    let to_delete = guard
+                        .array_chunk_iterator(&node_path)
+                        .await
+                        .try_filter_map(|chunk| async {
+                            let coords = chunk.coord.clone();
+                            let chunk_key = Key::Chunk {
+                                node_path: node_path.clone(),
+                                coords: chunk.coord,
+                            };
+                            let res = if is_prefix_match(&chunk_key.to_string(), prefix) {
+                                Some(coords)
+                            } else {
+                                None
+                            };
+                            Ok(res)
+                        })
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    Ok(guard
+                        .deref_mut()
+                        .delete_chunks(&node_path, to_delete.into_iter())
+                        .await?)
+                } else {
+                    // for cases 3, 4 this is a no-op
+                    Ok(())
+                }
+            }
+            Err(err) => Err(err)?,
+        }
+    }
+
+    pub async fn delete(&self, key: &str) -> StoreResult<()> {
+        // we need to hold the lock while we do the node search and the write
+        // to avoid race conditions with other writers
+        // (remember this method takes &self and not &mut self)
+        let mut session = self.session.write().await;
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                // we need to hold the lock while we do the node search and the write
-                // to avoid race conditions with other writers
-                // (remember this method takes &self and not &mut self)
-                let mut guard = self.session.write().await;
-                let node = guard.get_node(&node_path).await;
+                let node = session.get_node(&node_path).await;
 
                 // When there is no node at the given key, we don't consider it an error, instead we just do nothing
                 if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
                     return Ok(());
                 };
-
-                let node = node.map_err(StoreError::SessionError)?;
-                match node.node_data {
-                    NodeData::Array(_, _) => {
-                        Ok(guard.deref_mut().delete_array(node_path).await?)
-                    }
-                    NodeData::Group => {
-                        Ok(guard.deref_mut().delete_group(node_path).await?)
-                    }
-                }
+                Ok(session.delete_node(node.map_err(StoreError::SessionError)?).await?)
             }
             Key::Chunk { node_path, coords } => {
-                let mut guard = self.session.write().await;
-                let session = guard.deref_mut();
-                match session.set_chunk_ref(node_path, coords, None).await {
-                    Ok(_) => Ok(()),
-                    Err(SessionError::NodeNotFound { path: _, message: _ }) => {
-                        // When there is no chunk at the given key, we don't consider it an error, instead we just do nothing
-                        Ok(())
-                    }
-                    Err(err) => Err(StoreError::SessionError(err)),
-                }
+                Ok(session.delete_chunks(&node_path, vec![coords].into_iter()).await?)
             }
             Key::ZarrV2(_) => Ok(()),
         }
@@ -614,7 +653,7 @@ async fn set_array_meta(
     path: Path,
     array_meta: ArrayMetadata,
     repo: &mut Session,
-) -> Result<(), StoreError> {
+) -> StoreResult<()> {
     if let Ok(node) = repo.get_array(&path).await {
         // Check if the user attributes are different, if they are update them
         let existing_attrs = match node.user_attributes {
@@ -650,7 +689,7 @@ async fn set_group_meta(
     path: Path,
     group_meta: GroupMetadata,
     repo: &mut Session,
-) -> Result<(), StoreError> {
+) -> StoreResult<()> {
     // we need to hold the lock while we search the group and do the update to avoid race
     // conditions with other writers (notice we don't take &mut self)
     //
@@ -1157,6 +1196,25 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
+    async fn add_group(store: &Store, path: &str) -> StoreResult<()> {
+        let bytes = Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#);
+        store.set(&format!("{}/zarr.json", path), bytes).await?;
+        Ok(())
+    }
+
+    async fn add_array_and_chunk(store: &Store, path: &str) -> StoreResult<()> {
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+        store.set(&format!("{}/zarr.json", path), zarr_meta.clone()).await?;
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set(&format!("{}/c/0/1/0", path), data).await?;
+
+        let data = Bytes::copy_from_slice(b"hello");
+        store.set(&format!("{}/c/1/1/0", path), data).await?;
+
+        Ok(())
+    }
+
     async fn create_memory_store_repository() -> Repository {
         let storage = new_in_memory_storage().expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
@@ -1625,6 +1683,60 @@ mod tests {
             Err(StoreError::SessionError(SessionError::InvalidIndex { coords, path }))
                 if path.to_string() == "/array" && coords == ChunkIndices([10, 1, 1].to_vec())
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_dir() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = create_memory_store_repository().await;
+        let ds = repo.writable_session("main").await?;
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
+
+        add_group(&store, "").await.unwrap();
+        add_group(&store, "group").await.unwrap();
+        add_array_and_chunk(&store, "group/array").await.unwrap();
+
+        store.delete_dir("group/array").await.unwrap();
+        assert!(matches!(
+            store.get("group/array/zarr.json", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(..))
+        ));
+
+        add_array_and_chunk(&store, "group/array").await.unwrap();
+        store.delete_dir("group").await.unwrap();
+        assert!(matches!(
+            store.get("group/zarr.json", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(..))
+        ));
+        assert!(matches!(
+            store.get("group/array/zarr.json", &ByteRange::ALL).await,
+            Err(StoreError::NotFound(..))
+        ));
+
+        add_group(&store, "group").await.unwrap();
+        add_array_and_chunk(&store, "group/array").await.unwrap();
+
+        // intentionally adding prefix '/' here.
+        store.delete_dir("/group/array/c").await.unwrap();
+        let list = store
+            .list_prefix("group/array")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(list, vec!["group/array/zarr.json"]);
+
+        add_array_and_chunk(&store, "group/array").await.unwrap();
+        store.delete_dir("group/array/c/0").await.unwrap();
+        let mut list = store
+            .list_prefix("group/array")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await?;
+        list.sort();
+        assert_eq!(list, vec!["group/array/c/1/1/0", "group/array/zarr.json"]);
 
         Ok(())
     }

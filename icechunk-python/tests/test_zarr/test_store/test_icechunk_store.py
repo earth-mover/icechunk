@@ -319,8 +319,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert await store.is_empty("spam/")
 
     async def test_delete_dir(self, store: IcechunkStore) -> None:
-        if not store.supports_deletes:
-            pytest.skip("store does not support deletes")
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
         await store.set(
             "foo-bar/zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)

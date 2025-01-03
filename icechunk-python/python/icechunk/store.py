@@ -235,9 +235,18 @@ class IcechunkStore(Store, SyncMixin):
 
         Parameters
         ----------
-        key : strz
+        key : str
         """
         return await self._store.delete(key)
+
+    async def delete_dir(self, prefix: str) -> None:
+        """Delete a prefix
+
+        Parameters
+        ----------
+        key : str
+        """
+        return await self._store.delete_dir(prefix)
 
     @property
     def supports_partial_writes(self) -> bool:
