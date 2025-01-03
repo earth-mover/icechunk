@@ -39,7 +39,7 @@ test = [
   "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
-  "xarray>=2024.11.0",
+  "xarray>=2024.11.0, <2025",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
@@ -53,7 +53,7 @@ exclude = ["README.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope="function"
+asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
 testpaths = ["tests"]
 log_cli_level = "INFO"

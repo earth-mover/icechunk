@@ -133,6 +133,7 @@ pub type SnapshotProperties = HashMap<String, Value>;
 pub struct ManifestFileInfo {
     pub id: ManifestId,
     pub format_version: IcechunkFormatVersion,
+    pub size: u64,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -260,9 +261,13 @@ impl Snapshot {
         self.nodes.len()
     }
 
-    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn manifest_info(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
+        // FIXME: optimize
+        self.manifest_files.iter().find(|info| &info.id == id)
     }
 }
 
@@ -426,10 +431,12 @@ mod tests {
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
                 format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                size: 1_000_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
                 format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                size: 1_000_000,
             },
         ];
         let st = Snapshot::from_iter(&initial, None, manifests, vec![], nodes);

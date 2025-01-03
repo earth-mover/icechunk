@@ -115,11 +115,12 @@ impl Storage for MemCachingStorage {
     async fn fetch_manifests(
         &self,
         id: &ManifestId,
+        size: u64,
     ) -> Result<Arc<Manifest>, StorageError> {
         match self.manifest_cache.get_value_or_guard_async(id).await {
             Ok(manifest) => Ok(manifest),
             Err(guard) => {
-                let manifest = self.backend.fetch_manifests(id).await?;
+                let manifest = self.backend.fetch_manifests(id, size).await?;
                 let _fail_is_ok = guard.insert(Arc::clone(&manifest));
                 Ok(manifest)
             }
@@ -180,10 +181,10 @@ impl Storage for MemCachingStorage {
         &self,
         id: ManifestId,
         manifest: Arc<Manifest>,
-    ) -> Result<(), StorageError> {
-        self.backend.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
+    ) -> Result<u64, StorageError> {
+        let res = self.backend.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
         self.manifest_cache.insert(id, manifest);
-        Ok(())
+        Ok(res)
     }
 
     async fn write_transaction_log(
@@ -274,7 +275,7 @@ mod test {
         };
         let pre_existing_id = ManifestId::random();
         let pre_exiting_manifest = Arc::new(vec![ci1].into_iter().collect());
-        backend
+        let pre_size = backend
             .write_manifests(pre_existing_id.clone(), Arc::clone(&pre_exiting_manifest))
             .await?;
 
@@ -284,16 +285,16 @@ mod test {
 
         let manifest = Arc::new(vec![ci2].into_iter().collect());
         let id = ManifestId::random();
-        caching.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
+        let size = caching.write_manifests(id.clone(), Arc::clone(&manifest)).await?;
 
-        assert_eq!(caching.fetch_manifests(&id).await?, manifest);
-        assert_eq!(caching.fetch_manifests(&id).await?, manifest);
+        assert_eq!(caching.fetch_manifests(&id, size).await?, manifest);
+        assert_eq!(caching.fetch_manifests(&id, size).await?, manifest);
         // when we insert we cache, so no fetches
         assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
         assert_eq!(
-            caching.fetch_manifests(&pre_existing_id).await?,
+            caching.fetch_manifests(&pre_existing_id, pre_size).await?,
             pre_exiting_manifest
         );
         assert_eq!(
@@ -303,7 +304,7 @@ mod test {
 
         // only calls backend once
         assert_eq!(
-            caching.fetch_manifests(&pre_existing_id).await?,
+            caching.fetch_manifests(&pre_existing_id, pre_size).await?,
             pre_exiting_manifest
         );
         assert_eq!(
@@ -312,7 +313,7 @@ mod test {
         );
 
         // other walues still cached
-        assert_eq!(caching.fetch_manifests(&id).await?, manifest);
+        assert_eq!(caching.fetch_manifests(&id, size).await?, manifest);
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifests".to_string(), pre_existing_id.0.to_vec())]
@@ -340,13 +341,13 @@ mod test {
 
         let id1 = ManifestId::random();
         let table1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());
-        backend.write_manifests(id1.clone(), Arc::clone(&table1)).await?;
+        let size1 = backend.write_manifests(id1.clone(), Arc::clone(&table1)).await?;
         let id2 = ManifestId::random();
         let table2 = Arc::new(vec![ci4, ci5, ci6].into_iter().collect());
-        backend.write_manifests(id2.clone(), Arc::clone(&table2)).await?;
+        let size2 = backend.write_manifests(id2.clone(), Arc::clone(&table2)).await?;
         let id3 = ManifestId::random();
         let table3 = Arc::new(vec![ci7, ci8, ci9].into_iter().collect());
-        backend.write_manifests(id3.clone(), Arc::clone(&table3)).await?;
+        let size3 = backend.write_manifests(id3.clone(), Arc::clone(&table3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -362,9 +363,9 @@ mod test {
 
         // we keep asking for all 3 items, but the cache can only fit 2
         for _ in 0..20 {
-            assert_eq!(caching.fetch_manifests(&id1).await?, table1);
-            assert_eq!(caching.fetch_manifests(&id2).await?, table2);
-            assert_eq!(caching.fetch_manifests(&id3).await?, table3);
+            assert_eq!(caching.fetch_manifests(&id1, size1).await?, table1);
+            assert_eq!(caching.fetch_manifests(&id2, size2).await?, table2);
+            assert_eq!(caching.fetch_manifests(&id3, size3).await?, table3);
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);

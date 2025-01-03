@@ -5,7 +5,9 @@ use futures::{stream, Stream, StreamExt, TryStreamExt};
 use tokio::pin;
 
 use crate::{
-    format::{manifest::ChunkPayload, ChunkId, ManifestId, SnapshotId},
+    format::{
+        manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
+    },
     refs::{list_refs, RefError},
     storage::ListInfo,
     Storage, StorageError,
@@ -130,6 +132,8 @@ pub enum GCError {
     Ref(#[from] RefError),
     #[error("storage error {0}")]
     Storage(#[from] StorageError),
+    #[error("format error {0}")]
+    FormatError(#[from] IcechunkFormatError),
 }
 
 pub type GCResult<A> = Result<A, GCError>;
@@ -165,7 +169,13 @@ pub async fn garbage_collect(
         if config.deletes_chunks() {
             for manifest_file in snap.manifest_files.iter() {
                 let manifest_id = &manifest_file.id;
-                let manifest = storage.fetch_manifests(manifest_id).await?;
+                let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
+                    IcechunkFormatError::ManifestInfoNotFound {
+                        manifest_id: manifest_id.clone(),
+                    }
+                })?;
+                let manifest =
+                    storage.fetch_manifests(manifest_id, manifest_info.size).await?;
                 let chunk_ids =
                     manifest.chunks().values().filter_map(|payload| match payload {
                         ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
