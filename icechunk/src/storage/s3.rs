@@ -30,7 +30,11 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::OnceCell;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    sync::OnceCell,
+};
+use tokio_util::io::SyncIoBridge;
 
 use crate::{
     config::{CredentialsFetcher, S3Credentials, S3Options},
@@ -210,7 +214,7 @@ impl S3Storage {
         &self,
         key: &str,
         range: &ByteRange,
-    ) -> StorageResult<Bytes> {
+    ) -> StorageResult<impl AsyncRead> {
         get_object_range(self.get_client().await, self.bucket.clone(), key, range).await
     }
 
@@ -218,7 +222,7 @@ impl S3Storage {
         &self,
         key: &str,
         size: u64,
-    ) -> StorageResult<Bytes> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client().await;
         let mut results = split_in_multiple_requests(
             size,
@@ -234,12 +238,12 @@ impl S3Storage {
         })
         .collect::<FuturesOrdered<_>>();
 
-        let mut res = BytesMut::with_capacity(size as usize);
-        while let Some(bytes) = results.try_next().await? {
-            res.extend_from_slice(bytes.as_ref());
+        let mut res: Box<dyn AsyncRead + Unpin + Send> = Box::new(tokio::io::empty());
+        while let Some(read) = results.try_next().await? {
+            res = Box::new(res.chain(read));
         }
 
-        Ok(res.into())
+        Ok(res)
     }
 
     async fn put_object<
@@ -413,10 +417,15 @@ impl Storage for S3Storage {
         size: u64,
     ) -> StorageResult<Arc<Manifest>> {
         let key = self.get_manifest_path(id)?;
-        let bytes = self.get_object_concurrently(key.as_str(), size).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        let object_read = self.get_object_concurrently(key.as_str(), size).await?;
+        let manifest = tokio::task::spawn_blocking(move || {
+            let sync_read = SyncIoBridge::new(object_read);
+            let decompressor = zstd::stream::Decoder::new(sync_read)?;
+            rmp_serde::from_read(decompressor).map_err(StorageError::MsgPackDecodeError)
+        })
+        .await??;
+
+        Ok(Arc::new(manifest))
     }
 
     async fn fetch_transaction_log(
@@ -432,8 +441,10 @@ impl Storage for S3Storage {
 
     async fn fetch_chunk(&self, id: &ChunkId, range: &ByteRange) -> StorageResult<Bytes> {
         let key = self.get_chunk_path(id)?;
-        let bytes = self.get_object_range(key.as_str(), range).await?;
-        Ok(bytes)
+        let mut read = self.get_object_range(key.as_str(), range).await?;
+        let mut buffer = BytesMut::new();
+        read.read_buf(&mut buffer).await?;
+        Ok(buffer.into())
     }
 
     async fn write_snapshot(
@@ -468,19 +479,30 @@ impl Storage for S3Storage {
         &self,
         id: ManifestId,
         manifest: Arc<Manifest>,
-    ) -> Result<u64, StorageError> {
+    ) -> StorageResult<u64> {
         let key = self.get_manifest_path(&id)?;
-        let bytes = rmp_serde::to_vec(manifest.as_ref())?;
+        let manifest_c = Arc::clone(&manifest);
+        // TODO: we should compress only when the manifest reaches a certain size
+        // but then, we would need to include metadata to know if it's compressed or not
+        let buffer = tokio::task::spawn_blocking(move || {
+            let buffer = Vec::new(); // TODO: initialize capacity
+            let mut compressor = zstd::stream::Encoder::new(buffer, 1)?;
+            rmp_serde::encode::write(&mut compressor, manifest_c.as_ref())
+                .map_err(StorageError::MsgPackEncodeError)?;
+            compressor.finish().map_err(StorageError::IOError)
+        })
+        .await??;
+
         let metadata = [(
             format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
             manifest.icechunk_manifest_format_version.to_string(),
         )];
-        let len = bytes.len() as u64;
+        let len = buffer.len() as u64;
         self.put_object(
             key.as_str(),
             Some(format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE),
             metadata,
-            bytes,
+            buffer,
         )
         .await?;
         Ok(len)
@@ -725,14 +747,14 @@ async fn get_object_range(
     bucket: String,
     key: &str,
     range: &ByteRange,
-) -> StorageResult<Bytes> {
+) -> StorageResult<impl AsyncRead> {
     let mut b = client.get_object().bucket(bucket).key(key);
 
     if let Some(header) = range_to_header(range) {
         b = b.range(header)
     };
 
-    Ok(b.send().await?.body.collect().await?.into_bytes())
+    Ok(b.send().await?.body.into_async_read())
 }
 
 #[cfg(test)]

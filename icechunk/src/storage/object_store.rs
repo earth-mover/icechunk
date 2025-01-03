@@ -7,7 +7,7 @@ use crate::{
     private,
 };
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{
     stream::{self, BoxStream, FuturesOrdered},
     StreamExt, TryStreamExt,
@@ -28,6 +28,8 @@ use std::{
         Arc,
     },
 };
+use tokio::io::AsyncRead;
+use tokio_util::{compat::FuturesAsyncReadCompatExt, io::SyncIoBridge};
 use url::Url;
 
 use super::{
@@ -245,7 +247,7 @@ impl ObjectStorage {
         &self,
         path: &ObjectPath,
         size: u64,
-    ) -> StorageResult<Bytes> {
+    ) -> StorageResult<impl AsyncRead> {
         let mut results = split_in_multiple_requests(
             size,
             self.config.min_concurrent_request_size,
@@ -262,12 +264,12 @@ impl ObjectStorage {
         })
         .collect::<FuturesOrdered<_>>();
 
-        let mut res = BytesMut::with_capacity(size as usize);
+        let mut res = stream::empty().boxed();
         while let Some(result) = results.try_next().await? {
-            res.extend_from_slice(result.bytes().await?.as_ref());
+            res = res.chain(result.into_stream()).boxed();
         }
 
-        Ok(res.into())
+        Ok(res.err_into().into_async_read().compat())
     }
 }
 
@@ -363,10 +365,14 @@ impl Storage for ObjectStorage {
         size: u64,
     ) -> Result<Arc<Manifest>, StorageError> {
         let path = self.get_manifest_path(id);
-        let bytes = self.get_object_concurrently(&path, size).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        let object_read = self.get_object_concurrently(&path, size).await?;
+        let manifest = tokio::task::spawn_blocking(move || {
+            let sync_read = SyncIoBridge::new(object_read);
+            let decompressor = zstd::stream::Decoder::new(sync_read)?;
+            rmp_serde::from_read(decompressor).map_err(StorageError::MsgPackDecodeError)
+        })
+        .await??;
+        Ok(Arc::new(manifest))
     }
 
     async fn fetch_transaction_log(
@@ -427,7 +433,16 @@ impl Storage for ObjectStorage {
         manifest: Arc<Manifest>,
     ) -> Result<u64, StorageError> {
         let path = self.get_manifest_path(&id);
-        let bytes = rmp_serde::to_vec(manifest.as_ref())?;
+        let manifest_c = Arc::clone(&manifest);
+        let buffer = tokio::task::spawn_blocking(move || {
+            let buffer = Vec::new(); // TODO: initialize capacity
+            let mut compressor = zstd::stream::Encoder::new(buffer, 1)?;
+            rmp_serde::encode::write(&mut compressor, manifest_c.as_ref())
+                .map_err(StorageError::MsgPackEncodeError)?;
+            compressor.finish().map_err(StorageError::IOError)
+        })
+        .await??;
+
         let attributes = if self.supports_metadata() {
             Attributes::from_iter(vec![
                 (
@@ -449,9 +464,9 @@ impl Storage for ObjectStorage {
             Attributes::new()
         };
         let options = PutOptions { attributes, ..PutOptions::default() };
-        let len = bytes.len() as u64;
+        let len = buffer.len() as u64;
         // FIXME: use multipart
-        self.store.put_opts(&path, bytes.into(), options).await?;
+        self.store.put_opts(&path, buffer.into(), options).await?;
         Ok(len)
     }
 

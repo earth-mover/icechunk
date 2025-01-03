@@ -76,7 +76,9 @@ pub enum StorageError {
     #[error("the etag does not match")]
     ConfigUpdateConflict,
     #[error("a concurrent task failed {0}")]
-    ConcurrencyError(JoinError),
+    ConcurrencyError(#[from] JoinError),
+    #[error("I/O error: {0}")]
+    IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]
     Other(String),
 }
