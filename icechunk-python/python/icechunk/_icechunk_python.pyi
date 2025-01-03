@@ -329,6 +329,8 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: AnyS3Credential | None = None,
+        max_concurrent_requests_for_object: int | None = None,
+        min_concurrent_request_size: int | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -342,6 +344,8 @@ class Storage:
         credentials: AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
+        max_concurrent_requests_for_object: int | None = None,
+        min_concurrent_request_size: int | None = None,
     ) -> Storage: ...
 
 class VersionSelection(Enum):

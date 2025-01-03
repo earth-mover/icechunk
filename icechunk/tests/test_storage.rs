@@ -10,7 +10,10 @@ use icechunk::{
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
-    storage::{new_in_memory_storage, new_s3_storage, StorageResult},
+    storage::{
+        new_in_memory_storage, new_s3_storage, object_store::ObjectStorageConfig,
+        StorageResult,
+    },
     ObjectStorage, Repository, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
@@ -32,6 +35,8 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
             session_token: None,
             expires_after: None,
         })),
+        None,
+        None,
     )
     .expect("Creating minio storage failed");
 
@@ -44,19 +49,23 @@ async fn mk_s3_object_store_storage(
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     // Add 2 so prefix does not match native s3 storage tests
     let url = format!("s3://testbucket/{}2", prefix);
+    let config = ObjectStorageConfig {
+        url,
+        prefix: "".to_string(),
+        max_concurrent_requests_for_object: 12,
+        min_concurrent_request_size: 8_000_000,
+        options: vec![
+            ("aws_access_key_id".to_string(), "minio123".to_string()),
+            ("aws_secret_access_key".to_string(), "minio123".to_string()),
+            ("aws_region".to_string(), "us-east-1".to_string()),
+            ("aws_endpoint".to_string(), "http://localhost:9000".to_string()),
+            ("allow_http".to_string(), "true".to_string()),
+            ("conditional_put".to_string(), "etag".to_string()),
+        ],
+    };
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-        ObjectStorage::from_url(
-            &url,
-            vec![
-                ("aws_access_key_id".to_string(), "minio123".to_string()),
-                ("aws_secret_access_key".to_string(), "minio123".to_string()),
-                ("aws_region".to_string(), "us-east-1".to_string()),
-                ("aws_endpoint".to_string(), "http://localhost:9000".to_string()),
-                ("allow_http".to_string(), "true".to_string()),
-                ("conditional_put".to_string(), "etag".to_string()),
-            ],
-        )
-        .expect("Creating minio s3 storage with object_store failed"),
+        ObjectStorage::from_config(config)
+            .expect("Creating minio s3 storage with object_store failed"),
     );
 
     Ok(Repository::add_in_mem_asset_caching(storage))
@@ -97,8 +106,8 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
     with_storage(|storage| async move {
         let id = ManifestId::random();
         let manifest = Arc::new(Manifest::default());
-        storage.write_manifests(id.clone(), manifest.clone()).await?;
-        let back = storage.fetch_manifests(&id).await?;
+        let size = storage.write_manifests(id.clone(), manifest.clone()).await?;
+        let back = storage.fetch_manifests(&id, size).await?;
         assert_eq!(manifest, back);
         Ok(())
     })

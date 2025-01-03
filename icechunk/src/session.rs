@@ -539,8 +539,7 @@ impl Session {
     ) -> SessionResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
         for manifest in manifests {
-            let manifest_structure =
-                self.storage.fetch_manifests(&manifest.object_id).await?;
+            let manifest_structure = self.fetch_manifest(&manifest.object_id).await?;
             match manifest_structure.get_chunk_payload(&node, coords.clone()) {
                 Ok(payload) => {
                     return Ok(Some(payload.clone()));
@@ -550,6 +549,10 @@ impl Session {
             }
         }
         Ok(None)
+    }
+
+    async fn fetch_manifest(&self, id: &ManifestId) -> SessionResult<Arc<Manifest>> {
+        fetch_manifest(id, self.snapshot_id(), self.storage.as_ref()).await
     }
 
     pub async fn list_nodes(
@@ -798,12 +801,12 @@ async fn updated_chunk_iterator<'a>(
 async fn node_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     change_set: &'a ChangeSet,
-    snapshot_id: &SnapshotId,
+    snapshot_id: &'a SnapshotId,
     path: &Path,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match get_node(storage, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
-            verified_node_chunk_iterator(storage, change_set, node).await,
+            verified_node_chunk_iterator(storage, snapshot_id, change_set, node).await,
         ),
         Err(_) => futures::future::Either::Right(futures::stream::empty()),
     }
@@ -812,6 +815,7 @@ async fn node_chunk_iterator<'a>(
 /// Warning: The presence of a single error may mean multiple missing items
 async fn verified_node_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    snapshot_id: &'a SnapshotId,
     change_set: &'a ChangeSet,
     node: NodeSnapshot,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
@@ -848,9 +852,12 @@ async fn verified_node_chunk_iterator<'a>(
                             let node_id_c2 = node.id.clone();
                             let node_id_c3 = node.id.clone();
                             async move {
-                                let manifest = storage
-                                    .fetch_manifests(&manifest_ref.object_id)
-                                    .await;
+                                let manifest = fetch_manifest(
+                                    &manifest_ref.object_id,
+                                    snapshot_id,
+                                    storage,
+                                )
+                                .await;
                                 match manifest {
                                     Ok(manifest) => {
                                         let old_chunks = manifest
@@ -875,9 +882,7 @@ async fn verified_node_chunk_iterator<'a>(
                                     // if we cannot even fetch the manifest, we generate a
                                     // single error value.
                                     Err(err) => futures::future::Either::Right(
-                                        futures::stream::once(ready(Err(
-                                            SessionError::StorageError(err),
-                                        ))),
+                                        futures::stream::once(ready(Err(err))),
                                     ),
                                 }
                             }
@@ -1099,27 +1104,29 @@ async fn flush(
         .map_ok(|(_path, chunk_info)| chunk_info);
 
     let new_manifest = Arc::new(Manifest::from_stream(chunks).await?);
-    let new_manifest_id = if new_manifest.len() > 0 {
+    let new_manifest_info = if new_manifest.len() > 0 {
         let id = ObjectId::random();
-        storage.write_manifests(id.clone(), Arc::clone(&new_manifest)).await?;
-        Some(id)
+        let size = storage.write_manifests(id.clone(), Arc::clone(&new_manifest)).await?;
+        Some((id, size))
     } else {
         None
     };
 
+    let new_manifest_id = new_manifest_info.as_ref().map(|info| &info.0);
     let all_nodes =
-        updated_nodes(storage, change_set, parent_id, new_manifest_id.as_ref()).await?;
+        updated_nodes(storage, change_set, parent_id, new_manifest_id).await?;
 
     let old_snapshot = storage.fetch_snapshot(parent_id).await?;
     let mut new_snapshot = Snapshot::from_iter(
         old_snapshot.as_ref(),
         Some(properties),
-        new_manifest_id
+        new_manifest_info
             .as_ref()
-            .map(|mid| {
+            .map(|(mid, msize)| {
                 vec![ManifestFileInfo {
                     id: mid.clone(),
                     format_version: new_manifest.icechunk_manifest_format_version,
+                    size: *msize,
                 }]
             })
             .unwrap_or_default(),
@@ -1171,6 +1178,18 @@ async fn do_commit(
     }?;
 
     Ok(id)
+}
+
+async fn fetch_manifest(
+    manifest_id: &ManifestId,
+    snapshot_id: &SnapshotId,
+    storage: &(dyn Storage + Send + Sync),
+) -> SessionResult<Arc<Manifest>> {
+    let snapshot = storage.fetch_snapshot(snapshot_id).await?;
+    let manifest_info = snapshot.manifest_info(manifest_id).ok_or_else(|| {
+        IcechunkFormatError::ManifestInfoNotFound { manifest_id: manifest_id.clone() }
+    })?;
+    Ok(storage.fetch_manifests(manifest_id, manifest_info.size).await?)
 }
 
 #[cfg(test)]
@@ -1331,7 +1350,8 @@ mod tests {
         let manifest =
             Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
         let manifest_id = ObjectId::random();
-        storage.write_manifests(manifest_id.clone(), Arc::clone(&manifest)).await?;
+        let manifest_size =
+            storage.write_manifests(manifest_id.clone(), Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -1381,6 +1401,7 @@ mod tests {
         let manifests = vec![ManifestFileInfo {
             id: manifest_id.clone(),
             format_version: manifest.icechunk_manifest_format_version,
+            size: manifest_size,
         }];
         let snapshot = Arc::new(Snapshot::from_iter(
             &initial,
@@ -1998,7 +2019,7 @@ mod tests {
         )
         .await?;
 
-        ds.commit("commit", None).await?;
+        let snap_id = ds.commit("commit", None).await?;
 
         // there should be one manifest now
         assert_eq!(
@@ -2017,12 +2038,12 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = storage.fetch_manifests(&manifest_id).await?;
+        let manifest = fetch_manifest(&manifest_id, &snap_id, storage.as_ref()).await?;
         let initial_size = manifest.len();
 
         let mut ds = repo.writable_session("main").await?;
         ds.delete_array(a2path).await?;
-        ds.commit("array2 deleted", None).await?;
+        let snap_id = ds.commit("array2 deleted", None).await?;
 
         // there should be two manifests
         assert_eq!(
@@ -2041,7 +2062,7 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = storage.fetch_manifests(&manifest_id).await?;
+        let manifest = fetch_manifest(&manifest_id, &snap_id, storage.as_ref()).await?;
         let size_after_delete = manifest.len();
 
         assert!(size_after_delete < initial_size);
@@ -2049,7 +2070,7 @@ mod tests {
         // delete a chunk
         let mut ds = repo.writable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 0]), None).await?;
-        ds.commit("chunk deleted", None).await?;
+        let snap_id = ds.commit("chunk deleted", None).await?;
 
         // there should be three manifests
         assert_eq!(
@@ -2078,7 +2099,7 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = storage.fetch_manifests(&manifest_id).await?;
+        let manifest = fetch_manifest(&manifest_id, &snap_id, storage.as_ref()).await?;
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 

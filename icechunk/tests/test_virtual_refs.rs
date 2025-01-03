@@ -128,6 +128,8 @@ mod tests {
             "testbucket".to_string(),
             Some(prefix),
             Some(credentials),
+            None,
+            None,
         )
         .expect("Creating minio storage failed");
 
@@ -524,6 +526,8 @@ mod tests {
             "testbucket".to_string(),
             Some(prefix),
             Some(credentials),
+            None,
+            None,
         )
         .expect("Creating minio storage failed");
 

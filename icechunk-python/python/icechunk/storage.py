@@ -61,6 +61,8 @@ def s3_storage(
     region: str | None = None,
     endpoint_url: str | None = None,
     allow_http: bool = False,
+    max_concurrent_requests_for_object: int | None = None,
+    min_concurrent_request_size: int | None = None,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
     session_token: str | None = None,
@@ -83,6 +85,10 @@ def s3_storage(
         Optional endpoint where the object store serves data, example: http://localhost:9000
     allow_http: bool
         If the object store can be accessed using http protocol instead of https
+    max_concurrent_requests_for_object: int | None
+        Try to use this many concurrent requests to fetch an object from object store
+    min_concurrent_request_size: int | None
+        Try not to use requests smaller than min_concurrent_request_size bytes
     access_key_id: str | None
         S3 credential access key
     secret_access_key: str | None
@@ -109,7 +115,12 @@ def s3_storage(
     )
     options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
     return Storage.new_s3(
-        config=options, bucket=bucket, prefix=prefix, credentials=credentials
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
+        max_concurrent_requests_for_object=max_concurrent_requests_for_object,
+        min_concurrent_request_size=min_concurrent_request_size,
     )
 
 
@@ -117,6 +128,8 @@ def gcs_storage(
     *,
     bucket: str,
     prefix: str | None,
+    max_concurrent_requests_for_object: int | None = None,
+    min_concurrent_request_size: int | None = None,
     service_account_file: str | None = None,
     service_account_key: str | None = None,
     application_credentials: str | None = None,
@@ -131,6 +144,10 @@ def gcs_storage(
         The bucket where the repository will store its data
     prefix: str | None
         The prefix within the bucket that is the root directory of the repository
+    max_concurrent_requests_for_object: int | None
+        Try to use this many concurrent requests to fetch an object from object store
+    min_concurrent_request_size: int | None
+        Try not to use requests smaller than min_concurrent_request_size bytes
     from_env: bool | None
         Fetch credentials from the operative system environment
     """
@@ -141,5 +158,10 @@ def gcs_storage(
         from_env=from_env,
     )
     return Storage.new_gcs(
-        bucket=bucket, prefix=prefix, credentials=credentials, config=config
+        bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
+        config=config,
+        max_concurrent_requests_for_object=max_concurrent_requests_for_object,
+        min_concurrent_request_size=min_concurrent_request_size,
     )
