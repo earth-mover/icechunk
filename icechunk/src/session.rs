@@ -269,7 +269,7 @@ impl Session {
     pub async fn delete_chunks(
         &mut self,
         node_path: &Path,
-        coords: Vec<ChunkIndices>,
+        coords: impl IntoIterator<Item = ChunkIndices>,
     ) -> SessionResult<()> {
         let node = self.get_array(node_path).await?;
         for coord in coords {

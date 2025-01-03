@@ -375,7 +375,10 @@ impl Store {
                         })
                         .try_collect::<Vec<_>>()
                         .await?;
-                    Ok(guard.deref_mut().delete_chunks(&node_path, to_delete).await?)
+                    Ok(guard
+                        .deref_mut()
+                        .delete_chunks(&node_path, to_delete.into_iter())
+                        .await?)
                 } else {
                     // for cases 3, 4 this is a no-op
                     Ok(())
@@ -401,7 +404,7 @@ impl Store {
                 Ok(session.delete_node(node.map_err(StoreError::SessionError)?).await?)
             }
             Key::Chunk { node_path, coords } => {
-                Ok(session.delete_chunks(&node_path, vec![coords]).await?)
+                Ok(session.delete_chunks(&node_path, vec![coords].into_iter()).await?)
             }
             Key::ZarrV2(_) => Ok(()),
         }
