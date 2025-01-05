@@ -35,8 +35,6 @@ async fn mk_storage(
             session_token: None,
             expires_after: None,
         })),
-        None,
-        None,
     )
     .expect("Creating minio storage failed");
 

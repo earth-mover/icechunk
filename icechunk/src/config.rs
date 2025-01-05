@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::virtual_chunks::{
-    mk_default_containers, ContainerName, VirtualChunkContainer,
+use crate::{
+    storage,
+    virtual_chunks::{mk_default_containers, ContainerName, VirtualChunkContainer},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +46,9 @@ pub struct RepositoryConfig {
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
     pub get_partial_values_concurrency: u16,
 
+    // If not set it will use the Storage implementation default
+    pub storage: Option<storage::Settings>,
+
     pub virtual_chunk_containers: HashMap<ContainerName, VirtualChunkContainer>,
 }
 
@@ -55,6 +59,7 @@ impl Default for RepositoryConfig {
             unsafe_overwrite_refs: false,
             get_partial_values_concurrency: 10,
             virtual_chunk_containers: mk_default_containers(),
+            storage: None,
         }
     }
 }
