@@ -96,6 +96,15 @@ class Repository:
         """
         return PyRepository.exists(storage)
 
+    @staticmethod
+    def fetch_config(storage: Storage) -> RepositoryConfig | None:
+        """Fetch the configuration for the repository saved in storage"""
+        return PyRepository.fetch_config(storage)
+
+    def save_config(self) -> None:
+        """Save the repository configuration to storage, this configuration will be used in future calls to Repository.open."""
+        return self._repository.save_config()
+
     def ancestry(self, snapshot_id: str) -> list[SnapshotMetadata]:
         """Get the ancestry of a snapshot.
 

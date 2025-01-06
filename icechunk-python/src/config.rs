@@ -317,8 +317,8 @@ impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
     }
 }
 
-#[pyclass(name = "RepositoryConfig")]
-#[derive(Clone, Debug)]
+#[pyclass(name = "RepositoryConfig", eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub inline_chunk_threshold_bytes: u16,

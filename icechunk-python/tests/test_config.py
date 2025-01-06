@@ -24,6 +24,36 @@ def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     yield store, repo_path
 
 
+def test_config_fetch() -> None:
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
+    storage = icechunk.in_memory_storage()
+    icechunk.Repository.create(
+        storage=storage,
+        config=config,
+    )
+
+    assert icechunk.Repository.fetch_config(storage) == config
+
+
+def test_config_save() -> None:
+    config = icechunk.RepositoryConfig.default()
+    storage = icechunk.in_memory_storage()
+    repo = icechunk.Repository.create(
+        storage=storage,
+    )
+
+    config.inline_chunk_threshold_bytes = 5
+    repo = icechunk.Repository.open(
+        storage=storage,
+        config=config,
+    )
+
+    assert icechunk.Repository.fetch_config(storage) != config
+    repo.save_config()
+    assert icechunk.Repository.fetch_config(storage) == config
+
+
 def test_no_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]

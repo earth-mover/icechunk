@@ -124,6 +124,27 @@ impl PyRepository {
         })
     }
 
+    #[staticmethod]
+    fn fetch_config(storage: PyStorage) -> PyResult<Option<PyRepositoryConfig>> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let res = Repository::fetch_config(storage.0.as_ref())
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res.map(|res| res.0.into()))
+        })
+    }
+
+    fn save_config(&self) -> PyResult<()> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let _etag = self
+                .0
+                .save_config()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn ancestry(&self, snapshot_id: &str) -> PyResult<Vec<PySnapshotMetadata>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
             PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
