@@ -93,7 +93,11 @@ impl Repository {
         let overwrite_refs = config.unsafe_overwrite_refs;
 
         let storage_c = Arc::clone(&storage);
-        let storage_settings = storage.default_settings();
+        let storage_settings = config
+            .storage
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| storage.default_settings());
         let handle1 = tokio::spawn(async move {
             // On create we need to create the default branch
             let new_snapshot = Snapshot::empty();
@@ -197,6 +201,7 @@ impl Repository {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| storage.default_settings());
+        let storage = Repository::add_in_mem_asset_caching(storage);
         Ok(Self { config, config_etag, storage, storage_settings, virtual_resolver })
     }
 

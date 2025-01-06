@@ -23,7 +23,7 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{
     stream::{self, BoxStream, FuturesOrdered},
     StreamExt, TryStreamExt,
@@ -448,8 +448,8 @@ impl Storage for S3Storage {
     ) -> StorageResult<Bytes> {
         let key = self.get_chunk_path(id)?;
         let mut read = self.get_object_range(key.as_str(), range).await?;
-        let mut buffer = BytesMut::new();
-        read.read_buf(&mut buffer).await?;
+        let mut buffer = Vec::new();
+        tokio::io::copy(&mut read, &mut buffer).await?;
         Ok(buffer.into())
     }
 

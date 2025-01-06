@@ -38,7 +38,7 @@ async fn mk_storage(
     )
     .expect("Creating minio storage failed");
 
-    Ok(Repository::add_in_mem_asset_caching(storage))
+    Ok(storage)
 }
 
 async fn mk_repo(

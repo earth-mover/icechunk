@@ -38,7 +38,7 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
     )
     .expect("Creating minio storage failed");
 
-    Ok(Repository::add_in_mem_asset_caching(storage))
+    Ok(storage)
 }
 
 #[allow(clippy::expect_used)]
