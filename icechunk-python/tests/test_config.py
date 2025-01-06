@@ -55,6 +55,7 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
         zarr_format=3,
         chunks=(1,),
         fill_value=-1,
+        compressors=None,
     )
 
     inline_array[:] = 9
@@ -71,6 +72,7 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
         zarr_format=3,
         chunks=(1,),
         fill_value=-1,
+        compressors=None,
     )
 
     written_array[:] = 3

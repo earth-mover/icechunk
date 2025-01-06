@@ -11,7 +11,7 @@ import zarr.api
 import zarr.api.asynchronous
 from icechunk import IcechunkStore
 from tests.conftest import parse_repo
-from zarr import Array, AsyncArray, AsyncGroup, Group
+from zarr import Array, AsyncGroup, Group
 from zarr.api.asynchronous import create_array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import JSON, ZarrFormat
@@ -272,7 +272,9 @@ def test_group_getitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
 
     group = Group.from_store(store, zarr_format=zarr_format)
     subgroup = group.create_group(name="subgroup")
-    subarray = group.create_array(name="subarray", shape=(10,), chunks=(10,), dtype="uint8")
+    subarray = group.create_array(
+        name="subarray", shape=(10,), chunks=(10,), dtype="uint8"
+    )
 
     assert group["subgroup"] == subgroup
     assert group["subarray"] == subarray
@@ -287,7 +289,9 @@ def test_group_delitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
 
     group = Group.from_store(store, zarr_format=zarr_format)
     subgroup = group.create_group(name="subgroup")
-    subarray = group.create_array(name="subarray", shape=(10,), chunks=(10,), dtype="uint8")
+    subarray = group.create_array(
+        name="subarray", shape=(10,), chunks=(10,), dtype="uint8"
+    )
 
     assert group["subgroup"] == subgroup
     assert group["subarray"] == subarray
@@ -361,7 +365,9 @@ def test_group_subarrays(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     """
     group = Group.from_store(store, zarr_format=zarr_format)
     keys = ("foo", "bar")
-    subarrays_expected = tuple(group.create_array(k, shape=(10,), dtype="uint8") for k in keys)
+    subarrays_expected = tuple(
+        group.create_array(k, shape=(10,), dtype="uint8") for k in keys
+    )
     # create a sub-group as well
     _ = group.create_group("group")
     subarrays_observed = tuple(a[1] for a in group.arrays())

@@ -10,7 +10,7 @@ import pytest
 
 from icechunk import IcechunkStore
 from tests.conftest import parse_repo
-from zarr import Array, Group, create_array
+from zarr import Group, create_array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import ZarrFormat
 from zarr.errors import ContainsArrayError, ContainsGroupError
