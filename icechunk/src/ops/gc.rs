@@ -9,7 +9,7 @@ use crate::{
         manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
     },
     refs::{list_refs, RefError},
-    storage::ListInfo,
+    storage::{self, ListInfo},
     Storage, StorageError,
 };
 
@@ -140,6 +140,7 @@ pub type GCResult<A> = Result<A, GCError>;
 
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
     // TODO: this function could have much more parallelism
@@ -147,7 +148,8 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
 
-    let all_snaps = pointed_snapshots(storage, &config.extra_roots).await?;
+    let all_snaps =
+        pointed_snapshots(storage, storage_settings, &config.extra_roots).await?;
 
     // FIXME: add attribute files
     // FIXME: add transaction log files
@@ -157,7 +159,7 @@ pub async fn garbage_collect(
 
     pin!(all_snaps);
     while let Some(snap_id) = all_snaps.try_next().await? {
-        let snap = storage.fetch_snapshot(&snap_id).await?;
+        let snap = storage.fetch_snapshot(storage_settings, &snap_id).await?;
         if config.deletes_snapshots() {
             keep_snapshots.insert(snap_id);
         }
@@ -174,8 +176,9 @@ pub async fn garbage_collect(
                         manifest_id: manifest_id.clone(),
                     }
                 })?;
-                let manifest =
-                    storage.fetch_manifests(manifest_id, manifest_info.size).await?;
+                let manifest = storage
+                    .fetch_manifests(storage_settings, manifest_id, manifest_info.size)
+                    .await?;
                 let chunk_ids =
                     manifest.chunks().values().filter_map(|payload| match payload {
                         ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
@@ -189,13 +192,16 @@ pub async fn garbage_collect(
     let mut summary = GCSummary::default();
 
     if config.deletes_snapshots() {
-        summary.snapshots_deleted = gc_snapshots(storage, config, keep_snapshots).await?;
+        summary.snapshots_deleted =
+            gc_snapshots(storage, storage_settings, config, keep_snapshots).await?;
     }
     if config.deletes_manifests() {
-        summary.manifests_deleted = gc_manifests(storage, config, keep_manifests).await?;
+        summary.manifests_deleted =
+            gc_manifests(storage, storage_settings, config, keep_manifests).await?;
     }
     if config.deletes_chunks() {
-        summary.chunks_deleted = gc_chunks(storage, config, keep_chunks).await?;
+        summary.chunks_deleted =
+            gc_chunks(storage, storage_settings, config, keep_chunks).await?;
     }
 
     Ok(summary)
@@ -203,29 +209,30 @@ pub async fn garbage_collect(
 
 async fn all_roots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
-    let all_refs = list_refs(storage).await?;
+    let all_refs = list_refs(storage, storage_settings).await?;
     // TODO: this could be optimized by not following the ancestry of snapshots that we have
     // already seen
-    let roots =
-        stream::iter(all_refs)
-            .then(move |r| async move {
-                r.fetch(storage).await.map(|ref_data| ref_data.snapshot)
-            })
-            .err_into()
-            .chain(stream::iter(extra_roots.iter().cloned()).map(Ok));
+    let roots = stream::iter(all_refs)
+        .then(move |r| async move {
+            r.fetch(storage, storage_settings).await.map(|ref_data| ref_data.snapshot)
+        })
+        .err_into()
+        .chain(stream::iter(extra_roots.iter().cloned()).map(Ok));
     Ok(roots)
 }
 
 async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
-    let roots = all_roots(storage, extra_roots).await?;
+    let roots = all_roots(storage, storage_settings, extra_roots).await?;
     Ok(roots
         .and_then(move |snap_id| async move {
-            let snap = storage.fetch_snapshot(&snap_id).await?;
+            let snap = storage.fetch_snapshot(storage_settings, &snap_id).await?;
             // FIXME: this should be global ancestry, not local
             let parents = snap.local_ancestry().map(|parent| parent.id);
             Ok(stream::iter(iter::once(snap_id).chain(parents))
@@ -236,11 +243,12 @@ async fn pointed_snapshots<'a>(
 
 async fn gc_chunks(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: HashSet<ChunkId>,
 ) -> GCResult<usize> {
     let to_delete = storage
-        .list_chunks()
+        .list_chunks(storage_settings)
         .await?
         // TODO: don't skip over errors
         .filter_map(move |chunk| {
@@ -253,16 +261,17 @@ async fn gc_chunks(
             }))
         })
         .boxed();
-    Ok(storage.delete_chunks(to_delete).await?)
+    Ok(storage.delete_chunks(storage_settings, to_delete).await?)
 }
 
 async fn gc_manifests(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: HashSet<ManifestId>,
 ) -> GCResult<usize> {
     let to_delete = storage
-        .list_manifests()
+        .list_manifests(storage_settings)
         .await?
         // TODO: don't skip over errors
         .filter_map(move |manifest| {
@@ -277,16 +286,17 @@ async fn gc_manifests(
             }))
         })
         .boxed();
-    Ok(storage.delete_manifests(to_delete).await?)
+    Ok(storage.delete_manifests(storage_settings, to_delete).await?)
 }
 
 async fn gc_snapshots(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: HashSet<SnapshotId>,
 ) -> GCResult<usize> {
     let to_delete = storage
-        .list_snapshots()
+        .list_snapshots(storage_settings)
         .await?
         // TODO: don't skip over errors
         .filter_map(move |snapshot| {
@@ -301,5 +311,5 @@ async fn gc_snapshots(
             }))
         })
         .boxed();
-    Ok(storage.delete_snapshots(to_delete).await?)
+    Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
 }

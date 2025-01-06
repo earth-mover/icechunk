@@ -32,6 +32,7 @@ use crate::{
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError},
     repository::RepositoryError,
+    storage,
     virtual_chunks::VirtualChunkResolver,
     RepositoryConfig, Storage, StorageError,
 };
@@ -88,6 +89,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
+    storage_settings: Arc<storage::Settings>,
     storage: Arc<dyn Storage + Send + Sync>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     branch_name: Option<String>,
@@ -98,12 +100,14 @@ pub struct Session {
 impl Session {
     pub fn create_readonly_session(
         config: RepositoryConfig,
+        storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_resolver: Arc<VirtualChunkResolver>,
         snapshot_id: SnapshotId,
     ) -> Self {
         Self {
             config,
+            storage_settings: Arc::new(storage_settings),
             storage,
             virtual_resolver,
             branch_name: None,
@@ -114,6 +118,7 @@ impl Session {
 
     pub fn create_writable_session(
         config: RepositoryConfig,
+        storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_resolver: Arc<VirtualChunkResolver>,
         branch_name: String,
@@ -121,6 +126,7 @@ impl Session {
     ) -> Self {
         Self {
             config,
+            storage_settings: Arc::new(storage_settings),
             storage,
             virtual_resolver,
             branch_name: Some(branch_name),
@@ -342,7 +348,14 @@ impl Session {
     }
 
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_node(self.storage.as_ref(), &self.change_set, self.snapshot_id(), path).await
+        get_node(
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+            &self.change_set,
+            self.snapshot_id(),
+            path,
+        )
+        .await
     }
 
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
@@ -373,6 +386,7 @@ impl Session {
     ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
         node_chunk_iterator(
             self.storage.as_ref(),
+            self.storage_settings.as_ref(),
             &self.change_set,
             &self.snapshot_id,
             path,
@@ -448,10 +462,14 @@ impl Session {
             Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
                 let storage = Arc::clone(&self.storage);
                 let byte_range = byte_range.clone();
+                let settings = Arc::clone(&self.storage_settings);
                 Ok(Some(
                     async move {
                         // TODO: we don't have a way to distinguish if we want to pass a range or not
-                        storage.fetch_chunk(&id, &byte_range).await.map_err(|e| e.into())
+                        storage
+                            .fetch_chunk(settings.as_ref(), &id, &byte_range)
+                            .await
+                            .map_err(|e| e.into())
                     }
                     .boxed(),
                 ))
@@ -504,10 +522,16 @@ impl Session {
     {
         let threshold = self.config.inline_chunk_threshold_bytes as usize;
         let storage = Arc::clone(&self.storage);
+        let storage_settings = Arc::clone(&self.storage_settings);
         move |data: Bytes| {
             async move {
                 let payload = if data.len() > threshold {
-                    new_materialized_chunk(storage.as_ref(), data).await?
+                    new_materialized_chunk(
+                        storage.as_ref(),
+                        storage_settings.as_ref(),
+                        data,
+                    )
+                    .await?
                 } else {
                     new_inline_chunk(data)
                 };
@@ -552,20 +576,38 @@ impl Session {
     }
 
     async fn fetch_manifest(&self, id: &ManifestId) -> SessionResult<Arc<Manifest>> {
-        fetch_manifest(id, self.snapshot_id(), self.storage.as_ref()).await
+        fetch_manifest(
+            id,
+            self.snapshot_id(),
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+        )
+        .await
     }
 
     pub async fn list_nodes(
         &self,
     ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(self.storage.as_ref(), &self.change_set, &self.snapshot_id, None)
-            .await
+        updated_nodes(
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            None,
+        )
+        .await
     }
 
     pub async fn all_chunks(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
-        all_chunks(self.storage.as_ref(), &self.change_set, self.snapshot_id()).await
+        all_chunks(
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+            &self.change_set,
+            self.snapshot_id(),
+        )
+        .await
     }
 
     pub async fn all_virtual_chunk_locations(
@@ -602,13 +644,19 @@ impl Session {
             return Err(SessionError::ReadOnlySession);
         };
 
-        let current = fetch_branch_tip(self.storage.as_ref(), branch_name).await;
+        let current = fetch_branch_tip(
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+            branch_name,
+        )
+        .await;
 
         let id = match current {
             Err(RefError::RefNotFound(_)) => {
                 do_commit(
                     &self.config,
                     self.storage.as_ref(),
+                    self.storage_settings.as_ref(),
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
@@ -629,6 +677,7 @@ impl Session {
                     do_commit(
                         &self.config,
                         self.storage.as_ref(),
+                        self.storage_settings.as_ref(),
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
@@ -719,14 +768,21 @@ impl Session {
             return Err(SessionError::ReadOnlySession);
         };
 
-        let ref_data = fetch_branch_tip(self.storage.as_ref(), branch_name).await?;
+        let ref_data = fetch_branch_tip(
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+            branch_name,
+        )
+        .await?;
 
         if ref_data.snapshot == self.snapshot_id {
             // nothing to do, commit should work without rebasing
             Ok(())
         } else {
-            let current_snapshot =
-                self.storage.fetch_snapshot(&ref_data.snapshot).await?;
+            let current_snapshot = self
+                .storage
+                .fetch_snapshot(&self.storage_settings, &ref_data.snapshot)
+                .await?;
             // FIXME: this should be the whole ancestry not local
             let anc = current_snapshot.local_ancestry().map(|meta| meta.id);
             let new_commits = iter::once(ref_data.snapshot.clone())
@@ -740,10 +796,14 @@ impl Session {
 
             // we need to reverse the iterator to process them in order of oldest first
             for snap_id in new_commits.into_iter().rev() {
-                let tx_log = self.storage.fetch_transaction_log(&snap_id).await?;
+                let tx_log = self
+                    .storage
+                    .fetch_transaction_log(&self.storage_settings, &snap_id)
+                    .await?;
 
                 let session = Self::create_readonly_session(
                     self.config.clone(),
+                    self.storage_settings.as_ref().clone(),
                     Arc::clone(&self.storage),
                     Arc::clone(&self.virtual_resolver),
                     ref_data.snapshot.clone(),
@@ -774,10 +834,11 @@ impl Session {
 /// Warning: The presence of a single error may mean multiple missing items
 async fn updated_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
-    let snapshot = storage.fetch_snapshot(snapshot_id).await?;
+    let snapshot = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
     let res = nodes.filter_map(move |node| async move {
         // This iterator should yield chunks for existing arrays + any updates.
@@ -788,9 +849,15 @@ async fn updated_chunk_iterator<'a>(
         } else {
             let path = node.path.clone();
             Some(
-                node_chunk_iterator(storage, change_set, snapshot_id, &node.path)
-                    .await
-                    .map_ok(move |ci| (path.clone(), ci)),
+                node_chunk_iterator(
+                    storage,
+                    storage_settings,
+                    change_set,
+                    snapshot_id,
+                    &node.path,
+                )
+                .await
+                .map_ok(move |ci| (path.clone(), ci)),
             )
         }
     });
@@ -800,13 +867,21 @@ async fn updated_chunk_iterator<'a>(
 /// Warning: The presence of a single error may mean multiple missing items
 async fn node_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     path: &Path,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
-    match get_node(storage, change_set, snapshot_id, path).await {
+    match get_node(storage, storage_settings, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
-            verified_node_chunk_iterator(storage, snapshot_id, change_set, node).await,
+            verified_node_chunk_iterator(
+                storage,
+                storage_settings,
+                snapshot_id,
+                change_set,
+                node,
+            )
+            .await,
         ),
         Err(_) => futures::future::Either::Right(futures::stream::empty()),
     }
@@ -815,6 +890,7 @@ async fn node_chunk_iterator<'a>(
 /// Warning: The presence of a single error may mean multiple missing items
 async fn verified_node_chunk_iterator<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     snapshot_id: &'a SnapshotId,
     change_set: &'a ChangeSet,
     node: NodeSnapshot,
@@ -856,6 +932,7 @@ async fn verified_node_chunk_iterator<'a>(
                                     &manifest_ref.object_id,
                                     snapshot_id,
                                     storage,
+                                    storage_settings,
                                 )
                                 .await;
                                 match manifest {
@@ -918,10 +995,11 @@ pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
 
 async fn new_materialized_chunk(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     data: Bytes,
 ) -> SessionResult<ChunkPayload> {
     let new_id = ObjectId::random();
-    storage.write_chunk(new_id.clone(), data.clone()).await?;
+    storage.write_chunk(storage_settings, new_id.clone(), data.clone()).await?;
     Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
 }
 
@@ -941,6 +1019,7 @@ pub async fn get_chunk(
 /// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
     manifest_id: Option<&'a ManifestId>,
@@ -949,15 +1028,17 @@ async fn updated_existing_nodes<'a>(
         vec![ManifestRef { object_id: mid.clone(), extents: ManifestExtents(vec![]) }]
     });
     let updated_nodes =
-        storage.fetch_snapshot(parent_id).await?.iter_arc().filter_map(move |node| {
-            let new_manifests = if node.node_type() == NodeType::Array {
-                //FIXME: it could be none for empty arrays
-                manifest_refs.clone()
-            } else {
-                None
-            };
-            change_set.update_existing_node(node, new_manifests)
-        });
+        storage.fetch_snapshot(storage_settings, parent_id).await?.iter_arc().filter_map(
+            move |node| {
+                let new_manifests = if node.node_type() == NodeType::Array {
+                    //FIXME: it could be none for empty arrays
+                    manifest_refs.clone()
+                } else {
+                    None
+                };
+                change_set.update_existing_node(node, new_manifests)
+            },
+        );
 
     Ok(updated_nodes)
 }
@@ -966,17 +1047,25 @@ async fn updated_existing_nodes<'a>(
 /// *and* new nodes in the changeset
 async fn updated_nodes<'a>(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
     manifest_id: Option<&'a ManifestId>,
 ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
-    Ok(updated_existing_nodes(storage, change_set, parent_id, manifest_id)
-        .await?
-        .chain(change_set.new_nodes_iterator(manifest_id)))
+    Ok(updated_existing_nodes(
+        storage,
+        storage_settings,
+        change_set,
+        parent_id,
+        manifest_id,
+    )
+    .await?
+    .chain(change_set.new_nodes_iterator(manifest_id)))
 }
 
 async fn get_node<'a>(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     change_set: &'a ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
@@ -984,7 +1073,14 @@ async fn get_node<'a>(
     match change_set.get_new_node(path) {
         Some(node) => Ok(node),
         None => {
-            let node = get_existing_node(storage, change_set, snapshot_id, path).await?;
+            let node = get_existing_node(
+                storage,
+                storage_settings,
+                change_set,
+                snapshot_id,
+                path,
+            )
+            .await?;
             if change_set.is_deleted(&node.path, &node.id) {
                 Err(SessionError::NodeNotFound {
                     path: path.clone(),
@@ -999,12 +1095,13 @@ async fn get_node<'a>(
 
 async fn get_existing_node<'a>(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     change_set: &'a ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> SessionResult<NodeSnapshot> {
     // An existing node is one that is present in a Snapshot file on storage
-    let snapshot = storage.fetch_snapshot(snapshot_id).await?;
+    let snapshot = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
 
     let node = snapshot.get_node(path).map_err(|err| match err {
         // A missing node here is not really a format error, so we need to
@@ -1039,11 +1136,13 @@ async fn get_existing_node<'a>(
 
 async fn all_chunks<'a>(
     storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let existing_array_chunks =
-        updated_chunk_iterator(storage, change_set, snapshot_id).await?;
+        updated_chunk_iterator(storage, storage_settings, change_set, snapshot_id)
+            .await?;
     let new_array_chunks =
         futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
     Ok(existing_array_chunks.chain(new_array_chunks))
@@ -1051,10 +1150,11 @@ async fn all_chunks<'a>(
 
 pub async fn raise_if_invalid_snapshot_id(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     snapshot_id: &SnapshotId,
 ) -> SessionResult<()> {
     storage
-        .fetch_snapshot(snapshot_id)
+        .fetch_snapshot(storage_settings, snapshot_id)
         .await
         .map_err(|_| SessionError::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
@@ -1090,6 +1190,7 @@ pub fn construct_valid_byte_range(
 
 async fn flush(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     change_set: &ChangeSet,
     parent_id: &SnapshotId,
     message: &str,
@@ -1099,14 +1200,16 @@ async fn flush(
         return Err(SessionError::NoChangesToCommit);
     }
 
-    let chunks = all_chunks(storage, change_set, parent_id)
+    let chunks = all_chunks(storage, storage_settings, change_set, parent_id)
         .await?
         .map_ok(|(_path, chunk_info)| chunk_info);
 
     let new_manifest = Arc::new(Manifest::from_stream(chunks).await?);
     let new_manifest_info = if new_manifest.len() > 0 {
         let id = ObjectId::random();
-        let size = storage.write_manifests(id.clone(), Arc::clone(&new_manifest)).await?;
+        let size = storage
+            .write_manifests(storage_settings, id.clone(), Arc::clone(&new_manifest))
+            .await?;
         Some((id, size))
     } else {
         None
@@ -1114,9 +1217,10 @@ async fn flush(
 
     let new_manifest_id = new_manifest_info.as_ref().map(|info| &info.0);
     let all_nodes =
-        updated_nodes(storage, change_set, parent_id, new_manifest_id).await?;
+        updated_nodes(storage, storage_settings, change_set, parent_id, new_manifest_id)
+            .await?;
 
-    let old_snapshot = storage.fetch_snapshot(parent_id).await?;
+    let old_snapshot = storage.fetch_snapshot(storage_settings, parent_id).await?;
     let mut new_snapshot = Snapshot::from_iter(
         old_snapshot.as_ref(),
         Some(properties),
@@ -1141,15 +1245,29 @@ async fn flush(
     let tx_log =
         TransactionLog::new(change_set, old_snapshot.iter(), new_snapshot.iter());
     let new_snapshot_id = &new_snapshot.metadata.id;
-    storage.write_snapshot(new_snapshot_id.clone(), Arc::clone(&new_snapshot)).await?;
-    storage.write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log)).await?;
+    storage
+        .write_snapshot(
+            storage_settings,
+            new_snapshot_id.clone(),
+            Arc::clone(&new_snapshot),
+        )
+        .await?;
+    storage
+        .write_transaction_log(
+            storage_settings,
+            new_snapshot_id.clone(),
+            Arc::new(tx_log),
+        )
+        .await?;
 
     Ok(new_snapshot_id.clone())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_commit(
     config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
@@ -1159,10 +1277,12 @@ async fn do_commit(
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let new_snapshot =
-        flush(storage, change_set, snapshot_id, message, properties).await?;
+        flush(storage, storage_settings, change_set, snapshot_id, message, properties)
+            .await?;
 
     let id = match update_branch(
         storage,
+        storage_settings,
         branch_name,
         new_snapshot.clone(),
         Some(&parent_snapshot),
@@ -1184,12 +1304,13 @@ async fn fetch_manifest(
     manifest_id: &ManifestId,
     snapshot_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
 ) -> SessionResult<Arc<Manifest>> {
-    let snapshot = storage.fetch_snapshot(snapshot_id).await?;
+    let snapshot = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
     let manifest_info = snapshot.manifest_info(manifest_id).ok_or_else(|| {
         IcechunkFormatError::ManifestInfoNotFound { manifest_id: manifest_id.clone() }
     })?;
-    Ok(storage.fetch_manifests(manifest_id, manifest_info.size).await?)
+    Ok(storage.fetch_manifests(storage_settings, manifest_id, manifest_info.size).await?)
 }
 
 #[cfg(test)]
@@ -1329,6 +1450,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage = new_in_memory_storage()?;
+        let storage_settings = storage.default_settings();
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {
@@ -1350,8 +1472,13 @@ mod tests {
         let manifest =
             Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
         let manifest_id = ObjectId::random();
-        let manifest_size =
-            storage.write_manifests(manifest_id.clone(), Arc::clone(&manifest)).await?;
+        let manifest_size = storage
+            .write_manifests(
+                &storage_settings,
+                manifest_id.clone(),
+                Arc::clone(&manifest),
+            )
+            .await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -1411,8 +1538,16 @@ mod tests {
             nodes.iter().cloned(),
         ));
         let snapshot_id = ObjectId::random();
-        storage.write_snapshot(snapshot_id.clone(), snapshot).await?;
-        update_branch(storage.as_ref(), "main", snapshot_id.clone(), None, true).await?;
+        storage.write_snapshot(&storage_settings, snapshot_id.clone(), snapshot).await?;
+        update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "main",
+            snapshot_id.clone(),
+            None,
+            true,
+        )
+        .await?;
         Repository::store_config(storage.as_ref(), &RepositoryConfig::default(), None)
             .await?;
 
@@ -1928,6 +2063,7 @@ mod tests {
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory()?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage_settings = storage.default_settings();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         // there should be no manifests yet
@@ -2038,7 +2174,9 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = fetch_manifest(&manifest_id, &snap_id, storage.as_ref()).await?;
+        let manifest =
+            fetch_manifest(&manifest_id, &snap_id, storage.as_ref(), &storage_settings)
+                .await?;
         let initial_size = manifest.len();
 
         let mut ds = repo.writable_session("main").await?;
@@ -2062,7 +2200,9 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = fetch_manifest(&manifest_id, &snap_id, storage.as_ref()).await?;
+        let manifest =
+            fetch_manifest(&manifest_id, &snap_id, storage.as_ref(), &storage_settings)
+                .await?;
         let size_after_delete = manifest.len();
 
         assert!(size_after_delete < initial_size);
@@ -2099,7 +2239,9 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest = fetch_manifest(&manifest_id, &snap_id, storage.as_ref()).await?;
+        let manifest =
+            fetch_manifest(&manifest_id, &snap_id, storage.as_ref(), &storage_settings)
+                .await?;
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 
@@ -2110,6 +2252,7 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
         let storage = Arc::clone(repo.storage());
+        let storage_settings = storage.default_settings();
         let mut ds = repo.writable_session("main").await?;
 
         // add a new array and retrieve its node
@@ -2117,12 +2260,13 @@ mod tests {
         let new_snapshot_id = ds.commit("first commit", None).await?;
         assert_eq!(
             new_snapshot_id,
-            fetch_ref(storage.as_ref(), "main").await?.1.snapshot
+            fetch_ref(storage.as_ref(), &storage_settings, "main").await?.1.snapshot
         );
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
         repo.create_tag("v1", &new_snapshot_id).await?;
-        let (ref_name, ref_data) = fetch_ref(storage.as_ref(), "v1").await?;
+        let (ref_name, ref_data) =
+            fetch_ref(storage.as_ref(), &storage_settings, "v1").await?;
         assert_eq!(ref_name, Ref::Tag("v1".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
@@ -2167,7 +2311,7 @@ mod tests {
         .await?;
         let new_snapshot_id = ds.commit("second commit", None).await?;
         let (ref_name, ref_data) =
-            fetch_ref(storage.as_ref(), Ref::DEFAULT_BRANCH).await?;
+            fetch_ref(storage.as_ref(), &storage_settings, Ref::DEFAULT_BRANCH).await?;
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
@@ -2760,10 +2904,16 @@ mod tests {
         }
 
         // reset the branch to what repo1 wrote
-        let current_snap =
-            fetch_branch_tip(repo.storage().as_ref(), "main").await?.snapshot;
+        let current_snap = fetch_branch_tip(
+            repo.storage().as_ref(),
+            &repo.storage().default_settings(),
+            "main",
+        )
+        .await?
+        .snapshot;
         update_branch(
             repo.storage().as_ref(),
+            &repo.storage().default_settings(),
             "main",
             conflicting_snap.clone(),
             Some(&current_snap),
