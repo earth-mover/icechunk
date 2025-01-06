@@ -15,7 +15,7 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
-    config::{PyCredentials, PyRepositoryConfig, PyStorage},
+    config::{PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings},
     errors::PyIcechunkStoreError,
     session::PySession,
 };
@@ -143,6 +143,14 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(())
         })
+    }
+
+    pub fn config(&self) -> PyRepositoryConfig {
+        self.0.config().clone().into()
+    }
+
+    pub fn storage_settings(&self) -> PyStorageSettings {
+        self.0.storage_settings().clone().into()
     }
 
     pub fn ancestry(&self, snapshot_id: &str) -> PyResult<Vec<PySnapshotMetadata>> {
