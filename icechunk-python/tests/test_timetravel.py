@@ -19,7 +19,7 @@ def test_timetravel() -> None:
 
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array(
-        "air_temp", shape=(1000, 1000), chunk_shape=(100, 100), dtype="i4"
+        "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
     )
 
     air_temp[:, :] = 42

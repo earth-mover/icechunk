@@ -19,7 +19,7 @@ def repo(tmpdir: Path) -> icechunk.Repository:
     root = zarr.group(store=store)
     root.create_group("foo/bar")
     root.create_array(
-        "foo/bar/some-array", shape=(10, 10), chunk_shape=(1, 1), dtype="i4"
+        "foo/bar/some-array", shape=(10, 10), chunks=(1, 1), dtype="i4"
     )
     session.commit("commit 1")
 

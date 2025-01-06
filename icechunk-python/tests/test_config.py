@@ -33,7 +33,7 @@ def test_no_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None
         shape=(10),
         dtype="int64",
         zarr_format=3,
-        chunk_shape=(1),
+        chunks=(1),
         fill_value=-1,
     )
     array[:] = 42
@@ -55,7 +55,7 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
         shape=(10),
         dtype="int32",
         zarr_format=3,
-        chunk_shape=(1),
+        chunks=(1),
         fill_value=-1,
     )
 
@@ -72,7 +72,7 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
         shape=(10),
         dtype="int64",
         zarr_format=3,
-        chunk_shape=(1),
+        chunks=(1),
         fill_value=-1,
     )
 

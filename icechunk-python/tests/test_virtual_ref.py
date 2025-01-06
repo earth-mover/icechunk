@@ -56,7 +56,7 @@ async def test_write_minio_virtual_refs() -> None:
     session = repo.writable_session("main")
     store = session.store
 
-    array = zarr.Array.create(store, shape=(5, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
+    array = zarr.Array.create(store, shape=(5, 1, 3), chunks=(1, 1, 1), dtype="i4")
 
     # We add the virtual chunk refs without checksum, with the right etag, and with the wrong wrong etag and datetime.
     # This way we can check retrieval operations that should fail
@@ -198,7 +198,7 @@ async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
     year = root.require_array(
-        name="year", shape=((72,)), chunk_shape=((72,)), dtype="float32"
+        name="year", shape=((72,)), chunks=((72,)), dtype="float32"
     )
 
     store.set_virtual_ref(
