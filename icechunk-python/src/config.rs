@@ -13,6 +13,7 @@ use icechunk::{
         Credentials, CredentialsFetcher, GcsCredentials, GcsStaticCredentials,
         S3Credentials, S3Options, S3StaticCredentials,
     },
+    storage::{self, CompressionAlgorithm, CompressionSettings, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
@@ -317,6 +318,103 @@ impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
     }
 }
 
+#[pyclass(name = "StorageCompressionAlgorithm", eq, eq_int)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PyStorageCompressionAlgorithm {
+    Zstd,
+}
+
+impl From<CompressionAlgorithm> for PyStorageCompressionAlgorithm {
+    fn from(value: CompressionAlgorithm) -> Self {
+        match value {
+            CompressionAlgorithm::Zstd => PyStorageCompressionAlgorithm::Zstd,
+        }
+    }
+}
+
+impl From<PyStorageCompressionAlgorithm> for CompressionAlgorithm {
+    fn from(value: PyStorageCompressionAlgorithm) -> Self {
+        match value {
+            PyStorageCompressionAlgorithm::Zstd => CompressionAlgorithm::Zstd,
+        }
+    }
+}
+
+#[pyclass(name = "StorageCompressionSettings", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStorageCompressionSettings {
+    #[pyo3(get, set)]
+    pub algorithm: PyStorageCompressionAlgorithm,
+    #[pyo3(get, set)]
+    pub level: u8,
+}
+
+impl From<CompressionSettings> for PyStorageCompressionSettings {
+    fn from(value: CompressionSettings) -> Self {
+        Self { algorithm: value.algorithm.into(), level: value.level }
+    }
+}
+
+impl From<PyStorageCompressionSettings> for CompressionSettings {
+    fn from(value: PyStorageCompressionSettings) -> Self {
+        Self { algorithm: value.algorithm.into(), level: value.level }
+    }
+}
+
+#[pyclass(name = "StorageConcurrencySettings", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStorageConcurrencySettings {
+    #[pyo3(get, set)]
+    pub max_concurrent_requests_for_object: NonZeroU16,
+    #[pyo3(get, set)]
+    pub min_concurrent_request_size: NonZeroU64,
+}
+
+impl From<ConcurrencySettings> for PyStorageConcurrencySettings {
+    fn from(value: ConcurrencySettings) -> Self {
+        Self {
+            max_concurrent_requests_for_object: value.max_concurrent_requests_for_object,
+            min_concurrent_request_size: value.min_concurrent_request_size,
+        }
+    }
+}
+
+impl From<PyStorageConcurrencySettings> for ConcurrencySettings {
+    fn from(value: PyStorageConcurrencySettings) -> Self {
+        Self {
+            max_concurrent_requests_for_object: value.max_concurrent_requests_for_object,
+            min_concurrent_request_size: value.min_concurrent_request_size,
+        }
+    }
+}
+
+#[pyclass(name = "StorageSettings", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStorageSettings {
+    #[pyo3(get, set)]
+    pub concurrency: PyStorageConcurrencySettings,
+    #[pyo3(get, set)]
+    pub compression: PyStorageCompressionSettings,
+}
+
+impl From<storage::Settings> for PyStorageSettings {
+    fn from(value: storage::Settings) -> Self {
+        Self {
+            concurrency: value.concurrency.into(),
+            compression: value.compression.into(),
+        }
+    }
+}
+
+impl From<PyStorageSettings> for storage::Settings {
+    fn from(value: PyStorageSettings) -> Self {
+        Self {
+            concurrency: value.concurrency.into(),
+            compression: value.compression.into(),
+        }
+    }
+}
+
 #[pyclass(name = "RepositoryConfig", eq)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PyRepositoryConfig {
@@ -327,6 +425,8 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub get_partial_values_concurrency: u16,
     #[pyo3(get, set)]
+    pub storage: Option<PyStorageSettings>,
+    #[pyo3(get, set)]
     pub virtual_chunk_containers: HashMap<String, PyVirtualChunkContainer>,
 }
 
@@ -336,6 +436,7 @@ impl From<PyRepositoryConfig> for RepositoryConfig {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
+            storage: value.storage.map(|s| s.into()),
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()
@@ -351,6 +452,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
+            storage: value.storage.map(|s| s.into()),
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()
@@ -383,7 +485,7 @@ pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
 #[pymethods]
 impl PyStorage {
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None, max_concurrent_requests_for_object=None, min_concurrent_request_size=None))]
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
     #[classmethod]
     pub fn new_s3(
         _cls: &Bound<'_, PyType>,
@@ -391,16 +493,12 @@ impl PyStorage {
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
-        max_concurrent_requests_for_object: Option<NonZeroU16>,
-        min_concurrent_request_size: Option<NonZeroU64>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_s3_storage(
             config.into(),
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
-            max_concurrent_requests_for_object,
-            min_concurrent_request_size,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -427,25 +525,25 @@ impl PyStorage {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None, max_concurrent_requests_for_object=None, min_concurrent_request_size=None))]
+    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
     pub fn new_gcs(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
         config: Option<HashMap<String, String>>,
-        max_concurrent_requests_for_object: Option<u16>,
-        min_concurrent_request_size: Option<u64>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_gcs_storage(
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
             config,
-            max_concurrent_requests_for_object,
-            min_concurrent_request_size,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
+    }
+
+    pub fn default_settings(&self) -> PyStorageSettings {
+        self.0.default_settings().into()
     }
 }

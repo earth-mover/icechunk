@@ -13,6 +13,7 @@ use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 use object_store::ObjectStorageConfig;
 use s3::S3Storage;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
     collections::HashMap,
@@ -76,13 +77,16 @@ pub enum StorageError {
     #[error("the etag does not match")]
     ConfigUpdateConflict,
     #[error("a concurrent task failed {0}")]
-    ConcurrencyError(JoinError),
+    ConcurrencyError(#[from] JoinError),
+    #[error("I/O error: {0}")]
+    IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]
     Other(String),
 }
 
 pub type StorageResult<A> = Result<A, StorageError>;
 
+#[derive(Debug)]
 pub struct ListInfo<Id> {
     pub id: Id,
     pub created_at: DateTime<Utc>,
@@ -98,6 +102,51 @@ const CONFIG_PATH: &str = "config.yaml";
 
 pub type ETag = String;
 
+#[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize, Clone)]
+pub enum CompressionAlgorithm {
+    #[default]
+    Zstd,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct CompressionSettings {
+    pub algorithm: CompressionAlgorithm,
+    pub level: u8,
+}
+
+impl Default for CompressionSettings {
+    fn default() -> Self {
+        Self { algorithm: Default::default(), level: 1 }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct ConcurrencySettings {
+    pub max_concurrent_requests_for_object: NonZeroU16,
+    pub min_concurrent_request_size: NonZeroU64,
+}
+
+// AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
+// 8-16 MB requests
+// 85-90 MB/s per request
+// these numbers would saturate a 12.5 Gbps network
+impl Default for ConcurrencySettings {
+    fn default() -> Self {
+        Self {
+            max_concurrent_requests_for_object: NonZeroU16::new(18)
+                .unwrap_or(NonZeroU16::MIN),
+            min_concurrent_request_size: NonZeroU64::new(12 * 1024 * 1024)
+                .unwrap_or(NonZeroU64::MIN),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct Settings {
+    pub concurrency: ConcurrencySettings,
+    pub compression: CompressionSettings,
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
@@ -105,58 +154,88 @@ pub type ETag = String;
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
-    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>>;
+    fn default_settings(&self) -> Settings {
+        Default::default()
+    }
+    async fn fetch_config(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<Option<(Bytes, ETag)>>;
     async fn update_config(
         &self,
+        settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
     ) -> StorageResult<ETag>;
-    async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>>;
+    async fn fetch_snapshot(
+        &self,
+        settings: &Settings,
+        id: &SnapshotId,
+    ) -> StorageResult<Arc<Snapshot>>;
     async fn fetch_attributes(
         &self,
+        settings: &Settings,
         id: &AttributesId,
     ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
     async fn fetch_manifests(
         &self,
+        settings: &Settings,
         id: &ManifestId,
         size: u64,
     ) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
-    async fn fetch_chunk(&self, id: &ChunkId, range: &ByteRange) -> StorageResult<Bytes>; // FIXME: format flags
+    async fn fetch_chunk(
+        &self,
+        settings: &Settings,
+        id: &ChunkId,
+        range: &ByteRange,
+    ) -> StorageResult<Bytes>; // FIXME: format flags
     async fn fetch_transaction_log(
         &self,
+        settings: &Settings,
         id: &SnapshotId,
     ) -> StorageResult<Arc<TransactionLog>>; // FIXME: format flags
 
     async fn write_snapshot(
         &self,
+        settings: &Settings,
         id: SnapshotId,
         table: Arc<Snapshot>,
     ) -> StorageResult<()>;
     async fn write_attributes(
         &self,
+        settings: &Settings,
         id: AttributesId,
         table: Arc<AttributesTable>,
     ) -> StorageResult<()>;
     async fn write_manifests(
         &self,
+        settings: &Settings,
         id: ManifestId,
         table: Arc<Manifest>,
     ) -> StorageResult<u64>;
-    async fn write_chunk(&self, id: ChunkId, bytes: Bytes) -> StorageResult<()>;
+    async fn write_chunk(
+        &self,
+        settings: &Settings,
+        id: ChunkId,
+        bytes: Bytes,
+    ) -> StorageResult<()>;
     async fn write_transaction_log(
         &self,
+        settings: &Settings,
         id: SnapshotId,
         log: Arc<TransactionLog>,
     ) -> StorageResult<()>;
 
-    async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes>;
-    async fn ref_names(&self) -> StorageResult<Vec<String>>;
+    async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes>;
+    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
     async fn ref_versions(
         &self,
+        settings: &Settings,
         ref_name: &str,
     ) -> StorageResult<BoxStream<StorageResult<String>>>;
     async fn write_ref(
         &self,
+        settings: &Settings,
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
@@ -164,59 +243,84 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
 
     async fn list_objects<'a>(
         &'a self,
+        settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
     /// Delete a stream of objects, by their id string representations
     async fn delete_objects(
         &self,
+        settings: &Settings,
         prefix: &str,
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize>;
 
     async fn list_chunks(
         &self,
+        settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
-        Ok(translate_list_infos(self.list_objects(CHUNK_PREFIX).await?))
+        Ok(translate_list_infos(self.list_objects(settings, CHUNK_PREFIX).await?))
     }
 
     async fn list_manifests(
         &self,
+        settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
-        Ok(translate_list_infos(self.list_objects(MANIFEST_PREFIX).await?))
+        Ok(translate_list_infos(self.list_objects(settings, MANIFEST_PREFIX).await?))
     }
 
     async fn list_snapshots(
         &self,
+        settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        Ok(translate_list_infos(self.list_objects(SNAPSHOT_PREFIX).await?))
+        Ok(translate_list_infos(self.list_objects(settings, SNAPSHOT_PREFIX).await?))
     }
 
     async fn delete_chunks(
         &self,
+        settings: &Settings,
         chunks: BoxStream<'_, ChunkId>,
     ) -> StorageResult<usize> {
-        self.delete_objects(CHUNK_PREFIX, chunks.map(|id| id.to_string()).boxed()).await
+        self.delete_objects(
+            settings,
+            CHUNK_PREFIX,
+            chunks.map(|id| id.to_string()).boxed(),
+        )
+        .await
     }
 
     async fn delete_manifests(
         &self,
+        settings: &Settings,
         chunks: BoxStream<'_, ManifestId>,
     ) -> StorageResult<usize> {
-        self.delete_objects(MANIFEST_PREFIX, chunks.map(|id| id.to_string()).boxed())
-            .await
+        self.delete_objects(
+            settings,
+            MANIFEST_PREFIX,
+            chunks.map(|id| id.to_string()).boxed(),
+        )
+        .await
     }
 
     async fn delete_snapshots(
         &self,
+        settings: &Settings,
         chunks: BoxStream<'_, SnapshotId>,
     ) -> StorageResult<usize> {
-        self.delete_objects(SNAPSHOT_PREFIX, chunks.map(|id| id.to_string()).boxed())
-            .await
+        self.delete_objects(
+            settings,
+            SNAPSHOT_PREFIX,
+            chunks.map(|id| id.to_string()).boxed(),
+        )
+        .await
     }
 
-    async fn delete_refs(&self, refs: BoxStream<'_, String>) -> StorageResult<usize> {
-        self.delete_objects(REF_PREFIX, refs).await
+    async fn delete_refs(
+        &self,
+        settings: &Settings,
+        refs: BoxStream<'_, String>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(settings, REF_PREFIX, refs).await
     }
 }
 
@@ -268,16 +372,12 @@ pub fn new_s3_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
-    max_concurrent_requests_for_object: Option<NonZeroU16>,
-    min_concurrent_request_size: Option<NonZeroU64>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let st = S3Storage::new(
         config,
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
-        max_concurrent_requests_for_object,
-        min_concurrent_request_size,
     )?;
     Ok(Arc::new(st))
 }
@@ -297,8 +397,6 @@ pub fn new_gcs_storage(
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
     config: Option<HashMap<String, String>>,
-    max_concurrent_requests_for_object: Option<u16>,
-    min_concurrent_request_size: Option<u64>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let url = format!(
         "gs://{}{}",
@@ -349,14 +447,6 @@ pub fn new_gcs_storage(
     let config = ObjectStorageConfig {
         url,
         prefix: "".to_string(), // it's embedded in the url
-        // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
-        // 8-16 MB requests
-        // 85-90 MB/s per request
-        // these numbers would saturate a 12.5 Gbps network
-        max_concurrent_requests_for_object: max_concurrent_requests_for_object
-            .unwrap_or(18),
-        min_concurrent_request_size: min_concurrent_request_size
-            .unwrap_or(12 * 1024 * 1024),
         options,
     };
 
