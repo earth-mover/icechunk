@@ -38,7 +38,7 @@ async def test_store_clear_chunk_list() -> None:
     await store.clear()
 
     group = zarr.group(store=store)
-    array = group.create_array(**array_kwargs, exists_ok=True)
+    array = group.create_array(**array_kwargs, overwrite=True)
     assert len([_ async for _ in store.list_prefix("/")]) == 2
     array[:] = rng.integers(
         low=0,

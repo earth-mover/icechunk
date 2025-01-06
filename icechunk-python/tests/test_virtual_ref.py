@@ -56,7 +56,7 @@ async def test_write_minio_virtual_refs() -> None:
     session = repo.writable_session("main")
     store = session.store
 
-    array = zarr.Array.create(store, shape=(5, 1, 3), chunks=(1, 1, 1), dtype="i4")
+    array = zarr.create_array(store, shape=(5, 1, 3), chunks=(1, 1, 1), dtype="i4")
 
     # We add the virtual chunk refs without checksum, with the right etag, and with the wrong wrong etag and datetime.
     # This way we can check retrieval operations that should fail
