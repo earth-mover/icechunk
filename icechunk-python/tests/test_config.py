@@ -27,13 +27,12 @@ def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
 def test_no_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]
-    array = zarr.open_array(
+    array = zarr.create_array(
         store=store,
-        mode="a",
         shape=(10),
         dtype="int64",
         zarr_format=3,
-        chunks=(1),
+        chunks=(1,),
         fill_value=-1,
     )
     array[:] = 42
@@ -48,14 +47,13 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]
 
-    inline_array = zarr.open_array(
+    inline_array = zarr.create_array(
         store=store,
-        mode="a",
-        path="inline",
+        name="inline",
         shape=(10),
         dtype="int32",
         zarr_format=3,
-        chunks=(1),
+        chunks=(1,),
         fill_value=-1,
     )
 
@@ -65,14 +63,13 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     # inline_chunk_threshold is 40, we should have no chunks directory
     assert not os.path.isdir(f"{store_path}/chunks")
 
-    written_array = zarr.open_array(
+    written_array = zarr.create_array(
         store=store,
-        mode="a",
-        path="not_inline",
+        name="not_inline",
         shape=(10),
         dtype="int64",
         zarr_format=3,
-        chunks=(1),
+        chunks=(1,),
         fill_value=-1,
     )
 
