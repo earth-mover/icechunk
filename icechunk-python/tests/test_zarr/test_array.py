@@ -55,16 +55,15 @@ def test_array_creation_existing_node(
 
     if overwrite:
         # This is currently not supported by IcechunkStore
-        pytest.xfail("IcechunkStore does not support overwrite=True")
-        # arr_new = create_array(
-        #     spath / "extant",
-        #     shape=new_shape,
-        #     dtype=new_dtype,
-        #     overwrite=overwrite,
-        #     zarr_format=zarr_format,
-        # )
-        # assert arr_new.shape == new_shape
-        # assert arr_new.dtype == new_dtype
+        arr_new = create_array(
+            spath / "extant",
+            shape=new_shape,
+            dtype=new_dtype,
+            overwrite=overwrite,
+            zarr_format=zarr_format,
+        )
+        assert arr_new.shape == new_shape
+        assert arr_new.dtype == new_dtype
     else:
         with pytest.raises(expected_exception):
             create_array(
