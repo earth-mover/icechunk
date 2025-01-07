@@ -473,14 +473,13 @@ def test_group_creation_existing_node(
     new_attributes = {"new": True}
 
     if overwrite:
-        pytest.xfail("overwrite is not implemented for Group.from_store")
-        # node_new = Group.from_store(
-        #     spath / "extant",
-        #     attributes=new_attributes,
-        #     zarr_format=zarr_format,
-        #     overwrite=overwrite,
-        # )
-        # assert node_new.attrs == new_attributes
+        node_new = Group.from_store(
+            spath / "extant",
+            attributes=new_attributes,
+            zarr_format=zarr_format,
+            overwrite=overwrite,
+        )
+        assert node_new.attrs == new_attributes
     else:
         with pytest.raises(expected_exception):
             Group.from_store(
