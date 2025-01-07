@@ -654,6 +654,12 @@ async fn set_array_meta(
     array_meta: ArrayMetadata,
     repo: &mut Session,
 ) -> StoreResult<()> {
+    // TODO: Consider deleting all this logic?
+    // We try hard to not overwrite existing metadata here.
+    // I don't think this is actually useful because Zarr's
+    // Array/Group API will require that the user set `overwrite=True`
+    // which will delete any existing array metadata. This path is only
+    // applicable when using the explicit `store.set` interface.
     if let Ok(node) = repo.get_array(&path).await {
         // Check if the user attributes are different, if they are update them
         let existing_attrs = match node.user_attributes {
