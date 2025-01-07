@@ -46,7 +46,7 @@ Byte 26 identifies compression type:
 * 0x00 - No compression
 * 0x01 - Zstd
 
-The following bytes are the Msgpack serialization of the Rust datastructure. This part of the file will see a lot of change and improvements after Icenchuk 1.0.
+The following bytes are the Msgpack serialization of the Rust datastructure. This part of the file will see a lot of change and improvements after Icechunk 1.0.
 
 In object stores that supported, the file information (spec version, compression, type, etc) is also store as object store metadata. Icechunk writes this information but currently doesn't use it during reads. Details of the metadata format TBD.
 
