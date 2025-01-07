@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-python"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -21,7 +21,7 @@ crate-type = ["cdylib"]
 bytes = "1.8.0"
 chrono = { version = "0.4.39" }
 futures = "0.3.31"
-icechunk = { path = "../icechunk", version = "0.1.0-alpha.8" }
+icechunk = { path = "../icechunk", version = "0.1.0-alpha.9" }
 pyo3 = { version = "0.23", features = [
   "chrono",
   #  do we really need this one?
