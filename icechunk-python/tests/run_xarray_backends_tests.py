@@ -47,7 +47,7 @@ class IcechunkStoreBase(ZarrBase):
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
     @contextlib.contextmanager
     def create_zarr_target(self) -> Generator[IcechunkStore]:
-        if zarr.config.config["default_zarr_version"] == 2:
+        if zarr.config.config["default_zarr_format"] == 2:
             pytest.skip("v2 not supported")
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(local_filesystem_storage(tmpdir))
@@ -58,7 +58,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
 class TestIcechunkStoreMemory(IcechunkStoreBase):
     @contextlib.contextmanager
     def create_zarr_target(self) -> Generator[IcechunkStore]:
-        if zarr.config.config["default_zarr_version"] == 2:
+        if zarr.config.config["default_zarr_format"] == 2:
             pytest.skip("v2 not supported")
         repo = Repository.create(in_memory_storage())
         session = repo.writable_session("main")
@@ -74,7 +74,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
 class TestIcechunkStoreMinio(IcechunkStoreBase):
     @contextlib.contextmanager
     def create_zarr_target(self) -> Generator[IcechunkStore]:
-        if zarr.config.config["default_zarr_version"] == 2:
+        if zarr.config.config["default_zarr_format"] == 2:
             pytest.skip("v2 not supported")
         repo = Repository.create(
             s3_storage(
