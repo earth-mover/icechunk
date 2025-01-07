@@ -34,6 +34,8 @@ Byte 24 identifies Icechunk spec version used to write the file.
 * 0x02 - Spec version 2
 * ...
 
+If more than 255 version are needed, we will set this byte to 0 and modify the following bytes according to a new spec.
+
 The next byte (index 25) identifies file type :
 
 * 0x01 - Snapshot
@@ -46,9 +48,9 @@ Byte 26 identifies compression type:
 * 0x00 - No compression
 * 0x01 - Zstd
 
-The following bytes are the Msgpack serialization of the Rust datastructure. This part of the file will see a lot of change and improvements after Icechunk 1.0.
+The following bytes are the compressed Msgpack serialization of the corresponding Rust datastructure. This part of the file will see a lot of change and improvements after Icechunk 1.0. Notice compression doesn't apply to the header, only to bytes after and including index 27.
 
-In object stores that supported, the file information (spec version, compression, type, etc) is also store as object store metadata. Icechunk writes this information but currently doesn't use it during reads. Details of the metadata format TBD.
+In object stores that support it, the file information (spec version, compression, type, etc) is also stored as object store metadata. Icechunk writes this information but currently doesn't use it during reads. Details of the metadata format TBD in the spec.
 
 ### File structure
 
