@@ -1,5 +1,21 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a9
+
+### Features
+
+- Manifests compression using Zstd
+- Large manifests are fetched using multiple parallel requests
+- Functions to fetch and store repository config
+
+### Performance
+
+- Faster `list_dir` and `delete_dir` implementations in the Zarr store
+
+### Fixes
+
+- Credentials from environment in GCS
+
 ## Python Icechunk Library 0.1.0a8
 
 ### Features
