@@ -66,6 +66,7 @@ filterwarnings = [
     # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
   "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
   "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
+  "ignore::ResourceWarning",
 ]
 
 [tool.pyright]
