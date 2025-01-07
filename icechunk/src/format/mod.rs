@@ -216,14 +216,47 @@ pub enum IcechunkFormatError {
     ChunkCoordinatesNotFound { coords: ChunkIndices },
     #[error("manifest information cannot be found in snapshot `{manifest_id}`")]
     ManifestInfoNotFound { manifest_id: ManifestId },
+    #[error("invalid magic numbers in file")]
+    InvalidMagicNumbers, // TODO: add more info
+    #[error("Icechunk cannot read from repository written with a more modern version")]
+    InvalidSpecVersion, // TODO: add more info
+    #[error("Icechunk cannot read this file type, expected {expected} got {got}")]
+    InvalidFileType { expected: u8, got: u8 }, // TODO: add more info
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
-pub type IcechunkFormatVersion = u16;
+pub type IcechunkFormatVersion = u8;
 
 pub mod format_constants {
     use super::IcechunkFormatVersion;
+
+    pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
+    pub const LATEST_ICECHUNK_SPEC_VERSION_BINARY: u8 = 1;
+
+    pub const LATEST_ICECHUNK_FORMAT_VERSION: IcechunkFormatVersion = 1;
+    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic-spec-ver";
+
+    pub const ICECHUNK_CLIENT_NAME: &str = "ic-"; // FIXME: version
+    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic-client";
+
+    pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
+    pub const ICECHUNK_FILE_TYPE_MANIFEST: &str = "manifest";
+    pub const ICECHUNK_FILE_TYPE_TRANSACTION_LOG: &str = "transaction-log";
+    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic-file-type";
+
+    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic-comp-alg";
+    pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
+    pub const ICECHUNK_COMPRESSION_NONE: &str = "none";
+
+    pub const ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT: u8 = 1;
+    pub const ICECHUNK_FILE_TYPE_BINARY_MANIFEST: u8 = 2;
+    pub const ICECHUNK_FILE_TYPE_BINARY_ATTRIBUTES: u8 = 3;
+    pub const ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG: u8 = 4;
+
+    pub const ICECHUNK_COMPRESSION_BINARY_ZSTD: u8 = 1;
+
+    //////////////////////////
 
     pub const LATEST_ICECHUNK_MANIFEST_FORMAT: IcechunkFormatVersion = 0;
     pub const LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE: &str = "application/msgpack";

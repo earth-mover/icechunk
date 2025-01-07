@@ -23,7 +23,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::task::JoinError;
+use tokio::{io::AsyncRead, task::JoinError};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -43,9 +43,8 @@ pub use object_store::ObjectStorage;
 use crate::{
     config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
     format::{
-        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
-        transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
-        SnapshotId,
+        attributes::AttributesTable, transaction_log::TransactionLog, AttributesId,
+        ByteRange, ChunkId, ManifestId, SnapshotId,
     },
     private,
 };
@@ -102,24 +101,6 @@ const CONFIG_PATH: &str = "config.yaml";
 
 pub type ETag = String;
 
-#[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize, Clone)]
-pub enum CompressionAlgorithm {
-    #[default]
-    Zstd,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub struct CompressionSettings {
-    pub algorithm: CompressionAlgorithm,
-    pub level: u8,
-}
-
-impl Default for CompressionSettings {
-    fn default() -> Self {
-        Self { algorithm: Default::default(), level: 1 }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: NonZeroU16,
@@ -144,7 +125,6 @@ impl Default for ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: ConcurrencySettings,
-    pub compression: CompressionSettings,
 }
 
 /// Fetch and write the parquet files that represent the repository in object store
@@ -171,18 +151,35 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<Snapshot>>;
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
     async fn fetch_attributes(
         &self,
         settings: &Settings,
         id: &AttributesId,
-    ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
-    async fn fetch_manifests(
+    ) -> StorageResult<Arc<AttributesTable>>;
+    async fn fetch_manifest(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        if size == 0 {
+            self.fetch_manifest_single_request(settings, id).await
+        } else {
+            self.fetch_manifest_splitting(settings, id, size).await
+        }
+    }
+    async fn fetch_manifest_splitting(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+        size: u64,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+    async fn fetch_manifest_single_request(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
     async fn fetch_chunk(
         &self,
         settings: &Settings,
@@ -199,7 +196,8 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: SnapshotId,
-        table: Arc<Snapshot>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()>;
     async fn write_attributes(
         &self,
@@ -207,12 +205,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         id: AttributesId,
         table: Arc<AttributesTable>,
     ) -> StorageResult<()>;
-    async fn write_manifests(
+    async fn write_manifest(
         &self,
         settings: &Settings,
         id: ManifestId,
-        table: Arc<Manifest>,
-    ) -> StorageResult<u64>;
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()>;
     async fn write_chunk(
         &self,
         settings: &Settings,

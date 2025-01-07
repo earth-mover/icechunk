@@ -17,6 +17,7 @@
 //!     - a caching wrapper implementation
 //! - The datastructures are represented by concrete types in the [`mod@format`] modules.
 //!   These datastructures use Arrow RecordBatches for representation.
+pub mod asset_resolver;
 pub mod change_set;
 pub mod config;
 pub mod conflicts;
