@@ -64,7 +64,8 @@ filterwarnings = [
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
   "ignore:Port 8787 is already in use:UserWarning:",
     # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
-  "ignore:.*is currently not part .* the Zarr version 3 specification.",
+  "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
+  "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
 ]
 
 [tool.pyright]
