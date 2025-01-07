@@ -55,7 +55,7 @@ def v3_group_metadata(draw):
 
 
 @st.composite
-def v3_array_metadata(draw):
+def v3_array_metadata(draw: st.DrawFn) -> bytes:
     from zarr.codecs.bytes import BytesCodec
     from zarr.core.chunk_grids import RegularChunkGrid
     from zarr.core.chunk_key_encodings import DefaultChunkKeyEncoding
@@ -127,11 +127,20 @@ class Model:
         Branches: {tuple(self.branches.keys())!r}
         Tags: {tuple(self.tags.keys())!r}""").strip("\n")
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: Buffer) -> None:
+        # Icechunk doesn't overwrite docs with the same value
+        # and we need to keep `changes_made` in sync.
+        # Icechunk checks after decoding the metadata to rust Structs so we must do the same.
+        # Different byte strings can decode to the same json dict (order of user attributes may be different)
+        if key in self.store and json.loads(self.store[key].to_bytes()) == json.loads(
+            value.to_bytes()
+        ):
+            note(f"skipping setting {key!r}, value is unchanged")
+            return
         self.changes_made = True
         self.store[key] = value
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Buffer:
         return self.store[key]
 
     @property

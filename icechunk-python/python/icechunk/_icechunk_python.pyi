@@ -51,6 +51,46 @@ class VirtualChunkContainer:
 
     def __init__(self, name: str, url_prefix: str, store: AnyObjectStoreConfig): ...
 
+class StorageCompressionAlgorithm(Enum):
+    """Enum for selecting the compression algorithm used by Icechunk to write its metadata files"""
+
+    Zstd = 0
+
+class StorageCompressionSettings:
+    """Configuration for how Icechunk compresses its metadata files"""
+    @property
+    def algorithm(self) -> StorageCompressionAlgorithm: ...
+    @algorithm.setter
+    def algorithm(self, value: StorageCompressionAlgorithm) -> None: ...
+    @property
+    def level(self) -> int: ...
+    @level.setter
+    def level(self, value: int) -> None: ...
+
+class StorageConcurrencySettings:
+    """Configuration for how Icechunk uses its Storage instance"""
+
+    @property
+    def max_concurrent_requests_for_object(self) -> int: ...
+    @max_concurrent_requests_for_object.setter
+    def max_concurrent_requests_for_object(self, value: int) -> None: ...
+    @property
+    def min_concurrent_request_size(self) -> int: ...
+    @min_concurrent_request_size.setter
+    def min_concurrent_request_size(self, value: int) -> None: ...
+
+class StorageSettings:
+    """Configuration for how Icechunk uses its Storage instance"""
+
+    @property
+    def concurrency(self) -> StorageConcurrencySettings: ...
+    @concurrency.setter
+    def concurrency(self, value: StorageConcurrencySettings) -> None: ...
+    @property
+    def compression(self) -> StorageCompressionSettings: ...
+    @compression.setter
+    def compression(self, value: StorageCompressionSettings) -> None: ...
+
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
     def __init__(
@@ -332,8 +372,6 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: AnyS3Credential | None = None,
-        max_concurrent_requests_for_object: int | None = None,
-        min_concurrent_request_size: int | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -347,8 +385,6 @@ class Storage:
         credentials: AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
-        max_concurrent_requests_for_object: int | None = None,
-        min_concurrent_request_size: int | None = None,
     ) -> Storage: ...
 
 class VersionSelection(Enum):

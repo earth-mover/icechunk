@@ -28,8 +28,6 @@ def mk_repo() -> icechunk.Repository:
         prefix="python-distributed-writers-test__" + str(time.time()),
         access_key_id="minio123",
         secret_access_key="minio123",
-        max_concurrent_requests_for_object=10,
-        min_concurrent_request_size=10,
     )
     repo_config = icechunk.RepositoryConfig.default()
     repo_config.inline_chunk_threshold_bytes = 5

@@ -21,7 +21,7 @@ use crate::{
         update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
-    storage::ETag,
+    storage::{self, ETag},
     virtual_chunks::{ContainerName, VirtualChunkContainer, VirtualChunkResolver},
     MemCachingStorage, Storage, StorageError,
 };
@@ -73,6 +73,7 @@ pub type RepositoryResult<T> = Result<T, RepositoryError>;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
     config: RepositoryConfig,
+    storage_settings: storage::Settings,
     config_etag: ETag,
     storage: Arc<dyn Storage + Send + Sync>,
     virtual_resolver: Arc<VirtualChunkResolver>,
@@ -92,16 +93,26 @@ impl Repository {
         let overwrite_refs = config.unsafe_overwrite_refs;
 
         let storage_c = Arc::clone(&storage);
+        let storage_settings = config
+            .storage
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| storage.default_settings());
         let handle1 = tokio::spawn(async move {
             // On create we need to create the default branch
             let new_snapshot = Snapshot::empty();
             let new_snapshot_id = new_snapshot.metadata.id.clone();
             storage_c
-                .write_snapshot(new_snapshot_id.clone(), Arc::new(new_snapshot))
+                .write_snapshot(
+                    &storage_settings,
+                    new_snapshot_id.clone(),
+                    Arc::new(new_snapshot),
+                )
                 .await?;
 
             update_branch(
                 storage_c.as_ref(),
+                &storage_settings,
                 Ref::DEFAULT_BRANCH,
                 new_snapshot_id.clone(),
                 None,
@@ -185,11 +196,19 @@ impl Repository {
         let virtual_resolver =
             Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
 
-        Ok(Self { config, config_etag, storage, virtual_resolver })
+        let storage_settings = config
+            .storage
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| storage.default_settings());
+        let storage = Repository::add_in_mem_asset_caching(storage);
+        Ok(Self { config, config_etag, storage, storage_settings, virtual_resolver })
     }
 
     pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
-        match fetch_branch_tip(storage, Ref::DEFAULT_BRANCH).await {
+        match fetch_branch_tip(storage, &storage.default_settings(), Ref::DEFAULT_BRANCH)
+            .await
+        {
             Ok(_) => Ok(true),
             Err(RefError::RefNotFound(_)) => Ok(false),
             Err(err) => Err(err.into()),
@@ -208,7 +227,7 @@ impl Repository {
     pub async fn fetch_config(
         storage: &(dyn Storage + Send + Sync),
     ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
-        match storage.fetch_config().await? {
+        match storage.fetch_config(&storage.default_settings()).await? {
             Some((bytes, etag)) => {
                 let config = serde_yml::from_slice(&bytes)?;
                 Ok(Some((config, etag)))
@@ -232,12 +251,22 @@ impl Repository {
         config_etag: Option<&ETag>,
     ) -> RepositoryResult<ETag> {
         let bytes = Bytes::from(serde_yml::to_string(config)?);
-        let res = storage.update_config(bytes, config_etag.map(|e| e.as_str())).await?;
+        let res = storage
+            .update_config(
+                &storage.default_settings(),
+                bytes,
+                config_etag.map(|e| e.as_str()),
+            )
+            .await?;
         Ok(res)
     }
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    pub fn storage_settings(&self) -> &storage::Settings {
+        &self.storage_settings
     }
 
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
@@ -249,7 +278,8 @@ impl Repository {
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
-        let parent = self.storage.fetch_snapshot(snapshot_id).await?;
+        let parent =
+            self.storage.fetch_snapshot(&self.storage_settings, snapshot_id).await?;
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
             // FIXME: implement splitting of snapshot history
@@ -273,6 +303,7 @@ impl Repository {
         // TODO: The parent snapshot should exist?
         let version = match update_branch(
             self.storage.as_ref(),
+            &self.storage_settings,
             branch_name,
             snapshot_id.clone(),
             None,
@@ -292,13 +323,16 @@ impl Repository {
 
     /// List all branches in the repository.
     pub async fn list_branches(&self) -> RepositoryResult<HashSet<String>> {
-        let branches = list_branches(self.storage.as_ref()).await?;
+        let branches =
+            list_branches(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(branches)
     }
 
     /// Get the snapshot id of the tip of a branch
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let branch_version = fetch_branch_tip(self.storage.as_ref(), branch).await?;
+        let branch_version =
+            fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
+                .await?;
         Ok(branch_version.snapshot)
     }
 
@@ -310,10 +344,16 @@ impl Repository {
         branch: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<BranchVersion> {
-        raise_if_invalid_snapshot_id(self.storage.as_ref(), snapshot_id).await?;
+        raise_if_invalid_snapshot_id(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            snapshot_id,
+        )
+        .await?;
         let branch_tip = self.lookup_branch(branch).await?;
         let version = update_branch(
             self.storage.as_ref(),
+            &self.storage_settings,
             branch,
             snapshot_id.clone(),
             Some(&branch_tip),
@@ -328,7 +368,7 @@ impl Repository {
     /// This will remove the branch reference and the branch history. It will not remove the
     /// chunks or snapshots associated with the branch.
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
-        delete_branch(self.storage.as_ref(), branch).await?;
+        delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
         Ok(())
     }
 
@@ -340,6 +380,7 @@ impl Repository {
     ) -> RepositoryResult<()> {
         create_tag(
             self.storage.as_ref(),
+            &self.storage_settings,
             tag_name,
             snapshot_id.clone(),
             self.config.unsafe_overwrite_refs,
@@ -350,12 +391,13 @@ impl Repository {
 
     /// List all tags in the repository.
     pub async fn list_tags(&self) -> RepositoryResult<HashSet<String>> {
-        let tags = list_tags(self.storage.as_ref()).await?;
+        let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
 
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
-        let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
+        let ref_data =
+            fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
         Ok(ref_data.snapshot)
     }
 
@@ -365,21 +407,33 @@ impl Repository {
     ) -> RepositoryResult<Session> {
         let snapshot_id: SnapshotId = match version {
             VersionInfo::SnapshotId(sid) => {
-                raise_if_invalid_snapshot_id(self.storage.as_ref(), sid).await?;
+                raise_if_invalid_snapshot_id(
+                    self.storage.as_ref(),
+                    &self.storage_settings,
+                    sid,
+                )
+                .await?;
                 Ok::<_, RepositoryError>(SnapshotId::from(sid.clone()))
             }
             VersionInfo::TagRef(tag) => {
-                let ref_data = fetch_tag(self.storage.as_ref(), tag).await?;
+                let ref_data =
+                    fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
                 Ok::<_, RepositoryError>(ref_data.snapshot)
             }
             VersionInfo::BranchTipRef(branch) => {
-                let ref_data = fetch_branch_tip(self.storage.as_ref(), branch).await?;
+                let ref_data = fetch_branch_tip(
+                    self.storage.as_ref(),
+                    &self.storage_settings,
+                    branch,
+                )
+                .await?;
                 Ok::<_, RepositoryError>(ref_data.snapshot)
             }
         }?;
 
         let session = Session::create_readonly_session(
             self.config.clone(),
+            self.storage_settings.clone(),
             self.storage.clone(),
             self.virtual_resolver.clone(),
             snapshot_id,
@@ -389,9 +443,12 @@ impl Repository {
     }
 
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
-        let ref_data = fetch_branch_tip(self.storage.as_ref(), branch).await?;
+        let ref_data =
+            fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
+                .await?;
         let session = Session::create_writable_session(
             self.config.clone(),
+            self.storage_settings.clone(),
             self.storage.clone(),
             self.virtual_resolver.clone(),
             branch.to_string(),
@@ -418,10 +475,11 @@ fn validate_credentials(
 
 pub async fn raise_if_invalid_snapshot_id(
     storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
     storage
-        .fetch_snapshot(snapshot_id)
+        .fetch_snapshot(storage_settings, snapshot_id)
         .await
         .map_err(|_| RepositoryError::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())

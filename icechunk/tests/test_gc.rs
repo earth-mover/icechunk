@@ -41,15 +41,10 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
 pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
-    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        config,
-        "testbucket".to_string(),
-        Some(prefix),
-        Some(credentials),
-        None,
-        None,
-    )
-    .expect("Creating minio storage failed");
+    let storage: Arc<dyn Storage + Send + Sync> =
+        new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
+            .expect("Creating minio storage failed");
+    let storage_settings = storage.default_settings();
 
     let repo = Repository::create(
         Some(RepositoryConfig {
@@ -87,7 +82,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let first_snap_id = ds.commit("first", None).await?;
-    assert_eq!(storage.list_chunks().await?.count().await, 1100);
+    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
 
     let mut ds = repo.writable_session("main").await?;
 
@@ -99,14 +94,15 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
     }
     let second_snap_id = ds.commit("second", None).await?;
-    assert_eq!(storage.list_chunks().await?.count().await, 1110);
+    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
 
     // verify doing gc without dangling objects doesn't change the repo
     let now = Utc::now();
     let gc_config = GCConfig::clean_all(now, now, None);
-    let summary = garbage_collect(storage.as_ref(), &gc_config).await?;
+    let summary =
+        garbage_collect(storage.as_ref(), &storage_settings, &gc_config).await?;
     assert_eq!(summary, GCSummary::default());
-    assert_eq!(storage.list_chunks().await?.count().await, 1110);
+    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
     for idx in 0..10 {
         let bytes = get_chunk(
             ds.get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
@@ -118,21 +114,29 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Reset the branch to leave the latest commit dangling
-    update_branch(storage.as_ref(), "main", first_snap_id, Some(&second_snap_id), false)
-        .await?;
+    update_branch(
+        storage.as_ref(),
+        &storage_settings,
+        "main",
+        first_snap_id,
+        Some(&second_snap_id),
+        false,
+    )
+    .await?;
 
     // we still have all the chunks
-    assert_eq!(storage.list_chunks().await?.count().await, 1110);
+    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
 
-    let summary = garbage_collect(storage.as_ref(), &gc_config).await?;
+    let summary =
+        garbage_collect(storage.as_ref(), &storage_settings, &gc_config).await?;
     assert_eq!(summary.chunks_deleted, 10);
     assert_eq!(summary.manifests_deleted, 1);
     assert_eq!(summary.snapshots_deleted, 1);
 
     // 10 chunks should be drop
-    assert_eq!(storage.list_chunks().await?.count().await, 1100);
-    assert_eq!(storage.list_manifests().await?.count().await, 1);
-    assert_eq!(storage.list_snapshots().await?.count().await, 2);
+    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
+    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 1);
+    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 2);
 
     // Opening the repo on main should give the right data
     let ds =
