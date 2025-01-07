@@ -16,7 +16,7 @@ classifiers = [
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0b3"]
+dependencies = ["zarr==3.0.0rc2"]
 
 [tool.poetry]
 name = "icechunk"
@@ -39,7 +39,7 @@ test = [
   "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
-  "xarray>=2024.11.0, <2025",
+  "xarray@git+https://github.com/pydata/xarray.git@main",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
@@ -63,6 +63,10 @@ filterwarnings = [
   "error",
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
   "ignore:Port 8787 is already in use:UserWarning:",
+    # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
+  "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
+  "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
+  "ignore::ResourceWarning",
 ]
 
 [tool.pyright]

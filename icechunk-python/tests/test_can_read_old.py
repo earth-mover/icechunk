@@ -74,7 +74,7 @@ async def write_a_test_repo() -> None:
     big_chunks = group1.create_array(
         "big_chunks",
         shape=(10, 10),
-        chunk_shape=(5, 5),
+        chunks=(5, 5),
         dtype="float32",
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
@@ -84,7 +84,7 @@ async def write_a_test_repo() -> None:
     small_chunks = group1.create_array(
         "small_chunks",
         shape=(5),
-        chunk_shape=(1),
+        chunks=(1),
         dtype="int8",
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
@@ -144,7 +144,7 @@ async def write_a_test_repo() -> None:
     group5.create_array(
         "inner",
         shape=(10, 10),
-        chunk_shape=(5, 5),
+        chunks=(5, 5),
         dtype="float32",
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},

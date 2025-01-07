@@ -50,7 +50,7 @@ async def test_concurrency() -> None:
 
     group = zarr.group(store=store, overwrite=True)
     array = group.create_array(
-        "array", shape=(N, N), chunk_shape=(1, 1), dtype="f8", fill_value=1e23
+        "array", shape=(N, N), chunks=(1, 1), dtype="f8", fill_value=1e23
     )
 
     barrier = asyncio.Barrier(2 * N * N + 1)

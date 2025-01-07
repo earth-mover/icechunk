@@ -47,7 +47,7 @@ group = zarr.group(store=icechunk_sesion.store(), overwrite=True)
 zarray = group.create_array(
     "array",
     shape=shape,
-    chunk_shape=zarr_chunks,
+    chunks=zarr_chunks,
     dtype="f8",
     fill_value=float("nan"),
 )

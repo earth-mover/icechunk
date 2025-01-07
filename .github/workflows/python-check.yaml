@@ -95,6 +95,15 @@ jobs:
           restore-keys: |
             cache-hypothesis-
 
+      - name: describe environment
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip list
+
       - name: pytest
         shell: bash
         working-directory: icechunk-python

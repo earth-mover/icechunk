@@ -60,7 +60,7 @@ async def test_distributed_writers() -> None:
     zarray = group.create_array(
         "array",
         shape=shape,
-        chunk_shape=(CHUNK_DIM_SIZE, CHUNK_DIM_SIZE),
+        chunks=(CHUNK_DIM_SIZE, CHUNK_DIM_SIZE),
         dtype="f8",
         fill_value=float("nan"),
     )

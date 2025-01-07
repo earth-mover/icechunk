@@ -55,8 +55,8 @@ async def test_issue_418() -> None:
     store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
-    time = root.require_array(name="time", shape=((2,)), chunk_shape=((1,)), dtype="i4")
-    root.require_array(name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4")
+    time = root.require_array(name="time", shape=((2,)), chunks=((1,)), dtype="i4")
+    root.require_array(name="lon", shape=((1,)), chunks=((1,)), dtype="i4")
 
     # Set longitude
     store.set_virtual_ref(
@@ -81,7 +81,7 @@ async def test_issue_418() -> None:
 
     root = zarr.Group.open(store=store)
     time = cast(zarr.core.array.Array, root["time"])
-    root.require_array(name="lon", shape=((1,)), chunk_shape=((1,)), dtype="i4")
+    root.require_array(name="lon", shape=((1,)), chunks=((1,)), dtype="i4")
 
     # resize the array and append a new chunk
     time.resize((3,))
