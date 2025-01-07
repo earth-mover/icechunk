@@ -17,7 +17,7 @@ from icechunk import (
 )
 from xarray.tests.test_backends import (
     ZarrBase,
-    default_zarr_version,  # noqa: F401; needed otherwise not discovered
+    default_zarr_format,  # noqa: F401; needed otherwise not discovered
 )
 
 
