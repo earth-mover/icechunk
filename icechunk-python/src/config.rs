@@ -398,7 +398,7 @@ pub struct PyCachingConfig {
 #[pymethods]
 impl PyCachingConfig {
     #[staticmethod]
-    /// Create a default `RepositoryConfig` instance
+    /// Create a default `CachingConfig` instance
     fn default() -> Self {
         CachingConfig::default().into()
     }
