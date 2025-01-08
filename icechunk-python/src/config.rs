@@ -328,7 +328,7 @@ pub enum PyCompressionAlgorithm {
 #[pymethods]
 impl PyCompressionAlgorithm {
     #[staticmethod]
-    /// Create a default `RepositoryConfig` instance
+    /// Create a default `CompressionAlgorithm` instance
     fn default() -> Self {
         CompressionAlgorithm::default().into()
     }
