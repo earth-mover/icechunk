@@ -319,24 +319,33 @@ impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
     }
 }
 
-#[pyclass(name = "StorageCompressionAlgorithm", eq, eq_int)]
+#[pyclass(name = "CompressionAlgorithm", eq, eq_int)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PyStorageCompressionAlgorithm {
+pub enum PyCompressionAlgorithm {
     Zstd,
 }
 
-impl From<CompressionAlgorithm> for PyStorageCompressionAlgorithm {
+#[pymethods]
+impl PyCompressionAlgorithm {
+    #[staticmethod]
+    /// Create a default `RepositoryConfig` instance
+    fn default() -> Self {
+        CompressionAlgorithm::default().into()
+    }
+}
+
+impl From<CompressionAlgorithm> for PyCompressionAlgorithm {
     fn from(value: CompressionAlgorithm) -> Self {
         match value {
-            CompressionAlgorithm::Zstd => PyStorageCompressionAlgorithm::Zstd,
+            CompressionAlgorithm::Zstd => PyCompressionAlgorithm::Zstd,
         }
     }
 }
 
-impl From<PyStorageCompressionAlgorithm> for CompressionAlgorithm {
-    fn from(value: PyStorageCompressionAlgorithm) -> Self {
+impl From<PyCompressionAlgorithm> for CompressionAlgorithm {
+    fn from(value: PyCompressionAlgorithm) -> Self {
         match value {
-            PyStorageCompressionAlgorithm::Zstd => CompressionAlgorithm::Zstd,
+            PyCompressionAlgorithm::Zstd => CompressionAlgorithm::Zstd,
         }
     }
 }
@@ -345,9 +354,18 @@ impl From<PyStorageCompressionAlgorithm> for CompressionAlgorithm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyCompressionConfig {
     #[pyo3(get, set)]
-    pub algorithm: PyStorageCompressionAlgorithm,
+    pub algorithm: PyCompressionAlgorithm,
     #[pyo3(get, set)]
     pub level: u8,
+}
+
+#[pymethods]
+impl PyCompressionConfig {
+    #[staticmethod]
+    /// Create a default `RepositoryConfig` instance
+    fn default() -> Self {
+        CompressionConfig::default().into()
+    }
 }
 
 impl From<CompressionConfig> for PyCompressionConfig {
@@ -375,6 +393,15 @@ pub struct PyCachingConfig {
     pub attributes_cache_size: u16,
     #[pyo3(get, set)]
     pub chunks_cache_size: u16,
+}
+
+#[pymethods]
+impl PyCachingConfig {
+    #[staticmethod]
+    /// Create a default `RepositoryConfig` instance
+    fn default() -> Self {
+        CachingConfig::default().into()
+    }
 }
 
 impl From<PyCachingConfig> for CachingConfig {
