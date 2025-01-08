@@ -274,8 +274,8 @@ fn binary_file_header(
     // magic numbers
     buffer.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);
     // implementation name
-    let implementation = format!("{:<12}", ICECHUNK_CLIENT_NAME);
-    buffer.extend_from_slice(&implementation.as_bytes()[..12]);
+    let implementation = format!("{:<24}", &*ICECHUNK_CLIENT_NAME);
+    buffer.extend_from_slice(&implementation.as_bytes()[..24]);
     // spec version
     buffer.push(spec_version);
     buffer.push(file_type);
@@ -297,6 +297,7 @@ async fn check_header(
         ));
     }
 
+    let mut buf = [0; 24];
     // ignore implementation name
     read.read_exact(&mut buf).await?;
 
@@ -332,7 +333,7 @@ async fn write_new_manifest(
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
             LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
         ),
-        (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
+        (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
         (
             ICECHUNK_FILE_TYPE_METADATA_KEY.to_string(),
             ICECHUNK_FILE_TYPE_MANIFEST.to_string(),
@@ -410,7 +411,7 @@ async fn write_new_snapshot(
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
             LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
         ),
-        (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
+        (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
         (
             ICECHUNK_FILE_TYPE_METADATA_KEY.to_string(),
             ICECHUNK_FILE_TYPE_SNAPSHOT.to_string(),
@@ -475,7 +476,7 @@ async fn write_new_tx_log(
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
             LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
         ),
-        (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
+        (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
         (
             ICECHUNK_FILE_TYPE_METADATA_KEY.to_string(),
             ICECHUNK_FILE_TYPE_TRANSACTION_LOG.to_string(),

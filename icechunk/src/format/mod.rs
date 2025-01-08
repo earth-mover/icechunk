@@ -229,12 +229,17 @@ pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 pub type IcechunkFormatVersion = u8;
 
 pub mod format_constants {
+    use std::sync::LazyLock;
+
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
     pub const LATEST_ICECHUNK_SPEC_VERSION_BINARY: u8 = 1;
 
     pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic-spec-ver";
 
-    pub const ICECHUNK_CLIENT_NAME: &str = "ic-"; // FIXME: version
+    pub const ICECHUNK_LIB_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    pub static ICECHUNK_CLIENT_NAME: LazyLock<String> =
+        LazyLock::new(|| "ic-".to_string() + ICECHUNK_LIB_VERSION);
     pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic-client";
 
     pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
