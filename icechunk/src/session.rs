@@ -18,6 +18,7 @@ use crate::{
     change_set::ChangeSet,
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     format::{
+        format_constants,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkRef, VirtualReferenceError,
@@ -1160,7 +1161,7 @@ async fn flush(
             .map(|(mid, msize)| {
                 vec![ManifestFileInfo {
                     id: mid.clone(),
-                    format_version: 1, // FIXME:
+                    format_version: format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY,
                     size: *msize,
                 }]
             })

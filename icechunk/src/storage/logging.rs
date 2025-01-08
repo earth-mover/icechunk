@@ -88,7 +88,7 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("fetch_manifest_splitting".to_string(), id.0.to_vec()));
-        self.backend.fetch_manifest_splitting(settings, id, size).await // FIXME:
+        self.backend.fetch_manifest_splitting(settings, id, size).await
     }
 
     async fn fetch_manifest_single_request(
@@ -100,7 +100,7 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("fetch_manifest_single_request".to_string(), id.0.to_vec()));
-        self.backend.fetch_manifest_single_request(settings, id).await // FIXME:
+        self.backend.fetch_manifest_single_request(settings, id).await
     }
 
     async fn fetch_chunk(
@@ -143,7 +143,7 @@ impl Storage for LoggingStorage {
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
-        self.backend.write_manifest(settings, id, metadata, bytes).await // FIXME:
+        self.backend.write_manifest(settings, id, metadata, bytes).await
     }
 
     async fn write_chunk(

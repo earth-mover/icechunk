@@ -234,20 +234,20 @@ pub mod format_constants {
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
     pub const LATEST_ICECHUNK_SPEC_VERSION_BINARY: u8 = 1;
 
-    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic-spec-ver";
+    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic_spec_ver";
 
     pub const ICECHUNK_LIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     pub static ICECHUNK_CLIENT_NAME: LazyLock<String> =
         LazyLock::new(|| "ic-".to_string() + ICECHUNK_LIB_VERSION);
-    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic-client";
+    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic_client";
 
     pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
     pub const ICECHUNK_FILE_TYPE_MANIFEST: &str = "manifest";
     pub const ICECHUNK_FILE_TYPE_TRANSACTION_LOG: &str = "transaction-log";
-    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic-file-type";
+    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic_file_type";
 
-    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic-comp-alg";
+    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 
     pub const ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT: u8 = 1;
