@@ -23,7 +23,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::{io::AsyncRead, task::JoinError};
+use tokio::io::AsyncRead;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -59,18 +59,12 @@ pub enum StorageError {
     S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] ByteStreamError),
-    #[error("messagepack decode error: {0}")]
-    MsgPackDecodeError(#[from] rmp_serde::decode::Error),
-    #[error("messagepack encode error: {0}")]
-    MsgPackEncodeError(#[from] rmp_serde::encode::Error),
     #[error("cannot overwrite ref: {0}")]
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
     #[error("the etag does not match")]
     ConfigUpdateConflict,
-    #[error("a concurrent task failed {0}")]
-    ConcurrencyError(#[from] JoinError),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]

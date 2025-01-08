@@ -12,7 +12,6 @@ use chrono::Utc;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::task::JoinError;
 
 use crate::{
     asset_manager::AssetManager,
@@ -84,10 +83,6 @@ pub enum SessionError {
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
-    #[error("I/O error `{0}`")]
-    IOError(#[from] std::io::Error),
-    #[error("a concurrent task failed {0}")]
-    ConcurrencyError(#[from] JoinError),
 }
 
 pub type SessionResult<T> = Result<T, SessionError>;
