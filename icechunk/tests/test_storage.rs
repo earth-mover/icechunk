@@ -67,6 +67,18 @@ async fn mk_s3_object_store_storage(
     Ok(Repository::add_in_mem_asset_caching(storage))
 }
 
+async fn mk_azure_blob_storage(prefix: &str) -> StorageResult<ObjectStorage> {
+    ObjectStorage::new_azure_blob_store(
+        prefix.to_string(),
+        "testcontainer".to_string(),
+        vec![
+            ("account_name".to_string(), "devstoreaccount1".to_string()),
+            ("use_emulator".to_string(), true.to_string()),
+        ],
+    )
+    .await
+}
+
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Fn(Arc<dyn Storage + Send + Sync>) -> Fut,
@@ -77,9 +89,11 @@ where
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().unwrap();
     let s3 = mk_s3_object_store_storage(prefix.as_str()).await?;
+    let s4 = Arc::new(mk_azure_blob_storage(prefix.as_str()).await?);
     f(s1).await?;
     f(s2).await?;
     f(s3).await?;
+    f(s4).await?;
     Ok(())
 }
 

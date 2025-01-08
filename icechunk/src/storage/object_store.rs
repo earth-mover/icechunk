@@ -94,6 +94,19 @@ impl ObjectStorage {
         Self::from_config(config)
     }
 
+    pub async fn new_azure_blob_store(
+        prefix: String,
+        container: String,
+        options: Vec<(String, String)>,
+    ) -> Result<ObjectStorage, StorageError> {
+        let object_store_config = ObjectStorageConfig {
+            url: format!("azure://{}/{}", container, prefix),
+            prefix: prefix.to_string(),
+            options,
+        };
+        Self::from_config(object_store_config)
+    }
+
     /// Create an ObjectStore client from a URL and provided options
     pub fn from_config(
         config: ObjectStorageConfig,
@@ -414,6 +427,16 @@ impl Storage for ObjectStorage {
     ) -> Result<(), StorageError> {
         let path = self.get_snapshot_path(&id);
         let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
+        let snapshot_version_attribute = if self.config.url.starts_with("azure") {
+            let azure_snapshot_version_metadata_key =
+                format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY
+                    .replace("-", "_");
+            Attribute::Metadata(azure_snapshot_version_metadata_key.into())
+        } else {
+            Attribute::Metadata(std::borrow::Cow::Borrowed(
+                format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
+            ))
+        };
         let attributes = if self.supports_metadata() {
             Attributes::from_iter(vec![
                 (
@@ -423,9 +446,7 @@ impl Storage for ObjectStorage {
                     ),
                 ),
                 (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
-                    )),
+                    snapshot_version_attribute,
                     AttributeValue::from(
                         snapshot.icechunk_snapshot_format_version.to_string(),
                     ),
@@ -468,6 +489,17 @@ impl Storage for ObjectStorage {
         })
         .await??;
 
+        let manifest_version_attribute = if self.config.url.starts_with("azure") {
+            let azure_manifest_version_metadata_key =
+                format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY
+                    .replace("-", "_");
+            Attribute::Metadata(azure_manifest_version_metadata_key.into())
+        } else {
+            Attribute::Metadata(std::borrow::Cow::Borrowed(
+                format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
+            ))
+        };
+
         let attributes = if self.supports_metadata() {
             Attributes::from_iter(vec![
                 (
@@ -477,9 +509,7 @@ impl Storage for ObjectStorage {
                     ),
                 ),
                 (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
-                    )),
+                    manifest_version_attribute,
                     AttributeValue::from(
                         manifest.icechunk_manifest_format_version.to_string(),
                     ),
@@ -503,6 +533,16 @@ impl Storage for ObjectStorage {
     ) -> StorageResult<()> {
         let path = self.get_transaction_path(&id);
         let bytes = rmp_serde::to_vec(log.as_ref())?;
+        let transaction_log_version_attribute = if self.config.url.starts_with("azure") {
+            let azure_transaction_log_version_metadata_key =
+                format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY
+                    .replace("-", "_");
+            Attribute::Metadata(azure_transaction_log_version_metadata_key.into())
+        } else {
+            Attribute::Metadata(std::borrow::Cow::Borrowed(
+                format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
+            ))
+        };
         let attributes = if self.supports_metadata() {
             Attributes::from_iter(vec![
                 (
@@ -512,9 +552,7 @@ impl Storage for ObjectStorage {
                     ),
                 ),
                 (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
-                    )),
+                    transaction_log_version_attribute,
                     AttributeValue::from(
                         log.icechunk_transaction_log_format_version.to_string(),
                     ),
@@ -734,5 +772,31 @@ mod tests {
         let store =
             ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path());
         assert!(store.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_serialize_object_store_for_azure() {
+        let options = Vec::from([
+            ("account_name".to_string(), "devstoreaccount1".to_string()),
+            ("use_emulator".to_string(), true.to_string()),
+        ]);
+
+        let store = ObjectStorage::new_azure_blob_store(
+            "icechunk".to_string(),
+            "container".to_string(),
+            options,
+        )
+        .await
+        .unwrap();
+
+        let serialized = serde_json::to_string(&store).unwrap();
+
+        assert_eq!(
+            serialized,
+            r#"{"url":"azure://container/icechunk","prefix":"icechunk","options":[["account_name","devstoreaccount1"],["use_emulator","true"]]}"#
+        );
+
+        let deserialized: ObjectStorage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(store.config, deserialized.config);
     }
 }

@@ -71,6 +71,11 @@ jobs:
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
+      - name: Stand up Azurite
+        run: |
+          docker compose up -d azurite
+          docker compose exec -it azurite sh -c "apk add --no-cache curl && curl -XPUT 'http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container'"
+
       - name: Install Just
         run: sudo snap install --edge --classic just
 

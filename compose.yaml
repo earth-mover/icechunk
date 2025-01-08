@@ -1,5 +1,6 @@
 volumes:
   minio_data:
+  azurite-data:
 
 services:
   minio:
@@ -23,3 +24,19 @@ services:
     ports:
       - '9000:9000'
       - '9001:9001'
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    container_name: azurite
+    hostname: azurite
+    healthcheck:
+      test: nc 127.0.0.1 10000 -z
+      interval: 1s
+      retries: 30
+    command: azurite --silent --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 -l /workspace
+    ports:
+      - "10000:10000" # Blob
+      - "10001:10001" # Queue
+      - "10002:10002" # Table
+    volumes:
+      - azurite-data:/workspace
