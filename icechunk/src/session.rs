@@ -463,14 +463,13 @@ impl Session {
     {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
-                let storage = Arc::clone(&self.storage);
                 let byte_range = byte_range.clone();
-                let settings = Arc::clone(&self.storage_settings);
+                let asset_manager = Arc::clone(&self.asset_manager);
                 Ok(Some(
                     async move {
                         // TODO: we don't have a way to distinguish if we want to pass a range or not
-                        storage
-                            .fetch_chunk(settings.as_ref(), &id, &byte_range)
+                        asset_manager
+                            .fetch_chunk(&id, &byte_range)
                             .await
                             .map_err(|e| e.into())
                     }
@@ -524,17 +523,11 @@ impl Session {
     ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
     {
         let threshold = self.config.inline_chunk_threshold_bytes as usize;
-        let storage = Arc::clone(&self.storage);
-        let storage_settings = Arc::clone(&self.storage_settings);
+        let asset_manager = Arc::clone(&self.asset_manager);
         move |data: Bytes| {
             async move {
                 let payload = if data.len() > threshold {
-                    new_materialized_chunk(
-                        storage.as_ref(),
-                        storage_settings.as_ref(),
-                        data,
-                    )
-                    .await?
+                    new_materialized_chunk(asset_manager.as_ref(), data).await?
                 } else {
                     new_inline_chunk(data)
                 };
@@ -963,12 +956,11 @@ pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
 }
 
 async fn new_materialized_chunk(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    asset_manager: &AssetManager,
     data: Bytes,
 ) -> SessionResult<ChunkPayload> {
     let new_id = ObjectId::random();
-    storage.write_chunk(storage_settings, new_id.clone(), data.clone()).await?;
+    asset_manager.write_chunk(new_id.clone(), data.clone()).await?;
     Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
 }
 

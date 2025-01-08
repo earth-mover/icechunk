@@ -8,9 +8,9 @@ use tokio_util::io::SyncIoBridge;
 use crate::{
     config::CachingConfig,
     format::{
-        attributes::AttributesTable, format_constants, manifest::Manifest,
-        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
+        format_constants, manifest::Manifest, snapshot::Snapshot,
+        transaction_log::TransactionLog, ByteRange, ChunkId, IcechunkFormatError,
+        ManifestId, SnapshotId,
     },
     private,
     repository::{RepositoryError, RepositoryResult},
@@ -33,8 +33,6 @@ pub struct AssetManager {
     manifest_cache: Cache<ManifestId, Arc<Manifest>>,
     #[serde(skip)]
     transactions_cache: Cache<SnapshotId, Arc<TransactionLog>>,
-    #[serde(skip)]
-    attributes_cache: Cache<AttributesId, Arc<AttributesTable>>,
     #[serde(skip)]
     chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
 }
@@ -87,7 +85,6 @@ impl AssetManager {
             snapshot_cache: Cache::new(num_snapshots as usize),
             manifest_cache: Cache::new(num_manifests as usize),
             transactions_cache: Cache::new(num_transactions as usize),
-            attributes_cache: Cache::new(num_attributes as usize),
             chunk_cache: Cache::new(num_chunks as usize),
         }
     }
@@ -232,6 +229,35 @@ impl AssetManager {
                 .await?;
                 let _fail_is_ok = guard.insert(Arc::clone(&transaction));
                 Ok(transaction)
+            }
+        }
+    }
+
+    pub async fn write_chunk(
+        &self,
+        chunk_id: ChunkId,
+        bytes: Bytes,
+    ) -> RepositoryResult<()> {
+        // we don't pre-populate the chunk cache, there are too many of them for this to be useful
+        Ok(self.storage.write_chunk(&self.storage_settings, chunk_id, bytes).await?)
+    }
+
+    pub async fn fetch_chunk(
+        &self,
+        chunk_id: &ChunkId,
+        range: &ByteRange,
+    ) -> RepositoryResult<Bytes> {
+        let key = (chunk_id.clone(), range.clone());
+        match self.chunk_cache.get_value_or_guard_async(&key).await {
+            Ok(chunk) => Ok(chunk),
+            Err(guard) => {
+                // TODO: split and parallelize downloads
+                let chunk = self
+                    .storage
+                    .fetch_chunk(&self.storage_settings, chunk_id, range)
+                    .await?;
+                let _fail_is_ok = guard.insert(chunk.clone());
+                Ok(chunk)
             }
         }
     }
