@@ -99,7 +99,11 @@ impl Storage for LoggingStorage {
         id: &ManifestId,
         size: u64,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        self.backend.fetch_manifest(settings, id, size).await // FIXME:
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_manifest_splitting".to_string(), id.0.to_vec()));
+        self.backend.fetch_manifest_splitting(settings, id, size).await // FIXME:
     }
 
     async fn fetch_manifest_single_request(
@@ -107,6 +111,10 @@ impl Storage for LoggingStorage {
         settings: &Settings,
         id: &ManifestId,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_manifest_single_request".to_string(), id.0.to_vec()));
         self.backend.fetch_manifest_single_request(settings, id).await // FIXME:
     }
 

@@ -29,15 +29,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
 
-pub mod caching;
-
 #[cfg(test)]
 pub mod logging;
 
 pub mod object_store;
 pub mod s3;
 
-pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{

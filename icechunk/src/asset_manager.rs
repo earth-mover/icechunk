@@ -530,3 +530,141 @@ async fn fetch_transaction_log(
     .await??;
     Ok(Arc::new(transaction))
 }
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod test {
+
+    use itertools::Itertools;
+
+    use super::*;
+    use crate::{
+        format::{
+            manifest::{ChunkInfo, ChunkPayload},
+            ChunkIndices, NodeId,
+        },
+        storage::{logging::LoggingStorage, new_in_memory_storage, Storage},
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let settings = storage::Settings::default();
+        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone());
+
+        let ci1 = ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(vec![]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
+        };
+        let ci2 = ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(vec![]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
+        };
+        let pre_exiting_manifest = Arc::new(vec![ci1].into_iter().collect());
+        let (pre_existing_id, pre_size) =
+            manager.write_manifest(Arc::clone(&pre_exiting_manifest), 1).await?.unwrap();
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let caching = AssetManager::new_with_config(
+            Arc::clone(&logging_c),
+            settings,
+            &CachingConfig::default(),
+        );
+
+        let manifest = Arc::new(vec![ci2].into_iter().collect());
+        let (id, size) = caching.write_manifest(Arc::clone(&manifest), 1).await?.unwrap();
+
+        assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
+        assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
+        // when we insert we cache, so no fetches
+        assert_eq!(logging.fetch_operations(), vec![]);
+
+        // first time it sees an ID it calls the backend
+        assert_eq!(
+            caching.fetch_manifest(&pre_existing_id, pre_size).await?,
+            pre_exiting_manifest
+        );
+        assert_eq!(
+            logging.fetch_operations(),
+            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.0.to_vec())]
+        );
+
+        // only calls backend once
+        assert_eq!(
+            caching.fetch_manifest(&pre_existing_id, pre_size).await?,
+            pre_exiting_manifest
+        );
+        assert_eq!(
+            logging.fetch_operations(),
+            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.0.to_vec())]
+        );
+
+        // other walues still cached
+        assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
+        assert_eq!(
+            logging.fetch_operations(),
+            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.0.to_vec())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let settings = storage::Settings::default();
+        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone());
+
+        let ci1 = ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(vec![]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
+        };
+        let ci2 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci3 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci4 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci5 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci6 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci7 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci8 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+        let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
+
+        let manifest1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());
+        let (id1, size1) =
+            manager.write_manifest(Arc::clone(&manifest1), 1).await?.unwrap();
+        let manifest2 = Arc::new(vec![ci4, ci5, ci6].into_iter().collect());
+        let (id2, size2) =
+            manager.write_manifest(Arc::clone(&manifest2), 1).await?.unwrap();
+        let manifest3 = Arc::new(vec![ci7, ci8, ci9].into_iter().collect());
+        let (id3, size3) =
+            manager.write_manifest(Arc::clone(&manifest3), 1).await?.unwrap();
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let caching = AssetManager::new_with_config(
+            logging_c,
+            settings,
+            // the cache can only fit 2 manifests.
+            &CachingConfig {
+                snapshots_cache_size: 0,
+                manifests_cache_size: 2,
+                transactions_cache_size: 0,
+                attributes_cache_size: 0,
+                chunks_cache_size: 0,
+            },
+        );
+
+        // we keep asking for all 3 items, but the cache can only fit 2
+        for _ in 0..20 {
+            assert_eq!(caching.fetch_manifest(&id1, size1).await?, manifest1);
+            assert_eq!(caching.fetch_manifest(&id2, size2).await?, manifest2);
+            assert_eq!(caching.fetch_manifest(&id3, size3).await?, manifest3);
+        }
+        // after the initial warming requests, we only request the file that doesn't fit in the cache
+        assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);
+
+        Ok(())
+    }
+}
