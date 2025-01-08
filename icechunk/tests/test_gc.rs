@@ -6,6 +6,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use icechunk::{
+    asset_resolver::AssetResolver,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
@@ -45,6 +46,8 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
         new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
             .expect("Creating minio storage failed");
     let storage_settings = storage.default_settings();
+    let asset_manager =
+        AssetResolver::new_no_cache(storage.clone(), storage_settings.clone());
 
     let repo = Repository::create(
         Some(RepositoryConfig {
@@ -100,7 +103,8 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let now = Utc::now();
     let gc_config = GCConfig::clean_all(now, now, None);
     let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &gc_config).await?;
+        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
+            .await?;
     assert_eq!(summary, GCSummary::default());
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
     for idx in 0..10 {
@@ -128,7 +132,8 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
 
     let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &gc_config).await?;
+        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
+            .await?;
     assert_eq!(summary.chunks_deleted, 10);
     assert_eq!(summary.manifests_deleted, 1);
     assert_eq!(summary.snapshots_deleted, 1);
