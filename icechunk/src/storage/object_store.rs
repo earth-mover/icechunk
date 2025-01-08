@@ -94,19 +94,6 @@ impl ObjectStorage {
         Self::from_config(config)
     }
 
-    pub async fn new_azure_blob_store(
-        prefix: String,
-        container: String,
-        options: Vec<(String, String)>,
-    ) -> Result<ObjectStorage, StorageError> {
-        let object_store_config = ObjectStorageConfig {
-            url: format!("azure://{}/{}", container, prefix),
-            prefix: prefix.to_string(),
-            options,
-        };
-        Self::from_config(object_store_config)
-    }
-
     /// Create an ObjectStore client from a URL and provided options
     pub fn from_config(
         config: ObjectStorageConfig,
@@ -772,31 +759,5 @@ mod tests {
         let store =
             ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path());
         assert!(store.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_serialize_object_store_for_azure() {
-        let options = Vec::from([
-            ("account_name".to_string(), "devstoreaccount1".to_string()),
-            ("use_emulator".to_string(), true.to_string()),
-        ]);
-
-        let store = ObjectStorage::new_azure_blob_store(
-            "icechunk".to_string(),
-            "container".to_string(),
-            options,
-        )
-        .await
-        .unwrap();
-
-        let serialized = serde_json::to_string(&store).unwrap();
-
-        assert_eq!(
-            serialized,
-            r#"{"url":"azure://container/icechunk","prefix":"icechunk","options":[["account_name","devstoreaccount1"],["use_emulator","true"]]}"#
-        );
-
-        let deserialized: ObjectStorage = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(store.config, deserialized.config);
     }
 }
