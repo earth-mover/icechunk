@@ -229,12 +229,9 @@ pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 pub type IcechunkFormatVersion = u8;
 
 pub mod format_constants {
-    use super::IcechunkFormatVersion;
-
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
     pub const LATEST_ICECHUNK_SPEC_VERSION_BINARY: u8 = 1;
 
-    pub const LATEST_ICECHUNK_FORMAT_VERSION: IcechunkFormatVersion = 1;
     pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic-spec-ver";
 
     pub const ICECHUNK_CLIENT_NAME: &str = "ic-"; // FIXME: version
@@ -247,7 +244,6 @@ pub mod format_constants {
 
     pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic-comp-alg";
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
-    pub const ICECHUNK_COMPRESSION_NONE: &str = "none";
 
     pub const ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT: u8 = 1;
     pub const ICECHUNK_FILE_TYPE_BINARY_MANIFEST: u8 = 2;
@@ -255,21 +251,6 @@ pub mod format_constants {
     pub const ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG: u8 = 4;
 
     pub const ICECHUNK_COMPRESSION_BINARY_ZSTD: u8 = 1;
-
-    //////////////////////////
-
-    pub const LATEST_ICECHUNK_MANIFEST_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY: &str = "ic-man-fmt-ver";
-
-    pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
-
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY: &str =
-        "ic-tx-fmt-ver";
 }
 
 impl Display for Path {

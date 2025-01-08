@@ -39,10 +39,7 @@ pub use object_store::ObjectStorage;
 
 use crate::{
     config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
-    format::{
-        attributes::AttributesTable, AttributesId, ByteRange, ChunkId, ManifestId,
-        SnapshotId,
-    },
+    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
     private,
 };
 
@@ -149,11 +146,6 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         settings: &Settings,
         id: &SnapshotId,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    async fn fetch_attributes(
-        &self,
-        settings: &Settings,
-        id: &AttributesId,
-    ) -> StorageResult<Arc<AttributesTable>>;
     async fn fetch_manifest(
         &self,
         settings: &Settings,
@@ -195,12 +187,6 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_attributes(
-        &self,
-        settings: &Settings,
-        id: AttributesId,
-        table: Arc<AttributesTable>,
     ) -> StorageResult<()>;
     async fn write_manifest(
         &self,

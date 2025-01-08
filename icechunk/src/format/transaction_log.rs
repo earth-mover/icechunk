@@ -67,7 +67,7 @@ impl TransactionLog {
             updated_zarr_metadata,
             updated_chunks,
             icechunk_transaction_log_format_version:
-                format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_FORMAT,
+                format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY,
         }
     }
 }

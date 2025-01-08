@@ -330,7 +330,7 @@ async fn write_new_manifest(
     let metadata = vec![
         (
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
-            LATEST_ICECHUNK_FORMAT_VERSION.to_string(),
+            LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
         ),
         (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
         (
@@ -408,7 +408,7 @@ async fn write_new_snapshot(
     let metadata = vec![
         (
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
-            LATEST_ICECHUNK_FORMAT_VERSION.to_string(),
+            LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
         ),
         (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
         (
@@ -473,7 +473,7 @@ async fn write_new_tx_log(
     let metadata = vec![
         (
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
-            LATEST_ICECHUNK_FORMAT_VERSION.to_string(),
+            LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
         ),
         (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
         (

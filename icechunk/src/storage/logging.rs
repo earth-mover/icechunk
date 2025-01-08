@@ -8,10 +8,7 @@ use tokio::io::AsyncRead;
 
 use super::{ETag, ListInfo, Settings, Storage, StorageError, StorageResult};
 use crate::{
-    format::{
-        attributes::AttributesTable, AttributesId, ByteRange, ChunkId, ManifestId,
-        SnapshotId,
-    },
+    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
     private,
 };
 
@@ -81,18 +78,6 @@ impl Storage for LoggingStorage {
         self.backend.fetch_transaction_log(settings, id).await
     }
 
-    async fn fetch_attributes(
-        &self,
-        settings: &Settings,
-        id: &AttributesId,
-    ) -> Result<Arc<AttributesTable>, StorageError> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_attributes".to_string(), id.0.to_vec()));
-        self.backend.fetch_attributes(settings, id).await
-    }
-
     async fn fetch_manifest_splitting(
         &self,
         settings: &Settings,
@@ -149,15 +134,6 @@ impl Storage for LoggingStorage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         self.backend.write_transaction_log(settings, id, metadata, bytes).await
-    }
-
-    async fn write_attributes(
-        &self,
-        settings: &Settings,
-        id: AttributesId,
-        table: Arc<AttributesTable>,
-    ) -> Result<(), StorageError> {
-        self.backend.write_attributes(settings, id, table).await
     }
 
     async fn write_manifest(

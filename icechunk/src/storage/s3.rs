@@ -10,10 +10,7 @@ use std::{
 
 use crate::{
     config::{CredentialsFetcher, S3Credentials, S3Options},
-    format::{
-        attributes::AttributesTable, format_constants, AttributesId, ByteRange, ChunkId,
-        FileTypeTag, ManifestId, ObjectId, SnapshotId,
-    },
+    format::{ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private, Storage, StorageError,
 };
 use async_stream::try_stream;
@@ -387,14 +384,6 @@ impl Storage for S3Storage {
         self.get_object_reader(settings, key.as_str()).await
     }
 
-    async fn fetch_attributes(
-        &self,
-        _settings: &Settings,
-        _id: &AttributesId,
-    ) -> StorageResult<Arc<AttributesTable>> {
-        todo!()
-    }
-
     async fn fetch_manifest_splitting(
         &self,
         settings: &Settings,
@@ -444,22 +433,7 @@ impl Storage for S3Storage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_snapshot_path(&id)?;
-        self.put_object(
-            key.as_str(),
-            Some(format_constants::LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE),
-            metadata,
-            bytes,
-        )
-        .await
-    }
-
-    async fn write_attributes(
-        &self,
-        _settings: &Settings,
-        _id: AttributesId,
-        _table: Arc<AttributesTable>,
-    ) -> StorageResult<()> {
-        todo!()
+        self.put_object(key.as_str(), None::<String>, metadata, bytes).await
     }
 
     async fn write_manifest(
@@ -470,13 +444,7 @@ impl Storage for S3Storage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_manifest_path(&id)?;
-        self.put_object(
-            key.as_str(),
-            Some(format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE),
-            metadata.into_iter(),
-            bytes,
-        )
-        .await
+        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
     }
 
     async fn write_transaction_log(
@@ -487,13 +455,7 @@ impl Storage for S3Storage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_transaction_path(&id)?;
-        self.put_object(
-            key.as_str(),
-            Some(format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE),
-            metadata.into_iter(),
-            bytes,
-        )
-        .await
+        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
     }
 
     async fn write_chunk(

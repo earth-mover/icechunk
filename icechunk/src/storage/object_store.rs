@@ -1,8 +1,5 @@
 use crate::{
-    format::{
-        attributes::AttributesTable, AttributesId, ByteRange, ChunkId, FileTypeTag,
-        ManifestId, ObjectId, SnapshotId,
-    },
+    format::{ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
@@ -390,14 +387,6 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
-    async fn fetch_attributes(
-        &self,
-        _settings: &Settings,
-        _id: &AttributesId,
-    ) -> Result<Arc<AttributesTable>, StorageError> {
-        todo!();
-    }
-
     async fn fetch_manifest_splitting(
         &self,
         settings: &Settings,
@@ -439,15 +428,6 @@ impl Storage for ObjectStorage {
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
-    }
-
-    async fn write_attributes(
-        &self,
-        _settings: &Settings,
-        _id: AttributesId,
-        _table: Arc<AttributesTable>,
-    ) -> Result<(), StorageError> {
-        todo!()
     }
 
     async fn write_manifest(
