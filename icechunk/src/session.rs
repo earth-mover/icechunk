@@ -15,7 +15,7 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 use crate::{
-    asset_resolver::AssetResolver,
+    asset_manager::AssetManager,
     change_set::ChangeSet,
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     format::{
@@ -97,7 +97,7 @@ pub struct Session {
     config: RepositoryConfig,
     storage_settings: Arc<storage::Settings>,
     storage: Arc<dyn Storage + Send + Sync>,
-    asset_resolver: Arc<AssetResolver>,
+    asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
@@ -109,7 +109,7 @@ impl Session {
         config: RepositoryConfig,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
-        asset_resolver: Arc<AssetResolver>,
+        asset_manager: Arc<AssetManager>,
         virtual_resolver: Arc<VirtualChunkResolver>,
         snapshot_id: SnapshotId,
     ) -> Self {
@@ -117,7 +117,7 @@ impl Session {
             config,
             storage_settings: Arc::new(storage_settings),
             storage,
-            asset_resolver,
+            asset_manager,
             virtual_resolver,
             branch_name: None,
             snapshot_id,
@@ -129,7 +129,7 @@ impl Session {
         config: RepositoryConfig,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
-        asset_resolver: Arc<AssetResolver>,
+        asset_manager: Arc<AssetManager>,
         virtual_resolver: Arc<VirtualChunkResolver>,
         branch_name: String,
         snapshot_id: SnapshotId,
@@ -138,7 +138,7 @@ impl Session {
             config,
             storage_settings: Arc::new(storage_settings),
             storage,
-            asset_resolver,
+            asset_manager,
             virtual_resolver,
             branch_name: Some(branch_name),
             snapshot_id,
@@ -359,7 +359,7 @@ impl Session {
     }
 
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_node(&self.asset_resolver, &self.change_set, self.snapshot_id(), path).await
+        get_node(&self.asset_manager, &self.change_set, self.snapshot_id(), path).await
     }
 
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
@@ -389,7 +389,7 @@ impl Session {
         path: &Path,
     ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
         node_chunk_iterator(
-            &self.asset_resolver,
+            &self.asset_manager,
             &self.change_set,
             &self.snapshot_id,
             path,
@@ -579,20 +579,20 @@ impl Session {
     }
 
     async fn fetch_manifest(&self, id: &ManifestId) -> SessionResult<Arc<Manifest>> {
-        fetch_manifest(id, self.snapshot_id(), self.asset_resolver.as_ref()).await
+        fetch_manifest(id, self.snapshot_id(), self.asset_manager.as_ref()).await
     }
 
     pub async fn list_nodes(
         &self,
     ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(&self.asset_resolver, &self.change_set, &self.snapshot_id, None)
+        updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id, None)
             .await
     }
 
     pub async fn all_chunks(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
-        all_chunks(&self.asset_resolver, &self.change_set, self.snapshot_id()).await
+        all_chunks(&self.asset_manager, &self.change_set, self.snapshot_id()).await
     }
 
     pub async fn all_virtual_chunk_locations(
@@ -641,7 +641,7 @@ impl Session {
                 do_commit(
                     &self.config,
                     self.storage.as_ref(),
-                    &self.asset_resolver,
+                    &self.asset_manager,
                     self.storage_settings.as_ref(),
                     branch_name,
                     &self.snapshot_id,
@@ -664,7 +664,7 @@ impl Session {
                     do_commit(
                         &self.config,
                         self.storage.as_ref(),
-                        &self.asset_resolver,
+                        &self.asset_manager,
                         self.storage_settings.as_ref(),
                         branch_name,
                         &self.snapshot_id,
@@ -769,7 +769,7 @@ impl Session {
             Ok(())
         } else {
             let current_snapshot =
-                self.asset_resolver.fetch_snapshot(&ref_data.snapshot).await?;
+                self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
             let anc = current_snapshot.local_ancestry().map(|meta| meta.id);
             let new_commits = iter::once(ref_data.snapshot.clone())
@@ -792,7 +792,7 @@ impl Session {
                     self.config.clone(),
                     self.storage_settings.as_ref().clone(),
                     Arc::clone(&self.storage),
-                    Arc::clone(&self.asset_resolver),
+                    Arc::clone(&self.asset_manager),
                     Arc::clone(&self.virtual_resolver),
                     ref_data.snapshot.clone(),
                 );
@@ -821,11 +821,11 @@ impl Session {
 
 /// Warning: The presence of a single error may mean multiple missing items
 async fn updated_chunk_iterator<'a>(
-    asset_resolver: &'a AssetResolver,
+    asset_manager: &'a AssetManager,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
-    let snapshot = asset_resolver.fetch_snapshot(snapshot_id).await?;
+    let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
     let res = nodes.filter_map(move |node| async move {
         // This iterator should yield chunks for existing arrays + any updates.
@@ -836,7 +836,7 @@ async fn updated_chunk_iterator<'a>(
         } else {
             let path = node.path.clone();
             Some(
-                node_chunk_iterator(asset_resolver, change_set, snapshot_id, &node.path)
+                node_chunk_iterator(asset_manager, change_set, snapshot_id, &node.path)
                     .await
                     .map_ok(move |ci| (path.clone(), ci)),
             )
@@ -847,7 +847,7 @@ async fn updated_chunk_iterator<'a>(
 
 /// Warning: The presence of a single error may mean multiple missing items
 async fn node_chunk_iterator<'a>(
-    asset_manager: &'a AssetResolver,
+    asset_manager: &'a AssetManager,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     path: &Path,
@@ -863,7 +863,7 @@ async fn node_chunk_iterator<'a>(
 
 /// Warning: The presence of a single error may mean multiple missing items
 async fn verified_node_chunk_iterator<'a>(
-    asset_resolver: &'a AssetResolver,
+    asset_manager: &'a AssetManager,
     snapshot_id: &'a SnapshotId,
     change_set: &'a ChangeSet,
     node: NodeSnapshot,
@@ -904,7 +904,7 @@ async fn verified_node_chunk_iterator<'a>(
                                 let manifest = fetch_manifest(
                                     &manifest_ref.object_id,
                                     snapshot_id,
-                                    asset_resolver,
+                                    asset_manager,
                                 )
                                 .await;
                                 match manifest {
@@ -990,7 +990,7 @@ pub async fn get_chunk(
 
 /// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
-    asset_manager: &AssetResolver,
+    asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
     manifest_id: Option<&'a ManifestId>,
@@ -1017,7 +1017,7 @@ async fn updated_existing_nodes<'a>(
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
 /// *and* new nodes in the changeset
 async fn updated_nodes<'a>(
-    asset_manager: &AssetResolver,
+    asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
     manifest_id: Option<&'a ManifestId>,
@@ -1028,7 +1028,7 @@ async fn updated_nodes<'a>(
 }
 
 async fn get_node<'a>(
-    asset_manager: &AssetResolver,
+    asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
@@ -1051,7 +1051,7 @@ async fn get_node<'a>(
 }
 
 async fn get_existing_node<'a>(
-    asset_manager: &AssetResolver,
+    asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
@@ -1091,12 +1091,12 @@ async fn get_existing_node<'a>(
 }
 
 async fn all_chunks<'a>(
-    asset_resolver: &'a AssetResolver,
+    asset_manager: &'a AssetManager,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let existing_array_chunks =
-        updated_chunk_iterator(asset_resolver, change_set, snapshot_id).await?;
+        updated_chunk_iterator(asset_manager, change_set, snapshot_id).await?;
     let new_array_chunks =
         futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
     Ok(existing_array_chunks.chain(new_array_chunks))
@@ -1145,7 +1145,7 @@ pub fn construct_valid_byte_range(
 #[allow(clippy::too_many_arguments)]
 async fn flush(
     storage: &(dyn Storage + Send + Sync),
-    asset_resolver: &AssetResolver,
+    asset_manager: &AssetManager,
     storage_settings: &storage::Settings,
     change_set: &ChangeSet,
     parent_id: &SnapshotId,
@@ -1157,19 +1157,19 @@ async fn flush(
         return Err(SessionError::NoChangesToCommit);
     }
 
-    let chunks = all_chunks(asset_resolver, change_set, parent_id)
+    let chunks = all_chunks(asset_manager, change_set, parent_id)
         .await?
         .map_ok(|(_path, chunk_info)| chunk_info);
 
     let new_manifest = Arc::new(Manifest::from_stream(chunks).await?);
     let new_manifest_info =
-        asset_resolver.write_manifest(new_manifest, compression_level).await?;
+        asset_manager.write_manifest(new_manifest, compression_level).await?;
 
     let new_manifest_id = new_manifest_info.as_ref().map(|info| &info.0);
     let all_nodes =
-        updated_nodes(asset_resolver, change_set, parent_id, new_manifest_id).await?;
+        updated_nodes(asset_manager, change_set, parent_id, new_manifest_id).await?;
 
-    let old_snapshot = asset_resolver.fetch_snapshot(parent_id).await?;
+    let old_snapshot = asset_manager.fetch_snapshot(parent_id).await?;
     let mut new_snapshot = Snapshot::from_iter(
         old_snapshot.as_ref(),
         Some(properties),
@@ -1194,7 +1194,7 @@ async fn flush(
     let tx_log =
         TransactionLog::new(change_set, old_snapshot.iter(), new_snapshot.iter());
     let new_snapshot_id = &new_snapshot.metadata.id;
-    asset_resolver.write_snapshot(Arc::clone(&new_snapshot), compression_level).await?;
+    asset_manager.write_snapshot(Arc::clone(&new_snapshot), compression_level).await?;
     storage
         .write_transaction_log(
             storage_settings,
@@ -1210,7 +1210,7 @@ async fn flush(
 async fn do_commit(
     config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
-    asset_resolver: &AssetResolver,
+    asset_manager: &AssetManager,
     storage_settings: &storage::Settings,
     branch_name: &str,
     snapshot_id: &SnapshotId,
@@ -1223,7 +1223,7 @@ async fn do_commit(
     let properties = properties.unwrap_or_default();
     let new_snapshot = flush(
         storage,
-        asset_resolver,
+        asset_manager,
         storage_settings,
         change_set,
         snapshot_id,
@@ -1255,7 +1255,7 @@ async fn do_commit(
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     snapshot_id: &SnapshotId,
-    asset_manager: &AssetResolver,
+    asset_manager: &AssetManager,
 ) -> SessionResult<Arc<Manifest>> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let manifest_info = snapshot.manifest_info(manifest_id).ok_or_else(|| {
@@ -1403,7 +1403,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let storage_settings = storage.default_settings();
         let asset_manager =
-            AssetResolver::new_no_cache(Arc::clone(&storage), storage_settings.clone());
+            AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone());
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {

@@ -12,7 +12,7 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 use crate::{
-    asset_resolver::AssetResolver,
+    asset_manager::AssetManager,
     config::{Credentials, RepositoryConfig},
     format::{
         snapshot::{Snapshot, SnapshotMetadata},
@@ -82,7 +82,7 @@ pub struct Repository {
     storage_settings: storage::Settings,
     config_etag: ETag,
     storage: Arc<dyn Storage + Send + Sync>,
-    asset_resolver: Arc<AssetResolver>,
+    asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
 }
 
@@ -107,13 +107,13 @@ impl Repository {
 
         let handle1 = tokio::spawn(async move {
             // TODO: we could cache this first snapshot
-            let asset_resolver = AssetResolver::new_no_cache(
+            let asset_manager = AssetManager::new_no_cache(
                 Arc::clone(&storage_c),
                 storage_settings.clone(),
             );
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::empty());
-            let new_snapshot_id = asset_resolver
+            let new_snapshot_id = asset_manager
                 .write_snapshot(new_snapshot, config.compression.level)
                 .await?;
 
@@ -206,7 +206,7 @@ impl Repository {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| storage.default_settings());
-        let asset_resolver = Arc::new(AssetResolver::new_with_config(
+        let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
             storage_settings.clone(),
             &config.caching,
@@ -217,7 +217,7 @@ impl Repository {
             storage,
             storage_settings,
             virtual_resolver,
-            asset_resolver,
+            asset_manager,
         })
     }
 
@@ -280,8 +280,8 @@ impl Repository {
         &self.storage
     }
 
-    pub fn asset_manager(&self) -> &Arc<AssetResolver> {
-        &self.asset_resolver
+    pub fn asset_manager(&self) -> &Arc<AssetManager> {
+        &self.asset_manager
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
@@ -289,7 +289,7 @@ impl Repository {
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
-        let parent = self.asset_resolver.fetch_snapshot(snapshot_id).await?;
+        let parent = self.asset_manager.fetch_snapshot(snapshot_id).await?;
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
             // FIXME: implement splitting of snapshot history
@@ -445,7 +445,7 @@ impl Repository {
             self.config.clone(),
             self.storage_settings.clone(),
             self.storage.clone(),
-            Arc::clone(&self.asset_resolver),
+            Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
             snapshot_id,
         );
@@ -461,7 +461,7 @@ impl Repository {
             self.config.clone(),
             self.storage_settings.clone(),
             self.storage.clone(),
-            Arc::clone(&self.asset_resolver),
+            Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot,

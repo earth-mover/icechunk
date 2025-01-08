@@ -6,7 +6,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use icechunk::{
-    asset_resolver::AssetResolver,
+    asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
@@ -47,7 +47,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
             .expect("Creating minio storage failed");
     let storage_settings = storage.default_settings();
     let asset_manager =
-        AssetResolver::new_no_cache(storage.clone(), storage_settings.clone());
+        AssetManager::new_no_cache(storage.clone(), storage_settings.clone());
 
     let repo = Repository::create(
         Some(RepositoryConfig {

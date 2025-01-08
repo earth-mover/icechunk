@@ -18,8 +18,8 @@ use crate::{
 };
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(from = "AssetResolverSerializer")]
-pub struct AssetResolver {
+#[serde(from = "AssetManagerSerializer")]
+pub struct AssetManager {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
     num_snapshots: u16,
@@ -39,10 +39,10 @@ pub struct AssetResolver {
     chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
 }
 
-impl private::Sealed for AssetResolver {}
+impl private::Sealed for AssetManager {}
 
 #[derive(Debug, Deserialize)]
-struct AssetResolverSerializer {
+struct AssetManagerSerializer {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
     num_snapshots: u16,
@@ -52,9 +52,9 @@ struct AssetResolverSerializer {
     num_chunks: u16,
 }
 
-impl From<AssetResolverSerializer> for AssetResolver {
-    fn from(value: AssetResolverSerializer) -> Self {
-        AssetResolver::new(
+impl From<AssetManagerSerializer> for AssetManager {
+    fn from(value: AssetManagerSerializer) -> Self {
+        AssetManager::new(
             value.storage,
             value.storage_settings,
             value.num_snapshots,
@@ -66,7 +66,7 @@ impl From<AssetResolverSerializer> for AssetResolver {
     }
 }
 
-impl AssetResolver {
+impl AssetManager {
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,

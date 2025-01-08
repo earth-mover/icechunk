@@ -5,7 +5,7 @@ use futures::{stream, Stream, StreamExt, TryStreamExt};
 use tokio::pin;
 
 use crate::{
-    asset_resolver::AssetResolver,
+    asset_manager::AssetManager,
     format::{
         manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
     },
@@ -145,7 +145,7 @@ pub type GCResult<A> = Result<A, GCError>;
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-    asset_manager: &AssetResolver,
+    asset_manager: &AssetManager,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
     // TODO: this function could have much more parallelism
@@ -232,7 +232,7 @@ async fn all_roots<'a>(
 async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,
-    asset_manager: &'a AssetResolver,
+    asset_manager: &'a AssetManager,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
     let roots = all_roots(storage, storage_settings, extra_roots).await?;
