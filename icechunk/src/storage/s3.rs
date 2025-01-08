@@ -11,8 +11,8 @@ use std::{
 use crate::{
     config::{CredentialsFetcher, S3Credentials, S3Options},
     format::{
-        attributes::AttributesTable, format_constants, transaction_log::TransactionLog,
-        AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
+        attributes::AttributesTable, format_constants, AttributesId, ByteRange, ChunkId,
+        FileTypeTag, ManifestId, ObjectId, SnapshotId,
     },
     private, Storage, StorageError,
 };
@@ -175,21 +175,6 @@ impl S3Storage {
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
-    }
-
-    async fn get_object(&self, key: &str) -> StorageResult<Bytes> {
-        Ok(self
-            .get_client()
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await?
-            .body
-            .collect()
-            .await?
-            .into_bytes())
     }
 
     async fn get_object_range(
@@ -431,14 +416,11 @@ impl Storage for S3Storage {
 
     async fn fetch_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let key = self.get_transaction_path(id)?;
-        let bytes = self.get_object(key.as_str()).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        self.get_object_reader(settings, key.as_str()).await
     }
 
     async fn fetch_chunk(
@@ -494,26 +476,21 @@ impl Storage for S3Storage {
             metadata.into_iter(),
             bytes,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn write_transaction_log(
         &self,
         _settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_transaction_path(&id)?;
-        let bytes = rmp_serde::to_vec(log.as_ref())?;
-        let metadata = [(
-            format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
-            log.icechunk_transaction_log_format_version.to_string(),
-        )];
         self.put_object(
             key.as_str(),
             Some(format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE),
-            metadata,
+            metadata.into_iter(),
             bytes,
         )
         .await

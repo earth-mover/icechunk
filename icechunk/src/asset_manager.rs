@@ -197,6 +197,44 @@ impl AssetManager {
             }
         }
     }
+
+    pub async fn write_transaction_log(
+        &self,
+        transaction_id: SnapshotId,
+        log: Arc<TransactionLog>,
+        compression_level: u8,
+    ) -> RepositoryResult<()> {
+        let log_c = Arc::clone(&log);
+        write_new_tx_log(
+            transaction_id.clone(),
+            log_c,
+            compression_level,
+            self.storage.as_ref(),
+            &self.storage_settings,
+        )
+        .await?;
+        self.transactions_cache.insert(transaction_id, log);
+        Ok(())
+    }
+
+    pub async fn fetch_transaction_log(
+        &self,
+        transaction_id: &SnapshotId,
+    ) -> RepositoryResult<Arc<TransactionLog>> {
+        match self.transactions_cache.get_value_or_guard_async(transaction_id).await {
+            Ok(transaction) => Ok(transaction),
+            Err(guard) => {
+                let transaction = fetch_transaction_log(
+                    transaction_id,
+                    self.storage.as_ref(),
+                    &self.storage_settings,
+                )
+                .await?;
+                let _fail_is_ok = guard.insert(Arc::clone(&transaction));
+                Ok(transaction)
+            }
+        }
+    }
 }
 
 fn binary_file_header(
@@ -227,7 +265,7 @@ async fn check_header(
     let mut buf = [0; 12];
     read.read_exact(&mut buf).await?;
     // Magic numbers
-    if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != &buf {
+    if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
         return Err(RepositoryError::FormatError(
             IcechunkFormatError::InvalidMagicNumbers,
         ));
@@ -349,7 +387,7 @@ async fn write_new_snapshot(
         (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
         (
             ICECHUNK_FILE_TYPE_METADATA_KEY.to_string(),
-            ICECHUNK_FILE_TYPE_MANIFEST.to_string(),
+            ICECHUNK_FILE_TYPE_SNAPSHOT.to_string(),
         ),
         (
             ICECHUNK_COMPRESSION_METADATA_KEY.to_string(),
@@ -396,4 +434,73 @@ async fn fetch_snapshot(
     })
     .await??;
     Ok(Arc::new(snapshot))
+}
+
+async fn write_new_tx_log(
+    transaction_id: SnapshotId,
+    new_log: Arc<TransactionLog>,
+    compression_level: u8,
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+) -> RepositoryResult<()> {
+    use format_constants::*;
+    let metadata = vec![
+        (
+            LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
+            LATEST_ICECHUNK_FORMAT_VERSION.to_string(),
+        ),
+        (ICECHUNK_CLIENT_NAME.to_string(), ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string()),
+        (
+            ICECHUNK_FILE_TYPE_METADATA_KEY.to_string(),
+            ICECHUNK_FILE_TYPE_TRANSACTION_LOG.to_string(),
+        ),
+        (
+            ICECHUNK_COMPRESSION_METADATA_KEY.to_string(),
+            ICECHUNK_COMPRESSION_ZSTD.to_string(),
+        ),
+    ];
+
+    let buffer = tokio::task::spawn_blocking(move || {
+        let buffer = binary_file_header(
+            LATEST_ICECHUNK_SPEC_VERSION_BINARY,
+            ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG,
+            ICECHUNK_COMPRESSION_BINARY_ZSTD,
+        );
+        let mut compressor =
+            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
+        rmp_serde::encode::write(&mut compressor, new_log.as_ref())?;
+        compressor.finish().map_err(RepositoryError::IOError)
+    })
+    .await??;
+
+    storage
+        .write_transaction_log(storage_settings, transaction_id, metadata, buffer.into())
+        .await?;
+
+    Ok(())
+}
+
+async fn fetch_transaction_log(
+    transaction_id: &SnapshotId,
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+) -> RepositoryResult<Arc<TransactionLog>> {
+    let mut read =
+        storage.fetch_transaction_log(storage_settings, transaction_id).await?;
+
+    let compression = check_header(
+        read.as_mut(),
+        format_constants::ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG,
+    )
+    .await?;
+
+    debug_assert_eq!(compression, 1);
+
+    let transaction = tokio::task::spawn_blocking(move || {
+        let sync_read = SyncIoBridge::new(read);
+        let decompressor = zstd::stream::Decoder::new(sync_read)?;
+        rmp_serde::from_read(decompressor).map_err(RepositoryError::DeserializationError)
+    })
+    .await??;
+    Ok(Arc::new(transaction))
 }

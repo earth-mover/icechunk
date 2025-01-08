@@ -73,7 +73,7 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<crate::format::transaction_log::TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -137,9 +137,10 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         id: SnapshotId,
-        log: Arc<crate::format::transaction_log::TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
-        self.backend.write_transaction_log(settings, id, log).await
+        self.backend.write_transaction_log(settings, id, metadata, bytes).await
     }
 
     async fn write_attributes(

@@ -1,7 +1,7 @@
 use crate::{
     format::{
-        attributes::AttributesTable, format_constants, transaction_log::TransactionLog,
-        AttributesId, ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
+        attributes::AttributesTable, AttributesId, ByteRange, ChunkId, FileTypeTag,
+        ManifestId, ObjectId, SnapshotId,
     },
     private,
 };
@@ -309,7 +309,6 @@ impl Storage for ObjectStorage {
                     min_concurrent_request_size: NonZeroU64::new(4 * 1024)
                         .unwrap_or(NonZeroU64::MIN),
                 },
-                ..base
             },
             "memory" => Settings {
                 concurrency: ConcurrencySettings {
@@ -319,7 +318,6 @@ impl Storage for ObjectStorage {
                     min_concurrent_request_size: NonZeroU64::new(1)
                         .unwrap_or(NonZeroU64::MIN),
                 },
-                ..base
             },
 
             _ => base,
@@ -421,14 +419,11 @@ impl Storage for ObjectStorage {
 
     async fn fetch_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_transaction_path(id);
-        let bytes = self.store.get(&path).await?.bytes().await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
     async fn write_snapshot(
@@ -474,30 +469,11 @@ impl Storage for ObjectStorage {
         &self,
         _settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_transaction_path(&id);
-        let bytes = rmp_serde::to_vec(log.as_ref())?;
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
-                    )),
-                    AttributeValue::from(
-                        log.icechunk_transaction_log_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;

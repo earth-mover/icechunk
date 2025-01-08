@@ -783,10 +783,7 @@ impl Session {
 
             // we need to reverse the iterator to process them in order of oldest first
             for snap_id in new_commits.into_iter().rev() {
-                let tx_log = self
-                    .storage
-                    .fetch_transaction_log(&self.storage_settings, &snap_id)
-                    .await?;
+                let tx_log = self.asset_manager.fetch_transaction_log(&snap_id).await?;
 
                 let session = Self::create_readonly_session(
                     self.config.clone(),
@@ -1144,9 +1141,7 @@ pub fn construct_valid_byte_range(
 
 #[allow(clippy::too_many_arguments)]
 async fn flush(
-    storage: &(dyn Storage + Send + Sync),
     asset_manager: &AssetManager,
-    storage_settings: &storage::Settings,
     change_set: &ChangeSet,
     parent_id: &SnapshotId,
     message: &str,
@@ -1195,11 +1190,11 @@ async fn flush(
         TransactionLog::new(change_set, old_snapshot.iter(), new_snapshot.iter());
     let new_snapshot_id = &new_snapshot.metadata.id;
     asset_manager.write_snapshot(Arc::clone(&new_snapshot), compression_level).await?;
-    storage
+    asset_manager
         .write_transaction_log(
-            storage_settings,
             new_snapshot_id.clone(),
             Arc::new(tx_log),
+            compression_level,
         )
         .await?;
 
@@ -1222,9 +1217,7 @@ async fn do_commit(
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let new_snapshot = flush(
-        storage,
         asset_manager,
-        storage_settings,
         change_set,
         snapshot_id,
         message,

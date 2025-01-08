@@ -43,8 +43,8 @@ pub use object_store::ObjectStorage;
 use crate::{
     config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
     format::{
-        attributes::AttributesTable, transaction_log::TransactionLog, AttributesId,
-        ByteRange, ChunkId, ManifestId, SnapshotId,
+        attributes::AttributesTable, AttributesId, ByteRange, ChunkId, ManifestId,
+        SnapshotId,
     },
     private,
 };
@@ -190,7 +190,7 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>>; // FIXME: format flags
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
 
     async fn write_snapshot(
         &self,
@@ -222,7 +222,8 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()>;
 
     async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes>;
