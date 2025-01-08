@@ -362,7 +362,7 @@ pub struct PyCompressionConfig {
 #[pymethods]
 impl PyCompressionConfig {
     #[staticmethod]
-    /// Create a default `RepositoryConfig` instance
+    /// Create a default `CompressionConfig` instance
     fn default() -> Self {
         CompressionConfig::default().into()
     }
