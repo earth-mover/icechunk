@@ -3,6 +3,8 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    AzureCredentials,
+    AzureStaticCredentials,
     Credentials,
     GcsCredentials,
     GcsStaticCredentials,
@@ -25,7 +27,15 @@ AnyGcsStaticCredential = (
 
 AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
 
-AnyCredential = Credentials.S3 | Credentials.Gcs
+AnyAzureStaticCredential = (
+    AzureStaticCredentials.AccessKey
+    | AzureStaticCredentials.SasToken
+    | AzureStaticCredentials.BearerToken
+)
+
+AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+
+AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 
 def s3_refreshable_credentials(
@@ -216,6 +226,57 @@ def gcs_credentials(
         )
 
     raise ValueError("Conflicting arguments to gcs_credentials function")
+
+
+def azure_static_credentials(
+    *,
+    access_key: str | None = None,
+    sas_token: str | None = None,
+    bearer_token: str | None = None,
+) -> AnyAzureStaticCredential:
+    """Create static credentials Azure Blob Storage object store."""
+    if access_key is not None:
+        return AzureStaticCredentials.AccessKey(access_key)
+    if sas_token is not None:
+        return AzureStaticCredentials.SasToken(sas_token)
+    if bearer_token is not None:
+        return AzureStaticCredentials.BearerToken(bearer_token)
+    raise ValueError("Conflicting arguments to azure_static_credentials function")
+
+
+def azure_from_env_credentials() -> AzureCredentials.FromEnv:
+    """Instruct Azure Blob Storage object store to fetch credentials from the operative system environment."""
+    return AzureCredentials.FromEnv()
+
+
+def azure_credentials(
+    *,
+    access_key: str | None = None,
+    sas_token: str | None = None,
+    bearer_token: str | None = None,
+    from_env: bool | None = None,
+) -> AnyAzureCredential:
+    """Create credentials Azure Blob Storage object store.
+
+    If all arguments are None, credentials are fetched from the operative system environment.
+    """
+    if (from_env is None or from_env) and (
+        access_key is None and sas_token is None and bearer_token is None
+    ):
+        return azure_from_env_credentials()
+
+    if (access_key is not None or sas_token is not None or bearer_token is not None) and (
+        from_env is None or not from_env
+    ):
+        return AzureCredentials.Static(
+            azure_static_credentials(
+                access_key=access_key,
+                sas_token=sas_token,
+                bearer_token=bearer_token,
+            )
+        )
+
+    raise ValueError("Conflicting arguments to azure_credentials function")
 
 
 def containers_credentials(

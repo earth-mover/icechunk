@@ -1,6 +1,8 @@
 # module
 
 from icechunk._icechunk_python import (
+    AzureCredentials,
+    AzureStaticCredentials,
     BasicConflictSolver,
     Conflict,
     ConflictDetector,
@@ -32,6 +34,9 @@ from icechunk.credentials import (
     AnyGcsCredential,
     AnyGcsStaticCredential,
     AnyS3Credential,
+    azure_credentials,
+    azure_from_env_credentials,
+    azure_static_credentials,
     containers_credentials,
     gcs_credentials,
     gcs_from_env_credentials,
@@ -46,6 +51,7 @@ from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    azure_storage,
     gcs_storage,
     in_memory_storage,
     local_filesystem_storage,
@@ -55,11 +61,15 @@ from icechunk.storage import (
 from icechunk.store import IcechunkStore
 
 __all__ = [
+    "AnyAzureCredential",
+    "AnyAzureStaticCredential",
     "AnyCredential",
     "AnyGcsCredential",
     "AnyGcsStaticCredential",
     "AnyObjectStoreConfig",
     "AnyS3Credential",
+    "AzureCredentials",
+    "AzureStaticCredentials",
     "BasicConflictSolver",
     "Conflict",
     "ConflictDetector",
@@ -90,6 +100,10 @@ __all__ = [
     "VersionSelection",
     "VirtualChunkContainer",
     "__version__",
+    "azure_credentials",
+    "azure_from_env_credentials",
+    "azure_static_credentials",
+    "azure_storage",
     "containers_credentials",
     "gcs_credentials",
     "gcs_from_env_credentials",

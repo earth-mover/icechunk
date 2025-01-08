@@ -340,6 +340,31 @@ class GcsCredentials:
 
 AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
 
+class AzureStaticCredentials:
+    class AccessKey:
+        def __init__(self, key: str) -> None: ...
+
+    class SasToken:
+        def __init__(self, token: str) -> None: ...
+
+    class BearerToken:
+        def __init__(self, token: str) -> None: ...
+
+AnyAzureStaticCredential = (
+    AzureStaticCredentials.AccessKey
+    | AzureStaticCredentials.SasToken
+    | AzureStaticCredentials.BearerToken
+)
+
+class AzureCredentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, credentials: AnyAzureStaticCredential) -> None: ...
+
+AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+
 class Credentials:
     class S3:
         def __init__(self, credentials: AnyS3Credential) -> None: ...
@@ -347,7 +372,10 @@ class Credentials:
     class Gcs:
         def __init__(self, credentials: GcsCredentials) -> None: ...
 
-AnyCredential = Credentials.S3 | Credentials.Gcs
+    class Azure:
+        def __init__(self, credentials: AzureCredentials) -> None: ...
+
+AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -385,6 +413,14 @@ class Storage:
         credentials: AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
+    ) -> Storage: ...
+    @classmethod
+    def new_azure_blob(
+        cls,
+        container: str,
+        prefix: str,
+        config: dict[str, str],
+        credentials: AnyAzureCredential | None = None,
     ) -> Storage: ...
 
 class VersionSelection(Enum):

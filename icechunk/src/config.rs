@@ -25,9 +25,7 @@ pub enum ObjectStoreConfig {
     S3Compatible(S3Options),
     S3(S3Options),
     Gcs(HashMap<String, String>),
-    Azure {
-        // TODO:
-    },
+    Azure(HashMap<String, String>),
     Tigris {
         // TODO:
     },

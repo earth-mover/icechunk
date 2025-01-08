@@ -399,10 +399,10 @@ pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storag
 }
 
 pub fn new_azure_blob_storage(
-    prefix: String,
     container: String,
-    credentials: Option<AzureCredentials>,
+    prefix: String,
     config: HashMap<String, String>,
+    credentials: Option<AzureCredentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let url = format!("azure://{}/{}", container, prefix);
     let mut options = config.into_iter().collect::<Vec<_>>();

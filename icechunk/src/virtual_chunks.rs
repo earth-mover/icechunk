@@ -47,7 +47,7 @@ impl VirtualChunkContainer {
             (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()), // TODO:
-            (ObjectStoreConfig::Azure {}, _) => Ok(()),                 // TODO
+            (ObjectStoreConfig::Azure(_), Credentials::Azure(_)) => Ok(()), // TODO
             (ObjectStoreConfig::Tigris {}, _) => Ok(()),                // TODO
             _ => Err("credentials do not match store type".to_string()),
         }
@@ -82,7 +82,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "az".to_string(),
                 url_prefix: "az".to_string(),
-                store: ObjectStoreConfig::Azure {},
+                store: ObjectStoreConfig::Azure(HashMap::new()),
             },
         ),
         (
