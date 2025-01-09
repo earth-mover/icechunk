@@ -165,7 +165,6 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        print(key_ranges)
         ranges = [(k[0], _byte_request_to_tuple(k[1])) for k in key_ranges]
         result = await self._store.get_partial_values(list(ranges))
         return [prototype.buffer.from_bytes(r) for r in result]
