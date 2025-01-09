@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     config::{CredentialsFetcher, S3Credentials, S3Options},
-    format::{ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId},
+    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private, Storage, StorageError,
 };
 use async_stream::try_stream;
@@ -174,14 +174,6 @@ impl S3Storage {
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
-    async fn get_object_range(
-        &self,
-        key: &str,
-        range: &ByteRange,
-    ) -> StorageResult<impl AsyncRead> {
-        get_object_range(self.get_client().await, self.bucket.clone(), key, range).await
-    }
-
     async fn get_object_reader(
         &self,
         _settings: &Settings,
@@ -196,16 +188,15 @@ impl S3Storage {
         &self,
         settings: &Settings,
         key: &str,
-        size: u64,
+        range: &Range<u64>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client().await;
         let mut results = split_in_multiple_requests(
-            size,
+            range,
             settings.concurrency.min_concurrent_request_size.get(),
             settings.concurrency.max_concurrent_requests_for_object.get(),
         )
-        .map(|(req_offset, req_size)| async move {
-            let range = ByteRange::from_offset_with_length(req_offset, req_size);
+        .map(|range| async move {
             let key = key.to_string();
             let client = Arc::clone(client);
             let bucket = self.bucket.clone();
@@ -278,15 +269,8 @@ impl S3Storage {
     }
 }
 
-pub fn range_to_header(range: &ByteRange) -> Option<String> {
-    match range {
-        ByteRange::Bounded(Range { start, end }) => {
-            Some(format!("bytes={}-{}", start, end - 1))
-        }
-        ByteRange::From(offset) if *offset == 0 => None,
-        ByteRange::From(offset) => Some(format!("bytes={}-", offset)),
-        ByteRange::Until(n) => Some(format!("bytes={}-", n)),
-    }
+pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
+    format!("bytes={}-{}", range.start, range.end - 1)
 }
 
 impl private::Sealed for S3Storage {}
@@ -391,7 +375,7 @@ impl Storage for S3Storage {
         size: u64,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let key = self.get_manifest_path(id)?;
-        self.get_object_concurrently(settings, key.as_str(), size).await
+        self.get_object_concurrently(settings, key.as_str(), &(0..size)).await
     }
 
     async fn fetch_manifest_single_request(
@@ -414,13 +398,15 @@ impl Storage for S3Storage {
 
     async fn fetch_chunk(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: &ChunkId,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
     ) -> StorageResult<Bytes> {
         let key = self.get_chunk_path(id)?;
-        let mut read = self.get_object_range(key.as_str(), range).await?;
-        let mut buffer = Vec::new();
+        let mut read =
+            self.get_object_concurrently(settings, key.as_str(), range).await?;
+        // add some extra space to the buffer to optimize conversion to bytes
+        let mut buffer = Vec::with_capacity((range.end - range.start + 16) as usize);
         tokio::io::copy(&mut read, &mut buffer).await?;
         Ok(buffer.into())
     }
@@ -681,14 +667,9 @@ async fn get_object_range(
     client: &Client,
     bucket: String,
     key: &str,
-    range: &ByteRange,
+    range: &Range<ChunkOffset>,
 ) -> StorageResult<impl AsyncRead> {
-    let mut b = client.get_object().bucket(bucket).key(key);
-
-    if let Some(header) = range_to_header(range) {
-        b = b.range(header)
-    };
-
+    let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
     Ok(b.send().await?.body.into_async_read())
 }
 

@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    ops::Range,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -8,7 +11,7 @@ use tokio::io::AsyncRead;
 
 use super::{ETag, ListInfo, Settings, Storage, StorageError, StorageResult};
 use crate::{
-    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
+    format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
 };
 
@@ -107,7 +110,7 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         id: &ChunkId,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
     ) -> Result<Bytes, StorageError> {
         self.fetch_log
             .lock()
