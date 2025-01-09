@@ -23,13 +23,11 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::task::JoinError;
+use tokio::io::AsyncRead;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
-
-pub mod caching;
 
 #[cfg(test)]
 pub mod logging;
@@ -37,16 +35,11 @@ pub mod logging;
 pub mod object_store;
 pub mod s3;
 
-pub use caching::MemCachingStorage;
 pub use object_store::ObjectStorage;
 
 use crate::{
     config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
-    format::{
-        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
-        transaction_log::TransactionLog, AttributesId, ByteRange, ChunkId, ManifestId,
-        SnapshotId,
-    },
+    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
     private,
 };
 
@@ -66,18 +59,12 @@ pub enum StorageError {
     S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] ByteStreamError),
-    #[error("messagepack decode error: {0}")]
-    MsgPackDecodeError(#[from] rmp_serde::decode::Error),
-    #[error("messagepack encode error: {0}")]
-    MsgPackEncodeError(#[from] rmp_serde::encode::Error),
     #[error("cannot overwrite ref: {0}")]
     RefAlreadyExists(String),
     #[error("ref not found: {0}")]
     RefNotFound(String),
     #[error("the etag does not match")]
     ConfigUpdateConflict,
-    #[error("a concurrent task failed {0}")]
-    ConcurrencyError(#[from] JoinError),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]
@@ -101,24 +88,6 @@ const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
 
 pub type ETag = String;
-
-#[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize, Clone)]
-pub enum CompressionAlgorithm {
-    #[default]
-    Zstd,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub struct CompressionSettings {
-    pub algorithm: CompressionAlgorithm,
-    pub level: u8,
-}
-
-impl Default for CompressionSettings {
-    fn default() -> Self {
-        Self { algorithm: Default::default(), level: 1 }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ConcurrencySettings {
@@ -144,7 +113,6 @@ impl Default for ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: ConcurrencySettings,
-    pub compression: CompressionSettings,
 }
 
 /// Fetch and write the parquet files that represent the repository in object store
@@ -171,18 +139,30 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<Snapshot>>;
-    async fn fetch_attributes(
-        &self,
-        settings: &Settings,
-        id: &AttributesId,
-    ) -> StorageResult<Arc<AttributesTable>>; // FIXME: format flags
-    async fn fetch_manifests(
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+    async fn fetch_manifest(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Arc<Manifest>>; // FIXME: format flags
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        if size == 0 {
+            self.fetch_manifest_single_request(settings, id).await
+        } else {
+            self.fetch_manifest_splitting(settings, id, size).await
+        }
+    }
+    async fn fetch_manifest_splitting(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+        size: u64,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+    async fn fetch_manifest_single_request(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
     async fn fetch_chunk(
         &self,
         settings: &Settings,
@@ -193,26 +173,22 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>>; // FIXME: format flags
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
 
     async fn write_snapshot(
         &self,
         settings: &Settings,
         id: SnapshotId,
-        table: Arc<Snapshot>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()>;
-    async fn write_attributes(
-        &self,
-        settings: &Settings,
-        id: AttributesId,
-        table: Arc<AttributesTable>,
-    ) -> StorageResult<()>;
-    async fn write_manifests(
+    async fn write_manifest(
         &self,
         settings: &Settings,
         id: ManifestId,
-        table: Arc<Manifest>,
-    ) -> StorageResult<u64>;
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()>;
     async fn write_chunk(
         &self,
         settings: &Settings,
@@ -223,7 +199,8 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()>;
 
     async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes>;

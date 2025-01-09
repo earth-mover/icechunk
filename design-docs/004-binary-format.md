@@ -20,14 +20,14 @@ All these files start with 12 magic bytes:
 
 Which correspond to the string `ICE🧊CHUNK` in UTF-8.
 
-The next 12 bytes, with indexes 12-23 (zero based) identify the Icechunk client that wrote the file.
+The next 24 bytes, with indexes 12-35 (zero based) identify the Icechunk client that wrote the file.
 Different implementations will use different strings in UTF-8 encoding, padding them with ASCII spaces on the right. The official Icechunk implementation uses "ic-" followed by the version:
 
 * "ic-0.1.0-a.8"
 * "ic-1.0.0"
 * etc.
 
-Byte 24 identifies Icechunk spec version used to write the file.
+Byte 36 identifies Icechunk spec version used to write the file.
 
 * 0x00 - Reserved for future use
 * 0x01 - Spec version 1
@@ -36,14 +36,14 @@ Byte 24 identifies Icechunk spec version used to write the file.
 
 If more than 255 version are needed, we will set this byte to 0 and modify the following bytes according to a new spec.
 
-The next byte (index 25) identifies file type :
+The next byte (index 37) identifies file type :
 
 * 0x01 - Snapshot
 * 0x02 - Manifest
 * 0x03 - Attributes file
 * 0x04 - Transaction log
 
-Byte 26 identifies compression type:
+Byte 38 identifies compression type:
 
 * 0x00 - No compression
 * 0x01 - Zstd
@@ -57,8 +57,8 @@ In object stores that support it, the file information (spec version, compressio
 | Byte index    | Content               | Example |
 | ------------- | --------------- |--------- |
 | 0 - 11        | Magic bytes           | ICE🧊CHUNK              |
-| 12 - 23       | Implementation id     | 'ic-1.0.0    '          |
-| 24            | Spec version          | 0x01                    |
-| 25            | File type             | 0x01                    |
-| 26            | Compression           | 0x01                    |
-| 27..end       | Msgpack serializanion |                         |
+| 12 - 35       | Implementation id     | 'ic-1.0.0    '          |
+| 36            | Spec version          | 0x01                    |
+| 37            | File type             | 0x01                    |
+| 38            | Compression           | 0x01                    |
+| 39..end       | Msgpack serializanion |                         |

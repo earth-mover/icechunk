@@ -3,10 +3,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 use bytes::Bytes;
 use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{
-        manifest::Manifest, snapshot::Snapshot, ByteRange, ChunkId, ManifestId,
-        SnapshotId,
-    },
+    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
@@ -14,9 +11,10 @@ use icechunk::{
         new_in_memory_storage, new_s3_storage, object_store::ObjectStorageConfig,
         StorageResult,
     },
-    ObjectStorage, Repository, Storage, StorageError,
+    ObjectStorage, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
+use tokio::io::AsyncReadExt;
 
 #[allow(clippy::expect_used)]
 async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
@@ -64,7 +62,7 @@ async fn mk_s3_object_store_storage(
             .expect("Creating minio s3 storage with object_store failed"),
     );
 
-    Ok(Repository::add_in_mem_asset_caching(storage))
+    Ok(storage)
 }
 
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
@@ -88,10 +86,19 @@ pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>
     with_storage(|storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        let snapshot = Arc::new(Snapshot::empty());
-        storage.write_snapshot(&storage_settings, id.clone(), snapshot.clone()).await?;
-        let back = storage.fetch_snapshot(&storage_settings, &id).await?;
-        assert_eq!(snapshot, back);
+        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        storage
+            .write_snapshot(
+                &storage_settings,
+                id.clone(),
+                vec![("foo".to_string(), "bar".to_string())],
+                Bytes::copy_from_slice(&bytes[..]),
+            )
+            .await?;
+        let mut read = storage.fetch_snapshot(&storage_settings, &id).await?;
+        let mut bytes_back = [0; 1024];
+        read.read_exact(&mut bytes_back).await?;
+        assert_eq!(bytes_back, bytes);
         Ok(())
     })
     .await?;
@@ -103,12 +110,29 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
     with_storage(|storage| async move {
         let storage_settings = storage.default_settings();
         let id = ManifestId::random();
-        let manifest = Arc::new(Manifest::default());
-        let size = storage
-            .write_manifests(&storage_settings, id.clone(), manifest.clone())
+        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        storage
+            .write_manifest(
+                &storage_settings,
+                id.clone(),
+                vec![("foo".to_string(), "bar".to_string())],
+                Bytes::copy_from_slice(&bytes[..]),
+            )
             .await?;
-        let back = storage.fetch_manifests(&storage_settings, &id, size).await?;
-        assert_eq!(manifest, back);
+        let mut read =
+            storage.fetch_manifest_single_request(&storage_settings, &id).await?;
+        let mut bytes_back = [0; 1024];
+        read.read_exact(&mut bytes_back).await?;
+        assert_eq!(bytes_back, bytes);
+
+        let mut read = storage.fetch_manifest(&storage_settings, &id, 1024).await?;
+        read.read_exact(&mut bytes_back).await?;
+        assert_eq!(bytes_back, bytes);
+
+        let mut read =
+            storage.fetch_manifest_splitting(&storage_settings, &id, 1024).await?;
+        read.read_exact(&mut bytes_back).await?;
+        assert_eq!(bytes_back, bytes);
         Ok(())
     })
     .await?;

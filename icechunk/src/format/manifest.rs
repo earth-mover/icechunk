@@ -147,7 +147,7 @@ impl Manifest {
         Self {
             chunks,
             icechunk_manifest_format_version:
-                format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY,
             icechunk_manifest_format_flags: Default::default(),
         }
     }

@@ -4,13 +4,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncRead;
 
 use super::{ETag, ListInfo, Settings, Storage, StorageError, StorageResult};
 use crate::{
-    format::{
-        attributes::AttributesTable, manifest::Manifest, snapshot::Snapshot,
-        AttributesId, ByteRange, ChunkId, ManifestId, SnapshotId,
-    },
+    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
     private,
 };
 
@@ -55,11 +53,12 @@ impl Storage for LoggingStorage {
     ) -> StorageResult<ETag> {
         self.backend.update_config(settings, config, etag).await
     }
+
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> Result<Arc<Snapshot>, StorageError> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -71,7 +70,7 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<crate::format::transaction_log::TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -79,29 +78,29 @@ impl Storage for LoggingStorage {
         self.backend.fetch_transaction_log(settings, id).await
     }
 
-    async fn fetch_attributes(
-        &self,
-        settings: &Settings,
-        id: &AttributesId,
-    ) -> Result<Arc<AttributesTable>, StorageError> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_attributes".to_string(), id.0.to_vec()));
-        self.backend.fetch_attributes(settings, id).await
-    }
-
-    async fn fetch_manifests(
+    async fn fetch_manifest_splitting(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> Result<Arc<Manifest>, StorageError> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_manifests".to_string(), id.0.to_vec()));
-        self.backend.fetch_manifests(settings, id, size).await
+            .push(("fetch_manifest_splitting".to_string(), id.0.to_vec()));
+        self.backend.fetch_manifest_splitting(settings, id, size).await
+    }
+
+    async fn fetch_manifest_single_request(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("fetch_manifest_single_request".to_string(), id.0.to_vec()));
+        self.backend.fetch_manifest_single_request(settings, id).await
     }
 
     async fn fetch_chunk(
@@ -121,36 +120,30 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         id: SnapshotId,
-        table: Arc<Snapshot>,
-    ) -> Result<(), StorageError> {
-        self.backend.write_snapshot(settings, id, table).await
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
+        self.backend.write_snapshot(settings, id, metadata, bytes).await
     }
 
     async fn write_transaction_log(
         &self,
         settings: &Settings,
         id: SnapshotId,
-        log: Arc<crate::format::transaction_log::TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
-        self.backend.write_transaction_log(settings, id, log).await
+        self.backend.write_transaction_log(settings, id, metadata, bytes).await
     }
 
-    async fn write_attributes(
-        &self,
-        settings: &Settings,
-        id: AttributesId,
-        table: Arc<AttributesTable>,
-    ) -> Result<(), StorageError> {
-        self.backend.write_attributes(settings, id, table).await
-    }
-
-    async fn write_manifests(
+    async fn write_manifest(
         &self,
         settings: &Settings,
         id: ManifestId,
-        table: Arc<Manifest>,
-    ) -> Result<u64, StorageError> {
-        self.backend.write_manifests(settings, id, table).await
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
+        self.backend.write_manifest(settings, id, metadata, bytes).await
     }
 
     async fn write_chunk(

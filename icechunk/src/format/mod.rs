@@ -216,27 +216,46 @@ pub enum IcechunkFormatError {
     ChunkCoordinatesNotFound { coords: ChunkIndices },
     #[error("manifest information cannot be found in snapshot `{manifest_id}`")]
     ManifestInfoNotFound { manifest_id: ManifestId },
+    #[error("invalid magic numbers in file")]
+    InvalidMagicNumbers, // TODO: add more info
+    #[error("Icechunk cannot read from repository written with a more modern version")]
+    InvalidSpecVersion, // TODO: add more info
+    #[error("Icechunk cannot read this file type, expected {expected} got {got}")]
+    InvalidFileType { expected: u8, got: u8 }, // TODO: add more info
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
-pub type IcechunkFormatVersion = u16;
+pub type IcechunkFormatVersion = u8;
 
 pub mod format_constants {
-    use super::IcechunkFormatVersion;
+    use std::sync::LazyLock;
 
-    pub const LATEST_ICECHUNK_MANIFEST_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY: &str = "ic-man-fmt-ver";
+    pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
+    pub const LATEST_ICECHUNK_SPEC_VERSION_BINARY: u8 = 1;
 
-    pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
+    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic_spec_ver";
 
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY: &str =
-        "ic-tx-fmt-ver";
+    pub const ICECHUNK_LIB_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    pub static ICECHUNK_CLIENT_NAME: LazyLock<String> =
+        LazyLock::new(|| "ic-".to_string() + ICECHUNK_LIB_VERSION);
+    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic_client";
+
+    pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
+    pub const ICECHUNK_FILE_TYPE_MANIFEST: &str = "manifest";
+    pub const ICECHUNK_FILE_TYPE_TRANSACTION_LOG: &str = "transaction-log";
+    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic_file_type";
+
+    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
+    pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
+
+    pub const ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT: u8 = 1;
+    pub const ICECHUNK_FILE_TYPE_BINARY_MANIFEST: u8 = 2;
+    pub const ICECHUNK_FILE_TYPE_BINARY_ATTRIBUTES: u8 = 3;
+    pub const ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG: u8 = 4;
+
+    pub const ICECHUNK_COMPRESSION_BINARY_ZSTD: u8 = 1;
 }
 
 impl Display for Path {
