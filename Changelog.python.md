@@ -7,6 +7,7 @@
 - Large chunks are fetched concurrently
 - `IcechunkStore.list_dir` is now significantly faster
 - Support for Zarr 3.0 and xarray 2025.1.1
+- Transaction logs and snapshot files are compressed
 
 ## Python Icechunk Library 0.1.0a9
 
