@@ -8,9 +8,7 @@ import pytest
 
 from icechunk import IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
-from zarr.abc.store import (
-    RangeByteRequest,
-)
+from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
@@ -230,13 +228,23 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             default_buffer_prototype(),
             [
                 ("zarr.json", RangeByteRequest(0, 5)),
+                ("zarr.json", SuffixByteRequest(5)),
+                ("zarr.json", OffsetByteRequest(10)),
             ],
         )
 
-        assert len(values) == 1
+        assert len(values) == 3
         data = values[0].to_bytes()
         assert len(data) == 5
         assert data == DEFAULT_GROUP_METADATA[:5]
+
+        data = values[1].to_bytes()
+        assert len(data) == len(DEFAULT_GROUP_METADATA) - 5
+        assert data == DEFAULT_GROUP_METADATA[:-5]
+
+        data = values[2].to_bytes()
+        assert len(data) == len(DEFAULT_GROUP_METADATA) - 10
+        assert data == DEFAULT_GROUP_METADATA[10:]
 
     async def test_set(self, store: IcechunkStore) -> None:
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
