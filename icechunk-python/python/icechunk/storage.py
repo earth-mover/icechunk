@@ -156,11 +156,11 @@ def azure_storage(
     *,
     container: str,
     prefix: str,
-    config: dict[str, str],
     access_key: str | None = None,
     sas_token: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    config: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Azure Blob Storage object store.
 
