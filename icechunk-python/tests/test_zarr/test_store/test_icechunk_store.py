@@ -8,6 +8,9 @@ import pytest
 
 from icechunk import IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
+from zarr.abc.store import (
+    RangeByteRequest,
+)
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
@@ -226,7 +229,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         values = await store.get_partial_values(
             default_buffer_prototype(),
             [
-                ("zarr.json", (0, 5)),
+                ("zarr.json", RangeByteRequest(0, 5)),
             ],
         )
 
