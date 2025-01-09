@@ -1,7 +1,5 @@
 use crate::{
-    format::{
-        ByteRange, ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId,
-    },
+    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
@@ -12,8 +10,8 @@ use futures::{
 };
 use object_store::{
     local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath, Attribute,
-    AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
-    PutOptions, PutPayload, UpdateVersion,
+    AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
+    PutPayload, UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,20 +34,6 @@ use super::{
     StorageError, StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
     SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
-
-// Get Range is object_store specific, keep it with this module
-impl From<&ByteRange> for Option<GetRange> {
-    fn from(value: &ByteRange) -> Self {
-        match value {
-            ByteRange::Bounded(Range { start, end }) => {
-                Some(GetRange::Bounded(*start as usize..*end as usize))
-            }
-            ByteRange::From(start) if *start == 0u64 => None,
-            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
-            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ObjectStorageConfig {

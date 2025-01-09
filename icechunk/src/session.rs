@@ -1014,9 +1014,9 @@ async fn updated_nodes<'a>(
         .chain(change_set.new_nodes_iterator(manifest_id)))
 }
 
-async fn get_node<'a>(
+async fn get_node(
     asset_manager: &AssetManager,
-    change_set: &'a ChangeSet,
+    change_set: &ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> SessionResult<NodeSnapshot> {
@@ -1037,9 +1037,9 @@ async fn get_node<'a>(
     }
 }
 
-async fn get_existing_node<'a>(
+async fn get_existing_node(
     asset_manager: &AssetManager,
-    change_set: &'a ChangeSet,
+    change_set: &ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> SessionResult<NodeSnapshot> {
@@ -1120,6 +1120,11 @@ pub fn construct_valid_byte_range(
         ByteRange::From(n) => {
             let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
             new_start..chunk_offset + chunk_length
+        }
+        ByteRange::Until(n) => {
+            let new_end = chunk_offset + chunk_length;
+            let new_start = new_end - n;
+            new_start..new_end
         }
         ByteRange::Last(n) => {
             let new_end = chunk_offset + chunk_length;

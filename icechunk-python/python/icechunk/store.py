@@ -3,13 +3,33 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from icechunk._icechunk_python import PyStore
-from zarr.abc.store import ByteRangeRequest, Store
+from zarr.abc.store import (
+    ByteRequest,
+    OffsetByteRequest,
+    RangeByteRequest,
+    Store,
+    SuffixByteRequest,
+)
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
 
 if TYPE_CHECKING:
     from icechunk import Session
+
+
+def _byte_request_to_tuple(
+    byte_request: ByteRequest | None,
+) -> tuple[int | None, int | None]:
+    match byte_request:
+        case None:
+            return (None, None)
+        case RangeByteRequest(start, end):
+            return (start, end)
+        case OffsetByteRequest(offset):
+            return (offset, None)
+        case SuffixByteRequest(suffix):
+            return (None, suffix)
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -93,14 +113,20 @@ class IcechunkStore(Store, SyncMixin):
         self,
         key: str,
         prototype: BufferPrototype,
-        byte_range: tuple[int | None, int | None] | None = None,
+        byte_range: ByteRequest | None = None,
     ) -> Buffer | None:
         """Retrieve the value associated with a given key.
 
         Parameters
         ----------
         key : str
-        byte_range : tuple[int, Optional[int]], optional
+        byte_range : ByteRequest, optional
+
+            ByteRequest may be one of the following. If not provided, all data associated with the key is retrieved.
+
+            - RangeByteRequest(int, int): Request a specific range of bytes in the form (start, end). The end is exclusive. If the given range is zero-length or starts after the end of the object, an error will be returned. Additionally, if the range ends after the end of the object, the entire remainder of the object will be returned. Otherwise, the exact requested range will be returned.
+            - OffsetByteRequest(int): Request all bytes starting from a given byte offset. This is equivalent to bytes={int}- as an HTTP header.
+            - SuffixByteRequest(int): Request the last int bytes. Note that here, int is the size of the request, not the byte offset. This is equivalent to bytes=-{int} as an HTTP header.
 
         Returns
         -------
@@ -108,7 +134,7 @@ class IcechunkStore(Store, SyncMixin):
         """
 
         try:
-            result = await self._store.get(key, byte_range)
+            result = await self._store.get(key, _byte_request_to_tuple(byte_range))
         except KeyError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
@@ -119,7 +145,7 @@ class IcechunkStore(Store, SyncMixin):
     async def get_partial_values(
         self,
         prototype: BufferPrototype,
-        key_ranges: Iterable[tuple[str, ByteRangeRequest]],
+        key_ranges: Iterable[tuple[str, ByteRequest | None]],
     ) -> list[Buffer | None]:
         """Retrieve possibly partial values from given key_ranges.
 
@@ -134,7 +160,8 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        result = await self._store.get_partial_values(list(key_ranges))
+        ranges = [(k[0], _byte_request_to_tuple(k[1])) for k in key_ranges]
+        result = await self._store.get_partial_values(list(ranges))
         return [prototype.buffer.from_bytes(r) for r in result]
 
     async def exists(self, key: str) -> bool:

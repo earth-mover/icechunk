@@ -16,7 +16,7 @@ classifiers = [
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0rc2"]
+dependencies = ["zarr>=3"]
 
 [tool.poetry]
 name = "icechunk"
@@ -39,7 +39,7 @@ test = [
   "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
-  "xarray@git+https://github.com/pydata/xarray.git@main",
+  "xarray>=2025.01.1",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
