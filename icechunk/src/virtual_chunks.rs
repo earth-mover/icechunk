@@ -1,11 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError, Client};
 use bytes::Bytes;
-use object_store::{
-    local::LocalFileSystem, path::Path, GetOptions, GetRange, ObjectStore,
-};
+use object_store::{local::LocalFileSystem, path::Path, GetOptions, ObjectStore};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use url::Url;
@@ -14,7 +12,7 @@ use crate::{
     config::{Credentials, S3Credentials, S3Options},
     format::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualReferenceError},
-        ByteRange,
+        ChunkOffset,
     },
     private,
     storage::s3::{mk_client, range_to_header},
@@ -110,7 +108,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
     async fn fetch_chunk(
         &self,
         chunk_location: &str,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError>;
 }
@@ -188,7 +186,7 @@ impl VirtualChunkResolver {
     pub async fn fetch_chunk(
         &self,
         chunk_location: &str,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let fetcher = self.get_fetcher(chunk_location).await?;
@@ -255,7 +253,7 @@ impl ChunkFetcher for S3Fetcher {
     async fn fetch_chunk(
         &self,
         location: &str,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let url = Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
@@ -270,11 +268,12 @@ impl ChunkFetcher for S3Fetcher {
 
         let key = url.path();
         let key = key.strip_prefix('/').unwrap_or(key);
-        let mut b = self.client.get_object().bucket(bucket_name).key(key);
-
-        if let Some(header) = range_to_header(range) {
-            b = b.range(header)
-        };
+        let mut b = self
+            .client
+            .get_object()
+            .bucket(bucket_name)
+            .key(key)
+            .range(range_to_header(range));
 
         match checksum {
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
@@ -344,12 +343,13 @@ impl ChunkFetcher for LocalFSFetcher {
     async fn fetch_chunk(
         &self,
         location: &str,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let url = Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
+        let usize_range = range.start as usize..range.end as usize;
         let mut options =
-            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
+            GetOptions { range: Some(usize_range.into()), ..Default::default() };
 
         match checksum {
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {

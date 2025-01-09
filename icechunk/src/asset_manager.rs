@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::SyncIoBridge;
 
@@ -9,7 +9,7 @@ use crate::{
     config::CachingConfig,
     format::{
         format_constants, manifest::Manifest, snapshot::Snapshot,
-        transaction_log::TransactionLog, ByteRange, ChunkId, IcechunkFormatError,
+        transaction_log::TransactionLog, ChunkId, ChunkOffset, IcechunkFormatError,
         ManifestId, SnapshotId,
     },
     private,
@@ -34,7 +34,7 @@ pub struct AssetManager {
     #[serde(skip)]
     transactions_cache: Cache<SnapshotId, Arc<TransactionLog>>,
     #[serde(skip)]
-    chunk_cache: Cache<(ChunkId, ByteRange), Bytes>,
+    chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes>,
 }
 
 impl private::Sealed for AssetManager {}
@@ -245,7 +245,7 @@ impl AssetManager {
     pub async fn fetch_chunk(
         &self,
         chunk_id: &ChunkId,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
     ) -> RepositoryResult<Bytes> {
         let key = (chunk_id.clone(), range.clone());
         match self.chunk_cache.get_value_or_guard_async(&key).await {

@@ -3,7 +3,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 use bytes::Bytes;
 use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
+    format::{ChunkId, ManifestId, SnapshotId},
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
@@ -146,30 +146,8 @@ pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
         let id = ChunkId::random();
         let bytes = Bytes::from_static(b"hello");
         storage.write_chunk(&storage_settings, id.clone(), bytes.clone()).await?;
-        let back = storage.fetch_chunk(&storage_settings, &id, &ByteRange::ALL).await?;
-        assert_eq!(bytes, back);
 
-        let back = storage
-            .fetch_chunk(
-                &storage_settings,
-                &id,
-                &ByteRange::from_offset_with_length(1, 2),
-            )
-            .await?;
-        assert_eq!(Bytes::from_static(b"el"), back);
-
-        let back = storage
-            .fetch_chunk(&storage_settings, &id, &ByteRange::from_offset(1))
-            .await?;
-        assert_eq!(Bytes::from_static(b"ello"), back);
-
-        let back =
-            storage.fetch_chunk(&storage_settings, &id, &ByteRange::to_offset(3)).await?;
-        assert_eq!(Bytes::from_static(b"hel"), back); // codespell:ignore
-
-        let back = storage
-            .fetch_chunk(&storage_settings, &id, &ByteRange::bounded(1, 4))
-            .await?;
+        let back = storage.fetch_chunk(&storage_settings, &id, &(1..4)).await?;
         assert_eq!(Bytes::from_static(b"ell"), back);
         Ok(())
     })
