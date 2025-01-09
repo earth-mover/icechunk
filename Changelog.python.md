@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a10
+
+### Features
+
+- Large chunks are fetched concurrently
+- Support for Zarr 3.0 and xarray 2025.1.1
+
 ## Python Icechunk Library 0.1.0a9
 
 ### Features
