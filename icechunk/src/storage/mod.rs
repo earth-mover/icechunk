@@ -23,6 +23,7 @@ use std::{
     ffi::OsString,
     iter,
     num::{NonZeroU16, NonZeroU64},
+    ops::Range,
     path::Path,
     sync::Arc,
 };
@@ -45,7 +46,7 @@ use crate::{
         AzureCredentials, AzureStaticCredentials, GcsCredentials, GcsStaticCredentials,
         S3Credentials, S3Options,
     },
-    format::{ByteRange, ChunkId, ManifestId, SnapshotId},
+    format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
 };
 
@@ -173,7 +174,7 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         id: &ChunkId,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
     ) -> StorageResult<Bytes>; // FIXME: format flags
     async fn fetch_transaction_log(
         &self,
@@ -328,25 +329,27 @@ where
 
 /// Split an object request into multiple byte range requests
 ///
-/// Returns tuples of (offset, size) for each request. It tries to generate the maximum number of
+/// Returns tuples of Range for each request. It tries to generate the maximum number of
 /// requests possible, not generating more than `max_parts` requests, and each request not being
 /// smaller than `min_part_size`. Note that the size of the last request is >= the preceding one.
 fn split_in_multiple_requests(
-    size: u64,
+    range: &Range<u64>,
     min_part_size: u64,
     max_parts: u16,
-) -> impl Iterator<Item = (u64, u64)> {
+) -> impl Iterator<Item = Range<u64>> {
+    let size = range.end - range.start;
     let min_part_size = max(min_part_size, 1);
     let num_parts = size / min_part_size;
     let num_parts = max(1, min(num_parts, max_parts as u64));
     let equal_parts = num_parts - 1;
     let equal_parts_size = size / num_parts;
     let last_part_size = size - equal_parts * equal_parts_size;
-    let equal_requests =
-        iter::successors(Some((0, equal_parts_size)), move |(off, _)| {
-            Some((off + equal_parts_size, equal_parts_size))
-        });
-    let last_request = iter::once((equal_parts * equal_parts_size, last_part_size));
+    let equal_requests = iter::successors(
+        Some(range.start..range.start + equal_parts_size),
+        move |range| Some(range.end..range.end + equal_parts_size),
+    );
+    let last_part_offset = range.start + equal_parts * equal_parts_size;
+    let last_request = iter::once(last_part_offset..last_part_offset + last_part_size);
     equal_requests.take(equal_parts as usize).chain(last_request)
 }
 
@@ -497,8 +500,8 @@ mod tests {
             cases: 999, .. ProptestConfig::default()
         })]
         #[test]
-        fn test_split_requests(size in 1..3_000_000_000u64, min_part_size in 0..16_000_000u64, max_parts in 1..100u16 ) {
-            let res: Vec<_> = split_in_multiple_requests(size, min_part_size, max_parts).collect();
+        fn test_split_requests(offset in 0..1_000_000u64, size in 1..3_000_000_000u64, min_part_size in 1..16_000_000u64, max_parts in 1..100u16 ) {
+            let res: Vec<_> = split_in_multiple_requests(&(offset..offset+size), min_part_size, max_parts).collect();
 
             // there is always at least 1 request
             prop_assert!(!res.is_empty());
@@ -510,19 +513,19 @@ mod tests {
             prop_assert!(res.len() <= max_parts as usize);
 
             // the request sizes add up to total size
-            prop_assert_eq!(res.iter().map(|(_, size)| size).sum::<u64>(), size);
+            prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
 
             // no more than one request smaller than minimum size
-            prop_assert!(res.iter().filter(|(_, size)| *size < min_part_size).count() <= 1);
+            prop_assert!(res.iter().filter(|range| (range.end - range.start) < min_part_size).count() <= 1);
 
             // if there is a request smaller than the minimum size it is because the total size is
             // smaller than minimum request size
-            if res.iter().any(|(_, size)| *size < min_part_size) {
+            if res.iter().any(|range| (range.end - range.start) < min_part_size) {
                 prop_assert!(size < min_part_size)
             }
 
             // there are only two request sizes
-            let counts = res.iter().map(|(_, size)| size).counts();
+            let counts = res.iter().map(|range| (range.end - range.start)).counts();
             prop_assert!(counts.len() <= 2); // only last element is smaller
             if counts.len() > 1 {
                 // the smaller request size happens only once
@@ -532,7 +535,7 @@ mod tests {
             // there are no holes in the requests, nor bytes that are requested more than once
             let mut iter = res.iter();
             iter.next();
-            prop_assert!(res.iter().zip(iter).all(|((off1,size),(off2,_))| off1 + size == *off2));
+            prop_assert!(res.iter().zip(iter).all(|(r1,r2)| r1.end == r2.start));
         }
 
     }
@@ -540,28 +543,32 @@ mod tests {
     #[test]
     fn test_split_examples() {
         assert_eq!(
-            split_in_multiple_requests(4, 4, 100,).collect::<Vec<_>>(),
-            vec![(0, 4)]
+            split_in_multiple_requests(&(0..4), 4, 100,).collect::<Vec<_>>(),
+            vec![0..4]
         );
         assert_eq!(
-            split_in_multiple_requests(3, 1, 100,).collect::<Vec<_>>(),
-            vec![(0, 1), (1, 1), (2, 1),]
+            split_in_multiple_requests(&(10..14), 4, 100,).collect::<Vec<_>>(),
+            vec![10..14]
         );
         assert_eq!(
-            split_in_multiple_requests(6, 5, 100,).collect::<Vec<_>>(),
-            vec![(0, 6)]
+            split_in_multiple_requests(&(20..23), 1, 100,).collect::<Vec<_>>(),
+            vec![(20..21), (21..22), (22..23),]
         );
         assert_eq!(
-            split_in_multiple_requests(11, 5, 100,).collect::<Vec<_>>(),
-            vec![(0, 5), (5, 6)]
+            split_in_multiple_requests(&(10..16), 5, 100,).collect::<Vec<_>>(),
+            vec![(10..16)]
         );
         assert_eq!(
-            split_in_multiple_requests(13, 5, 2,).collect::<Vec<_>>(),
-            vec![(0, 6), (6, 7)]
+            split_in_multiple_requests(&(10..21), 5, 100,).collect::<Vec<_>>(),
+            vec![(10..15), (15..21)]
         );
         assert_eq!(
-            split_in_multiple_requests(100, 5, 3,).collect::<Vec<_>>(),
-            vec![(0, 33), (33, 33), (66, 34)]
+            split_in_multiple_requests(&(0..13), 5, 2,).collect::<Vec<_>>(),
+            vec![(0..6), (6..13)]
+        );
+        assert_eq!(
+            split_in_multiple_requests(&(0..100), 5, 3,).collect::<Vec<_>>(),
+            vec![(0..33), (33..66), (66..100)]
         );
     }
 }

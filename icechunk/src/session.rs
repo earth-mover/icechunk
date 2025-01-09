@@ -3,6 +3,7 @@ use std::{
     collections::HashSet,
     future::{ready, Future},
     iter,
+    ops::Range,
     pin::Pin,
     sync::Arc,
 };
@@ -28,8 +29,8 @@ use crate::{
             SnapshotProperties, UserAttributesSnapshot, ZarrArrayMetadata,
         },
         transaction_log::TransactionLog,
-        ByteRange, ChunkIndices, IcechunkFormatError, ManifestId, NodeId, ObjectId, Path,
-        SnapshotId,
+        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, ManifestId, NodeId,
+        ObjectId, Path, SnapshotId,
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError},
@@ -458,9 +459,10 @@ impl Session {
     ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
     {
         match self.get_chunk_ref(path, coords).await? {
-            Some(ChunkPayload::Ref(ChunkRef { id, .. })) => {
+            Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
+                let byte_range = construct_valid_byte_range(&byte_range, offset, length);
                 Ok(Some(
                     async move {
                         // TODO: we don't have a way to distinguish if we want to pass a range or not
@@ -1105,7 +1107,7 @@ pub fn construct_valid_byte_range(
     request: &ByteRange,
     chunk_offset: u64,
     chunk_length: u64,
-) -> ByteRange {
+) -> Range<ChunkOffset> {
     // TODO: error for offset<0
     // TODO: error if request.start > offset + length
     match request {
@@ -1113,16 +1115,21 @@ pub fn construct_valid_byte_range(
             let new_start =
                 min(chunk_offset + req_start, chunk_offset + chunk_length - 1);
             let new_end = min(chunk_offset + req_end, chunk_offset + chunk_length);
-            ByteRange::Bounded(new_start..new_end)
+            new_start..new_end
         }
         ByteRange::From(n) => {
             let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
-            ByteRange::Bounded(new_start..chunk_offset + chunk_length)
+            new_start..chunk_offset + chunk_length
+        }
+        ByteRange::Until(n) => {
+            let new_end = chunk_offset + chunk_length;
+            let new_start = new_end - n;
+            new_start..new_end
         }
         ByteRange::Last(n) => {
             let new_end = chunk_offset + chunk_length;
             let new_start = new_end - n;
-            ByteRange::Bounded(new_start..new_end)
+            new_start..new_end
         }
     }
 }

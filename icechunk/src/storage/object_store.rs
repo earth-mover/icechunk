@@ -1,5 +1,5 @@
 use crate::{
-    format::{ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId},
+    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
@@ -10,8 +10,8 @@ use futures::{
 };
 use object_store::{
     local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath, Attribute,
-    AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
-    PutOptions, PutPayload, UpdateVersion,
+    AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
+    PutPayload, UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -34,20 +34,6 @@ use super::{
     StorageError, StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
     SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
-
-// Get Range is object_store specific, keep it with this module
-impl From<&ByteRange> for Option<GetRange> {
-    fn from(value: &ByteRange) -> Self {
-        match value {
-            ByteRange::Bounded(Range { start, end }) => {
-                Some(GetRange::Bounded(*start as usize..*end as usize))
-            }
-            ByteRange::From(start) if *start == 0u64 => None,
-            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
-            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ObjectStorageConfig {
@@ -224,18 +210,17 @@ impl ObjectStorage {
         &self,
         settings: &Settings,
         path: &ObjectPath,
-        size: u64,
+        range: &Range<u64>,
     ) -> StorageResult<impl AsyncRead> {
         let mut results = split_in_multiple_requests(
-            size,
+            range,
             settings.concurrency.min_concurrent_request_size.get(),
             settings.concurrency.max_concurrent_requests_for_object.get(),
         )
-        .map(|(req_offset, req_size)| async move {
+        .map(|range| async move {
             let store = Arc::clone(&self.store);
-            let range = Some(GetRange::from(
-                req_offset as usize..req_offset as usize + req_size as usize,
-            ));
+            let usize_range = range.start as usize..range.end as usize;
+            let range = Some(usize_range.into());
             let opts = GetOptions { range, ..Default::default() };
             let path = path.clone();
             store.get_opts(&path, opts).await
@@ -394,7 +379,7 @@ impl Storage for ObjectStorage {
         size: u64,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_manifest_path(id);
-        Ok(Box::new(self.get_object_concurrently(settings, &path, size).await?))
+        Ok(Box::new(self.get_object_concurrently(settings, &path, &(0..size)).await?))
     }
 
     async fn fetch_manifest_single_request(
@@ -462,17 +447,16 @@ impl Storage for ObjectStorage {
 
     async fn fetch_chunk(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: &ChunkId,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_chunk_path(id);
-        // TODO: shall we split `range` into multiple ranges and use get_ranges?
-        // I can't tell that `get_range` does splitting
-        let options =
-            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
-        let chunk = self.store.get_opts(&path, options).await?.bytes().await?;
-        Ok(chunk)
+        let mut read = self.get_object_concurrently(settings, &path, range).await?;
+        // add some extra space to the buffer to optimize conversion to bytes
+        let mut buffer = Vec::with_capacity((range.end - range.start + 16) as usize);
+        tokio::io::copy(&mut read, &mut buffer).await?;
+        Ok(buffer.into())
     }
 
     async fn write_chunk(

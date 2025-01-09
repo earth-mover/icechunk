@@ -18,7 +18,8 @@ from zarr.core.common import JSON, ZarrFormat
 from zarr.core.group import GroupMetadata
 from zarr.core.sync import sync
 from zarr.errors import ContainsArrayError, ContainsGroupError
-from zarr.storage import StorePath, make_store_path
+from zarr.storage import StorePath
+from zarr.storage._common import make_store_path
 
 
 @pytest.fixture(params=["memory"])
