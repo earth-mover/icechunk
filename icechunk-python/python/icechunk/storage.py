@@ -188,6 +188,6 @@ def azure_storage(
     return Storage.new_azure_blob(
         container=container,
         prefix=prefix,
-        config=config,
         credentials=credentials,
+        config=config,
     )

@@ -9,8 +9,10 @@ use futures::Stream;
 use itertools::Either;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::task::JoinError;
 
 use crate::{
+    asset_manager::AssetManager,
     config::{Credentials, RepositoryConfig},
     format::{
         snapshot::{Snapshot, SnapshotMetadata},
@@ -23,7 +25,7 @@ use crate::{
     session::Session,
     storage::{self, ETag},
     virtual_chunks::{ContainerName, VirtualChunkContainer, VirtualChunkResolver},
-    MemCachingStorage, Storage, StorageError,
+    Storage, StorageError,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +68,10 @@ pub enum RepositoryError {
     ConfigDeserializationError(#[from] serde_yml::Error),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+    #[error("I/O error `{0}`")]
+    IOError(#[from] std::io::Error),
+    #[error("a concurrent task failed {0}")]
+    ConcurrencyError(#[from] JoinError),
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
@@ -76,6 +82,7 @@ pub struct Repository {
     storage_settings: storage::Settings,
     config_etag: ETag,
     storage: Arc<dyn Storage + Send + Sync>,
+    asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
 }
 
@@ -91,23 +98,23 @@ impl Repository {
 
         let config = config.unwrap_or_default();
         let overwrite_refs = config.unsafe_overwrite_refs;
-
         let storage_c = Arc::clone(&storage);
         let storage_settings = config
             .storage
             .as_ref()
             .cloned()
             .unwrap_or_else(|| storage.default_settings());
+
         let handle1 = tokio::spawn(async move {
+            // TODO: we could cache this first snapshot
+            let asset_manager = AssetManager::new_no_cache(
+                Arc::clone(&storage_c),
+                storage_settings.clone(),
+            );
             // On create we need to create the default branch
-            let new_snapshot = Snapshot::empty();
-            let new_snapshot_id = new_snapshot.metadata.id.clone();
-            storage_c
-                .write_snapshot(
-                    &storage_settings,
-                    new_snapshot_id.clone(),
-                    Arc::new(new_snapshot),
-                )
+            let new_snapshot = Arc::new(Snapshot::empty());
+            let new_snapshot_id = asset_manager
+                .write_snapshot(new_snapshot, config.compression.level)
                 .await?;
 
             update_branch(
@@ -130,10 +137,8 @@ impl Repository {
             Ok::<_, RepositoryError>(etag)
         });
 
-        #[allow(clippy::expect_used)]
-        handle1.await.expect("Error initializing repo")?;
-        #[allow(clippy::expect_used)]
-        let config_etag = handle2.await.expect("Error fetching repo config")?;
+        handle1.await??;
+        let config_etag = handle2.await??;
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
@@ -201,8 +206,19 @@ impl Repository {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| storage.default_settings());
-        let storage = Repository::add_in_mem_asset_caching(storage);
-        Ok(Self { config, config_etag, storage, storage_settings, virtual_resolver })
+        let asset_manager = Arc::new(AssetManager::new_with_config(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            &config.caching,
+        ));
+        Ok(Self {
+            config,
+            config_etag,
+            storage,
+            storage_settings,
+            virtual_resolver,
+            asset_manager,
+        })
     }
 
     pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
@@ -213,15 +229,6 @@ impl Repository {
             Err(RefError::RefNotFound(_)) => Ok(false),
             Err(err) => Err(err.into()),
         }
-    }
-
-    /// Provide a reasonable amount of caching for snapshots, manifests and other assets.
-    /// We recommend always using some level of asset caching.
-    pub fn add_in_mem_asset_caching(
-        storage: Arc<dyn Storage + Send + Sync>,
-    ) -> Arc<dyn Storage + Send + Sync> {
-        // TODO: allow tuning once we experiment with different configurations
-        Arc::new(MemCachingStorage::new(storage, 2, 2, 0, 2, 0))
     }
 
     pub async fn fetch_config(
@@ -273,13 +280,16 @@ impl Repository {
         &self.storage
     }
 
+    pub fn asset_manager(&self) -> &Arc<AssetManager> {
+        &self.asset_manager
+    }
+
     /// Returns the sequence of parents of the current session, in order of latest first.
     pub async fn ancestry(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
-        let parent =
-            self.storage.fetch_snapshot(&self.storage_settings, snapshot_id).await?;
+        let parent = self.asset_manager.fetch_snapshot(snapshot_id).await?;
         let last = parent.metadata.clone();
         let it = if parent.short_term_history.len() < parent.total_parents as usize {
             // FIXME: implement splitting of snapshot history
@@ -435,6 +445,7 @@ impl Repository {
             self.config.clone(),
             self.storage_settings.clone(),
             self.storage.clone(),
+            Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
             snapshot_id,
         );
@@ -450,6 +461,7 @@ impl Repository {
             self.config.clone(),
             self.storage_settings.clone(),
             self.storage.clone(),
+            Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot,

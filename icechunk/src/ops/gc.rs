@@ -5,10 +5,12 @@ use futures::{stream, Stream, StreamExt, TryStreamExt};
 use tokio::pin;
 
 use crate::{
+    asset_manager::AssetManager,
     format::{
         manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
     },
     refs::{list_refs, RefError},
+    repository::RepositoryError,
     storage::{self, ListInfo},
     Storage, StorageError,
 };
@@ -132,6 +134,8 @@ pub enum GCError {
     Ref(#[from] RefError),
     #[error("storage error {0}")]
     Storage(#[from] StorageError),
+    #[error("repository error {0}")]
+    Repository(#[from] RepositoryError),
     #[error("format error {0}")]
     FormatError(#[from] IcechunkFormatError),
 }
@@ -141,6 +145,7 @@ pub type GCResult<A> = Result<A, GCError>;
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    asset_manager: &AssetManager,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
     // TODO: this function could have much more parallelism
@@ -149,7 +154,8 @@ pub async fn garbage_collect(
     }
 
     let all_snaps =
-        pointed_snapshots(storage, storage_settings, &config.extra_roots).await?;
+        pointed_snapshots(storage, storage_settings, asset_manager, &config.extra_roots)
+            .await?;
 
     // FIXME: add attribute files
     // FIXME: add transaction log files
@@ -159,7 +165,7 @@ pub async fn garbage_collect(
 
     pin!(all_snaps);
     while let Some(snap_id) = all_snaps.try_next().await? {
-        let snap = storage.fetch_snapshot(storage_settings, &snap_id).await?;
+        let snap = asset_manager.fetch_snapshot(&snap_id).await?;
         if config.deletes_snapshots() {
             keep_snapshots.insert(snap_id);
         }
@@ -176,9 +182,8 @@ pub async fn garbage_collect(
                         manifest_id: manifest_id.clone(),
                     }
                 })?;
-                let manifest = storage
-                    .fetch_manifests(storage_settings, manifest_id, manifest_info.size)
-                    .await?;
+                let manifest =
+                    asset_manager.fetch_manifest(manifest_id, manifest_info.size).await?;
                 let chunk_ids =
                     manifest.chunks().values().filter_map(|payload| match payload {
                         ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
@@ -227,12 +232,13 @@ async fn all_roots<'a>(
 async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,
+    asset_manager: &'a AssetManager,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
     let roots = all_roots(storage, storage_settings, extra_roots).await?;
     Ok(roots
         .and_then(move |snap_id| async move {
-            let snap = storage.fetch_snapshot(storage_settings, &snap_id).await?;
+            let snap = asset_manager.fetch_snapshot(&snap_id).await?;
             // FIXME: this should be global ancestry, not local
             let parents = snap.local_ancestry().map(|parent| parent.id);
             Ok(stream::iter(iter::once(snap_id).chain(parents))

@@ -7,11 +7,11 @@ mod store;
 mod streams;
 
 use config::{
-    PyAzureCredentials, PyAzureStaticCredentials, PyCredentials, PyGcsCredentials,
+    PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
+    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsCredentials,
     PyGcsStaticCredentials, PyObjectStoreConfig, PyRepositoryConfig, PyS3Credentials,
-    PyS3Options, PyS3StaticCredentials, PyStorage, PyStorageCompressionAlgorithm,
-    PyStorageCompressionSettings, PyStorageConcurrencySettings, PyStorageSettings,
-    PyVirtualChunkContainer, PythonCredentialsFetcher,
+    PyS3Options, PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyStorageSettings, PyVirtualChunkContainer, PythonCredentialsFetcher,
 };
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
@@ -51,8 +51,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyObjectStoreConfig>()?;
     m.add_class::<PyStorage>()?;
     m.add_class::<PyVirtualChunkContainer>()?;
-    m.add_class::<PyStorageCompressionAlgorithm>()?;
-    m.add_class::<PyStorageCompressionSettings>()?;
+    m.add_class::<PyCompressionAlgorithm>()?;
+    m.add_class::<PyCompressionConfig>()?;
+    m.add_class::<PyCachingConfig>()?;
     m.add_class::<PyStorageConcurrencySettings>()?;
     m.add_class::<PyStorageSettings>()?;
 

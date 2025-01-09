@@ -31,6 +31,45 @@ pub enum ObjectStoreConfig {
     },
 }
 
+#[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize, Clone)]
+pub enum CompressionAlgorithm {
+    #[default]
+    Zstd,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct CompressionConfig {
+    pub algorithm: CompressionAlgorithm,
+    pub level: u8,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self { algorithm: Default::default(), level: 1 }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct CachingConfig {
+    pub snapshots_cache_size: u16,
+    pub manifests_cache_size: u16,
+    pub transactions_cache_size: u16,
+    pub attributes_cache_size: u16,
+    pub chunks_cache_size: u16,
+}
+
+impl Default for CachingConfig {
+    fn default() -> Self {
+        Self {
+            snapshots_cache_size: 2,
+            manifests_cache_size: 2,
+            transactions_cache_size: 0,
+            attributes_cache_size: 2,
+            chunks_cache_size: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifst
@@ -43,6 +82,9 @@ pub struct RepositoryConfig {
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
     pub get_partial_values_concurrency: u16,
+
+    pub compression: CompressionConfig,
+    pub caching: CachingConfig,
 
     // If not set it will use the Storage implementation default
     pub storage: Option<storage::Settings>,
@@ -57,6 +99,8 @@ impl Default for RepositoryConfig {
             unsafe_overwrite_refs: false,
             get_partial_values_concurrency: 10,
             virtual_chunk_containers: mk_default_containers(),
+            compression: CompressionConfig::default(),
+            caching: CachingConfig::default(),
             storage: None,
         }
     }

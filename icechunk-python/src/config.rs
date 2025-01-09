@@ -10,11 +10,11 @@ use std::{
 
 use icechunk::{
     config::{
-        AzureCredentials, AzureStaticCredentials, Credentials, CredentialsFetcher,
-        GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options,
-        S3StaticCredentials,
+        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
+        CompressionConfig, Credentials, CredentialsFetcher, GcsCredentials,
+        GcsStaticCredentials, S3Credentials, S3Options, S3StaticCredentials,
     },
-    storage::{self, CompressionAlgorithm, CompressionSettings, ConcurrencySettings},
+    storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
     ObjectStoreConfig, RepositoryConfig, Storage,
 };
@@ -361,46 +361,112 @@ impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
     }
 }
 
-#[pyclass(name = "StorageCompressionAlgorithm", eq, eq_int)]
+#[pyclass(name = "CompressionAlgorithm", eq, eq_int)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PyStorageCompressionAlgorithm {
+pub enum PyCompressionAlgorithm {
     Zstd,
 }
 
-impl From<CompressionAlgorithm> for PyStorageCompressionAlgorithm {
+#[pymethods]
+impl PyCompressionAlgorithm {
+    #[staticmethod]
+    /// Create a default `CompressionAlgorithm` instance
+    fn default() -> Self {
+        CompressionAlgorithm::default().into()
+    }
+}
+
+impl From<CompressionAlgorithm> for PyCompressionAlgorithm {
     fn from(value: CompressionAlgorithm) -> Self {
         match value {
-            CompressionAlgorithm::Zstd => PyStorageCompressionAlgorithm::Zstd,
+            CompressionAlgorithm::Zstd => PyCompressionAlgorithm::Zstd,
         }
     }
 }
 
-impl From<PyStorageCompressionAlgorithm> for CompressionAlgorithm {
-    fn from(value: PyStorageCompressionAlgorithm) -> Self {
+impl From<PyCompressionAlgorithm> for CompressionAlgorithm {
+    fn from(value: PyCompressionAlgorithm) -> Self {
         match value {
-            PyStorageCompressionAlgorithm::Zstd => CompressionAlgorithm::Zstd,
+            PyCompressionAlgorithm::Zstd => CompressionAlgorithm::Zstd,
         }
     }
 }
 
-#[pyclass(name = "StorageCompressionSettings", eq)]
+#[pyclass(name = "CompressionConfig", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PyStorageCompressionSettings {
+pub struct PyCompressionConfig {
     #[pyo3(get, set)]
-    pub algorithm: PyStorageCompressionAlgorithm,
+    pub algorithm: PyCompressionAlgorithm,
     #[pyo3(get, set)]
     pub level: u8,
 }
 
-impl From<CompressionSettings> for PyStorageCompressionSettings {
-    fn from(value: CompressionSettings) -> Self {
+#[pymethods]
+impl PyCompressionConfig {
+    #[staticmethod]
+    /// Create a default `CompressionConfig` instance
+    fn default() -> Self {
+        CompressionConfig::default().into()
+    }
+}
+
+impl From<CompressionConfig> for PyCompressionConfig {
+    fn from(value: CompressionConfig) -> Self {
         Self { algorithm: value.algorithm.into(), level: value.level }
     }
 }
 
-impl From<PyStorageCompressionSettings> for CompressionSettings {
-    fn from(value: PyStorageCompressionSettings) -> Self {
+impl From<PyCompressionConfig> for CompressionConfig {
+    fn from(value: PyCompressionConfig) -> Self {
         Self { algorithm: value.algorithm.into(), level: value.level }
+    }
+}
+
+#[pyclass(name = "CachingConfig", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyCachingConfig {
+    #[pyo3(get, set)]
+    pub snapshots_cache_size: u16,
+    #[pyo3(get, set)]
+    pub manifests_cache_size: u16,
+    #[pyo3(get, set)]
+    pub transactions_cache_size: u16,
+    #[pyo3(get, set)]
+    pub attributes_cache_size: u16,
+    #[pyo3(get, set)]
+    pub chunks_cache_size: u16,
+}
+
+#[pymethods]
+impl PyCachingConfig {
+    #[staticmethod]
+    /// Create a default `CachingConfig` instance
+    fn default() -> Self {
+        CachingConfig::default().into()
+    }
+}
+
+impl From<PyCachingConfig> for CachingConfig {
+    fn from(value: PyCachingConfig) -> Self {
+        Self {
+            snapshots_cache_size: value.snapshots_cache_size,
+            manifests_cache_size: value.manifests_cache_size,
+            transactions_cache_size: value.transactions_cache_size,
+            attributes_cache_size: value.attributes_cache_size,
+            chunks_cache_size: value.chunks_cache_size,
+        }
+    }
+}
+
+impl From<CachingConfig> for PyCachingConfig {
+    fn from(value: CachingConfig) -> Self {
+        Self {
+            snapshots_cache_size: value.snapshots_cache_size,
+            manifests_cache_size: value.manifests_cache_size,
+            transactions_cache_size: value.transactions_cache_size,
+            attributes_cache_size: value.attributes_cache_size,
+            chunks_cache_size: value.chunks_cache_size,
+        }
     }
 }
 
@@ -436,25 +502,17 @@ impl From<PyStorageConcurrencySettings> for ConcurrencySettings {
 pub struct PyStorageSettings {
     #[pyo3(get, set)]
     pub concurrency: PyStorageConcurrencySettings,
-    #[pyo3(get, set)]
-    pub compression: PyStorageCompressionSettings,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
     fn from(value: storage::Settings) -> Self {
-        Self {
-            concurrency: value.concurrency.into(),
-            compression: value.compression.into(),
-        }
+        Self { concurrency: value.concurrency.into() }
     }
 }
 
 impl From<PyStorageSettings> for storage::Settings {
     fn from(value: PyStorageSettings) -> Self {
-        Self {
-            concurrency: value.concurrency.into(),
-            compression: value.compression.into(),
-        }
+        Self { concurrency: value.concurrency.into() }
     }
 }
 
@@ -468,6 +526,10 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub get_partial_values_concurrency: u16,
     #[pyo3(get, set)]
+    pub compression: PyCompressionConfig,
+    #[pyo3(get, set)]
+    pub caching: PyCachingConfig,
+    #[pyo3(get, set)]
     pub storage: Option<PyStorageSettings>,
     #[pyo3(get, set)]
     pub virtual_chunk_containers: HashMap<String, PyVirtualChunkContainer>,
@@ -480,6 +542,8 @@ impl From<PyRepositoryConfig> for RepositoryConfig {
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             storage: value.storage.map(|s| s.into()),
+            compression: value.compression.into(),
+            caching: value.caching.into(),
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()
@@ -496,6 +560,8 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             storage: value.storage.map(|s| s.into()),
+            compression: value.compression.into(),
+            caching: value.caching.into(),
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()
@@ -587,18 +653,18 @@ impl PyStorage {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (container, prefix, config, credentials=None))]
+    #[pyo3(signature = (container, prefix, credentials=None, *, config=None))]
     pub fn new_azure_blob(
         container: String,
         prefix: String,
-        config: HashMap<String, String>,
         credentials: Option<PyAzureCredentials>,
+        config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_azure_blob_storage(
             container,
             prefix,
-            config,
             credentials.map(|cred| cred.into()),
+            config,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 

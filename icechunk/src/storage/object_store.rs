@@ -1,11 +1,6 @@
 use crate::{
-    format::{
-        attributes::AttributesTable, format_constants, manifest::Manifest,
-        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
-    },
+    format::{ByteRange, ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
-    storage::CompressionAlgorithm,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -31,7 +26,7 @@ use std::{
     },
 };
 use tokio::io::AsyncRead;
-use tokio_util::{compat::FuturesAsyncReadCompatExt, io::SyncIoBridge};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
 use super::{
@@ -254,6 +249,34 @@ impl ObjectStorage {
 
         Ok(res.err_into().into_async_read().compat())
     }
+
+    async fn get_object_reader(
+        &self,
+        _settings: &Settings,
+        path: &ObjectPath,
+    ) -> StorageResult<impl AsyncRead> {
+        Ok(self
+            .store
+            .get(path)
+            .await?
+            .into_stream()
+            .err_into()
+            .into_async_read()
+            .compat())
+    }
+
+    fn metadata_to_attributes(&self, metadata: Vec<(String, String)>) -> Attributes {
+        if self.supports_metadata() {
+            Attributes::from_iter(metadata.into_iter().map(|(key, val)| {
+                (
+                    Attribute::Metadata(std::borrow::Cow::Owned(key)),
+                    AttributeValue::from(val),
+                )
+            }))
+        } else {
+            Attributes::new()
+        }
+    }
 }
 
 impl private::Sealed for ObjectStorage {}
@@ -283,7 +306,6 @@ impl Storage for ObjectStorage {
                     min_concurrent_request_size: NonZeroU64::new(4 * 1024)
                         .unwrap_or(NonZeroU64::MIN),
                 },
-                ..base
             },
             "memory" => Settings {
                 concurrency: ConcurrencySettings {
@@ -293,7 +315,6 @@ impl Storage for ObjectStorage {
                     min_concurrent_request_size: NonZeroU64::new(1)
                         .unwrap_or(NonZeroU64::MIN),
                 },
-                ..base
             },
 
             _ => base,
@@ -359,195 +380,80 @@ impl Storage for ObjectStorage {
 
     async fn fetch_snapshot(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> Result<Arc<Snapshot>, StorageError> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_snapshot_path(id);
-        let bytes = self.store.get(&path).await?.bytes().await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
-    async fn fetch_attributes(
-        &self,
-        _settings: &Settings,
-        _id: &AttributesId,
-    ) -> Result<Arc<AttributesTable>, StorageError> {
-        todo!();
-    }
-
-    async fn fetch_manifests(
+    async fn fetch_manifest_splitting(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> Result<Arc<Manifest>, StorageError> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_manifest_path(id);
-        let object_read = self.get_object_concurrently(settings, &path, size).await?;
-        let manifest = tokio::task::spawn_blocking(move || {
-            let sync_read = SyncIoBridge::new(object_read);
-            let decompressor = zstd::stream::Decoder::new(sync_read)?;
-            rmp_serde::from_read(decompressor).map_err(StorageError::MsgPackDecodeError)
-        })
-        .await??;
-        Ok(Arc::new(manifest))
+        Ok(Box::new(self.get_object_concurrently(settings, &path, size).await?))
+    }
+
+    async fn fetch_manifest_single_request(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let path = self.get_manifest_path(id);
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
     async fn fetch_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_transaction_path(id);
-        let bytes = self.store.get(&path).await?.bytes().await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
     async fn write_snapshot(
         &self,
         _settings: &Settings,
         id: SnapshotId,
-        snapshot: Arc<Snapshot>,
-    ) -> Result<(), StorageError> {
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
         let path = self.get_snapshot_path(&id);
-        let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
-        let snapshot_version_attribute = if self.config.url.starts_with("azure") {
-            let azure_snapshot_version_metadata_key =
-                format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY
-                    .replace("-", "_");
-            Attribute::Metadata(azure_snapshot_version_metadata_key.into())
-        } else {
-            Attribute::Metadata(std::borrow::Cow::Borrowed(
-                format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
-            ))
-        };
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    snapshot_version_attribute,
-                    AttributeValue::from(
-                        snapshot.icechunk_snapshot_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
-    async fn write_attributes(
+    async fn write_manifest(
         &self,
         _settings: &Settings,
-        _id: AttributesId,
-        _table: Arc<AttributesTable>,
-    ) -> Result<(), StorageError> {
-        todo!()
-    }
-
-    async fn write_manifests(
-        &self,
-        settings: &Settings,
         id: ManifestId,
-        manifest: Arc<Manifest>,
-    ) -> Result<u64, StorageError> {
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
         let path = self.get_manifest_path(&id);
-        let manifest_c = Arc::clone(&manifest);
-        debug_assert_eq!(settings.compression.algorithm, CompressionAlgorithm::Zstd);
-        let compression_level = settings.compression.level as i32;
-        let buffer = tokio::task::spawn_blocking(move || {
-            let buffer = Vec::new(); // TODO: initialize capacity
-            let mut compressor = zstd::stream::Encoder::new(buffer, compression_level)?;
-            rmp_serde::encode::write(&mut compressor, manifest_c.as_ref())
-                .map_err(StorageError::MsgPackEncodeError)?;
-            compressor.finish().map_err(StorageError::IOError)
-        })
-        .await??;
-
-        let manifest_version_attribute = if self.config.url.starts_with("azure") {
-            let azure_manifest_version_metadata_key =
-                format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY
-                    .replace("-", "_");
-            Attribute::Metadata(azure_manifest_version_metadata_key.into())
-        } else {
-            Attribute::Metadata(std::borrow::Cow::Borrowed(
-                format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
-            ))
-        };
-
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    manifest_version_attribute,
-                    AttributeValue::from(
-                        manifest.icechunk_manifest_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
-        let len = buffer.len() as u64;
         // FIXME: use multipart
-        self.store.put_opts(&path, buffer.into(), options).await?;
-        Ok(len)
+        self.store.put_opts(&path, bytes.into(), options).await?;
+        Ok(())
     }
 
     async fn write_transaction_log(
         &self,
         _settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_transaction_path(&id);
-        let bytes = rmp_serde::to_vec(log.as_ref())?;
-        let transaction_log_version_attribute = if self.config.url.starts_with("azure") {
-            let azure_transaction_log_version_metadata_key =
-                format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY
-                    .replace("-", "_");
-            Attribute::Metadata(azure_transaction_log_version_metadata_key.into())
-        } else {
-            Attribute::Metadata(std::borrow::Cow::Borrowed(
-                format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
-            ))
-        };
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    transaction_log_version_attribute,
-                    AttributeValue::from(
-                        log.icechunk_transaction_log_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;

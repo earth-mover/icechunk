@@ -14,9 +14,9 @@ use crate::metadata::{
 };
 
 use super::{
-    format_constants, manifest::ManifestRef, AttributesId, ChunkIndices,
-    IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
-    ObjectId, Path, SnapshotId, TableOffset,
+    manifest::ManifestRef, AttributesId, ChunkIndices, IcechunkFormatError,
+    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
+    SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,9 +144,6 @@ pub struct AttributeFileInfo {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
-    pub icechunk_snapshot_format_version: IcechunkFormatVersion,
-    pub icechunk_snapshot_format_flags: BTreeMap<String, rmpv::Value>,
-
     pub manifest_files: Vec<ManifestFileInfo>,
     pub attribute_files: Vec<AttributeFileInfo>,
 
@@ -193,9 +190,6 @@ impl Snapshot {
         let started_at = Utc::now();
         let properties = properties.unwrap_or_default();
         Self {
-            icechunk_snapshot_format_version:
-                format_constants::LATEST_ICECHUNK_SNAPSHOT_FORMAT,
-            icechunk_snapshot_format_flags: Default::default(),
             manifest_files,
             attribute_files,
             total_parents,
@@ -311,7 +305,10 @@ impl Iterator for NodeIterator {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::format::{manifest::ManifestExtents, IcechunkFormatError};
+    use crate::format::{
+        format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY, manifest::ManifestExtents,
+        IcechunkFormatError,
+    };
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -430,12 +427,12 @@ mod tests {
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
-                format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                format_version: LATEST_ICECHUNK_SPEC_VERSION_BINARY,
                 size: 1_000_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
-                format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                format_version: LATEST_ICECHUNK_SPEC_VERSION_BINARY,
                 size: 1_000_000,
             },
         ];
