@@ -150,8 +150,10 @@ pub enum ByteRange {
     Bounded(Range<ChunkOffset>),
     /// All bytes from the given offset (included) to the end of the object
     From(ChunkOffset),
+    /// The last n bytes in the object
+    Last(ChunkLength),
     /// All bytes up to the last n bytes in the object
-    Until(ChunkLength),
+    Until(ChunkOffset),
 }
 
 impl From<Range<ChunkOffset>> for ByteRange {
@@ -185,6 +187,7 @@ impl ByteRange {
                 bytes.slice(range.start as usize..range.end as usize)
             }
             ByteRange::From(from) => bytes.slice(*from as usize..),
+            ByteRange::Last(n) => bytes.slice(bytes.len() - *n as usize..),
             ByteRange::Until(n) => bytes.slice(0usize..bytes.len() - *n as usize),
         }
     }
@@ -195,6 +198,7 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
         match (start, end) {
             (Some(start), Some(end)) => Self::Bounded(start..end),
             (Some(start), None) => Self::From(start),
+            // NOTE: This is relied upon by zarr python
             (None, Some(end)) => Self::Until(end),
             (None, None) => Self::ALL,
         }

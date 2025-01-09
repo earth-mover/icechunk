@@ -1126,6 +1126,11 @@ pub fn construct_valid_byte_range(
             let new_start = new_end - n;
             new_start..new_end
         }
+        ByteRange::Last(n) => {
+            let new_end = chunk_offset + chunk_length;
+            let new_start = new_end - n;
+            new_start..new_end
+        }
     }
 }
 
