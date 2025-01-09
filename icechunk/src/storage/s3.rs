@@ -285,7 +285,7 @@ pub fn range_to_header(range: &ByteRange) -> Option<String> {
         }
         ByteRange::From(offset) if *offset == 0 => None,
         ByteRange::From(offset) => Some(format!("bytes={}-", offset)),
-        ByteRange::Last(n) => Some(format!("bytes={}-", n)),
+        ByteRange::Until(n) => Some(format!("bytes={}-", n)),
     }
 }
 

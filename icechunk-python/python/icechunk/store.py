@@ -134,12 +134,7 @@ class IcechunkStore(Store, SyncMixin):
         """
 
         try:
-            if byte_range is None:
-                result = await self._store.get(
-                    key,
-                )
-            else:
-                result = await self._store.get(key, _byte_request_to_tuple(byte_range))
+            result = await self._store.get(key, _byte_request_to_tuple(byte_range))
         except KeyError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist

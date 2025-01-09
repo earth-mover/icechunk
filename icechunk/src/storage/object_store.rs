@@ -44,7 +44,7 @@ impl From<&ByteRange> for Option<GetRange> {
             }
             ByteRange::From(start) if *start == 0u64 => None,
             ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
-            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
+            ByteRange::Until(n) => Some(GetRange::Suffix(*n as usize)),
         }
     }
 }

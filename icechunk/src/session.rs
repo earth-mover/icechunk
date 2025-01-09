@@ -1119,7 +1119,7 @@ pub fn construct_valid_byte_range(
             let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
             ByteRange::Bounded(new_start..chunk_offset + chunk_length)
         }
-        ByteRange::Last(n) => {
+        ByteRange::Until(n) => {
             let new_end = chunk_offset + chunk_length;
             let new_start = new_end - n;
             ByteRange::Bounded(new_start..new_end)
