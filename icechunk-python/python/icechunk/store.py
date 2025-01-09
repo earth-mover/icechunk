@@ -21,15 +21,15 @@ if TYPE_CHECKING:
 def _byte_request_to_tuple(
     byte_request: ByteRequest | None,
 ) -> tuple[int | None, int | None]:
-    if byte_request is None:
-        return (None, None)
-    if isinstance(byte_request, RangeByteRequest):
-        return (byte_request.start, byte_request.end)
-    if isinstance(byte_request, OffsetByteRequest):
-        return (byte_request.offset, None)
-    if isinstance(byte_request, SuffixByteRequest):
-        return (None, byte_request.suffix)
-    raise ValueError("Invalid byte request type")
+    match byte_request:
+        case None:
+            return (None, None)
+        case RangeByteRequest(start, end):
+            return (start, end)
+        case OffsetByteRequest(offset):
+            return (offset, None)
+        case SuffixByteRequest(suffix):
+            return (None, suffix)
 
 
 class IcechunkStore(Store, SyncMixin):
