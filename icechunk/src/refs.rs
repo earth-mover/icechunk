@@ -262,10 +262,10 @@ pub async fn list_branches(
     Ok(branches)
 }
 
-async fn branch_history<'a, 'b>(
+async fn branch_history<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-    branch: &'b str,
+    branch: &str,
 ) -> RefResult<impl Stream<Item = RefResult<BranchVersion>> + 'a> {
     let key = branch_root(branch)?;
     let all = storage.ref_versions(storage_settings, key.as_str()).await?;

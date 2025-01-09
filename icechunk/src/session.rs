@@ -1012,9 +1012,9 @@ async fn updated_nodes<'a>(
         .chain(change_set.new_nodes_iterator(manifest_id)))
 }
 
-async fn get_node<'a>(
+async fn get_node(
     asset_manager: &AssetManager,
-    change_set: &'a ChangeSet,
+    change_set: &ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> SessionResult<NodeSnapshot> {
@@ -1035,9 +1035,9 @@ async fn get_node<'a>(
     }
 }
 
-async fn get_existing_node<'a>(
+async fn get_existing_node(
     asset_manager: &AssetManager,
-    change_set: &'a ChangeSet,
+    change_set: &ChangeSet,
     snapshot_id: &SnapshotId,
     path: &Path,
 ) -> SessionResult<NodeSnapshot> {
