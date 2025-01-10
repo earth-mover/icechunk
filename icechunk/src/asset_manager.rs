@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
-use std::{ops::Range, sync::Arc};
+use std::{io::BufReader, ops::Range, sync::Arc};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::SyncIoBridge;
 
@@ -381,22 +381,31 @@ async fn fetch_manifest(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Manifest>> {
-    let mut read =
+    let read =
         storage.fetch_manifest(storage_settings, manifest_id, manifest_size).await?;
+    check_decompress_and_parse(read, format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST)
+        .await
+}
 
-    let compression =
-        check_header(read.as_mut(), format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST)
-            .await?;
-
+async fn check_decompress_and_parse<T>(
+    mut read: Box<dyn AsyncRead + Unpin + Send>,
+    file_type: u8,
+) -> RepositoryResult<Arc<T>>
+where
+    for<'de> T: Send + Deserialize<'de> + 'static,
+{
+    let compression = check_header(read.as_mut(), file_type).await?;
     debug_assert_eq!(compression, 1);
 
-    let manifest = tokio::task::spawn_blocking(move || {
+    let object = tokio::task::spawn_blocking(move || {
         let sync_read = SyncIoBridge::new(read);
-        let decompressor = zstd::stream::Decoder::new(sync_read)?;
+        // We find a perforance impact if we don't buffer here
+        let decompressor =
+            BufReader::with_capacity(1_024, zstd::stream::Decoder::new(sync_read)?);
         rmp_serde::from_read(decompressor).map_err(RepositoryError::DeserializationError)
     })
     .await??;
-    Ok(Arc::new(manifest))
+    Ok(Arc::new(object))
 }
 
 async fn write_new_snapshot(
@@ -446,21 +455,9 @@ async fn fetch_snapshot(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Snapshot>> {
-    let mut read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
-
-    let compression =
-        check_header(read.as_mut(), format_constants::ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT)
-            .await?;
-
-    debug_assert_eq!(compression, 1);
-
-    let snapshot = tokio::task::spawn_blocking(move || {
-        let sync_read = SyncIoBridge::new(read);
-        let decompressor = zstd::stream::Decoder::new(sync_read)?;
-        rmp_serde::from_read(decompressor).map_err(RepositoryError::DeserializationError)
-    })
-    .await??;
-    Ok(Arc::new(snapshot))
+    let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
+    check_decompress_and_parse(read, format_constants::ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT)
+        .await
 }
 
 async fn write_new_tx_log(
@@ -512,24 +509,13 @@ async fn fetch_transaction_log(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<TransactionLog>> {
-    let mut read =
-        storage.fetch_transaction_log(storage_settings, transaction_id).await?;
+    let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
 
-    let compression = check_header(
-        read.as_mut(),
+    check_decompress_and_parse(
+        read,
         format_constants::ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG,
     )
-    .await?;
-
-    debug_assert_eq!(compression, 1);
-
-    let transaction = tokio::task::spawn_blocking(move || {
-        let sync_read = SyncIoBridge::new(read);
-        let decompressor = zstd::stream::Decoder::new(sync_read)?;
-        rmp_serde::from_read(decompressor).map_err(RepositoryError::DeserializationError)
-    })
-    .await??;
-    Ok(Arc::new(transaction))
+    .await
 }
 
 #[cfg(test)]
