@@ -193,7 +193,7 @@ impl S3Storage {
         let client = self.get_client().await;
         let mut results = split_in_multiple_requests(
             range,
-            settings.concurrency.min_concurrent_request_size.get(),
+            settings.concurrency.ideal_concurrent_request_size.get(),
             settings.concurrency.max_concurrent_requests_for_object.get(),
         )
         .map(|range| async move {

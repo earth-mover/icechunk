@@ -14,6 +14,7 @@ use aws_sdk_s3::{
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
+use itertools::Itertools;
 use object_store::ObjectStorageConfig;
 use s3::S3Storage;
 use serde::{Deserialize, Serialize};
@@ -99,7 +100,7 @@ pub type ETag = String;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: NonZeroU16,
-    pub min_concurrent_request_size: NonZeroU64,
+    pub ideal_concurrent_request_size: NonZeroU64,
 }
 
 // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
@@ -111,7 +112,7 @@ impl Default for ConcurrencySettings {
         Self {
             max_concurrent_requests_for_object: NonZeroU16::new(18)
                 .unwrap_or(NonZeroU16::MIN),
-            min_concurrent_request_size: NonZeroU64::new(12 * 1024 * 1024)
+            ideal_concurrent_request_size: NonZeroU64::new(12 * 1024 * 1024)
                 .unwrap_or(NonZeroU64::MIN),
         }
     }
@@ -329,28 +330,38 @@ where
 
 /// Split an object request into multiple byte range requests
 ///
-/// Returns tuples of Range for each request. It tries to generate the maximum number of
-/// requests possible, not generating more than `max_parts` requests, and each request not being
-/// smaller than `min_part_size`. Note that the size of the last request is >= the preceding one.
+/// Returns tuples of Range for each request.
+///
+/// It generates requests that are as similar as possible in size, this means no more than 1 byte
+/// difference between the requests.
+///
+/// It tries to generate ceil(size/ideal_req_size) requests, but never exceeds max_requests.
+///
+/// ideal_req_size and max_requests must be > 0
 fn split_in_multiple_requests(
     range: &Range<u64>,
-    min_part_size: u64,
-    max_parts: u16,
+    ideal_req_size: u64,
+    max_requests: u16,
 ) -> impl Iterator<Item = Range<u64>> {
-    let size = range.end - range.start;
-    let min_part_size = max(min_part_size, 1);
-    let num_parts = size / min_part_size;
-    let num_parts = max(1, min(num_parts, max_parts as u64));
-    let equal_parts = num_parts - 1;
-    let equal_parts_size = size / num_parts;
-    let last_part_size = size - equal_parts * equal_parts_size;
-    let equal_requests = iter::successors(
-        Some(range.start..range.start + equal_parts_size),
-        move |range| Some(range.end..range.end + equal_parts_size),
-    );
-    let last_part_offset = range.start + equal_parts * equal_parts_size;
-    let last_request = iter::once(last_part_offset..last_part_offset + last_part_size);
-    equal_requests.take(equal_parts as usize).chain(last_request)
+    let size = max(0, range.end - range.start);
+    // we do a ceiling division, rounding always up
+    let num_parts = size.div_ceil(ideal_req_size);
+    // no more than max_parts, so we limit
+    let num_parts = max(1, min(num_parts, max_requests as u64));
+
+    // we split the total size into request that are as similar as possible in size
+    // this means, we are going to have a few requests that are 1 byte larger
+    let big_parts = size % num_parts;
+    let small_parts_size = size / num_parts;
+    let big_parts_size = small_parts_size + 1;
+
+    iter::successors(Some((1, range.start..range.start)), move |(index, prev_range)| {
+        let size = if *index <= big_parts { big_parts_size } else { small_parts_size };
+        Some((index + 1, prev_range.end..prev_range.end + size))
+    })
+    .dropping(1)
+    .take(num_parts as usize)
+    .map(|(_, range)| range)
 }
 
 pub fn new_s3_storage(
@@ -491,8 +502,9 @@ pub fn new_gcs_storage(
 #[allow(clippy::unwrap_used)]
 mod tests {
 
+    use std::collections::HashSet;
+
     use super::*;
-    use itertools::Itertools;
     use proptest::prelude::*;
 
     proptest! {
@@ -500,14 +512,14 @@ mod tests {
             cases: 999, .. ProptestConfig::default()
         })]
         #[test]
-        fn test_split_requests(offset in 0..1_000_000u64, size in 1..3_000_000_000u64, min_part_size in 1..16_000_000u64, max_parts in 1..100u16 ) {
-            let res: Vec<_> = split_in_multiple_requests(&(offset..offset+size), min_part_size, max_parts).collect();
+        fn test_split_requests(offset in 0..1_000_000u64, size in 1..3_000_000_000u64, part_size in 1..16_000_000u64, max_parts in 1..100u16 ) {
+            let res: Vec<_> = split_in_multiple_requests(&(offset..offset+size), part_size, max_parts).collect();
 
             // there is always at least 1 request
             prop_assert!(!res.is_empty());
 
             // it does as many requests as possible
-            prop_assert!(res.len() as u64 >= min(max_parts as u64, size / min_part_size));
+            prop_assert!(res.len() as u64 >= min(max_parts as u64, size / part_size));
 
             // there are never more than max_parts requests
             prop_assert!(res.len() <= max_parts as usize);
@@ -515,22 +527,16 @@ mod tests {
             // the request sizes add up to total size
             prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
 
-            // no more than one request smaller than minimum size
-            prop_assert!(res.iter().filter(|range| (range.end - range.start) < min_part_size).count() <= 1);
-
-            // if there is a request smaller than the minimum size it is because the total size is
-            // smaller than minimum request size
-            if res.iter().any(|range| (range.end - range.start) < min_part_size) {
-                prop_assert!(size < min_part_size)
-            }
-
             // there are only two request sizes
-            let counts = res.iter().map(|range| (range.end - range.start)).counts();
-            prop_assert!(counts.len() <= 2); // only last element is smaller
-            if counts.len() > 1 {
-                // the smaller request size happens only once
-                prop_assert_eq!(counts.values().min(), Some(&1usize));
+            let sizes: HashSet<_> = res.iter().map(|range| (range.end - range.start)).collect();
+            prop_assert!(sizes.len() <= 2); // only last element is smaller
+            if sizes.len() > 1 {
+                // the smaller request size is one less than the big ones
+                prop_assert_eq!(sizes.iter().min().unwrap() + 1, *sizes.iter().max().unwrap() );
             }
+
+            // we split as much as possible
+            assert!(res.len() >= min((size / part_size) as usize, max_parts as usize) );
 
             // there are no holes in the requests, nor bytes that are requested more than once
             let mut iter = res.iter();
@@ -556,19 +562,25 @@ mod tests {
         );
         assert_eq!(
             split_in_multiple_requests(&(10..16), 5, 100,).collect::<Vec<_>>(),
-            vec![(10..16)]
+            vec![(10..13), (13..16)]
         );
         assert_eq!(
             split_in_multiple_requests(&(10..21), 5, 100,).collect::<Vec<_>>(),
-            vec![(10..15), (15..21)]
+            vec![(10..14), (14..18), (18..21)]
         );
         assert_eq!(
             split_in_multiple_requests(&(0..13), 5, 2,).collect::<Vec<_>>(),
-            vec![(0..6), (6..13)]
+            vec![(0..7), (7..13)]
         );
         assert_eq!(
             split_in_multiple_requests(&(0..100), 5, 3,).collect::<Vec<_>>(),
-            vec![(0..33), (33..66), (66..100)]
+            vec![(0..34), (34..67), (67..100)]
+        );
+        // this is data from a real example
+        assert_eq!(
+            split_in_multiple_requests(&(0..19579213), 12_000_000, 18)
+                .collect::<Vec<_>>(),
+            vec![(0..9789607), (9789607..19579213)]
         );
     }
 }
