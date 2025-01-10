@@ -10,9 +10,9 @@ use std::{
 
 use icechunk::{
     config::{
-        CachingConfig, CompressionAlgorithm, CompressionConfig, Credentials,
-        CredentialsFetcher, GcsCredentials, GcsStaticCredentials, S3Credentials,
-        S3Options, S3StaticCredentials,
+        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
+        CompressionConfig, Credentials, CredentialsFetcher, GcsCredentials,
+        GcsStaticCredentials, S3Credentials, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -173,11 +173,52 @@ impl From<PyGcsCredentials> for GcsCredentials {
     }
 }
 
+#[pyclass(name = "AzureStaticCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyAzureStaticCredentials {
+    AccessKey(String),
+    SasToken(String),
+    BearerToken(String),
+}
+
+impl From<PyAzureStaticCredentials> for AzureStaticCredentials {
+    fn from(value: PyAzureStaticCredentials) -> Self {
+        match value {
+            PyAzureStaticCredentials::AccessKey(key) => {
+                AzureStaticCredentials::AccessKey(key)
+            }
+            PyAzureStaticCredentials::SasToken(token) => {
+                AzureStaticCredentials::SASToken(token)
+            }
+            PyAzureStaticCredentials::BearerToken(key) => {
+                AzureStaticCredentials::BearerToken(key)
+            }
+        }
+    }
+}
+
+#[pyclass(name = "AzureCredentials")]
+#[derive(Clone, Debug)]
+pub enum PyAzureCredentials {
+    FromEnv(),
+    Static(PyAzureStaticCredentials),
+}
+
 #[pyclass(name = "Credentials")]
 #[derive(Clone, Debug)]
 pub enum PyCredentials {
     S3(PyS3Credentials),
     Gcs(PyGcsCredentials),
+    Azure(PyAzureCredentials),
+}
+
+impl From<PyAzureCredentials> for AzureCredentials {
+    fn from(value: PyAzureCredentials) -> Self {
+        match value {
+            PyAzureCredentials::FromEnv() => AzureCredentials::FromEnv,
+            PyAzureCredentials::Static(creds) => AzureCredentials::Static(creds.into()),
+        }
+    }
 }
 
 impl From<PyCredentials> for Credentials {
@@ -185,6 +226,7 @@ impl From<PyCredentials> for Credentials {
         match value {
             PyCredentials::S3(cred) => Credentials::S3(cred.into()),
             PyCredentials::Gcs(cred) => Credentials::Gcs(cred.into()),
+            PyCredentials::Azure(cred) => Credentials::Azure(cred.into()),
         }
     }
 }
@@ -246,7 +288,7 @@ pub enum PyObjectStoreConfig {
     S3Compatible(PyS3Options),
     S3(PyS3Options),
     Gcs(Option<HashMap<String, String>>),
-    Azure(),
+    Azure(HashMap<String, String>),
     Tigris(),
 }
 
@@ -264,7 +306,7 @@ impl From<PyObjectStoreConfig> for ObjectStoreConfig {
             PyObjectStoreConfig::Gcs(opts) => {
                 ObjectStoreConfig::Gcs(opts.unwrap_or_default())
             }
-            PyObjectStoreConfig::Azure() => ObjectStoreConfig::Azure {},
+            PyObjectStoreConfig::Azure(opts) => ObjectStoreConfig::Azure(opts),
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }
     }
@@ -282,7 +324,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
             }
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
             ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
-            ObjectStoreConfig::Azure {} => PyObjectStoreConfig::Azure(),
+            ObjectStoreConfig::Azure(opts) => PyObjectStoreConfig::Azure(opts),
             ObjectStoreConfig::Tigris {} => PyObjectStoreConfig::Tigris(),
         }
     }
@@ -601,6 +643,25 @@ impl PyStorage {
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_gcs_storage(
             bucket,
+            prefix,
+            credentials.map(|cred| cred.into()),
+            config,
+        )
+        .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (container, prefix, credentials=None, *, config=None))]
+    pub fn new_azure_blob(
+        container: String,
+        prefix: String,
+        credentials: Option<PyAzureCredentials>,
+        config: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let storage = icechunk::storage::new_azure_blob_storage(
+            container,
             prefix,
             credentials.map(|cred| cred.into()),
             config,

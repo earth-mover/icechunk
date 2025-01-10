@@ -1,4 +1,7 @@
-use ::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use ::object_store::{
+    azure::AzureConfigKey,
+    gcp::{GoogleCloudStorageBuilder, GoogleConfigKey},
+};
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
@@ -39,7 +42,10 @@ pub mod s3;
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::{GcsCredentials, GcsStaticCredentials, S3Credentials, S3Options},
+    config::{
+        AzureCredentials, AzureStaticCredentials, GcsCredentials, GcsStaticCredentials,
+        S3Credentials, S3Options,
+    },
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
 };
@@ -370,6 +376,54 @@ pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
 pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_local_filesystem(path)?;
     Ok(Arc::new(st))
+}
+
+pub fn new_azure_blob_storage(
+    container: String,
+    prefix: String,
+    credentials: Option<AzureCredentials>,
+    config: Option<HashMap<String, String>>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let url = format!("azure://{}/{}", container, prefix);
+    let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
+    // Either the account name should be provided or user_emulator should be set to true to use the default account
+    if !options.iter().any(|(k, _)| k == AzureConfigKey::AccountName.as_ref()) {
+        options
+            .push((AzureConfigKey::UseEmulator.as_ref().to_string(), "true".to_string()));
+    }
+
+    match credentials {
+        Some(AzureCredentials::Static(AzureStaticCredentials::AccessKey(key))) => {
+            options.push((AzureConfigKey::AccessKey.as_ref().to_string(), key));
+        }
+        Some(AzureCredentials::Static(AzureStaticCredentials::SASToken(token))) => {
+            options.push((AzureConfigKey::SasKey.as_ref().to_string(), token));
+        }
+        Some(AzureCredentials::Static(AzureStaticCredentials::BearerToken(token))) => {
+            options.push((AzureConfigKey::Token.as_ref().to_string(), token));
+        }
+        None | Some(AzureCredentials::FromEnv) => {
+            let builder = ::object_store::azure::MicrosoftAzureBuilder::from_env();
+
+            for key in &[
+                AzureConfigKey::AccessKey,
+                AzureConfigKey::SasKey,
+                AzureConfigKey::Token,
+            ] {
+                if let Some(value) = builder.get_config_value(key) {
+                    options.push((key.as_ref().to_string(), value));
+                }
+            }
+        }
+    };
+
+    let config = ObjectStorageConfig {
+        url,
+        prefix: "".to_string(), // it's embedded in the url
+        options,
+    };
+
+    Ok(Arc::new(ObjectStorage::from_config(config)?))
 }
 
 pub fn new_gcs_storage(

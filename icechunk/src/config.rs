@@ -25,9 +25,7 @@ pub enum ObjectStoreConfig {
     S3Compatible(S3Options),
     S3(S3Options),
     Gcs(HashMap<String, String>),
-    Azure {
-        // TODO:
-    },
+    Azure(HashMap<String, String>),
     Tigris {
         // TODO:
     },
@@ -167,9 +165,25 @@ pub enum GcsCredentials {
     Static(GcsStaticCredentials),
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum AzureStaticCredentials {
+    AccessKey(String),
+    SASToken(String),
+    BearerToken(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum AzureCredentials {
+    #[serde(rename = "from_env")]
+    FromEnv,
+    #[serde(rename = "static")]
+    Static(AzureStaticCredentials),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum Credentials {
     S3(S3Credentials),
     Gcs(GcsCredentials),
+    Azure(AzureCredentials),
 }

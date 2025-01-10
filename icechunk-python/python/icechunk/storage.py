@@ -8,6 +8,7 @@ from icechunk._icechunk_python import (
     Storage,
 )
 from icechunk.credentials import (
+    azure_credentials,
     gcs_credentials,
     s3_credentials,
 )
@@ -145,6 +146,47 @@ def gcs_storage(
     )
     return Storage.new_gcs(
         bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
+        config=config,
+    )
+
+
+def azure_storage(
+    *,
+    container: str,
+    prefix: str,
+    access_key: str | None = None,
+    sas_token: str | None = None,
+    bearer_token: str | None = None,
+    from_env: bool | None = None,
+    config: dict[str, str] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in Azure Blob Storage object store.
+
+    Parameters
+    ----------
+    container: str
+        The container where the repository will store its data
+    prefix: str
+        The prefix within the container that is the root directory of the repository
+    access_key: str | None
+        Azure Blob Storage credential access key
+    sas_token: str | None
+        Azure Blob Storage credential SAS token
+    bearer_token: str | None
+        Azure Blob Storage credential bearer token
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    """
+    credentials = azure_credentials(
+        access_key=access_key,
+        sas_token=sas_token,
+        bearer_token=bearer_token,
+        from_env=from_env,
+    )
+    return Storage.new_azure_blob(
+        container=container,
         prefix=prefix,
         credentials=credentials,
         config=config,
