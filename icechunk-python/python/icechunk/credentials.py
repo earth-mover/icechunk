@@ -235,18 +235,20 @@ def azure_static_credentials(
     bearer_token: str | None = None,
 ) -> AnyAzureStaticCredential:
     """Create static credentials Azure Blob Storage object store."""
+    if (access_key + sas_token + bearer_token).count(None) != 2:
+        raise ValueError("Conflicting arguments to azure_static_credentials function")
     if access_key is not None:
         return AzureStaticCredentials.AccessKey(access_key)
     if sas_token is not None:
         return AzureStaticCredentials.SasToken(sas_token)
     if bearer_token is not None:
         return AzureStaticCredentials.BearerToken(bearer_token)
-    raise ValueError("Conflicting arguments to azure_static_credentials function")
+    raise ValueError("No valid static credential provided for Azure Blob Storage object store")
 
 
 def azure_from_env_credentials() -> AzureCredentials.FromEnv:
     """Instruct Azure Blob Storage object store to fetch credentials from the operative system environment."""
-    return AzureCredentials.FromEnv()
+    return AzureCredentials.FromEnv
 
 
 def azure_credentials(
