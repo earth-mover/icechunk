@@ -4,7 +4,7 @@ import pytest
 
 import xarray as xr
 import zarr
-from benchmarks.lib import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS, Dataset
+from benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS, Dataset
 from zarr.abc.store import Store
 
 # TODO: configurable?
