@@ -214,7 +214,7 @@ impl ObjectStorage {
     ) -> StorageResult<impl AsyncRead> {
         let mut results = split_in_multiple_requests(
             range,
-            settings.concurrency.min_concurrent_request_size.get(),
+            settings.concurrency.ideal_concurrent_request_size.get(),
             settings.concurrency.max_concurrent_requests_for_object.get(),
         )
         .map(|range| async move {
@@ -288,7 +288,7 @@ impl Storage for ObjectStorage {
                 concurrency: ConcurrencySettings {
                     max_concurrent_requests_for_object: NonZeroU16::new(5)
                         .unwrap_or(NonZeroU16::MIN),
-                    min_concurrent_request_size: NonZeroU64::new(4 * 1024)
+                    ideal_concurrent_request_size: NonZeroU64::new(4 * 1024)
                         .unwrap_or(NonZeroU64::MIN),
                 },
             },
@@ -297,7 +297,7 @@ impl Storage for ObjectStorage {
                     // we do != 1 because we use this store for tests
                     max_concurrent_requests_for_object: NonZeroU16::new(5)
                         .unwrap_or(NonZeroU16::MIN),
-                    min_concurrent_request_size: NonZeroU64::new(1)
+                    ideal_concurrent_request_size: NonZeroU64::new(1)
                         .unwrap_or(NonZeroU64::MIN),
                 },
             },

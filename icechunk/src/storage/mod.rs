@@ -100,7 +100,7 @@ pub type ETag = String;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: NonZeroU16,
-    pub min_concurrent_request_size: NonZeroU64,
+    pub ideal_concurrent_request_size: NonZeroU64,
 }
 
 // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
@@ -112,7 +112,7 @@ impl Default for ConcurrencySettings {
         Self {
             max_concurrent_requests_for_object: NonZeroU16::new(18)
                 .unwrap_or(NonZeroU16::MIN),
-            min_concurrent_request_size: NonZeroU64::new(12 * 1024 * 1024)
+            ideal_concurrent_request_size: NonZeroU64::new(12 * 1024 * 1024)
                 .unwrap_or(NonZeroU64::MIN),
         }
     }
@@ -345,7 +345,7 @@ fn split_in_multiple_requests(
 ) -> impl Iterator<Item = Range<u64>> {
     let size = max(0, range.end - range.start);
     // we do a ceiling division, rounding always up
-    let num_parts = (size - 1) / ideal_req_size + 1;
+    let num_parts = size.div_ceil(ideal_req_size);
     // no more than max_parts, so we limit
     let num_parts = max(1, min(num_parts, max_requests as u64));
 

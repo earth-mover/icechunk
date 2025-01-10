@@ -399,7 +399,7 @@ where
 
     let object = tokio::task::spawn_blocking(move || {
         let sync_read = SyncIoBridge::new(read);
-        // We find a perforance impact if we don't buffer here
+        // We find a performance impact if we don't buffer here
         let decompressor =
             BufReader::with_capacity(1_024, zstd::stream::Decoder::new(sync_read)?);
         rmp_serde::from_read(decompressor).map_err(RepositoryError::DeserializationError)

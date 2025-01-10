@@ -476,14 +476,14 @@ pub struct PyStorageConcurrencySettings {
     #[pyo3(get, set)]
     pub max_concurrent_requests_for_object: NonZeroU16,
     #[pyo3(get, set)]
-    pub min_concurrent_request_size: NonZeroU64,
+    pub ideal_concurrent_request_size: NonZeroU64,
 }
 
 impl From<ConcurrencySettings> for PyStorageConcurrencySettings {
     fn from(value: ConcurrencySettings) -> Self {
         Self {
             max_concurrent_requests_for_object: value.max_concurrent_requests_for_object,
-            min_concurrent_request_size: value.min_concurrent_request_size,
+            ideal_concurrent_request_size: value.ideal_concurrent_request_size,
         }
     }
 }
@@ -492,7 +492,7 @@ impl From<PyStorageConcurrencySettings> for ConcurrencySettings {
     fn from(value: PyStorageConcurrencySettings) -> Self {
         Self {
             max_concurrent_requests_for_object: value.max_concurrent_requests_for_object,
-            min_concurrent_request_size: value.min_concurrent_request_size,
+            ideal_concurrent_request_size: value.ideal_concurrent_request_size,
         }
     }
 }
