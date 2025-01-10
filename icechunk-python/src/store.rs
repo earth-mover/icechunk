@@ -209,6 +209,7 @@ impl PyStore {
                 .set(&key, Bytes::from(value))
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
+            dbg!("done setting ", &key);
             Ok(())
         })
     }

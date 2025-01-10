@@ -269,16 +269,20 @@ impl Store {
                         session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                     None => {
+
                         // we only lock the repository to get the writer
-                        let writer = self.session.read().await.get_chunk_writer();
+                        dbg!("grabbing write lock", &coords);
+                        let mut guard = self.session.write().await;
+                        dbg!("getting chunk writer", &coords);
+                        let writer = guard.get_chunk_writer();
+                        dbg!("writing bytes", &coords);
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
+                        dbg!("setting chunk ref", &coords);
                         // and finally we lock for write and update the reference
-                        self.session
-                            .write()
-                            .await
-                            .set_chunk_ref(node_path, coords, Some(payload))
-                            .await?
+                        guard.set_chunk_ref(node_path, coords.clone(), Some(payload)).await?;
+                        dbg!("releasing", &coords);
+
                     }
                 }
                 Ok(())

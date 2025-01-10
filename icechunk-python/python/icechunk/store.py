@@ -190,7 +190,10 @@ class IcechunkStore(Store, SyncMixin):
         key : str
         value : Buffer
         """
-        return await self._store.set(key, value.to_bytes())
+        print(f"setting {key}")
+        ret = await self._store.set(key, value.to_bytes())
+        print(f"finished setting {key}")
+        return ret
 
     async def set_if_not_exists(self, key: str, value: Buffer) -> None:
         """
