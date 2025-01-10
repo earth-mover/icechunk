@@ -46,7 +46,7 @@ impl VirtualChunkContainer {
             (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()),
             (ObjectStoreConfig::Azure(_), Credentials::Azure(_)) => Ok(()),
-            (ObjectStoreConfig::Tigris {}, _) => Ok(()),                // TODO
+            (ObjectStoreConfig::Tigris {}, _) => Ok(()), // TODO
             _ => Err("credentials do not match store type".to_string()),
         }
     }
