@@ -57,17 +57,18 @@ async def test_distributed_writers() -> None:
     dask_array = dask.array.random.random(shape, chunks=dask_chunks)
     group = zarr.group(store=store, overwrite=True)
 
-    zarray = group.create_array(
+    group.create_array(
         "array",
         shape=shape,
         chunks=(CHUNK_DIM_SIZE, CHUNK_DIM_SIZE),
         dtype="f8",
         fill_value=float("nan"),
     )
-    _first_snap = session.commit("array created")
+    first_snap = session.commit("array created")
 
-    with Client(n_workers=8):  # type: ignore[no-untyped-call]
-        session = repo.writable_session(branch="main")
+    def do_writes(branch_name: str) -> None:
+        repo.create_branch(branch_name, first_snap)
+        session = repo.writable_session(branch=branch_name)
         store = session.store
         group = zarr.open_group(store=store)
         zarray = cast(zarr.Array, group["array"])
@@ -76,8 +77,9 @@ async def test_distributed_writers() -> None:
         commit_res = session.commit("distributed commit")
         assert commit_res
 
+    async def verify(branch_name: str) -> None:
         # Lets open a new store to verify the results
-        readonly_session = repo.readonly_session(branch="main")
+        readonly_session = repo.readonly_session(branch=branch_name)
         store = readonly_session.store
         all_keys = [key async for key in store.list_prefix("/")]
         assert (
@@ -90,3 +92,11 @@ async def test_distributed_writers() -> None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]
+
+    with Client(n_workers=8):  # type: ignore[no-untyped-call]
+        do_writes("with-processes")
+        await verify("with-processes")
+
+    with dask.config.set(scheduler="threads"):  # type: ignore[no-untyped-call]
+        do_writes("with-threads")
+        await verify("with-threads")
