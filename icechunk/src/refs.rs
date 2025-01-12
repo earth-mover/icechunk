@@ -5,6 +5,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 
 use crate::{format::SnapshotId, storage, Storage, StorageError};
@@ -110,8 +111,10 @@ impl BranchVersion {
     }
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefData {
+    #[serde_as(as = "TryFromInto<String>")]
     pub snapshot: SnapshotId,
 }
 
