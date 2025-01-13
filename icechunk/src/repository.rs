@@ -72,7 +72,7 @@ pub enum RepositoryError {
     IOError(#[from] std::io::Error),
     #[error("a concurrent task failed {0}")]
     ConcurrencyError(#[from] JoinError),
-    #[error("bain branch cannot be deleted")]
+    #[error("main branch cannot be deleted")]
     CannotDeleteMain,
 }
 
@@ -380,7 +380,7 @@ impl Repository {
     /// This will remove the branch reference and the branch history. It will not remove the
     /// chunks or snapshots associated with the branch.
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
-        if branch != "main" {
+        if branch != Ref::DEFAULT_BRANCH {
             delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
             Ok(())
         } else {
