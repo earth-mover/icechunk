@@ -1342,6 +1342,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "serde",
+ "serde_bytes",
  "serde_json",
  "serde_with",
  "serde_yml",
