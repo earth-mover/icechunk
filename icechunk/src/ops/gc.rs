@@ -185,7 +185,7 @@ pub async fn garbage_collect(
                 let manifest =
                     asset_manager.fetch_manifest(manifest_id, manifest_info.size).await?;
                 let chunk_ids =
-                    manifest.chunks().values().filter_map(|payload| match payload {
+                    manifest.chunk_payloads().filter_map(|payload| match payload {
                         ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
                         _ => None,
                     });

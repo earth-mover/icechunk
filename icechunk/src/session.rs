@@ -558,7 +558,7 @@ impl Session {
         // FIXME: use manifest extents
         for manifest in manifests {
             let manifest_structure = self.fetch_manifest(&manifest.object_id).await?;
-            match manifest_structure.get_chunk_payload(&node, coords.clone()) {
+            match manifest_structure.get_chunk_payload(&node, coords) {
                 Ok(payload) => {
                     return Ok(Some(payload.clone()));
                 }
@@ -858,8 +858,7 @@ async fn verified_node_chunk_iterator<'a>(
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
-        NodeData::Array(meta, manifests) => {
-            let ndim = meta.shape.len();
+        NodeData::Array(_, manifests) => {
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
                     .array_chunks_iterator(&node.id, &node.path)
@@ -898,7 +897,7 @@ async fn verified_node_chunk_iterator<'a>(
                                 match manifest {
                                     Ok(manifest) => {
                                         let old_chunks = manifest
-                                            .iter(node_id_c.clone(), ndim)
+                                            .iter(node_id_c.clone())
                                             .filter(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
@@ -1411,7 +1410,8 @@ mod tests {
         };
 
         let manifest =
-            Arc::new(vec![chunk1.clone(), chunk2.clone()].into_iter().collect());
+            Arc::new(Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?);
+
         let (manifest_id, manifest_size) =
             asset_manager.write_manifest(Arc::clone(&manifest), 1).await?.unwrap();
 
@@ -2075,19 +2075,19 @@ mod tests {
         ds.set_chunk_ref(
             a1path.clone(),
             ChunkIndices(vec![0, 0]),
-            Some(ChunkPayload::Inline("hello".into())),
+            Some(ChunkPayload::Inline("hello1".into())),
         )
         .await?;
         ds.set_chunk_ref(
             a1path.clone(),
             ChunkIndices(vec![0, 1]),
-            Some(ChunkPayload::Inline("hello".into())),
+            Some(ChunkPayload::Inline("hello2".into())),
         )
         .await?;
         ds.set_chunk_ref(
             a2path.clone(),
-            ChunkIndices(vec![0, 1]),
-            Some(ChunkPayload::Inline("hello".into())),
+            ChunkIndices(vec![1, 0]),
+            Some(ChunkPayload::Inline("hello3".into())),
         )
         .await?;
 
@@ -2113,6 +2113,8 @@ mod tests {
         let manifest =
             repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
         let initial_size = manifest.len();
+
+        assert_eq!(initial_size, 3);
 
         let mut ds = repo.writable_session("main").await?;
         ds.delete_array(a2path).await?;
