@@ -13,18 +13,18 @@ edition = "2021"
 publish = true
 
 [dependencies]
-async-trait = "0.1.84"
-bytes = { version = "1.8.0", features = ["serde"] }
+async-trait = "0.1.85"
+bytes = { version = "1.9.0", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.31"
 itertools = "0.14.0"
 object_store = { version = "0.11.2", features = ["aws", "gcp", "azure"] }
 rand = "0.8.5"
-thiserror = "2.0.9"
-serde_json = "1.0.134"
+thiserror = "2.0.11"
+serde_json = "1.0.135"
 serde = { version = "1.0.217", features = ["derive", "rc"] }
 serde_with = { version = "3.12.0", features = ["hex"] }
-tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros"] }
 test-strategy = "0.4.0"
 proptest = "1.6.0"
 quick_cache = "0.6.9"
