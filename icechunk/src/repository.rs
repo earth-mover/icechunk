@@ -72,6 +72,8 @@ pub enum RepositoryError {
     IOError(#[from] std::io::Error),
     #[error("a concurrent task failed {0}")]
     ConcurrencyError(#[from] JoinError),
+    #[error("bain branch cannot be deleted")]
+    CannotDeleteMain,
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
@@ -378,8 +380,12 @@ impl Repository {
     /// This will remove the branch reference and the branch history. It will not remove the
     /// chunks or snapshots associated with the branch.
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
-        delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
-        Ok(())
+        if branch != "main" {
+            delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
+            Ok(())
+        } else {
+            Err(RepositoryError::CannotDeleteMain)
+        }
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -510,7 +516,8 @@ mod tests {
         config::RepositoryConfig, storage::new_in_memory_storage, Repository, Storage,
     };
 
-    // use super::*;
+    use super::*;
+
     // TODO: Add Tests
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
@@ -587,6 +594,12 @@ mod tests {
                 "branch2".to_string()
             ])
         );
+
+        // Main branch cannot be deleted
+        assert!(matches!(
+            repo.delete_branch("main").await,
+            Err(RepositoryError::CannotDeleteMain)
+        ));
 
         // Delete a branch
         repo.delete_branch("branch1").await?;
