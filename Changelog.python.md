@@ -1,5 +1,19 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a11
+
+### Features
+
+- Adds support for Azure Blob Storage
+
+### Performance
+
+- Manifests now load faster, due to an improved serialization format
+
+### Fixes
+
+- The store now releases the GIL appropriately in multithreaded contexts
+
 ## Python Icechunk Library 0.1.0a10
 
 ### Features
