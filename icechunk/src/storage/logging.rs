@@ -18,7 +18,7 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
-    fetch_log: Mutex<Vec<(String, Vec<u8>)>>,
+    fetch_log: Mutex<Vec<(String, String)>>,
 }
 
 #[cfg(test)]
@@ -28,7 +28,7 @@ impl LoggingStorage {
     }
 
     #[allow(clippy::expect_used)] // this implementation is intended for tests only
-    pub fn fetch_operations(&self) -> Vec<(String, Vec<u8>)> {
+    pub fn fetch_operations(&self) -> Vec<(String, String)> {
         self.fetch_log.lock().expect("poison lock").clone()
     }
 }
@@ -65,7 +65,7 @@ impl Storage for LoggingStorage {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_snapshot".to_string(), id.0.to_vec()));
+            .push(("fetch_snapshot".to_string(), id.to_string()));
         self.backend.fetch_snapshot(settings, id).await
     }
 
@@ -77,7 +77,7 @@ impl Storage for LoggingStorage {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_transaction_log".to_string(), id.0.to_vec()));
+            .push(("fetch_transaction_log".to_string(), id.to_string()));
         self.backend.fetch_transaction_log(settings, id).await
     }
 
@@ -90,7 +90,7 @@ impl Storage for LoggingStorage {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_manifest_splitting".to_string(), id.0.to_vec()));
+            .push(("fetch_manifest_splitting".to_string(), id.to_string()));
         self.backend.fetch_manifest_splitting(settings, id, size).await
     }
 
@@ -102,7 +102,7 @@ impl Storage for LoggingStorage {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_manifest_single_request".to_string(), id.0.to_vec()));
+            .push(("fetch_manifest_single_request".to_string(), id.to_string()));
         self.backend.fetch_manifest_single_request(settings, id).await
     }
 
@@ -115,7 +115,7 @@ impl Storage for LoggingStorage {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("fetch_chunk".to_string(), id.0.to_vec()));
+            .push(("fetch_chunk".to_string(), id.to_string()));
         self.backend.fetch_chunk(settings, id, range).await
     }
 

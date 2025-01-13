@@ -577,7 +577,7 @@ mod test {
         );
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.0.to_vec())]
+            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
 
         // only calls backend once
@@ -587,14 +587,14 @@ mod test {
         );
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.0.to_vec())]
+            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
 
         // other walues still cached
         assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.0.to_vec())]
+            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
         Ok(())
     }
@@ -653,6 +653,51 @@ mod test {
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_dont_fetch_asset_twice() -> Result<(), Box<dyn std::error::Error>> {
+        // Test that two concurrent requests for the same manifest doesn't generate two
+        // object_store requests, one of them must wait
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let settings = storage::Settings::default();
+        let manager =
+            Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone()));
+
+        // some reasonable size so it takes some time to parse
+        let manifest = Manifest::from_iter((0..5_000).map(|_| ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(Vec::from([rand::random(), rand::random()])),
+            payload: ChunkPayload::Inline("hello".into()),
+        }))
+        .await
+        .unwrap();
+        let (manifest_id, size) =
+            manager.write_manifest(Arc::new(manifest), 1).await?.unwrap();
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let manager = Arc::new(AssetManager::new_with_config(
+            logging_c.clone(),
+            logging_c.default_settings(),
+            &CachingConfig::default(),
+        ));
+
+        let manager_c = Arc::new(manager);
+        let manager_cc = Arc::clone(&manager_c);
+        let manifest_id_c = manifest_id.clone();
+
+        let res1 = tokio::task::spawn(async move {
+            manager_c.fetch_manifest(&manifest_id_c, size).await
+        });
+        let res2 = tokio::task::spawn(async move {
+            manager_cc.fetch_manifest(&manifest_id, size).await
+        });
+
+        assert!(res1.await?.is_ok());
+        assert!(res2.await?.is_ok());
+        assert_eq!(logging.fetch_operations().len(), 1);
         Ok(())
     }
 }
