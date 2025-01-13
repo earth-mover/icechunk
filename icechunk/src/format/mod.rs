@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    convert::Infallible,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -9,7 +10,7 @@ use std::{
 use bytes::Bytes;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
@@ -29,8 +30,11 @@ pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 pub trait FileTypeTag: private::Sealed {}
 
 /// The id of a file in object store
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(pub [u8; SIZE], PhantomData<T>);
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(
+    #[serde(with = "serde_bytes")] pub [u8; SIZE],
+    PhantomData<T>,
+);
 
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotTag;
@@ -115,25 +119,25 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     }
 }
 
+impl<const SIZE: usize, T: FileTypeTag> TryInto<String> for ObjectId<SIZE, T> {
+    type Error = Infallible;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.to_string())
+    }
+}
+
+impl<const SIZE: usize, T: FileTypeTag> TryInto<ObjectId<SIZE, T>> for String {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<ObjectId<SIZE, T>, Self::Error> {
+        self.as_str().try_into()
+    }
+}
+
 impl<const SIZE: usize, T: FileTypeTag> Display for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", String::from(self))
-    }
-}
-
-impl<const SIZE: usize, T: FileTypeTag> Serialize for ObjectId<SIZE, T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Just use the string representation
-        serializer.serialize_str(&String::from(self))
-    }
-}
-
-impl<'de, const SIZE: usize, T: FileTypeTag> Deserialize<'de> for ObjectId<SIZE, T> {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        // Because we implement TryFrom<&str> for ObjectId, we can use it here instead of
-        // having to implement a custom deserializer
-        let s = String::deserialize(d)?;
-        ObjectId::try_from(s.as_str()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -336,7 +340,10 @@ mod tests {
     #[test]
     fn test_object_id_serialization() {
         let sid = SnapshotId::new([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        assert_eq!(serde_json::to_string(&sid).unwrap(), r#""000G40R40M30E209185G""#);
+        assert_eq!(
+            serde_json::to_string(&sid).unwrap(),
+            r#"[[0,1,2,3,4,5,6,7,8,9,10,11],null]"#
+        );
         assert_eq!(String::from(&sid), "000G40R40M30E209185G");
         assert_eq!(sid, SnapshotId::try_from("000G40R40M30E209185G").unwrap());
         let sid = SnapshotId::random();

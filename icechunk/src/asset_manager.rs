@@ -549,7 +549,8 @@ mod test {
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
-        let pre_exiting_manifest = Arc::new(vec![ci1].into_iter().collect());
+        let pre_exiting_manifest =
+            Arc::new(Manifest::from_iter(vec![ci1].into_iter()).await?);
         let (pre_existing_id, pre_size) =
             manager.write_manifest(Arc::clone(&pre_exiting_manifest), 1).await?.unwrap();
 
@@ -561,7 +562,7 @@ mod test {
             &CachingConfig::default(),
         );
 
-        let manifest = Arc::new(vec![ci2].into_iter().collect());
+        let manifest = Arc::new(Manifest::from_iter(vec![ci2].into_iter()).await?);
         let (id, size) = caching.write_manifest(Arc::clone(&manifest), 1).await?.unwrap();
 
         assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
@@ -618,13 +619,13 @@ mod test {
         let ci8 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
         let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
-        let manifest1 = Arc::new(vec![ci1, ci2, ci3].into_iter().collect());
+        let manifest1 = Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?);
         let (id1, size1) =
             manager.write_manifest(Arc::clone(&manifest1), 1).await?.unwrap();
-        let manifest2 = Arc::new(vec![ci4, ci5, ci6].into_iter().collect());
+        let manifest2 = Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?);
         let (id2, size2) =
             manager.write_manifest(Arc::clone(&manifest2), 1).await?.unwrap();
-        let manifest3 = Arc::new(vec![ci7, ci8, ci9].into_iter().collect());
+        let manifest3 = Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?);
         let (id3, size3) =
             manager.write_manifest(Arc::clone(&manifest3), 1).await?.unwrap();
 
