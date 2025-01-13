@@ -246,7 +246,8 @@ impl PyStore {
         })
     }
 
-    #[pyo3(signature = (key, location, offset, length, checksum = None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (key, location, offset, length, checksum = None, validate_container = false))]
     fn set_virtual_ref(
         &self,
         py: Python<'_>,
@@ -255,6 +256,7 @@ impl PyStore {
         offset: ChunkOffset,
         length: ChunkLength,
         checksum: Option<ChecksumArgument>,
+        validate_container: bool,
     ) -> PyIcechunkStoreResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
@@ -268,7 +270,7 @@ impl PyStore {
                     checksum: checksum.map(|cs| cs.into()),
                 };
                 store
-                    .set_virtual_ref(&key, virtual_ref)
+                    .set_virtual_ref(&key, virtual_ref, validate_container)
                     .await
                     .map_err(PyIcechunkStoreError::from)?;
                 Ok(())

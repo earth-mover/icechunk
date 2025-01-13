@@ -94,6 +94,10 @@ pub enum StoreError {
         "uncommitted changes in repository, commit changes or reset repository and try again."
     )]
     UncommittedChanges,
+    #[error(
+        "invalid chunk location, no matching virtual chunk container: `{chunk_location}`"
+    )]
+    InvalidVirtualChunkContainer { chunk_location: String },
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -303,6 +307,7 @@ impl Store {
         &self,
         key: &str,
         reference: VirtualChunkRef,
+        validate_container: bool,
     ) -> StoreResult<()> {
         if self.read_only().await {
             return Err(StoreError::ReadOnly);
@@ -310,9 +315,15 @@ impl Store {
 
         match Key::parse(key)? {
             Key::Chunk { node_path, coords } => {
-                self.session
-                    .write()
-                    .await
+                let mut session = self.session.write().await;
+                if validate_container
+                    && session.matching_container(&reference.location).is_none()
+                {
+                    return Err(StoreError::InvalidVirtualChunkContainer {
+                        chunk_location: reference.location.0,
+                    });
+                }
+                session
                     .set_chunk_ref(
                         node_path,
                         coords,

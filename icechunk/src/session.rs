@@ -22,7 +22,7 @@ use crate::{
         format_constants,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            VirtualChunkRef, VirtualReferenceError,
+            VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
         },
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, Snapshot,
@@ -36,7 +36,7 @@ use crate::{
     refs::{fetch_branch_tip, update_branch, RefError},
     repository::RepositoryError,
     storage,
-    virtual_chunks::VirtualChunkResolver,
+    virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     RepositoryConfig, Storage, StorageError,
 };
 
@@ -173,6 +173,13 @@ impl Session {
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    pub fn matching_container(
+        &self,
+        chunk_location: &VirtualChunkLocation,
+    ) -> Option<&VirtualChunkContainer> {
+        self.virtual_resolver.matching_container(chunk_location.0.as_str())
     }
 
     /// Add a group to the store.

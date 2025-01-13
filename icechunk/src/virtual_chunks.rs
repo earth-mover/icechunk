@@ -147,6 +147,13 @@ impl VirtualChunkResolver {
         }
     }
 
+    pub fn matching_container(
+        &self,
+        chunk_location: &str,
+    ) -> Option<&VirtualChunkContainer> {
+        find_container(chunk_location, self.containers.as_ref())
+    }
+
     pub async fn get_fetcher(
         &self,
         chunk_location: &str,

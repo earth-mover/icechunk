@@ -203,34 +203,6 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.set_if_not_exists(key, value.to_bytes())
 
-    async def async_set_virtual_ref(
-        self,
-        key: str,
-        location: str,
-        *,
-        offset: int,
-        length: int,
-        checksum: str | datetime | None = None,
-    ) -> None:
-        """Store a virtual reference to a chunk.
-
-        Parameters
-        ----------
-        key : str
-            The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
-        location : str
-            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
-        offset : int
-            The offset in bytes from the start of the file location in storage the chunk starts at
-        length : int
-            The length of the chunk in bytes, measured from the given offset
-        checksum : str | datetime | None
-            The etag or last_medified_at field of the object
-        """
-        return await self._store.async_set_virtual_ref(
-            key, location, offset, length, checksum
-        )
-
     def set_virtual_ref(
         self,
         key: str,
@@ -239,6 +211,7 @@ class IcechunkStore(Store, SyncMixin):
         offset: int,
         length: int,
         checksum: str | datetime | None = None,
+        validate_container: bool = False,
     ) -> None:
         """Store a virtual reference to a chunk.
 
@@ -254,8 +227,12 @@ class IcechunkStore(Store, SyncMixin):
             The length of the chunk in bytes, measured from the given offset
         checksum : str | datetime | None
             The etag or last_medified_at field of the object
+        validate_container: bool
+            If set to true, fail for locations that don't match any existing virtual chunk container
         """
-        return self._store.set_virtual_ref(key, location, offset, length, checksum)
+        return self._store.set_virtual_ref(
+            key, location, offset, length, checksum, validate_container
+        )
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store
