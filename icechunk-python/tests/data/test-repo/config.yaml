@@ -12,18 +12,18 @@ caching:
   chunks_cache_size: 0
 storage: null
 virtual_chunk_containers:
-  file:
-    name: file
-    url_prefix: file
-    store: !LocalFileSystem ''
-  tigris:
-    name: tigris
-    url_prefix: tigris
-    store: !Tigris {}
   az:
     name: az
     url_prefix: az
     store: !Azure {}
+  gcs:
+    name: gcs
+    url_prefix: gcs
+    store: !Gcs {}
+  tigris:
+    name: tigris
+    url_prefix: tigris
+    store: !Tigris {}
   s3:
     name: s3
     url_prefix: s3://
@@ -32,7 +32,7 @@ virtual_chunk_containers:
       endpoint_url: http://localhost:9000
       anonymous: false
       allow_http: true
-  gcs:
-    name: gcs
-    url_prefix: gcs
-    store: !Gcs {}
+  file:
+    name: file
+    url_prefix: file
+    store: !LocalFileSystem ''

@@ -338,7 +338,7 @@ where
 /// It tries to generate ceil(size/ideal_req_size) requests, but never exceeds max_requests.
 ///
 /// ideal_req_size and max_requests must be > 0
-fn split_in_multiple_requests(
+pub fn split_in_multiple_requests(
     range: &Range<u64>,
     ideal_req_size: u64,
     max_requests: u16,
