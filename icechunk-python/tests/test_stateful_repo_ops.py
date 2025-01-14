@@ -258,7 +258,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=commits)
     def checkout_commit(self, ref):
         note(f"Checking out commit {ref}")
-        self.session = self.repo.readonly_session(snapshot_id=ref)
+        self.session = self.repo.readonly_session(snapshot=ref)
         assert self.session.read_only
         self.model.checkout_commit(ref)
 

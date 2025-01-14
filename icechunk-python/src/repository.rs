@@ -20,8 +20,8 @@ use crate::{
     session::PySession,
 };
 
-#[pyclass(name = "SnapshotMetadata")]
-#[derive(Clone, Debug)]
+#[pyclass(name = "SnapshotMetadata", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PySnapshotMetadata {
     #[pyo3(get)]
     id: String,
@@ -179,24 +179,23 @@ impl PyRepository {
         self.0.storage_settings().clone().into()
     }
 
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
     pub fn ancestry(
         &self,
         py: Python<'_>,
-        snapshot_id: &str,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot: Option<String>,
     ) -> PyResult<Vec<PySnapshotMetadata>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
-                    snapshot_id.to_owned(),
-                ))
-            })?;
+            let version = args_to_version_info(branch, tag, snapshot)?;
 
             // TODO: this holds everything in memory
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let ancestry = self
                     .0
-                    .ancestry(&snapshot_id)
+                    .ancestry(&version)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?
                     .map_ok(Into::<PySnapshotMetadata>::into)
@@ -349,35 +348,17 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
     pub fn readonly_session(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
-        snapshot_id: Option<String>,
+        snapshot: Option<String>,
     ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = if let Some(branch_name) = branch {
-                VersionInfo::BranchTipRef(branch_name)
-            } else if let Some(tag_name) = tag {
-                VersionInfo::TagRef(tag_name)
-            } else if let Some(snapshot_id) = snapshot_id {
-                let snapshot_id =
-                    SnapshotId::try_from(snapshot_id.as_str()).map_err(|_| {
-                        PyIcechunkStoreError::RepositoryError(
-                            RepositoryError::InvalidSnapshotId(snapshot_id.to_owned()),
-                        )
-                    })?;
-
-                VersionInfo::SnapshotId(snapshot_id)
-            } else {
-                return Err(PyValueError::new_err(
-                    "Must provide either branch_name, tag_name, or snapshot_id",
-                ));
-            };
-
+            let version = args_to_version_info(branch, tag, snapshot)?;
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     self.0
@@ -413,4 +394,35 @@ fn map_credentials(
         cred.iter().map(|(name, cred)| (name.clone(), cred.clone().into())).collect()
     })
     .unwrap_or_default()
+}
+
+fn args_to_version_info(
+    branch: Option<String>,
+    tag: Option<String>,
+    snapshot: Option<String>,
+) -> PyResult<VersionInfo> {
+    let n = [&branch, &tag, &snapshot].iter().filter(|r| !r.is_none()).count();
+    if n > 1 {
+        return Err(PyValueError::new_err(
+            "Must provide one of branch_name, tag_name, or snapshot_id",
+        ));
+    }
+
+    if let Some(branch_name) = branch {
+        Ok(VersionInfo::BranchTipRef(branch_name))
+    } else if let Some(tag_name) = tag {
+        Ok(VersionInfo::TagRef(tag_name))
+    } else if let Some(snapshot_id) = snapshot {
+        let snapshot_id = SnapshotId::try_from(snapshot_id.as_str()).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
+                snapshot_id.to_owned(),
+            ))
+        })?;
+
+        Ok(VersionInfo::SnapshotId(snapshot_id))
+    } else {
+        return Err(PyValueError::new_err(
+            "Must provide either branch_name, tag_name, or snapshot_id",
+        ));
+    }
 }

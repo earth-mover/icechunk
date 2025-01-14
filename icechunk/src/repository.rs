@@ -287,7 +287,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    pub async fn ancestry(
+    async fn snapshot_ancestry(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
@@ -304,6 +304,15 @@ impl Repository {
         };
 
         Ok(futures::stream::iter(iter::once(Ok(last)).chain(it.map(Ok))))
+    }
+
+    /// Returns the sequence of parents of the snapshot pointed by the given version
+    pub async fn ancestry(
+        &self,
+        version: &VersionInfo,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
+        let snapshot_id = self.resolve_version(version).await?;
+        self.snapshot_ancestry(&snapshot_id).await
     }
 
     /// Create a new branch in the repository at the given snapshot id
@@ -417,11 +426,11 @@ impl Repository {
         Ok(ref_data.snapshot)
     }
 
-    pub async fn readonly_session(
+    async fn resolve_version(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<Session> {
-        let snapshot_id: SnapshotId = match version {
+    ) -> RepositoryResult<SnapshotId> {
+        match version {
             VersionInfo::SnapshotId(sid) => {
                 raise_if_invalid_snapshot_id(
                     self.storage.as_ref(),
@@ -429,12 +438,12 @@ impl Repository {
                     sid,
                 )
                 .await?;
-                Ok::<_, RepositoryError>(SnapshotId::from(sid.clone()))
+                Ok(sid.clone())
             }
             VersionInfo::TagRef(tag) => {
                 let ref_data =
                     fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
-                Ok::<_, RepositoryError>(ref_data.snapshot)
+                Ok(ref_data.snapshot)
             }
             VersionInfo::BranchTipRef(branch) => {
                 let ref_data = fetch_branch_tip(
@@ -443,10 +452,16 @@ impl Repository {
                     branch,
                 )
                 .await?;
-                Ok::<_, RepositoryError>(ref_data.snapshot)
+                Ok(ref_data.snapshot)
             }
-        }?;
+        }
+    }
 
+    pub async fn readonly_session(
+        &self,
+        version: &VersionInfo,
+    ) -> RepositoryResult<Session> {
+        let snapshot_id = self.resolve_version(version).await?;
         let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage_settings.clone(),

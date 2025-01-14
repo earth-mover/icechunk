@@ -2257,8 +2257,11 @@ mod tests {
         assert_eq!(ref_name, Ref::Branch("main".to_string()));
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
-        let parents =
-            repo.ancestry(&new_snapshot_id).await?.try_collect::<Vec<_>>().await?;
+        let parents = repo
+            .ancestry(&VersionInfo::SnapshotId(new_snapshot_id))
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
         assert_eq!(parents[0].message, "second commit");
         assert_eq!(parents[1].message, "first commit");
         assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
@@ -2314,8 +2317,11 @@ mod tests {
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
             .await?;
-        let parents =
-            repository.ancestry(&ds.snapshot_id).await?.try_collect::<Vec<_>>().await?;
+        let parents = repository
+            .ancestry(&VersionInfo::SnapshotId(ds.snapshot_id))
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
         assert_eq!(parents.len(), 2);
         let msg = parents[0].message.as_str();
         assert!(msg == "from 1" || msg == "from 2");
@@ -2838,7 +2844,11 @@ mod tests {
                 ds2.get_chunk_ref(&new_array_2_path, &ChunkIndices(vec![0])).await?;
             assert_eq!(data, Some(ChunkPayload::Inline("bye0".into())));
 
-            let commits = repo.ancestry(&snapshot).await?.try_collect::<Vec<_>>().await?;
+            let commits = repo
+                .ancestry(&VersionInfo::SnapshotId(snapshot))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
             assert_eq!(commits[0].message, "after conflict");
             assert_eq!(commits[1].message, "write two chunks with repo 1");
         } else {
