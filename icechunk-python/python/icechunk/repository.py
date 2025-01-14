@@ -105,16 +105,26 @@ class Repository:
         """Save the repository configuration to storage, this configuration will be used in future calls to Repository.open."""
         return self._repository.save_config()
 
-    def ancestry(self, snapshot_id: str) -> list[SnapshotMetadata]:
+    def ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> list[SnapshotMetadata]:
         """Get the ancestry of a snapshot.
 
         Args:
-            snapshot_id: The snapshot ID to get the ancestry of.
+            branch: The branch to get the ancestry of.
+            tag: The tag to get the ancestry of.
+            snapshot: The snapshot ID to get the ancestry of.
 
         Returns:
             list[SnapshotMetadata]: The ancestry of the snapshot, listing out the snapshots and their metadata
+
+        Only one of the arguments can be specified.
         """
-        return self._repository.ancestry(snapshot_id)
+        return self._repository.ancestry(branch=branch, tag=tag, snapshot=snapshot)
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """Create a new branch at the given snapshot.
@@ -189,7 +199,7 @@ class Repository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot_id: str | None = None,
+        snapshot: str | None = None,
     ) -> Session:
         """Create a read-only session.
 
@@ -200,15 +210,15 @@ class Repository:
         Args:
             branch: If provided, the branch to create the session on.
             tag: If provided, the tag to create the session on.
-            snapshot_id: If provided, the snapshot ID to create the session on.
+            snapshot: If provided, the snapshot ID to create the session on.
 
         Returns:
             Session: The read-only session, pointing to the specified snapshot, tag, or branch.
+
+        Only one of the arguments can be specified.
         """
         return Session(
-            self._repository.readonly_session(
-                branch=branch, tag=tag, snapshot_id=snapshot_id
-            )
+            self._repository.readonly_session(branch=branch, tag=tag, snapshot=snapshot)
         )
 
     def writable_session(self, branch: str) -> Session:

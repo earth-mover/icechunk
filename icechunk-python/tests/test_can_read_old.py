@@ -170,23 +170,26 @@ async def test_icechunk_can_read_old_repo() -> None:
         "empty structure",
         "Repository initialized",
     ]
-    assert [p.message for p in repo.ancestry(main_snapshot)] == expected_main_history
+    assert [
+        p.message for p in repo.ancestry(snapshot=main_snapshot)
+    ] == expected_main_history
 
-    my_branch_snapshot = repo.lookup_branch("my-branch")
     expected_branch_history = [
         "some more structure",
         "delete a chunk",
     ] + expected_main_history
 
     assert [
-        p.message for p in repo.ancestry(my_branch_snapshot)
+        p.message for p in repo.ancestry(branch="my-branch")
     ] == expected_branch_history
 
-    tag_snapshot = repo.lookup_tag("it also works!")
-    assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history
+    assert [
+        p.message for p in repo.ancestry(tag="it also works!")
+    ] == expected_branch_history
 
-    tag_snapshot = repo.lookup_tag("it works!")
-    assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history[1:]
+    assert [p.message for p in repo.ancestry(tag="it works!")] == expected_branch_history[
+        1:
+    ]
 
     session = repo.writable_session("my-branch")
     store = session.store
