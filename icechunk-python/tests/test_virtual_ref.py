@@ -134,6 +134,16 @@ async def test_write_minio_virtual_refs() -> None:
         "c/0/0/2", f"s3://testbucket/{prefix}/non-existing", offset=1, length=4
     )
 
+    # can validate virtual chunk containers
+    with pytest.raises(IcechunkError, match="invalid chunk location"):
+        store.set_virtual_ref(
+            "c/0/0/2",
+            f"bad://testbucket/{prefix}/non-existing",
+            offset=1,
+            length=4,
+            validate_container=True,
+        )
+
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
     first = await store.get("c/0/0/0", prototype=buffer_prototype)

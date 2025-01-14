@@ -457,14 +457,30 @@ mod tests {
             length: 5,
             checksum: None,
         };
-        store.set_virtual_ref("array/c/0/0/0", ref1).await?;
-        store.set_virtual_ref("array/c/0/0/1", ref2).await?;
+        store.set_virtual_ref("array/c/0/0/0", ref1, false).await?;
+        store.set_virtual_ref("array/c/0/0/1", ref2, false).await?;
 
         assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes1,);
         assert_eq!(
             store.get("array/c/0/0/1", &ByteRange::ALL).await?,
             Bytes::copy_from_slice(&bytes2[1..6]),
         );
+
+        // it shouldn't let us write to an non existing virtual chunk container
+        let bad_location = VirtualChunkLocation::from_absolute_path(&format!(
+            "bad-protocol://testbucket/{}",
+            chunks[1].0
+        ))?;
+
+        let bad_ref = VirtualChunkRef {
+            location: bad_location.clone(),
+            offset: 1,
+            length: 5,
+            checksum: None,
+        };
+        assert!(matches!(
+                store.set_virtual_ref("array/c/0/0/0", bad_ref, true).await,
+                Err(StoreError::InvalidVirtualChunkContainer { chunk_location }) if chunk_location == bad_location.0));
         Ok(())
     }
 
@@ -497,7 +513,7 @@ mod tests {
             checksum: None,
         };
 
-        store.set_virtual_ref("year/c/0", ref2).await?;
+        store.set_virtual_ref("year/c/0", ref2, false).await?;
 
         let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
         assert_eq!(chunk.len(), 288);
@@ -625,9 +641,9 @@ mod tests {
             length: 5,
             checksum: Some(Checksum::LastModified(old_timestamp)),
         };
-        store.set_virtual_ref("array/c/0/0/0", ref1).await?;
-        store.set_virtual_ref("array/c/0/0/1", ref2).await?;
-        store.set_virtual_ref("array/c/1/0/0", ref3).await?;
+        store.set_virtual_ref("array/c/0/0/0", ref1, false).await?;
+        store.set_virtual_ref("array/c/0/0/1", ref2, false).await?;
+        store.set_virtual_ref("array/c/1/0/0", ref3, false).await?;
 
         // set virtual refs in local filesystem
         let chunk_dir = TempDir::new()?;
@@ -674,9 +690,9 @@ mod tests {
             checksum: Some(Checksum::ETag(String::from("invalid etag"))),
         };
 
-        store.set_virtual_ref("array/c/0/0/2", ref1).await?;
-        store.set_virtual_ref("array/c/0/0/3", ref2).await?;
-        store.set_virtual_ref("array/c/1/0/1", ref3).await?;
+        store.set_virtual_ref("array/c/0/0/2", ref1, false).await?;
+        store.set_virtual_ref("array/c/0/0/3", ref2, false).await?;
+        store.set_virtual_ref("array/c/1/0/1", ref3, false).await?;
 
         // set a virtual ref in a public bucket
         let public_ref = VirtualChunkRef {
@@ -696,8 +712,8 @@ mod tests {
             checksum: Some(Checksum::ETag(String::from("invalid etag"))),
         };
 
-        store.set_virtual_ref("array/c/1/1/1", public_ref).await?;
-        store.set_virtual_ref("array/c/1/1/2", public_modified_ref).await?;
+        store.set_virtual_ref("array/c/1/1/1", public_ref, false).await?;
+        store.set_virtual_ref("array/c/1/1/2", public_modified_ref, false).await?;
 
         // assert we can find all the virtual chunks
 

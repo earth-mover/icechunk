@@ -256,14 +256,7 @@ class PyStore:
         offset: int,
         length: int,
         checksum: str | datetime.datetime | None = None,
-    ) -> None: ...
-    async def async_set_virtual_ref(
-        self,
-        key: str,
-        location: str,
-        offset: int,
-        length: int,
-        checksum: str | datetime.datetime | None = None,
+        validate_container: bool = False,
     ) -> None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
