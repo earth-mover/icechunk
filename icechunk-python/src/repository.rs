@@ -54,7 +54,7 @@ impl PyRepository {
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
-        config: Option<PyRepositoryConfig>,
+        config: Option<&PyRepositoryConfig>,
         virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -80,7 +80,7 @@ impl PyRepository {
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
-        config: Option<PyRepositoryConfig>,
+        config: Option<&PyRepositoryConfig>,
         virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -106,7 +106,7 @@ impl PyRepository {
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
-        config: Option<PyRepositoryConfig>,
+        config: Option<&PyRepositoryConfig>,
         virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress

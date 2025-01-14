@@ -21,7 +21,7 @@ use icechunk::{
 use pyo3::{
     pyclass, pymethods,
     types::{PyAnyMethods, PyModule, PyType},
-    Bound, PyErr, PyResult, Python,
+    Bound, Py, PyErr, PyResult, Python,
 };
 
 use crate::errors::PyIcechunkStoreError;
@@ -258,8 +258,8 @@ impl PyS3Options {
     }
 }
 
-impl From<PyS3Options> for S3Options {
-    fn from(options: PyS3Options) -> Self {
+impl From<&PyS3Options> for S3Options {
+    fn from(options: &PyS3Options) -> Self {
         S3Options {
             region: options.region.clone(),
             endpoint_url: options.endpoint_url.clone(),
@@ -292,21 +292,21 @@ pub enum PyObjectStoreConfig {
     Tigris(),
 }
 
-impl From<PyObjectStoreConfig> for ObjectStoreConfig {
-    fn from(value: PyObjectStoreConfig) -> Self {
+impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
+    fn from(value: &PyObjectStoreConfig) -> Self {
         match value {
             PyObjectStoreConfig::InMemory() => ObjectStoreConfig::InMemory,
             PyObjectStoreConfig::LocalFileSystem(path) => {
-                ObjectStoreConfig::LocalFileSystem(path)
+                ObjectStoreConfig::LocalFileSystem(path.clone())
             }
             PyObjectStoreConfig::S3Compatible(opts) => {
                 ObjectStoreConfig::S3Compatible(opts.into())
             }
             PyObjectStoreConfig::S3(opts) => ObjectStoreConfig::S3(opts.into()),
             PyObjectStoreConfig::Gcs(opts) => {
-                ObjectStoreConfig::Gcs(opts.unwrap_or_default())
+                ObjectStoreConfig::Gcs(opts.clone().unwrap_or_default())
             }
-            PyObjectStoreConfig::Azure(opts) => ObjectStoreConfig::Azure(opts),
+            PyObjectStoreConfig::Azure(opts) => ObjectStoreConfig::Azure(opts.clone()),
             PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
         }
     }
@@ -349,9 +349,13 @@ impl PyVirtualChunkContainer {
     }
 }
 
-impl From<PyVirtualChunkContainer> for VirtualChunkContainer {
-    fn from(value: PyVirtualChunkContainer) -> Self {
-        Self { name: value.name, url_prefix: value.url_prefix, store: value.store.into() }
+impl From<&PyVirtualChunkContainer> for VirtualChunkContainer {
+    fn from(value: &PyVirtualChunkContainer) -> Self {
+        Self {
+            name: value.name.clone(),
+            url_prefix: value.url_prefix.clone(),
+            store: (&value.store).into(),
+        }
     }
 }
 
@@ -416,9 +420,9 @@ impl From<CompressionConfig> for PyCompressionConfig {
     }
 }
 
-impl From<PyCompressionConfig> for CompressionConfig {
-    fn from(value: PyCompressionConfig) -> Self {
-        Self { algorithm: value.algorithm.into(), level: value.level }
+impl From<&PyCompressionConfig> for CompressionConfig {
+    fn from(value: &PyCompressionConfig) -> Self {
+        Self { algorithm: value.algorithm.clone().into(), level: value.level }
     }
 }
 
@@ -446,8 +450,8 @@ impl PyCachingConfig {
     }
 }
 
-impl From<PyCachingConfig> for CachingConfig {
-    fn from(value: PyCachingConfig) -> Self {
+impl From<&PyCachingConfig> for CachingConfig {
+    fn from(value: &PyCachingConfig) -> Self {
         Self {
             snapshots_cache_size: value.snapshots_cache_size,
             manifests_cache_size: value.manifests_cache_size,
@@ -488,8 +492,8 @@ impl From<ConcurrencySettings> for PyStorageConcurrencySettings {
     }
 }
 
-impl From<PyStorageConcurrencySettings> for ConcurrencySettings {
-    fn from(value: PyStorageConcurrencySettings) -> Self {
+impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
+    fn from(value: &PyStorageConcurrencySettings) -> Self {
         Self {
             max_concurrent_requests_for_object: value.max_concurrent_requests_for_object,
             ideal_concurrent_request_size: value.ideal_concurrent_request_size,
@@ -498,26 +502,45 @@ impl From<PyStorageConcurrencySettings> for ConcurrencySettings {
 }
 
 #[pyclass(name = "StorageSettings", eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct PyStorageSettings {
     #[pyo3(get, set)]
-    pub concurrency: PyStorageConcurrencySettings,
+    pub concurrency: Py<PyStorageConcurrencySettings>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
     fn from(value: storage::Settings) -> Self {
-        Self { concurrency: value.concurrency.into() }
+        Python::with_gil(|py| Self {
+            #[allow(clippy::expect_used)]
+            concurrency: Py::new(
+                py,
+                Into::<PyStorageConcurrencySettings>::into(value.concurrency),
+            )
+            .expect("Cannot create instance of StorageConcurrencySettings"),
+        })
     }
 }
 
-impl From<PyStorageSettings> for storage::Settings {
-    fn from(value: PyStorageSettings) -> Self {
-        Self { concurrency: value.concurrency.into() }
+impl From<&PyStorageSettings> for storage::Settings {
+    fn from(value: &PyStorageSettings) -> Self {
+        Python::with_gil(|py| Self {
+            concurrency: (&*value.concurrency.borrow(py)).into(),
+        })
     }
 }
+
+impl PartialEq for PyStorageSettings {
+    fn eq(&self, other: &Self) -> bool {
+        Python::with_gil(|py| {
+            *self.concurrency.borrow(py) == *other.concurrency.borrow(py)
+        })
+    }
+}
+
+impl Eq for PyStorageSettings {}
 
 #[pyclass(name = "RepositoryConfig", eq)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub inline_chunk_threshold_bytes: u16,
@@ -526,48 +549,80 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub get_partial_values_concurrency: u16,
     #[pyo3(get, set)]
-    pub compression: PyCompressionConfig,
+    pub compression: Py<PyCompressionConfig>,
     #[pyo3(get, set)]
-    pub caching: PyCachingConfig,
+    pub caching: Py<PyCachingConfig>,
     #[pyo3(get, set)]
-    pub storage: Option<PyStorageSettings>,
+    pub storage: Option<Py<PyStorageSettings>>,
     #[pyo3(get, set)]
     pub virtual_chunk_containers: HashMap<String, PyVirtualChunkContainer>,
 }
 
-impl From<PyRepositoryConfig> for RepositoryConfig {
-    fn from(value: PyRepositoryConfig) -> Self {
-        Self {
+impl PartialEq for PyRepositoryConfig {
+    fn eq(&self, other: &Self) -> bool {
+        Python::with_gil(|py| {
+            let compression =
+                *self.compression.borrow(py) == *other.compression.borrow(py);
+            let caching = *self.caching.borrow(py) == *other.caching.borrow(py);
+            let storage = match (&self.storage, &other.storage) {
+                (Some(s1), Some(s2)) => *s1.borrow(py) == *s2.borrow(py),
+                (None, None) => true,
+                _ => false,
+            };
+            self.inline_chunk_threshold_bytes == other.inline_chunk_threshold_bytes
+                && self.unsafe_overwrite_refs == other.unsafe_overwrite_refs
+                && self.get_partial_values_concurrency
+                    == other.get_partial_values_concurrency
+                && self.virtual_chunk_containers == other.virtual_chunk_containers
+                && compression
+                && caching
+                && storage
+        })
+    }
+}
+
+impl From<&PyRepositoryConfig> for RepositoryConfig {
+    fn from(value: &PyRepositoryConfig) -> Self {
+        Python::with_gil(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
-            storage: value.storage.map(|s| s.into()),
-            compression: value.compression.into(),
-            caching: value.caching.into(),
+            compression: (&*value.compression.borrow(py)).into(),
+            caching: (&*value.caching.borrow(py)).into(),
+            storage: value.storage.as_ref().map(|storage| (&*storage.borrow(py)).into()),
             virtual_chunk_containers: value
                 .virtual_chunk_containers
-                .into_iter()
-                .map(|(name, cont)| (name, cont.into()))
+                .iter()
+                .map(|(name, cont)| (name.clone(), cont.into()))
                 .collect(),
-        }
+        })
     }
 }
 
 impl From<RepositoryConfig> for PyRepositoryConfig {
     fn from(value: RepositoryConfig) -> Self {
-        Self {
+        #[allow(clippy::expect_used)]
+        Python::with_gil(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
-            storage: value.storage.map(|s| s.into()),
-            compression: value.compression.into(),
-            caching: value.caching.into(),
+            compression: Py::new(
+                py,
+                Into::<PyCompressionConfig>::into(value.compression),
+            )
+            .expect("Cannot create instance of CompressionConfig"),
+            caching: Py::new(py, Into::<PyCachingConfig>::into(value.caching))
+                .expect("Cannot create instance of CachingConfig"),
+            storage: value.storage.map(|storage| {
+                Py::new(py, Into::<PyStorageSettings>::into(storage))
+                    .expect("Cannot create instance of StorageSettings")
+            }),
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .into_iter()
                 .map(|(name, cont)| (name, cont.into()))
                 .collect(),
-        }
+        })
     }
 }
 
@@ -598,7 +653,7 @@ impl PyStorage {
     #[classmethod]
     pub fn new_s3(
         _cls: &Bound<'_, PyType>,
-        config: PyS3Options,
+        config: &PyS3Options,
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,

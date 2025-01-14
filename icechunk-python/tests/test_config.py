@@ -142,3 +142,28 @@ def test_virtual_chunk_containers() -> None:
         if name == "custom"
     ]
     assert found_cont == [container]
+
+
+def test_can_change_deep_config_values() -> None:
+    storage = icechunk.in_memory_storage()
+    repo = icechunk.Repository.create(
+        storage=storage,
+    )
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
+    config.compression.level = 2
+    config.caching.manifests_cache_size = 8
+    config.storage = storage.default_settings()
+    config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
+
+    repo = icechunk.Repository.open(
+        storage=storage,
+        config=config,
+    )
+    repo.save_config()
+
+    stored_config = icechunk.Repository.fetch_config(storage)
+    assert stored_config.inline_chunk_threshold_bytes == 5
+    assert stored_config.compression.level == 2
+    assert stored_config.caching.manifests_cache_size == 8
+    assert stored_config.storage.concurrency.ideal_concurrent_request_size == 1_000_000
