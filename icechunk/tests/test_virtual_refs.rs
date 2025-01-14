@@ -13,8 +13,11 @@ mod tests {
             ByteRange, ChunkId, ChunkIndices, Path,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+        repository::VersionInfo,
         session::{get_chunk, SessionError},
-        storage::{new_s3_storage, s3::mk_client, ObjectStorage},
+        storage::{
+            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ObjectStorage,
+        },
         store::StoreError,
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
@@ -407,6 +410,46 @@ mod tests {
                 Some(range.slice(bytes1.clone()))
             );
         }
+
+        // check if we can fetch the virtual chunks in multiple small requests
+        ds.commit("done", None).await?;
+
+        let mut config = repo.config().clone();
+        config.storage = Some(storage::Settings {
+            concurrency: ConcurrencySettings {
+                max_concurrent_requests_for_object: 100.try_into()?,
+                ideal_concurrent_request_size: 1.try_into()?,
+            },
+        });
+        let repo = repo.reopen(Some(config), None)?;
+        assert_eq!(
+            repo.config()
+                .storage
+                .as_ref()
+                .unwrap()
+                .concurrency
+                .ideal_concurrent_request_size,
+            1.try_into()?
+        );
+        let session = repo
+            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_chunk(
+                session
+                    .get_chunk_reader(
+                        &new_array_path,
+                        &ChunkIndices(vec![0, 0, 0]),
+                        &ByteRange::ALL
+                    )
+                    .await
+                    .unwrap()
+            )
+            .await
+            .unwrap(),
+            Some(bytes1.clone()),
+        );
         Ok(())
     }
 

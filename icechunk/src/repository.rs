@@ -209,6 +209,7 @@ impl Repository {
         let virtual_resolver = Arc::new(VirtualChunkResolver::new(
             containers,
             virtual_chunk_credentials.clone(),
+            storage_settings.clone(),
         ));
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
