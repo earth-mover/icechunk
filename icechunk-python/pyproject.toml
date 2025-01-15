@@ -27,6 +27,7 @@ readme = "../README.md"
 packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
+perf = ["typer", "tqdm", "toolz"]
 test = [
   "boto3",
   "coverage",
