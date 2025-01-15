@@ -141,6 +141,30 @@ impl PyRepository {
         })
     }
 
+    /// Reopen the repository changing its config and or virtual chunk credentials
+    ///
+    /// If config is None, it will use the same value as self
+    /// If virtual_chunk_credentials is None, it will use the same value as self
+    /// If virtual_chunk_credentials is Some(x), it will override with x
+    #[pyo3(signature = (*, config = None, virtual_chunk_credentials = None::<Option<HashMap<String, PyCredentials>>>))]
+    pub fn reopen(
+        &self,
+        py: Python<'_>,
+        config: Option<&PyRepositoryConfig>,
+        virtual_chunk_credentials: Option<Option<HashMap<String, PyCredentials>>>,
+    ) -> PyResult<Self> {
+        py.allow_threads(move || {
+            Ok(Self(
+                self.0
+                    .reopen(
+                        config.map(|c| c.into()),
+                        virtual_chunk_credentials.map(map_credentials),
+                    )
+                    .map_err(PyIcechunkStoreError::RepositoryError)?,
+            ))
+        })
+    }
+
     #[staticmethod]
     fn fetch_config(
         py: Python<'_>,
