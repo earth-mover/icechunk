@@ -105,11 +105,17 @@ async def write_a_test_repo() -> None:
     session = repo.writable_session("main")
     store = session.store
 
+    # We are going to write this chunk to storage as a virtual chunk
+    # We need to know its size
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+    chunk = await store.get("group1/big_chunks/c/0/1", prototype=buffer_prototype)
+    virtual_chunk_data_size = len(chunk.to_bytes())
+
     store.set_virtual_ref(
         "group1/big_chunks/c/0/0",
         "s3://testbucket/can_read_old/chunk-1",
         offset=0,
-        length=5 * 5 * 4,
+        length=virtual_chunk_data_size,
         checksum=datetime(9999, 12, 31, tzinfo=UTC),
     )
     snapshot = session.commit("set virtual chunk")
