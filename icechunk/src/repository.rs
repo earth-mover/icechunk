@@ -86,6 +86,7 @@ pub struct Repository {
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
+    virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
 }
 
 impl Repository {
@@ -200,14 +201,15 @@ impl Repository {
             &config.virtual_chunk_containers,
             &virtual_chunk_credentials,
         )?;
-        let virtual_resolver =
-            Arc::new(VirtualChunkResolver::new(containers, virtual_chunk_credentials));
-
         let storage_settings = config
             .storage
             .as_ref()
             .cloned()
             .unwrap_or_else(|| storage.default_settings());
+        let virtual_resolver = Arc::new(VirtualChunkResolver::new(
+            containers,
+            virtual_chunk_credentials.clone(),
+        ));
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
             storage_settings.clone(),
@@ -220,6 +222,7 @@ impl Repository {
             storage_settings,
             virtual_resolver,
             asset_manager,
+            virtual_chunk_credentials,
         })
     }
 
@@ -231,6 +234,21 @@ impl Repository {
             Err(RefError::RefNotFound(_)) => Ok(false),
             Err(err) => Err(err.into()),
         }
+    }
+
+    /// Reopen the repository changing its config and or virtual chunk credentials
+    pub fn reopen(
+        &self,
+        config: Option<RepositoryConfig>,
+        virtual_chunk_credentials: Option<HashMap<ContainerName, Credentials>>,
+    ) -> RepositoryResult<Self> {
+        Self::new(
+            config.unwrap_or_else(|| self.config.clone()),
+            self.config_etag.clone(),
+            Arc::clone(&self.storage),
+            virtual_chunk_credentials
+                .unwrap_or_else(|| self.virtual_chunk_credentials.clone()),
+        )
     }
 
     pub async fn fetch_config(
