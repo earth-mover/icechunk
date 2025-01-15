@@ -2,7 +2,8 @@ use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError, Client};
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
+use futures::{stream::FuturesOrdered, TryStreamExt};
 use object_store::{local::LocalFileSystem, path::Path, GetOptions, ObjectStore};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -15,7 +16,11 @@ use crate::{
         ChunkOffset,
     },
     private,
-    storage::s3::{mk_client, range_to_header},
+    storage::{
+        self,
+        s3::{mk_client, range_to_header},
+        split_in_multiple_requests,
+    },
     ObjectStoreConfig,
 };
 
@@ -129,6 +134,7 @@ fn find_container<'a>(
 pub struct VirtualChunkResolver {
     containers: Vec<VirtualChunkContainer>,
     credentials: HashMap<ContainerName, Credentials>,
+    settings: storage::Settings,
     #[serde(skip)]
     fetchers: RwLock<HashMap<ContainerName, Arc<dyn ChunkFetcher>>>,
 }
@@ -137,12 +143,14 @@ impl VirtualChunkResolver {
     pub fn new(
         containers: impl Iterator<Item = VirtualChunkContainer>,
         credentials: HashMap<ContainerName, Credentials>,
+        settings: storage::Settings,
     ) -> Self {
         let mut containers = containers.collect::<Vec<_>>();
         sort_containers(&mut containers);
         VirtualChunkResolver {
             containers,
             credentials,
+            settings,
             fetchers: RwLock::new(HashMap::new()),
         }
     }
@@ -220,7 +228,7 @@ impl VirtualChunkResolver {
                         }
                     }
                 };
-                Ok(Arc::new(S3Fetcher::new(opts, creds).await))
+                Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
             // FIXME: implement
             ObjectStoreConfig::Gcs { .. } => {
@@ -245,11 +253,99 @@ impl VirtualChunkResolver {
 #[derive(Debug)]
 pub struct S3Fetcher {
     client: Arc<Client>,
+    settings: storage::Settings,
 }
 
 impl S3Fetcher {
-    pub async fn new(opts: &S3Options, credentials: &S3Credentials) -> Self {
-        Self { client: Arc::new(mk_client(opts, credentials.clone()).await) }
+    pub async fn new(
+        opts: &S3Options,
+        credentials: &S3Credentials,
+        settings: storage::Settings,
+    ) -> Self {
+        Self { settings, client: Arc::new(mk_client(opts, credentials.clone()).await) }
+    }
+
+    async fn get_object_concurrently(
+        &self,
+        key: &str,
+        location: &str, //used for errors
+        bucket: &str,
+        range: &Range<u64>,
+        checksum: Option<&Checksum>,
+    ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
+        let client = &self.client;
+        let results = split_in_multiple_requests(
+            range,
+            self.settings.concurrency.ideal_concurrent_request_size.get(),
+            self.settings.concurrency.max_concurrent_requests_for_object.get(),
+        )
+        .map(|range| async move {
+            let key = key.to_string();
+            let client = Arc::clone(client);
+            let bucket = bucket.to_string();
+            let mut b = client
+                .get_object()
+                .bucket(bucket)
+                .key(key)
+                .range(range_to_header(&range));
+
+            match checksum {
+                Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                    b = b.if_unmodified_since(
+                        aws_sdk_s3::primitives::DateTime::from_secs(*seconds as i64),
+                    )
+                }
+                Some(Checksum::ETag(etag)) => {
+                    b = b.if_match(etag);
+                }
+                None => {}
+            };
+
+            b.send()
+                .await
+                .map_err(|e| match e {
+                    // minio returns this
+                    SdkError::ServiceError(err) => {
+                        if err.err().meta().code() == Some("PreconditionFailed") {
+                            VirtualReferenceError::ObjectModified(location.to_string())
+                        } else {
+                            VirtualReferenceError::FetchError(Box::new(SdkError::<
+                                GetObjectError,
+                            >::ServiceError(
+                                err
+                            )))
+                        }
+                    }
+                    // S3 API documents this
+                    SdkError::ResponseError(err) => {
+                        let status = err.raw().status().as_u16();
+                        // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                        if status == 409 || status == 412 {
+                            VirtualReferenceError::ObjectModified(location.to_string())
+                        } else {
+                            VirtualReferenceError::FetchError(Box::new(SdkError::<
+                                GetObjectError,
+                            >::ResponseError(
+                                err
+                            )))
+                        }
+                    }
+                    other_err => VirtualReferenceError::FetchError(Box::new(other_err)),
+                })?
+                .body
+                .collect()
+                .await
+                .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))
+        })
+        .collect::<FuturesOrdered<_>>();
+
+        let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
+        results
+            .try_fold(init, |prev, agg_bytes| async {
+                let res: Box<dyn Buf + Unpin + Send> = Box::new(prev.chain(agg_bytes));
+                Ok(res)
+            })
+            .await
     }
 }
 
@@ -275,59 +371,18 @@ impl ChunkFetcher for S3Fetcher {
 
         let key = url.path();
         let key = key.strip_prefix('/').unwrap_or(key);
-        let mut b = self
-            .client
-            .get_object()
-            .bucket(bucket_name)
-            .key(key)
-            .range(range_to_header(range));
-
-        match checksum {
-            Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
-                b = b.if_unmodified_since(aws_sdk_s3::primitives::DateTime::from_secs(
-                    *seconds as i64,
-                ))
-            }
-            Some(Checksum::ETag(etag)) => {
-                b = b.if_match(etag);
-            }
-            None => {}
-        }
-
-        match b.send().await {
-            Ok(out) => Ok(out
-                .body
-                .collect()
-                .await
-                .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))?
-                .into_bytes()),
-            // minio returns this
-            Err(SdkError::ServiceError(err)) => {
-                if err.err().meta().code() == Some("PreconditionFailed") {
-                    Err(VirtualReferenceError::ObjectModified(location.to_string()))
-                } else {
-                    Err(VirtualReferenceError::FetchError(Box::new(SdkError::<
-                        GetObjectError,
-                    >::ServiceError(
-                        err
-                    ))))
-                }
-            }
-            // S3 API documents this
-            Err(SdkError::ResponseError(err)) => {
-                let status = err.raw().status().as_u16();
-                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
-                if status == 409 || status == 412 {
-                    Err(VirtualReferenceError::ObjectModified(location.to_string()))
-                } else {
-                    Err(VirtualReferenceError::FetchError(Box::new(SdkError::<
-                        GetObjectError,
-                    >::ResponseError(
-                        err
-                    ))))
-                }
-            }
-            Err(err) => Err(VirtualReferenceError::FetchError(Box::new(err))),
+        let mut buf = self
+            .get_object_concurrently(key, location, bucket_name.as_str(), range, checksum)
+            .await?;
+        let needed_bytes = range.end - range.start;
+        let remaining = buf.remaining() as u64;
+        if remaining != needed_bytes {
+            Err(VirtualReferenceError::InvalidObjectSize {
+                expected: needed_bytes,
+                available: remaining,
+            })
+        } else {
+            Ok(buf.copy_to_bytes(needed_bytes as usize))
         }
     }
 }

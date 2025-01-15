@@ -41,6 +41,8 @@ pub enum VirtualReferenceError {
     FetchError(Box<dyn std::error::Error + Send + Sync>),
     #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
     ObjectModified(String),
+    #[error("error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})")]
+    InvalidObjectSize { expected: u64, available: u64 },
     #[error("error parsing virtual reference {0}")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
