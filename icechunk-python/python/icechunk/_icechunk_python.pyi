@@ -74,6 +74,15 @@ class CompressionConfig:
 
 class CachingConfig:
     """Configuration for how Icechunk caches its metadata files"""
+
+    def __init__(
+        self,
+        snapshots_cache_size: int,
+        manifests_cache_size: int,
+        transactions_cache_size: int,
+        attributes_cache_size: int,
+        chunks_cache_size: int,
+    ) -> None: ...
     @property
     def snapshots_cache_size(self) -> int: ...
     @snapshots_cache_size.setter
@@ -100,6 +109,9 @@ class CachingConfig:
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
+    def __init__(
+        self, max_concurrent_requests_for_object: int, ideal_concurrent_request_size: int
+    ) -> None: ...
     @property
     def max_concurrent_requests_for_object(self) -> int: ...
     @max_concurrent_requests_for_object.setter
@@ -112,6 +124,7 @@ class StorageConcurrencySettings:
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
+    def __init__(self, concurrency: StorageConcurrencySettings) -> None: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings: ...
     @concurrency.setter
