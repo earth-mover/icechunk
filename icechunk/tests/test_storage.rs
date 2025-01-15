@@ -135,19 +135,17 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
             )
             .await?;
         let mut read =
-            storage.fetch_manifest_single_request(&storage_settings, &id).await?;
+            storage.fetch_manifest_unknown_size(&storage_settings, &id).await?;
         let mut bytes_back = [0; 1024];
         read.read_exact(&mut bytes_back).await?;
         assert_eq!(bytes_back, bytes);
 
-        let mut read = storage.fetch_manifest(&storage_settings, &id, 1024).await?;
-        read.read_exact(&mut bytes_back).await?;
-        assert_eq!(bytes_back, bytes);
-
-        let mut read =
-            storage.fetch_manifest_splitting(&storage_settings, &id, 1024).await?;
-        read.read_exact(&mut bytes_back).await?;
-        assert_eq!(bytes_back, bytes);
+        let bytes_back = storage
+            .fetch_manifest_known_size(&storage_settings, &id, 1024)
+            .await?
+            .to_bytes(1024)
+            .await?;
+        assert_eq!(bytes_back, Bytes::copy_from_slice(&bytes[..]));
         Ok(())
     })
     .await?;
