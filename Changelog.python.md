@@ -1,5 +1,34 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a12
+
+### Features
+
+- New `Repository.reopen` function to ope a repo again, overwriting its configuration and/or virtual chunk container credentials
+- Configuration classes are now mutable and easier to use:
+
+  ```python
+   storage = ...
+   config = icechunk.RepositoryConfig.default()
+   config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
+
+   repo = icechunk.Repository.open(
+       storage=storage,
+       config=config,
+   )
+- `ancestry` function can now receive a branch/tag name or a snapshot id
+- `set_virtual_ref` can now validate the virtual chunk container exists
+
+  ```
+
+### Performance
+
+- Better concurrent download of big chunks, both native and virtual
+
+### Fixes
+
+- We no longer allow `main` branch to be deleted
+
 ## Python Icechunk Library 0.1.0a11
 
 ### Features
