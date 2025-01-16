@@ -28,20 +28,17 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::{
-    stream::{self, BoxStream, FuturesOrdered},
+    stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt},
-    sync::OnceCell,
-};
+use tokio::{io::AsyncRead, sync::OnceCell};
 
 use super::{
-    split_in_multiple_requests, ETag, ListInfo, Settings, StorageResult, CHUNK_PREFIX,
-    CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    ETag, ListInfo, Reader, Settings, StorageResult, CHUNK_PREFIX, CONFIG_PATH,
+    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -182,34 +179,6 @@ impl S3Storage {
         let client = self.get_client().await;
         let b = client.get_object().bucket(self.bucket.as_str()).key(key);
         Ok(Box::new(b.send().await?.body.into_async_read()))
-    }
-
-    async fn get_object_concurrently(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let client = self.get_client().await;
-        let mut results = split_in_multiple_requests(
-            range,
-            settings.concurrency.ideal_concurrent_request_size.get(),
-            settings.concurrency.max_concurrent_requests_for_object.get(),
-        )
-        .map(|range| async move {
-            let key = key.to_string();
-            let client = Arc::clone(client);
-            let bucket = self.bucket.clone();
-            get_object_range(client.as_ref(), bucket, &key, &range).await
-        })
-        .collect::<FuturesOrdered<_>>();
-
-        let mut res: Box<dyn AsyncRead + Unpin + Send> = Box::new(tokio::io::empty());
-        while let Some(read) = results.try_next().await? {
-            res = Box::new(res.chain(read));
-        }
-
-        Ok(res)
     }
 
     async fn put_object<
@@ -368,17 +337,17 @@ impl Storage for S3Storage {
         self.get_object_reader(settings, key.as_str()).await
     }
 
-    async fn fetch_manifest_splitting(
+    async fn fetch_manifest_known_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+    ) -> StorageResult<Reader> {
         let key = self.get_manifest_path(id)?;
         self.get_object_concurrently(settings, key.as_str(), &(0..size)).await
     }
 
-    async fn fetch_manifest_single_request(
+    async fn fetch_manifest_unknown_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
@@ -403,12 +372,10 @@ impl Storage for S3Storage {
         range: &Range<ChunkOffset>,
     ) -> StorageResult<Bytes> {
         let key = self.get_chunk_path(id)?;
-        let mut read =
-            self.get_object_concurrently(settings, key.as_str(), range).await?;
-        // add some extra space to the buffer to optimize conversion to bytes
-        let mut buffer = Vec::with_capacity((range.end - range.start + 16) as usize);
-        tokio::io::copy(&mut read, &mut buffer).await?;
-        Ok(buffer.into())
+        self.get_object_concurrently(settings, key.as_str(), range)
+            .await?
+            .to_bytes((range.end - range.start) as usize)
+            .await
     }
 
     async fn write_snapshot(
@@ -622,6 +589,31 @@ impl Storage for S3Storage {
             })
             .await;
         Ok(deleted.into_inner())
+    }
+
+    async fn get_object_range_buf(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
+        let b = self
+            .get_client()
+            .await
+            .get_object()
+            .bucket(self.bucket.as_str())
+            .key(key)
+            .range(range_to_header(range));
+        Ok(Box::new(b.send().await?.body.collect().await?))
+    }
+
+    async fn get_object_range_read(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let client = self.get_client().await;
+        let bucket = self.bucket.clone();
+        Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range).await?))
     }
 }
 

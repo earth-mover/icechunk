@@ -4,12 +4,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
 
-use super::{ETag, ListInfo, Settings, Storage, StorageError, StorageResult};
+use super::{ETag, ListInfo, Reader, Settings, Storage, StorageError, StorageResult};
 use crate::{
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
@@ -81,20 +81,20 @@ impl Storage for LoggingStorage {
         self.backend.fetch_transaction_log(settings, id).await
     }
 
-    async fn fetch_manifest_splitting(
+    async fn fetch_manifest_known_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+    ) -> StorageResult<Reader> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("fetch_manifest_splitting".to_string(), id.to_string()));
-        self.backend.fetch_manifest_splitting(settings, id, size).await
+        self.backend.fetch_manifest_known_size(settings, id, size).await
     }
 
-    async fn fetch_manifest_single_request(
+    async fn fetch_manifest_unknown_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
@@ -103,7 +103,7 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("fetch_manifest_single_request".to_string(), id.to_string()));
-        self.backend.fetch_manifest_single_request(settings, id).await
+        self.backend.fetch_manifest_unknown_size(settings, id).await
     }
 
     async fn fetch_chunk(
@@ -199,5 +199,21 @@ impl Storage for LoggingStorage {
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
         self.backend.delete_objects(settings, prefix, ids).await
+    }
+
+    async fn get_object_range_buf(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
+        self.backend.get_object_range_buf(key, range).await
+    }
+
+    async fn get_object_range_read(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        self.backend.get_object_range_read(key, range).await
     }
 }

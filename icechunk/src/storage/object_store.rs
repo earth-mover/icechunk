@@ -3,9 +3,9 @@ use crate::{
     private,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::{
-    stream::{self, BoxStream, FuturesOrdered},
+    stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
 use object_store::{
@@ -30,8 +30,8 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
 use super::{
-    split_in_multiple_requests, ConcurrencySettings, ETag, ListInfo, Settings, Storage,
-    StorageError, StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
+    ConcurrencySettings, ETag, ListInfo, Reader, Settings, Storage, StorageError,
+    StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
     SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
@@ -206,35 +206,6 @@ impl ObjectStorage {
         Ok(results.filter(|res| ready(res.is_ok())).count().await)
     }
 
-    async fn get_object_concurrently(
-        &self,
-        settings: &Settings,
-        path: &ObjectPath,
-        range: &Range<u64>,
-    ) -> StorageResult<impl AsyncRead> {
-        let mut results = split_in_multiple_requests(
-            range,
-            settings.concurrency.ideal_concurrent_request_size.get(),
-            settings.concurrency.max_concurrent_requests_for_object.get(),
-        )
-        .map(|range| async move {
-            let store = Arc::clone(&self.store);
-            let usize_range = range.start as usize..range.end as usize;
-            let range = Some(usize_range.into());
-            let opts = GetOptions { range, ..Default::default() };
-            let path = path.clone();
-            store.get_opts(&path, opts).await
-        })
-        .collect::<FuturesOrdered<_>>();
-
-        let mut res = stream::empty().boxed();
-        while let Some(result) = results.try_next().await? {
-            res = res.chain(result.into_stream()).boxed();
-        }
-
-        Ok(res.err_into().into_async_read().compat())
-    }
-
     async fn get_object_reader(
         &self,
         _settings: &Settings,
@@ -372,17 +343,17 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
-    async fn fetch_manifest_splitting(
+    async fn fetch_manifest_known_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+    ) -> StorageResult<Reader> {
         let path = self.get_manifest_path(id);
-        Ok(Box::new(self.get_object_concurrently(settings, &path, &(0..size)).await?))
+        self.get_object_concurrently(settings, path.as_ref(), &(0..size)).await
     }
 
-    async fn fetch_manifest_single_request(
+    async fn fetch_manifest_unknown_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
@@ -452,11 +423,10 @@ impl Storage for ObjectStorage {
         range: &Range<ChunkOffset>,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_chunk_path(id);
-        let mut read = self.get_object_concurrently(settings, &path, range).await?;
-        // add some extra space to the buffer to optimize conversion to bytes
-        let mut buffer = Vec::with_capacity((range.end - range.start + 16) as usize);
-        tokio::io::copy(&mut read, &mut buffer).await?;
-        Ok(buffer.into())
+        self.get_object_concurrently(settings, path.as_ref(), range)
+            .await?
+            .to_bytes((range.end - range.start + 16) as usize)
+            .await
     }
 
     async fn write_chunk(
@@ -580,6 +550,39 @@ impl Storage for ObjectStorage {
             })
             .await;
         Ok(deleted.into_inner())
+    }
+
+    async fn get_object_range_buf(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
+        let path = ObjectPath::from(key);
+        let usize_range = range.start as usize..range.end as usize;
+        let range = Some(usize_range.into());
+        let opts = GetOptions { range, ..Default::default() };
+        Ok(Box::new(self.store.get_opts(&path, opts).await?.bytes().await?))
+    }
+
+    async fn get_object_range_read(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let path = ObjectPath::from(key);
+        let usize_range = range.start as usize..range.end as usize;
+        let range = Some(usize_range.into());
+        let opts = GetOptions { range, ..Default::default() };
+        let res: Box<dyn AsyncRead + Unpin + Send> = Box::new(
+            self.store
+                .get_opts(&path, opts)
+                .await?
+                .into_stream()
+                .err_into()
+                .into_async_read()
+                .compat(),
+        );
+        Ok(res)
     }
 }
 
