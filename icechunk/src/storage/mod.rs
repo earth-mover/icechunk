@@ -13,7 +13,10 @@ use aws_sdk_s3::{
 };
 use chrono::{DateTime, Utc};
 use core::fmt;
-use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
+use futures::{
+    stream::{BoxStream, FuturesOrdered},
+    Stream, StreamExt, TryStreamExt,
+};
 use itertools::Itertools;
 use object_store::ObjectStorageConfig;
 use s3::S3Storage;
@@ -22,6 +25,7 @@ use std::{
     cmp::{max, min},
     collections::HashMap,
     ffi::OsString,
+    io::Read,
     iter,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
@@ -29,9 +33,10 @@ use std::{
     sync::Arc,
 };
 use tokio::io::AsyncRead;
+use tokio_util::io::SyncIoBridge;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use thiserror::Error;
 
 #[cfg(test)]
@@ -123,6 +128,33 @@ pub struct Settings {
     pub concurrency: ConcurrencySettings,
 }
 
+pub enum Reader {
+    Asynchronous(Box<dyn AsyncRead + Unpin + Send>),
+    Synchronous(Box<dyn Buf + Unpin + Send>),
+}
+
+impl Reader {
+    pub async fn to_bytes(self, expected_size: usize) -> StorageResult<Bytes> {
+        match self {
+            Reader::Asynchronous(mut read) => {
+                // add some extra space to the buffer to optimize conversion to bytes
+                let mut buffer = Vec::with_capacity(expected_size + 16);
+                tokio::io::copy(&mut read, &mut buffer).await?;
+                Ok(buffer.into())
+            }
+            Reader::Synchronous(mut buf) => Ok(buf.copy_to_bytes(buf.remaining())),
+        }
+    }
+
+    /// Notice this Read can only be used in non async contexts, for example, calling tokio::task::spawn_blocking
+    pub fn into_read(self) -> Box<dyn Read + Unpin + Send> {
+        match self {
+            Reader::Asynchronous(read) => Box::new(SyncIoBridge::new(read)),
+            Reader::Synchronous(buf) => Box::new(buf.reader()),
+        }
+    }
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
@@ -148,25 +180,18 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         settings: &Settings,
         id: &SnapshotId,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    async fn fetch_manifest(
+    /// Returns whatever reader is more efficient.
+    ///
+    /// For example, if processesed with multiple requests, it will return a synchronous `Buf`
+    /// instance pointing the different parts. If it was executed in a single request, it's more
+    /// efficient to return the network `AsyncRead` directly
+    async fn fetch_manifest_known_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        if size == 0 {
-            self.fetch_manifest_single_request(settings, id).await
-        } else {
-            self.fetch_manifest_splitting(settings, id, size).await
-        }
-    }
-    async fn fetch_manifest_splitting(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    async fn fetch_manifest_single_request(
+    ) -> StorageResult<Reader>;
+    async fn fetch_manifest_unknown_size(
         &self,
         settings: &Settings,
         id: &ManifestId,
@@ -306,6 +331,62 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         refs: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
         self.delete_objects(settings, REF_PREFIX, refs).await
+    }
+
+    async fn get_object_range_buf(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>>;
+
+    async fn get_object_range_read(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+
+    async fn get_object_concurrently_multiple(
+        &self,
+        key: &str,
+        parts: Vec<Range<u64>>,
+    ) -> StorageResult<Box<dyn Buf + Send + Unpin>> {
+        let results = parts
+            .into_iter()
+            .map(|range| async move { self.get_object_range_buf(key, &range).await })
+            .collect::<FuturesOrdered<_>>();
+
+        let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
+        let buf = results
+            .try_fold(init, |prev, buf| async {
+                let res: Box<dyn Buf + Unpin + Send> = Box::new(prev.chain(buf));
+                Ok(res)
+            })
+            .await?;
+
+        Ok(Box::new(buf))
+    }
+
+    async fn get_object_concurrently(
+        &self,
+        settings: &Settings,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Reader> {
+        let parts = split_in_multiple_requests(
+            range,
+            settings.concurrency.ideal_concurrent_request_size.get(),
+            settings.concurrency.max_concurrent_requests_for_object.get(),
+        )
+        .collect::<Vec<_>>();
+
+        let res = match parts.len() {
+            0 => Reader::Asynchronous(Box::new(tokio::io::empty())),
+            1 => Reader::Asynchronous(self.get_object_range_read(key, range).await?),
+            _ => Reader::Synchronous(
+                self.get_object_concurrently_multiple(key, parts).await?,
+            ),
+        };
+        Ok(res)
     }
 }
 

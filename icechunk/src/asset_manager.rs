@@ -1,9 +1,11 @@
 use bytes::Bytes;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
-use std::{io::BufReader, ops::Range, sync::Arc};
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio_util::io::SyncIoBridge;
+use std::{
+    io::{BufReader, Read},
+    ops::Range,
+    sync::Arc,
+};
 
 use crate::{
     config::CachingConfig,
@@ -14,7 +16,8 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryResult},
-    storage, Storage,
+    storage::{self, Reader},
+    Storage,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -284,12 +287,12 @@ fn binary_file_header(
     buffer
 }
 
-async fn check_header(
-    read: &mut (dyn AsyncRead + Unpin + Send),
+fn check_header(
+    read: &mut (dyn Read + Unpin + Send),
     file_type: u8,
 ) -> RepositoryResult<u8> {
     let mut buf = [0; 12];
-    read.read_exact(&mut buf).await?;
+    read.read_exact(&mut buf)?;
     // Magic numbers
     if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
         return Err(RepositoryError::FormatError(
@@ -299,16 +302,19 @@ async fn check_header(
 
     let mut buf = [0; 24];
     // ignore implementation name
-    read.read_exact(&mut buf).await?;
+    read.read_exact(&mut buf)?;
 
-    let spec_version = read.read_u8().await?;
+    let mut spec_version = 0;
+    read.read_exact(std::slice::from_mut(&mut spec_version))?;
+
     if spec_version > format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY {
         return Err(RepositoryError::FormatError(
             IcechunkFormatError::InvalidSpecVersion,
         ));
     }
 
-    let actual_file_type = read.read_u8().await?;
+    let mut actual_file_type = 0;
+    read.read_exact(std::slice::from_mut(&mut actual_file_type))?;
 
     if actual_file_type != file_type {
         return Err(RepositoryError::FormatError(IcechunkFormatError::InvalidFileType {
@@ -317,7 +323,8 @@ async fn check_header(
         }));
     }
 
-    let compression = read.read_u8().await?;
+    let mut compression = 0;
+    read.read_exact(std::slice::from_mut(&mut compression))?;
     Ok(compression)
 }
 
@@ -381,24 +388,37 @@ async fn fetch_manifest(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Manifest>> {
-    let read =
-        storage.fetch_manifest(storage_settings, manifest_id, manifest_size).await?;
-    check_decompress_and_parse(read, format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST)
+    if manifest_size > 0 {
+        let read = storage
+            .fetch_manifest_known_size(storage_settings, manifest_id, manifest_size)
+            .await?;
+        check_decompress_and_parse(
+            read,
+            format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST,
+        )
         .await
+    } else {
+        let read =
+            storage.fetch_manifest_unknown_size(storage_settings, manifest_id).await?;
+        check_decompress_and_parse(
+            Reader::Asynchronous(read),
+            format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST,
+        )
+        .await
+    }
 }
 
 async fn check_decompress_and_parse<T>(
-    mut read: Box<dyn AsyncRead + Unpin + Send>,
+    data: Reader,
     file_type: u8,
 ) -> RepositoryResult<Arc<T>>
 where
     for<'de> T: Send + Deserialize<'de> + 'static,
 {
-    let compression = check_header(read.as_mut(), file_type).await?;
-    debug_assert_eq!(compression, 1);
-
+    let mut sync_read = data.into_read();
     let object = tokio::task::spawn_blocking(move || {
-        let sync_read = SyncIoBridge::new(read);
+        let compression = check_header(sync_read.as_mut(), file_type)?;
+        debug_assert_eq!(compression, 1);
         // We find a performance impact if we don't buffer here
         let decompressor =
             BufReader::with_capacity(1_024, zstd::stream::Decoder::new(sync_read)?);
@@ -456,8 +476,11 @@ async fn fetch_snapshot(
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Snapshot>> {
     let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
-    check_decompress_and_parse(read, format_constants::ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT)
-        .await
+    check_decompress_and_parse(
+        Reader::Asynchronous(read),
+        format_constants::ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT,
+    )
+    .await
 }
 
 async fn write_new_tx_log(
@@ -512,7 +535,7 @@ async fn fetch_transaction_log(
     let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
 
     check_decompress_and_parse(
-        read,
+        Reader::Asynchronous(read),
         format_constants::ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG,
     )
     .await
