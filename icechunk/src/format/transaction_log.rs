@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::change_set::ChangeSet;
 
 use super::{
-    format_constants,
+    format_constants::SpecVersionBin,
     snapshot::{NodeSnapshot, NodeType},
     ChunkIndices, IcechunkFormatVersion, NodeId,
 };
@@ -66,8 +66,7 @@ impl TransactionLog {
             updated_user_attributes,
             updated_zarr_metadata,
             updated_chunks,
-            icechunk_transaction_log_format_version:
-                format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY,
+            icechunk_transaction_log_format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
         }
     }
 }

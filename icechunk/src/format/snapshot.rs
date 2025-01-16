@@ -306,8 +306,7 @@ impl Iterator for NodeIterator {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::format::{
-        format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY, manifest::ManifestExtents,
-        IcechunkFormatError,
+        format_constants::SpecVersionBin, manifest::ManifestExtents, IcechunkFormatError,
     };
 
     use super::*;
@@ -427,12 +426,12 @@ mod tests {
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
-                format_version: LATEST_ICECHUNK_SPEC_VERSION_BINARY,
+                format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
                 size: 1_000_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
-                format_version: LATEST_ICECHUNK_SPEC_VERSION_BINARY,
+                format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
                 size: 1_000_000,
             },
         ];

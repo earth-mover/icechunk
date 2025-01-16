@@ -10,9 +10,11 @@ use std::{
 use crate::{
     config::CachingConfig,
     format::{
-        format_constants, manifest::Manifest, snapshot::Snapshot,
-        transaction_log::TransactionLog, ChunkId, ChunkOffset, IcechunkFormatError,
-        ManifestId, SnapshotId,
+        format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
+        manifest::Manifest,
+        snapshot::Snapshot,
+        transaction_log::TransactionLog,
+        ChunkId, ChunkOffset, IcechunkFormatError, ManifestId, SnapshotId,
     },
     private,
     repository::{RepositoryError, RepositoryResult},
@@ -267,9 +269,9 @@ impl AssetManager {
 }
 
 fn binary_file_header(
-    spec_version: u8,
-    file_type: u8,
-    compression_algorithm: u8,
+    spec_version: SpecVersionBin,
+    file_type: FileTypeBin,
+    compression_algorithm: CompressionAlgorithmBin,
 ) -> Vec<u8> {
     use format_constants::*;
     // TODO: initialize capacity
@@ -280,16 +282,16 @@ fn binary_file_header(
     let implementation = format!("{:<24}", &*ICECHUNK_CLIENT_NAME);
     buffer.extend_from_slice(&implementation.as_bytes()[..24]);
     // spec version
-    buffer.push(spec_version);
-    buffer.push(file_type);
+    buffer.push(spec_version as u8);
+    buffer.push(file_type as u8);
     // compression
-    buffer.push(compression_algorithm);
+    buffer.push(compression_algorithm as u8);
     buffer
 }
 
 fn check_header(
     read: &mut (dyn Read + Unpin + Send),
-    file_type: u8,
+    file_type: FileTypeBin,
 ) -> RepositoryResult<u8> {
     let mut buf = [0; 12];
     read.read_exact(&mut buf)?;
@@ -307,7 +309,7 @@ fn check_header(
     let mut spec_version = 0;
     read.read_exact(std::slice::from_mut(&mut spec_version))?;
 
-    if spec_version > format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY {
+    if spec_version > format_constants::SpecVersionBin::V0_1_0Alpha12 as u8 {
         return Err(RepositoryError::FormatError(
             IcechunkFormatError::InvalidSpecVersion,
         ));
@@ -316,7 +318,7 @@ fn check_header(
     let mut actual_file_type = 0;
     read.read_exact(std::slice::from_mut(&mut actual_file_type))?;
 
-    if actual_file_type != file_type {
+    if actual_file_type != file_type as u8 {
         return Err(RepositoryError::FormatError(IcechunkFormatError::InvalidFileType {
             expected: file_type,
             got: actual_file_type,
@@ -338,7 +340,7 @@ async fn write_new_manifest(
     let metadata = vec![
         (
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
-            LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
+            (SpecVersionBin::V0_1_0Alpha12 as u8).to_string(),
         ),
         (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
         (
@@ -352,15 +354,14 @@ async fn write_new_manifest(
     ];
 
     let new_manifest_info = if new_manifest.len() > 0 {
-        use format_constants::*;
         let id = ManifestId::random();
         // TODO: we should compress only when the manifest reaches a certain size
         // but then, we would need to include metadata to know if it's compressed or not
         let buffer = tokio::task::spawn_blocking(move || {
             let buffer = binary_file_header(
-                LATEST_ICECHUNK_SPEC_VERSION_BINARY,
-                ICECHUNK_FILE_TYPE_BINARY_MANIFEST,
-                ICECHUNK_COMPRESSION_BINARY_ZSTD,
+                SpecVersionBin::V0_1_0Alpha12,
+                FileTypeBin::Manifest,
+                CompressionAlgorithmBin::Zstd,
             );
             let mut compressor =
                 zstd::stream::Encoder::new(buffer, compression_level as i32)?;
@@ -392,25 +393,18 @@ async fn fetch_manifest(
         let read = storage
             .fetch_manifest_known_size(storage_settings, manifest_id, manifest_size)
             .await?;
-        check_decompress_and_parse(
-            read,
-            format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST,
-        )
-        .await
+        check_decompress_and_parse(read, FileTypeBin::Manifest).await
     } else {
         let read =
             storage.fetch_manifest_unknown_size(storage_settings, manifest_id).await?;
-        check_decompress_and_parse(
-            Reader::Asynchronous(read),
-            format_constants::ICECHUNK_FILE_TYPE_BINARY_MANIFEST,
-        )
-        .await
+        check_decompress_and_parse(Reader::Asynchronous(read), FileTypeBin::Manifest)
+            .await
     }
 }
 
 async fn check_decompress_and_parse<T>(
     data: Reader,
-    file_type: u8,
+    file_type: FileTypeBin,
 ) -> RepositoryResult<Arc<T>>
 where
     for<'de> T: Send + Deserialize<'de> + 'static,
@@ -438,7 +432,7 @@ async fn write_new_snapshot(
     let metadata = vec![
         (
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
-            LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
+            (SpecVersionBin::V0_1_0Alpha12 as u8).to_string(),
         ),
         (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
         (
@@ -454,9 +448,9 @@ async fn write_new_snapshot(
     let id = new_snapshot.metadata.id.clone();
     let buffer = tokio::task::spawn_blocking(move || {
         let buffer = binary_file_header(
-            LATEST_ICECHUNK_SPEC_VERSION_BINARY,
-            ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT,
-            ICECHUNK_COMPRESSION_BINARY_ZSTD,
+            SpecVersionBin::V0_1_0Alpha12,
+            FileTypeBin::Snapshot,
+            CompressionAlgorithmBin::Zstd,
         );
         let mut compressor =
             zstd::stream::Encoder::new(buffer, compression_level as i32)?;
@@ -476,11 +470,7 @@ async fn fetch_snapshot(
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Snapshot>> {
     let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
-    check_decompress_and_parse(
-        Reader::Asynchronous(read),
-        format_constants::ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT,
-    )
-    .await
+    check_decompress_and_parse(Reader::Asynchronous(read), FileTypeBin::Snapshot).await
 }
 
 async fn write_new_tx_log(
@@ -494,7 +484,7 @@ async fn write_new_tx_log(
     let metadata = vec![
         (
             LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
-            LATEST_ICECHUNK_SPEC_VERSION_BINARY.to_string(),
+            (SpecVersionBin::V0_1_0Alpha12 as u8).to_string(),
         ),
         (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
         (
@@ -509,9 +499,9 @@ async fn write_new_tx_log(
 
     let buffer = tokio::task::spawn_blocking(move || {
         let buffer = binary_file_header(
-            LATEST_ICECHUNK_SPEC_VERSION_BINARY,
-            ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG,
-            ICECHUNK_COMPRESSION_BINARY_ZSTD,
+            SpecVersionBin::V0_1_0Alpha12,
+            FileTypeBin::TransactionLog,
+            CompressionAlgorithmBin::Zstd,
         );
         let mut compressor =
             zstd::stream::Encoder::new(buffer, compression_level as i32)?;
@@ -536,7 +526,7 @@ async fn fetch_transaction_log(
 
     check_decompress_and_parse(
         Reader::Asynchronous(read),
-        format_constants::ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG,
+        format_constants::FileTypeBin::TransactionLog,
     )
     .await
 }

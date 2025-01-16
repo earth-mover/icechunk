@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::storage::ETag;
 
 use super::{
-    format_constants, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
+    format_constants::SpecVersionBin, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
     IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
 };
 
@@ -147,8 +147,7 @@ impl Manifest {
     pub fn new(chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>) -> Self {
         Self {
             chunks,
-            icechunk_manifest_format_version:
-                format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY,
+            icechunk_manifest_format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
             icechunk_manifest_format_flags: Default::default(),
         }
     }
