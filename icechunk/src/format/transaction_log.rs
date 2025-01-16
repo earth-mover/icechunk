@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
-
 use crate::change_set::ChangeSet;
 
 use super::{
@@ -10,7 +8,7 @@ use super::{
     ChunkIndices, IcechunkFormatVersion, NodeId,
 };
 
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionLog {
     // FIXME: better, more stable on-disk format
     pub icechunk_transaction_log_format_version: IcechunkFormatVersion,
@@ -66,7 +64,7 @@ impl TransactionLog {
             updated_user_attributes,
             updated_zarr_metadata,
             updated_chunks,
-            icechunk_transaction_log_format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
+            icechunk_transaction_log_format_version: SpecVersionBin::current() as u8,
         }
     }
 }

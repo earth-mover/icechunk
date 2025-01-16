@@ -118,11 +118,11 @@ pub struct ChunkInfo {
     pub payload: ChunkPayload,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Manifest {
     pub icechunk_manifest_format_version: IcechunkFormatVersion,
     pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
-    chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
+    pub(crate) chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
 impl Manifest {
@@ -147,7 +147,7 @@ impl Manifest {
     pub fn new(chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>) -> Self {
         Self {
             chunks,
-            icechunk_manifest_format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
+            icechunk_manifest_format_version: SpecVersionBin::current() as u8,
             icechunk_manifest_format_flags: Default::default(),
         }
     }

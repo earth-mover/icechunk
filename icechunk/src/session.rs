@@ -1174,7 +1174,7 @@ async fn flush(
             .map(|(mid, msize)| {
                 vec![ManifestFileInfo {
                     id: mid.clone(),
-                    format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
+                    format_version: SpecVersionBin::current() as u8,
                     size: *msize,
                 }]
             })
