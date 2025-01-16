@@ -20,7 +20,7 @@ dependencies = ["zarr>=3"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
 readme = "../README.md"
@@ -63,7 +63,7 @@ filterwarnings = [
   "error",
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
   "ignore:Port 8787 is already in use:UserWarning:",
-    # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
+  # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
   "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
   "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
   "ignore::ResourceWarning",
