@@ -15,7 +15,9 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
 use tokio::sync::RwLock;
 
 use crate::{
-    config::{PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings},
+    config::{
+        datetime_repr, PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings,
+    },
     errors::PyIcechunkStoreError,
     session::PySession,
 };
@@ -38,6 +40,19 @@ impl From<SnapshotMetadata> for PySnapshotMetadata {
             written_at: val.written_at,
             message: val.message,
         }
+    }
+}
+
+#[pymethods]
+impl PySnapshotMetadata {
+    pub fn __repr__(&self) -> String {
+        // TODO: escape
+        format!(
+            r#"SnapshotMetadata(id="{id}",written_at={at},message="{message}")"#,
+            id = self.id,
+            at = datetime_repr(&self.written_at),
+            message = self.message.chars().take(10).collect::<String>() + "...",
+        )
     }
 }
 

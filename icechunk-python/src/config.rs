@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
+    ops::Deref,
     path::PathBuf,
     sync::Arc,
 };
@@ -70,7 +71,7 @@ impl PyS3StaticCredentials {
         session_token = None,
         expires_after = None,
     ))]
-    fn new(
+    pub fn new(
         access_key_id: String,
         secret_access_key: String,
         session_token: Option<String>,
@@ -78,10 +79,54 @@ impl PyS3StaticCredentials {
     ) -> Self {
         Self { access_key_id, secret_access_key, session_token, expires_after }
     }
+
+    pub fn __repr__(&self) -> String {
+        // TODO: escape
+        format!(
+            r#"S3StaticCredentials(access_key_id="{ak}", secret_access_key="{sk}", session_token={st}, expires_after={ea})"#,
+            ak = self.access_key_id.as_str(),
+            sk = self.secret_access_key.as_str(),
+            st = format_option_string(self.session_token.as_ref()),
+            ea = format_option(self.expires_after.as_ref().map(datetime_repr))
+        )
+    }
 }
 
-#[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
+    match o.as_ref() {
+        None => "None".to_string(),
+        Some(s) => s.as_ref().to_string(),
+    }
+}
+
+fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
+    match o.as_ref() {
+        None => "None".to_string(),
+        Some(s) => format!(r#""{}""#, s.as_ref()),
+    }
+}
+
+fn format_bool(b: bool) -> &'static str {
+    match b {
+        true => "True",
+        false => "False",
+    }
+}
+
+pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
+    format!("datetime.datetime({y},{month},{d},{h},{min},{sec},{micro}, tzinfo=datetime.timezone.utc)",
+        y=d.year(),
+        month=d.month(),
+        d=d.day(),
+        h=d.hour(),
+        min=d.minute(),
+        sec=d.second(),
+        micro=(d.nanosecond()/1000),
+    )
+}
+
+#[pyclass(eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PythonCredentialsFetcher {
     pub pickled_function: Vec<u8>,
 }
@@ -92,8 +137,14 @@ impl PythonCredentialsFetcher {
     pub fn new(pickled_function: Vec<u8>) -> Self {
         PythonCredentialsFetcher { pickled_function }
     }
-}
 
+    pub fn __repr__(&self) -> String {
+        format!(
+            r#"PythonCredentialsFetcher(pickled_function=bytes.fromhex("{:02X?}"))"#,
+            self.pickled_function
+        )
+    }
+}
 #[async_trait]
 #[typetag::serde]
 impl CredentialsFetcher for PythonCredentialsFetcher {
@@ -255,6 +306,17 @@ impl PyS3Options {
         anonymous: bool,
     ) -> Self {
         Self { region, endpoint_url, allow_http, anonymous }
+    }
+
+    pub fn __repr__(&self) -> String {
+        // TODO: escape
+        format!(
+            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon})"#,
+            region = format_option_string(self.region.as_ref()),
+            url = format_option_string(self.endpoint_url.as_ref()),
+            http = format_bool(self.allow_http),
+            anon = format_bool(self.anonymous),
+        )
     }
 }
 
@@ -448,6 +510,34 @@ impl PyCachingConfig {
     fn default() -> Self {
         CachingConfig::default().into()
     }
+
+    #[new]
+    pub fn new(
+        snapshots_cache_size: u16,
+        manifests_cache_size: u16,
+        transactions_cache_size: u16,
+        attributes_cache_size: u16,
+        chunks_cache_size: u16,
+    ) -> Self {
+        Self {
+            snapshots_cache_size,
+            manifests_cache_size,
+            transactions_cache_size,
+            attributes_cache_size,
+            chunks_cache_size,
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            r#"CachingConfig(snapshots_cache_size={snap}, manifests_cache_size={man}, transactions_cache_size={tx}, attributes_cache_size={att}, chunks_cache_size={chunks})"#,
+            snap = self.snapshots_cache_size,
+            man = self.manifests_cache_size,
+            tx = self.transactions_cache_size,
+            att = self.attributes_cache_size,
+            chunks = self.chunks_cache_size,
+        )
+    }
 }
 
 impl From<&PyCachingConfig> for CachingConfig {
@@ -501,6 +591,29 @@ impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
     }
 }
 
+#[pymethods]
+impl PyStorageConcurrencySettings {
+    #[new]
+    pub fn new(
+        max_concurrent_requests_for_object: NonZeroU16,
+        ideal_concurrent_request_size: NonZeroU64,
+    ) -> Self {
+        Self { max_concurrent_requests_for_object, ideal_concurrent_request_size }
+    }
+
+    pub fn __repr__(&self) -> String {
+        storage_concurrency_settings_repr(self)
+    }
+}
+
+fn storage_concurrency_settings_repr(s: &PyStorageConcurrencySettings) -> String {
+    format!(
+        r#"StorageConcurrencySettings(max_concurrent_requests_for_object={max}, ideal_concurrent_request_size={ideal})"#,
+        max = s.max_concurrent_requests_for_object,
+        ideal = s.ideal_concurrent_request_size,
+    )
+}
+
 #[pyclass(name = "StorageSettings", eq)]
 #[derive(Debug)]
 pub struct PyStorageSettings {
@@ -538,6 +651,23 @@ impl PartialEq for PyStorageSettings {
 }
 
 impl Eq for PyStorageSettings {}
+
+#[pymethods]
+impl PyStorageSettings {
+    #[new]
+    pub fn new(concurrency: Py<PyStorageConcurrencySettings>) -> Self {
+        Self { concurrency }
+    }
+
+    pub fn __repr__(&self) -> String {
+        let inner = Python::with_gil(|py| {
+            let conc = self.concurrency.borrow(py);
+            storage_concurrency_settings_repr(conc.deref())
+        });
+
+        format!(r#"StorageSettings(concurrency={conc})"#, conc = inner)
+    }
+}
 
 #[pyclass(name = "RepositoryConfig", eq)]
 #[derive(Debug)]
@@ -640,6 +770,41 @@ impl PyRepositoryConfig {
 
     pub fn clear_virtual_chunk_containers(&mut self) {
         self.virtual_chunk_containers.clear();
+    }
+
+    pub fn __repr__(&self) -> String {
+        #[allow(clippy::expect_used)]
+        Python::with_gil(|py| {
+            let comp: String = self
+                .compression
+                .call_method0(py, "__repr__")
+                .expect("Cannot call __repr__")
+                .extract(py)
+                .expect("Cannot call __repr__");
+            let caching: String = self
+                .caching
+                .call_method0(py, "__repr__")
+                .expect("Cannot call __repr__")
+                .extract(py)
+                .expect("Cannot call __repr__");
+            let storage = self.storage.as_ref();
+            let storage: String = format_option(storage.map(|st| {
+                st.call_method0(py, "__repr__")
+                    .expect("Cannot call __repr__")
+                    .extract::<String>(py)
+                    .expect("Cannot call __repr__")
+            }));
+            // TODO: virtual chunk containers
+            format!(
+                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl},unsafe_overwrite_refs={uns},get_partial_values_concurrency={partial},compression={comp},caching={caching},storage={storage})"#,
+                inl = self.inline_chunk_threshold_bytes,
+                uns = format_bool(self.unsafe_overwrite_refs),
+                partial = self.get_partial_values_concurrency,
+                comp = comp,
+                caching = caching,
+                storage = storage
+            )
+        })
     }
 }
 
