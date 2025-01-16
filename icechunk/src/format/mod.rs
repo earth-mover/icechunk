@@ -8,6 +8,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use format_constants::FileTypeBin;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -228,8 +229,8 @@ pub enum IcechunkFormatError {
     InvalidMagicNumbers, // TODO: add more info
     #[error("Icechunk cannot read from repository written with a more modern version")]
     InvalidSpecVersion, // TODO: add more info
-    #[error("Icechunk cannot read this file type, expected {expected} got {got}")]
-    InvalidFileType { expected: u8, got: u8 }, // TODO: add more info
+    #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
+    InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
@@ -239,8 +240,30 @@ pub type IcechunkFormatVersion = u8;
 pub mod format_constants {
     use std::sync::LazyLock;
 
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FileTypeBin {
+        Snapshot = 1u8,
+        Manifest = 2,
+        Attributes = 3,
+        TransactionLog = 4,
+        Chunk = 5,
+    }
+
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SpecVersionBin {
+        V0_1_0Alpha12 = 1u8,
+    }
+
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CompressionAlgorithmBin {
+        None = 0u8,
+        Zstd = 1u8,
+    }
+
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
-    pub const LATEST_ICECHUNK_SPEC_VERSION_BINARY: u8 = 1;
 
     pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic_spec_ver";
 
@@ -257,13 +280,6 @@ pub mod format_constants {
 
     pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
-
-    pub const ICECHUNK_FILE_TYPE_BINARY_SNAPSHOT: u8 = 1;
-    pub const ICECHUNK_FILE_TYPE_BINARY_MANIFEST: u8 = 2;
-    pub const ICECHUNK_FILE_TYPE_BINARY_ATTRIBUTES: u8 = 3;
-    pub const ICECHUNK_FILE_TYPE_BINARY_TRANSACTION_LOG: u8 = 4;
-
-    pub const ICECHUNK_COMPRESSION_BINARY_ZSTD: u8 = 1;
 }
 
 impl Display for Path {

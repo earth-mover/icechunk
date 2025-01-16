@@ -19,7 +19,7 @@ use crate::{
     change_set::ChangeSet,
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     format::{
-        format_constants,
+        format_constants::SpecVersionBin,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
@@ -1174,7 +1174,7 @@ async fn flush(
             .map(|(mid, msize)| {
                 vec![ManifestFileInfo {
                     id: mid.clone(),
-                    format_version: format_constants::LATEST_ICECHUNK_SPEC_VERSION_BINARY,
+                    format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
                     size: *msize,
                 }]
             })
