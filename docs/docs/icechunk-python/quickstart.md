@@ -15,8 +15,7 @@ pip install icechunk
 !!! note
 
     Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
-    Using it today requires installing the latest pre-release of Zarr Python 3.
-
+    Using it today requires installing `zarr>=3`.
 
 ## Create a new Icechunk repository
 
@@ -27,18 +26,24 @@ However, you can also create a repo on your local filesystem.
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.s3_from_env(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1"
+    from icechunk import Repository, S3Options, Storage
+
+    repo = Repository.create(
+        storage=Storage.new_s3(
+            bucket="icechunk-test",
+            prefix="quickstart-demo-1"
+            config=S3Options(),
+        )
     )
-    repo = icechunk.Repository.create(storage_config)
+
     ```
 
 === "Local Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.filesystem("./icechunk-local")
-    repo = icechunk.Repository.create(storage_config)
+    repo = Repository.create(
+        storage=Storage.new_local_filesystem("./icechunk-local")
+    )
     ```
 
 ## Accessing the Icechunk store
@@ -53,7 +58,7 @@ session = repo.writable_session("main")
 Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
 
 ```python
-store = session.store()
+store = session.store  # A Zarr Store
 ```
 
 ## Write some data and commit
@@ -62,8 +67,8 @@ We can now use our Icechunk `store` with Zarr.
 Let's first create a group and an array within it.
 
 ```python
-group = zarr.group(store)
-array = group.create("my_array", shape=10, dtype=int)
+group = zarr.create_group(store)
+array = group.create_array(name="my_array", shape=10, dtype='int32', chunks=(5,))
 ```
 
 Now let's write some data
@@ -91,7 +96,7 @@ At this point, we have already committed using our session, so we need to get a 
 
 ```python
 session_2 = repo.writable_session("main")
-store_2 = session_2.store()
+store_2 = session_2.store
 group = zarr.open_group(store_2)
 array = group["my_array"]
 ```
@@ -113,14 +118,14 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python
-hist = repo.ancestry(snapshot_id_2)
+hist = repo.ancestry(snapshot=snapshot_id_2)
 for anc in hist:
     print(anc.id, anc.message, anc.written_at)
 
 # Output:
-# AHC3TSP5ERXKTM4FCB5G overwrite some values 2024-10-14 14:07:27.328429+00:00
-# Q492CAPV7SF3T1BC0AA0 first commit 2024-10-14 14:07:26.152193+00:00
-# T7SMDT9C5DZ8MP83DNM0 Repository initialized 2024-10-14 14:07:22.338529+00:00
+# W0EJE9HP0SQJV5540GPG overwrite some values 2025-01-17 17:58:49.393455+00:00
+# 9CS51QMKZT23NXEJZMA0 first commit 2025-01-17 17:57:41.291348+00:00
+# SDCT2B6F7TTX3N7QXYT0 Repository initialized 2025-01-17 17:54:27.423602+00:00
 ```
 
 ...and we can go back in time to the earlier version.
@@ -129,12 +134,12 @@ for anc in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-earlier_session = repo.readonly_session(snapshot_id=hist[1].id)
-store = earlier_session.store()
+earlier_session = repo.readonly_session(snapshot=hist[1].id)
+store = earlier_session.store
 
 # get the array
-group = zarr.open_group(store)
-array = group["my_array]
+group = zarr.open_group(store, mode="r")
+array = group["my_array"]
 
 # verify data matches first version
 assert array[0] == 1
