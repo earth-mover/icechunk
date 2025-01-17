@@ -20,6 +20,7 @@ use crate::{metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
+pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;
 
@@ -231,11 +232,13 @@ pub enum IcechunkFormatError {
     InvalidSpecVersion, // TODO: add more info
     #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
+    #[error("Icechunk cannot read file, invalid compression algorithm")]
+    InvalidCompressionAlgorithm, // TODO: add more info
 }
 
-pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
-
 pub type IcechunkFormatVersion = u8;
+
+pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
 pub mod format_constants {
     use std::sync::LazyLock;
@@ -250,10 +253,46 @@ pub mod format_constants {
         Chunk = 5,
     }
 
+    impl TryFrom<u8> for FileTypeBin {
+        type Error = String;
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                n if n == FileTypeBin::Snapshot as u8 => Ok(FileTypeBin::Snapshot),
+                n if n == FileTypeBin::Manifest as u8 => Ok(FileTypeBin::Manifest),
+                n if n == FileTypeBin::Attributes as u8 => Ok(FileTypeBin::Attributes),
+                n if n == FileTypeBin::TransactionLog as u8 => {
+                    Ok(FileTypeBin::TransactionLog)
+                }
+                n if n == FileTypeBin::Chunk as u8 => Ok(FileTypeBin::Chunk),
+                n => Err(format!("Bad file type code: {}", n)),
+            }
+        }
+    }
+
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SpecVersionBin {
         V0_1_0Alpha12 = 1u8,
+    }
+
+    impl TryFrom<u8> for SpecVersionBin {
+        type Error = String;
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                n if n == SpecVersionBin::V0_1_0Alpha12 as u8 => {
+                    Ok(SpecVersionBin::V0_1_0Alpha12)
+                }
+                n => Err(format!("Bad spec version code: {}", n)),
+            }
+        }
+    }
+
+    impl SpecVersionBin {
+        pub fn current() -> Self {
+            Self::V0_1_0Alpha12
+        }
     }
 
     #[repr(u8)]
@@ -261,6 +300,22 @@ pub mod format_constants {
     pub enum CompressionAlgorithmBin {
         None = 0u8,
         Zstd = 1u8,
+    }
+
+    impl TryFrom<u8> for CompressionAlgorithmBin {
+        type Error = String;
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                n if n == CompressionAlgorithmBin::None as u8 => {
+                    Ok(CompressionAlgorithmBin::None)
+                }
+                n if n == CompressionAlgorithmBin::Zstd as u8 => {
+                    Ok(CompressionAlgorithmBin::Zstd)
+                }
+                n => Err(format!("Bad cmpression algorithm code: {}", n)),
+            }
+        }
     }
 
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();

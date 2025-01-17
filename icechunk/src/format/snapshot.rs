@@ -142,7 +142,7 @@ pub struct AttributeFileInfo {
     pub format_version: IcechunkFormatVersion,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq)]
 pub struct Snapshot {
     pub manifest_files: Vec<ManifestFileInfo>,
     pub attribute_files: Vec<AttributeFileInfo>,
@@ -155,7 +155,7 @@ pub struct Snapshot {
     pub metadata: SnapshotMetadata,
     pub started_at: DateTime<Utc>,
     pub properties: SnapshotProperties,
-    nodes: BTreeMap<Path, NodeSnapshot>,
+    pub(crate) nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
 impl Default for SnapshotMetadata {
@@ -426,12 +426,12 @@ mod tests {
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
-                format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
+                format_version: SpecVersionBin::current() as u8,
                 size: 1_000_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
-                format_version: SpecVersionBin::V0_1_0Alpha12 as u8,
+                format_version: SpecVersionBin::current() as u8,
                 size: 1_000_000,
             },
         ];
