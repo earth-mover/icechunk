@@ -70,8 +70,8 @@ a single manifest. This is of course a limitation for very large arrays, but one
 we will lift in a future iteration. The on-disk format model supports the split
 and the current design must not block it.
 
-We define _manifest sets_. A manifest set is a group of manifests that
-is intended to optimize for certain types of arrays. We let the user define
+We define _manifest sets_. A manifest set is a group of individual array manifests that
+are stored together allowing a user to optimize for certain types of arrays. We let the user define
 the sets, but we offer good defaults that should work reasonably well in
 common cases.
 
