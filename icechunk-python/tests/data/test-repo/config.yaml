@@ -5,11 +5,11 @@ compression:
   algorithm: Zstd
   level: 1
 caching:
-  snapshots_cache_size: 2
-  manifests_cache_size: 2
-  transactions_cache_size: 0
-  attributes_cache_size: 2
-  chunks_cache_size: 0
+  snapshots_nodes: 2
+  manifests_refs: 2
+  transactions_records: 0
+  attributes_bytes: 2
+  chunks_bytes: 0
 storage: null
 virtual_chunk_containers:
   az:

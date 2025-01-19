@@ -51,21 +51,21 @@ impl Default for CompressionConfig {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct CachingConfig {
-    pub snapshots_cache_size: u16,
-    pub manifests_cache_size: u16,
-    pub transactions_cache_size: u16,
-    pub attributes_cache_size: u16,
-    pub chunks_cache_size: u16,
+    pub snapshots_nodes: u64,
+    pub manifests_refs: u64,
+    pub transactions_records: u64,
+    pub attributes_bytes: u64,
+    pub chunks_bytes: u64,
 }
 
 impl Default for CachingConfig {
     fn default() -> Self {
         Self {
-            snapshots_cache_size: 2,
-            manifests_cache_size: 2,
-            transactions_cache_size: 0,
-            attributes_cache_size: 2,
-            chunks_cache_size: 0,
+            snapshots_nodes: 10_000,
+            manifests_refs: 5_000_000,
+            transactions_records: 0,
+            attributes_bytes: 0,
+            chunks_bytes: 0,
         }
     }
 }

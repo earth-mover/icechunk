@@ -67,4 +67,19 @@ impl TransactionLog {
             icechunk_transaction_log_format_version: SpecVersionBin::current() as u8,
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.new_groups.len()
+            + self.new_arrays.len()
+            + self.deleted_groups.len()
+            + self.deleted_arrays.len()
+            + self.updated_user_attributes.len()
+            + self.updated_zarr_metadata.len()
+            + self.updated_chunks.values().map(|s| s.len()).sum::<usize>()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
