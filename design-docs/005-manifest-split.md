@@ -7,8 +7,8 @@ Aka: Manifest split
 Icechunk format allows to have multiple manifest files per snapshot,
 multiple manifest per array, and multiple arrays in a single manifest.
 
-Nevertheless, the current Icechunk implementation generates a single manifest
-per snapshot, putting in it all the chunks for all arrays in the repo.
+Nevertheless, the current Icechunk implementation generates a single manifest file
+per snapshot that combines all individual array manifests.
 
 Currently `ManifestExtents` --- a "bounding box" for a single manifest --- are part of the format but are not implemented,
 they remain empty for the manifest.
@@ -37,12 +37,12 @@ This an optimization problem and there are many ways to decide what "ideal"
 means. Examples:
 
 * Datasets that are periodically appended along the time dimension, may
-benefit from putting in the same manifest several arrays split by time.
+benefit from putting in the same manifest file several arrays split by time.
 Most reads and write will only need to look at the latest manifest.
 * Small arrays, particularly coordinate arrays, would benefit from packing
-multiple arrays in a single, small manifest that can be read quickly during
+multiple arrays in a single, small manifest file that can be read quickly during
 interactive usage.
-* Huge arrays require splitting into multiple manifests, and it becomes
+* Huge arrays require splitting into multiple manifest files, and it becomes
 important to know along what dimension they should be split for effective
 locality.
 
@@ -118,7 +118,7 @@ chunk-manifests:
                                   # if no overflow-to is indicated it goes to
                                   # the default set (see below)
 
-        cardinality: 2            # this set cannot have more than two manifests
+        cardinality: 2            # this set cannot have more than two manifest files
                                   # cardinality = null means unlimited
 
     - coord2:
@@ -134,7 +134,7 @@ chunk-manifests:
 
     - default:                  # default set must always exist, from defaults if needed
                                 # max-size: 1_000_000 by default (we'll have to tune)
-                                # default set is the only that can have members that
+                                # default set is the only one that can have members that
                                 # go beyond the max-size
                                 # (in case of large arrays that don't fit)
                                 # default always has cardinality = null
