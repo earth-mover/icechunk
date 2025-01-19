@@ -10,7 +10,7 @@ multiple manifest per array, and multiple arrays in a single manifest.
 Nevertheless, the current Icechunk implementation generates a single manifest
 per snapshot, putting in it all the chunks for all arrays in the repo.
 
-Currently `ManifestExtents` are part of the format but are not implemented,
+Currently `ManifestExtents` --- a "bounding box" for a single manifest --- are part of the format but are not implemented,
 they remain empty for the manifest.
 
 During `flush`, chunks are processed in a streaming fashion, without looking
