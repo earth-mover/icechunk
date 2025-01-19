@@ -171,19 +171,19 @@ pub async fn garbage_collect(
         }
 
         if config.deletes_manifests() {
-            keep_manifests.extend(snap.manifest_files.iter().map(|mf| mf.id.clone()));
+            keep_manifests.extend(snap.manifest_files.keys().cloned());
         }
 
         if config.deletes_chunks() {
-            for manifest_file in snap.manifest_files.iter() {
-                let manifest_id = &manifest_file.id;
+            for manifest_id in snap.manifest_files.keys() {
                 let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
                     IcechunkFormatError::ManifestInfoNotFound {
                         manifest_id: manifest_id.clone(),
                     }
                 })?;
-                let manifest =
-                    asset_manager.fetch_manifest(manifest_id, manifest_info.size).await?;
+                let manifest = asset_manager
+                    .fetch_manifest(manifest_id, manifest_info.size_bytes)
+                    .await?;
                 let chunk_ids =
                     manifest.chunk_payloads().filter_map(|payload| match payload {
                         ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),

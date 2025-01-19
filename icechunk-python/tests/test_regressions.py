@@ -71,7 +71,7 @@ async def test_issue_418() -> None:
     )
 
     assert (await store._store.get("lon/c/0")) == b"fift"
-    assert (await store._store.get("time/c/0")) == b"firs"
+    assert (await store._store.get("time/c/0")) == b"firs"  # codespell:ignore firs
     assert (await store._store.get("time/c/1")) == b"econ"
 
     session.commit("Initial commit")
@@ -91,7 +91,7 @@ async def test_issue_418() -> None:
     )
 
     assert (await store._store.get("lon/c/0")) == b"fift"
-    assert (await store._store.get("time/c/0")) == b"firs"
+    assert (await store._store.get("time/c/0")) == b"firs"  # codespell:ignore firs
     assert (await store._store.get("time/c/1")) == b"econ"
     assert (await store._store.get("time/c/2")) == b"thir"
 
@@ -99,6 +99,6 @@ async def test_issue_418() -> None:
     session.commit("Append virtual ref")
 
     assert (await store._store.get("lon/c/0")) == b"fift"
-    assert (await store._store.get("time/c/0")) == b"firs"
+    assert (await store._store.get("time/c/0")) == b"firs"  # codespell:ignore firs
     assert (await store._store.get("time/c/1")) == b"econ"
     assert (await store._store.get("time/c/2")) == b"thir"

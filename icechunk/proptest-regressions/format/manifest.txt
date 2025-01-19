@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b1f4a1a052fb80b62239be41d1c339fcd58a928a39c8a0eecfbd81ab3180443d # shrinks to input = _TestManifestExtentsArgs { indices: [ChunkIndices([0, 0, 0, 0])] }
+cc fe24d66f88ea0db85211ef04950903aeb3de6d3086ded541bc8efdb0649258e1 # shrinks to input = _TestManifestExtentsArgs { indices: [ChunkIndices([0, 0, 0, 0]), ChunkIndices([0, 0, 0, 0])] }

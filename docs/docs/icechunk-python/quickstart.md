@@ -125,8 +125,8 @@ We can see the full version history of our repo:
 
 ```python
 hist = repo.ancestry(snapshot=snapshot_id_2)
-for anc in hist:
-    print(anc.id, anc.message, anc.written_at)
+for ancestor in hist:
+    print(ancestor.id, ancestor.message, ancestor.written_at)
 
 # Output:
 # AHC3TSP5ERXKTM4FCB5G overwrite some values 2024-10-14 14:07:27.328429+00:00
