@@ -28,11 +28,12 @@ def test_config_fetch() -> None:
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     storage = icechunk.in_memory_storage()
-    icechunk.Repository.create(
+    repo = icechunk.Repository.create(
         storage=storage,
         config=config,
     )
 
+    assert repo.config == config
     assert icechunk.Repository.fetch_config(storage) == config
 
 
