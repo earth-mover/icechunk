@@ -32,18 +32,18 @@ pub struct AssetManager {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
     num_snapshot_nodes: u64,
-    num_manifest_refs: u64,
-    num_transaction_records: u64,
-    num_attribute_bytes: u64,
-    num_chunk_bytes: u64,
+    num_chunk_refs: u64,
+    num_transaction_changes: u64,
+    num_bytes_attributes: u64,
+    num_bytes_chunks: u64,
     #[serde(skip)]
-    snapshot_cache: Cache<SnapshotId, Arc<Snapshot>, FileWeigther>,
+    snapshot_cache: Cache<SnapshotId, Arc<Snapshot>, FileWeighter>,
     #[serde(skip)]
-    manifest_cache: Cache<ManifestId, Arc<Manifest>, FileWeigther>,
+    manifest_cache: Cache<ManifestId, Arc<Manifest>, FileWeighter>,
     #[serde(skip)]
-    transactions_cache: Cache<SnapshotId, Arc<TransactionLog>, FileWeigther>,
+    transactions_cache: Cache<SnapshotId, Arc<TransactionLog>, FileWeighter>,
     #[serde(skip)]
-    chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes, FileWeigther>,
+    chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes, FileWeighter>,
 }
 
 impl private::Sealed for AssetManager {}
@@ -53,10 +53,10 @@ struct AssetManagerSerializer {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
     num_snapshot_nodes: u64,
-    num_manifest_refs: u64,
-    num_transaction_records: u64,
-    num_attribute_bytes: u64,
-    num_chunk_bytes: u64,
+    num_chunk_refs: u64,
+    num_transaction_changes: u64,
+    num_bytes_attributes: u64,
+    num_bytes_chunks: u64,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
@@ -65,10 +65,10 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.storage,
             value.storage_settings,
             value.num_snapshot_nodes,
-            value.num_manifest_refs,
-            value.num_transaction_records,
-            value.num_attribute_bytes,
-            value.num_chunk_bytes,
+            value.num_chunk_refs,
+            value.num_transaction_changes,
+            value.num_bytes_attributes,
+            value.num_bytes_chunks,
         )
     }
 }
@@ -78,27 +78,27 @@ impl AssetManager {
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
         num_snapshot_nodes: u64,
-        num_manifest_refs: u64,
-        num_transaction_records: u64,
-        num_attribute_bytes: u64,
-        num_chunk_bytes: u64,
+        num_chunk_refs: u64,
+        num_transaction_changes: u64,
+        num_bytes_attributes: u64,
+        num_bytes_chunks: u64,
     ) -> Self {
         Self {
             num_snapshot_nodes,
-            num_manifest_refs,
-            num_transaction_records,
-            num_attribute_bytes,
-            num_chunk_bytes,
+            num_chunk_refs,
+            num_transaction_changes,
+            num_bytes_attributes,
+            num_bytes_chunks,
             storage,
             storage_settings,
-            snapshot_cache: Cache::with_weighter(1, num_snapshot_nodes, FileWeigther),
-            manifest_cache: Cache::with_weighter(1, num_manifest_refs, FileWeigther),
+            snapshot_cache: Cache::with_weighter(1, num_snapshot_nodes, FileWeighter),
+            manifest_cache: Cache::with_weighter(1, num_chunk_refs, FileWeighter),
             transactions_cache: Cache::with_weighter(
                 0,
-                num_transaction_records,
-                FileWeigther,
+                num_transaction_changes,
+                FileWeighter,
             ),
-            chunk_cache: Cache::with_weighter(0, num_chunk_bytes, FileWeigther),
+            chunk_cache: Cache::with_weighter(0, num_bytes_chunks, FileWeighter),
         }
     }
 
@@ -117,11 +117,11 @@ impl AssetManager {
         Self::new(
             storage,
             storage_settings,
-            config.snapshots_nodes,
-            config.manifests_refs,
-            config.transactions_records,
-            config.attributes_bytes,
-            config.chunks_bytes,
+            config.num_snapshot_nodes,
+            config.num_chunk_refs,
+            config.num_transaction_changes,
+            config.num_bytes_attributes,
+            config.num_bytes_chunks,
         )
     }
 
@@ -582,27 +582,27 @@ async fn fetch_transaction_log(
 }
 
 #[derive(Debug, Clone)]
-struct FileWeigther;
+struct FileWeighter;
 
-impl Weighter<ManifestId, Arc<Manifest>> for FileWeigther {
+impl Weighter<ManifestId, Arc<Manifest>> for FileWeighter {
     fn weight(&self, _: &ManifestId, val: &Arc<Manifest>) -> u64 {
         val.len() as u64
     }
 }
 
-impl Weighter<SnapshotId, Arc<Snapshot>> for FileWeigther {
+impl Weighter<SnapshotId, Arc<Snapshot>> for FileWeighter {
     fn weight(&self, _: &SnapshotId, val: &Arc<Snapshot>) -> u64 {
         val.len() as u64
     }
 }
 
-impl Weighter<(ChunkId, Range<ChunkOffset>), Bytes> for FileWeigther {
+impl Weighter<(ChunkId, Range<ChunkOffset>), Bytes> for FileWeighter {
     fn weight(&self, _: &(ChunkId, Range<ChunkOffset>), val: &Bytes) -> u64 {
         val.len() as u64
     }
 }
 
-impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeigther {
+impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
     fn weight(&self, _: &SnapshotId, val: &Arc<TransactionLog>) -> u64 {
         val.len() as u64
     }
@@ -726,11 +726,11 @@ mod test {
             settings,
             // the cache can only fit 6 refs.
             &CachingConfig {
-                snapshots_nodes: 0,
-                manifests_refs: 6,
-                transactions_records: 0,
-                attributes_bytes: 0,
-                chunks_bytes: 0,
+                num_snapshot_nodes: 0,
+                num_chunk_refs: 6,
+                num_transaction_changes: 0,
+                num_bytes_attributes: 0,
+                num_bytes_chunks: 0,
             },
         );
 
