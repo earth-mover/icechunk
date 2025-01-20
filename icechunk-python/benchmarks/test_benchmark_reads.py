@@ -19,27 +19,8 @@ zarr.config.set({"async.concurrency": 64})
     ]
 )
 def datasets(request) -> Store:
-    """These are "real-world" datasets stored in the cloud."""
+    """For now, these are synthetic datasets stored in the cloud."""
     return request.param
-
-
-# @pytest.fixture(
-#     params=[
-#         "era5",  # "icebreakhrrr"
-#     ]
-# )
-# def synthetic_stores_bench(request) -> Store:
-#     """These are synthetic datasets stored in minio.
-#     FIXME: run `....py` to initialize `minio`.
-#     """
-#     if request.param == "era5":
-#         s3_storage = ic.Storage.new_s3(
-#             bucket="icechunk-test",
-#             prefix="era5-demo-repository-a9",
-#             config=ic.S3Options(),
-#         )
-#         repo = ic.Repository.open_or_create(storage=s3_storage)
-#         return repo.readonly_session("main").store
 
 
 def test_time_create_store(datasets: Dataset, benchmark) -> None:
@@ -90,5 +71,4 @@ def test_time_first_bytes(datasets: Dataset, benchmark) -> None:
     benchmark(open_and_read)
 
 
-# TODO: write a large number of virtual chunk refs
 # TODO: synthetic dataset with very deep and large hierarchies for e.g. tree & members

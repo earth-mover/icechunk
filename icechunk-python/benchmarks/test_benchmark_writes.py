@@ -7,15 +7,29 @@ from benchmarks import lib
 from benchmarks.tasks import Executor, write
 
 
-@pytest.mark.parametrize("executor", [Executor.processes])
-def test_write_chunks(benchmark, executor):
+@pytest.mark.parametrize("executor", [Executor.threads, Executor.processes])
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("local://tmp/icechunk-test/perf-writes/foo", id="local"),
+        # pytest.param("s3://icechunk-test/perf-writes/foo", id="s3"),
+    ],
+)
+def test_write_chunks(url, benchmark, executor):
+    """
+    Writes chunks locally orchestrated using 'bare' tasks and executed using
+    either a ThreadPoolExecutor or ProcessPoolExecutor.
+
+    Importantly this benchmarks captures timings PER write task, summarizes them,
+    and then records them in the .json file.
+    """
     timer = benchmark.pedantic(
         # TODO: parametrize over some of these
         write,
         kwargs=dict(
-            url="local://tmp/icechunk-test/perf-writes/foo",
+            url=url,
             num_arrays=1,
-            shape=[3200, 720, 1441],
+            shape=[320, 720, 1441],
             chunks=[1, -1, -1],
             task_nchunks=1,
             executor=executor,
@@ -29,3 +43,6 @@ def test_write_chunks(benchmark, executor):
     diags["write_task_raw"] = diags["write_task"]
     diags["write_task"] = lib.stats(np.array(diags["write_task"]))
     benchmark.extra_info["data"] = diags
+
+
+# TODO: write a large number of virtual chunk refs

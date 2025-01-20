@@ -215,7 +215,7 @@ def write(
     with timer.time(op="commit", **timer_context):
         commit_res = session.commit("committed.")
     assert commit_res
-    print(timer)
+
     print("Written and committed!")
     return timer
 
