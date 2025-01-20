@@ -46,6 +46,7 @@ test = [
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
+  "pytest-xdist",
   "s3fs",
   "h5netcdf",
   "pooch",

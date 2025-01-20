@@ -4,47 +4,50 @@ import pytest
 
 import xarray as xr
 import zarr
-from benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS, Dataset
-from zarr.abc.store import Store
+from benchmarks.datasets import Dataset
 
 # TODO: configurable?
 zarr.config.set({"async.concurrency": 64})
 
 
-@pytest.fixture(
-    params=[
-        pytest.param(ERA5_SINGLE, id="era5-single"),
-        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
-        pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
-    ]
-)
-def datasets(request) -> Store:
-    """For now, these are synthetic datasets stored in the cloud."""
-    return request.param
+@pytest.mark.setup_benchmarks
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")  # bah, boto!
+def test_recreate_datasets(synth_dataset, request):
+    """
+    Helper to (re)create Icechunk repos when format or Dataset changes.
+    """
+    # Check if the mark is passed via the command line
+    if "setup_benchmarks" not in request.config.getoption("-m", default=""):
+        pytest.skip(
+            "Skipping test because 'setup_benchmarks' is not set in the command line."
+        )
+
+    if synth_dataset.setupfn is not None:
+        synth_dataset.setup()
 
 
-def test_time_create_store(datasets: Dataset, benchmark) -> None:
+def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:
     """time to create the icechunk store object"""
-    benchmark(operator.attrgetter("store"), datasets)
+    benchmark(operator.attrgetter("store"), synth_dataset)
 
 
 @pytest.mark.benchmark(group="zarr-read")
-def test_time_zarr_open(datasets: Dataset, benchmark) -> None:
-    benchmark(zarr.open_group, datasets.store, path=datasets.group, mode="r")
+def test_time_zarr_open(synth_dataset: Dataset, benchmark) -> None:
+    benchmark(zarr.open_group, synth_dataset.store, path=synth_dataset.group, mode="r")
 
 
 @pytest.mark.benchmark(group="zarr-read")
-def test_time_zarr_members(datasets: Dataset, benchmark) -> None:
-    group = zarr.open_group(datasets.store, path=datasets.group, mode="r")
+def test_time_zarr_members(synth_dataset: Dataset, benchmark) -> None:
+    group = zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
     benchmark(operator.methodcaller("members"), group)
 
 
 @pytest.mark.benchmark(group="xarray-read", min_rounds=10)
-def test_time_xarray_open(datasets: Dataset, benchmark) -> None:
+def test_time_xarray_open(synth_dataset: Dataset, benchmark) -> None:
     benchmark(
         xr.open_zarr,
-        datasets.store,
-        group=datasets.group,
+        synth_dataset.store,
+        group=synth_dataset.group,
         chunks=None,
         consolidated=False,
     )
@@ -52,24 +55,24 @@ def test_time_xarray_open(datasets: Dataset, benchmark) -> None:
 
 # TODO: mark as slow?
 @pytest.mark.benchmark(group="xarray-read", min_rounds=2)
-def test_time_xarray_read_chunks(datasets: Dataset, benchmark) -> None:
+def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
     ds = xr.open_zarr(
-        datasets.store, group=datasets.group, chunks=None, consolidated=False
+        synth_dataset.store, group=synth_dataset.group, chunks=None, consolidated=False
     )
-    subset = ds.isel(datasets.chunk_selector)
+    subset = ds.isel(synth_dataset.chunk_selector)
     # important this cannot be `load`
-    benchmark(operator.methodcaller("compute"), subset[datasets.load_variables])
+    benchmark(operator.methodcaller("compute"), subset[synth_dataset.load_variables])
 
 
 @pytest.mark.benchmark(group="zarr-read")
-def test_time_first_bytes(datasets: Dataset, benchmark) -> None:
+def test_time_first_bytes(synth_dataset: Dataset, benchmark) -> None:
     def open_and_read():
         # by opening the group repeatedly we force re-download of manifest
         # so that we actually measure what we want.
-        group = zarr.open_group(datasets.store, path=datasets.group, mode="r")
-        group[datasets.first_byte_variable][:]
+        group = zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
+        group[synth_dataset.first_byte_variable][:]
 
-    if datasets.first_byte_variable is None:
+    if synth_dataset.first_byte_variable is None:
         pytest.skip("first_byte_variable not set!")
     benchmark(open_and_read)
 

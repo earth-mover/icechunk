@@ -86,6 +86,7 @@ def setup_era5_single(dataset: Dataset):
     print(f"Reading {url}")
     tic = time.time()
     ds = xr.open_dataset(
+        # using pooch means we download only once on a local machine
         pooch.retrieve(
             url,
             known_hash="2322a4baaabd105cdc68356bdf2447b59fbbec559ee1f9a9a91d3c94f242701a",
@@ -109,9 +110,8 @@ def setup_era5_single(dataset: Dataset):
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
 
+# TODO: passing Storage directly is nice, but doesn't let us add an extra prefix.
 ERA5 = Dataset(
-    # TODO: this duplication is not great.
-    # make these accessible from storage
     storage=ic.Storage.new_s3(
         bucket="icechunk-test",
         prefix="era5-demo-repository-a10",

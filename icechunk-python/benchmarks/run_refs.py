@@ -49,10 +49,10 @@ def setup(ref):
         **pykwargs,
     )
 
-    # TODO: this is only needed for format changes
+    # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && python benchmarks/setup_benchmarks.py --prefix={ref}",
+        f"{activate} && pytest -nauto --setup_benchmarks benchmarks/test_benchmark_reads.py",
         **pykwargs,
         shell=True,
     )

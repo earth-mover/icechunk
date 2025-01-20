@@ -3,12 +3,32 @@
 This is a benchmark suite based on `pytest-benchmark`.
 It is best to think of these benchmarks as benchmarking "integration" workflows that exercise the ecosystem from the Xarray/Zarr level down to Icechunk.
 
+## Setup for benchmarks
+
+The Datasets used for benchmarking are listed in `datasets.py` and can include both synthetic and "real-world" datasets.
+These should be easy to extend.
+
+Running the read benchmarks requires benchmark datasets be created.
+These will need to be (re)created any time the `Dataset` changes, or the format changes.
+Do so with
+``` sh
+pytest -nauto -m setup_benchmarks benchmarks/test_benchmark_reads.py
+```
+As of Jan 20, 2025 this command takes 3 minutes to run.
+
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
+- [ ] How do I customize the folder name?
+- [ ] `--benchmark-autosave` is probably good, and then we write helper scripts around it?
+
+Run the read benchmarks:
+``` sh
+pytest benchmarks/test_benchmark_reads.py
+```
 
 Here is an example run that runs a specific benchmark `test_write_chunks` and saves it to a specific file.
-```
+```sh
 pytest --benchmark-save=write-chunks benchmarks/test_benchmark_writes.py::test_write_chunks
 ```
 
