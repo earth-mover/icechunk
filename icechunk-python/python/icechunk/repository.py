@@ -105,6 +105,11 @@ class Repository:
         """Save the repository configuration to storage, this configuration will be used in future calls to Repository.open."""
         return self._repository.save_config()
 
+    @property
+    def config(self) -> RepositoryConfig:
+        """Get a copy of this repository's config"""
+        return self._repository.config()
+
     def ancestry(
         self,
         *,
