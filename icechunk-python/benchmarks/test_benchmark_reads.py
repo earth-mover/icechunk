@@ -28,16 +28,18 @@ def test_time_create_store(datasets: Dataset, benchmark) -> None:
     benchmark(operator.attrgetter("store"), datasets)
 
 
+@pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_open(datasets: Dataset, benchmark) -> None:
     benchmark(zarr.open_group, datasets.store, path=datasets.group, mode="r")
 
 
+@pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_members(datasets: Dataset, benchmark) -> None:
     group = zarr.open_group(datasets.store, path=datasets.group, mode="r")
     benchmark(operator.methodcaller("members"), group)
 
 
-@pytest.mark.benchmark(min_rounds=10)
+@pytest.mark.benchmark(group="xarray-read", min_rounds=10)
 def test_time_xarray_open(datasets: Dataset, benchmark) -> None:
     benchmark(
         xr.open_zarr,
@@ -49,7 +51,7 @@ def test_time_xarray_open(datasets: Dataset, benchmark) -> None:
 
 
 # TODO: mark as slow?
-@pytest.mark.benchmark(min_rounds=2)
+@pytest.mark.benchmark(group="xarray-read", min_rounds=2)
 def test_time_xarray_read_chunks(datasets: Dataset, benchmark) -> None:
     ds = xr.open_zarr(
         datasets.store, group=datasets.group, chunks=None, consolidated=False
@@ -59,6 +61,7 @@ def test_time_xarray_read_chunks(datasets: Dataset, benchmark) -> None:
     benchmark(operator.methodcaller("compute"), subset[datasets.load_variables])
 
 
+@pytest.mark.benchmark(group="zarr-read")
 def test_time_first_bytes(datasets: Dataset, benchmark) -> None:
     def open_and_read():
         # by opening the group repeatedly we force re-download of manifest
