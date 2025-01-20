@@ -492,15 +492,15 @@ impl From<&PyCompressionConfig> for CompressionConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyCachingConfig {
     #[pyo3(get, set)]
-    pub snapshots_cache_size: u16,
+    pub num_snapshot_nodes: u64,
     #[pyo3(get, set)]
-    pub manifests_cache_size: u16,
+    pub num_chunk_refs: u64,
     #[pyo3(get, set)]
-    pub transactions_cache_size: u16,
+    pub num_transaction_changes: u64,
     #[pyo3(get, set)]
-    pub attributes_cache_size: u16,
+    pub num_bytes_attributes: u64,
     #[pyo3(get, set)]
-    pub chunks_cache_size: u16,
+    pub num_bytes_chunks: u64,
 }
 
 #[pymethods]
@@ -513,29 +513,29 @@ impl PyCachingConfig {
 
     #[new]
     pub fn new(
-        snapshots_cache_size: u16,
-        manifests_cache_size: u16,
-        transactions_cache_size: u16,
-        attributes_cache_size: u16,
-        chunks_cache_size: u16,
+        num_snapshot_nodes: u64,
+        num_chunk_refs: u64,
+        num_transaction_changes: u64,
+        num_bytes_attributes: u64,
+        num_bytes_chunks: u64,
     ) -> Self {
         Self {
-            snapshots_cache_size,
-            manifests_cache_size,
-            transactions_cache_size,
-            attributes_cache_size,
-            chunks_cache_size,
+            num_snapshot_nodes,
+            num_chunk_refs,
+            num_transaction_changes,
+            num_bytes_attributes,
+            num_bytes_chunks,
         }
     }
 
     pub fn __repr__(&self) -> String {
         format!(
-            r#"CachingConfig(snapshots_cache_size={snap}, manifests_cache_size={man}, transactions_cache_size={tx}, attributes_cache_size={att}, chunks_cache_size={chunks})"#,
-            snap = self.snapshots_cache_size,
-            man = self.manifests_cache_size,
-            tx = self.transactions_cache_size,
-            att = self.attributes_cache_size,
-            chunks = self.chunks_cache_size,
+            r#"CachingConfig(num_snapshot_nodes={snap}, num_chunk_refs={man}, num_transaction_changes={tx}, num_bytes_attributes={att}, num_bytes_chunks={chunks})"#,
+            snap = self.num_snapshot_nodes,
+            man = self.num_chunk_refs,
+            tx = self.num_transaction_changes,
+            att = self.num_bytes_attributes,
+            chunks = self.num_bytes_chunks,
         )
     }
 }
@@ -543,11 +543,11 @@ impl PyCachingConfig {
 impl From<&PyCachingConfig> for CachingConfig {
     fn from(value: &PyCachingConfig) -> Self {
         Self {
-            snapshots_cache_size: value.snapshots_cache_size,
-            manifests_cache_size: value.manifests_cache_size,
-            transactions_cache_size: value.transactions_cache_size,
-            attributes_cache_size: value.attributes_cache_size,
-            chunks_cache_size: value.chunks_cache_size,
+            num_snapshot_nodes: value.num_snapshot_nodes,
+            num_chunk_refs: value.num_chunk_refs,
+            num_transaction_changes: value.num_transaction_changes,
+            num_bytes_attributes: value.num_bytes_attributes,
+            num_bytes_chunks: value.num_bytes_chunks,
         }
     }
 }
@@ -555,11 +555,11 @@ impl From<&PyCachingConfig> for CachingConfig {
 impl From<CachingConfig> for PyCachingConfig {
     fn from(value: CachingConfig) -> Self {
         Self {
-            snapshots_cache_size: value.snapshots_cache_size,
-            manifests_cache_size: value.manifests_cache_size,
-            transactions_cache_size: value.transactions_cache_size,
-            attributes_cache_size: value.attributes_cache_size,
-            chunks_cache_size: value.chunks_cache_size,
+            num_snapshot_nodes: value.num_snapshot_nodes,
+            num_chunk_refs: value.num_chunk_refs,
+            num_transaction_changes: value.num_transaction_changes,
+            num_bytes_attributes: value.num_bytes_attributes,
+            num_bytes_chunks: value.num_bytes_chunks,
         }
     }
 }

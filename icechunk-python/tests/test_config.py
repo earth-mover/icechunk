@@ -153,7 +153,7 @@ def test_can_change_deep_config_values() -> None:
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     config.compression.level = 2
-    config.caching.manifests_cache_size = 8
+    config.caching.num_chunk_refs = 8
     config.storage = storage.default_settings()
     config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
 
@@ -166,5 +166,5 @@ def test_can_change_deep_config_values() -> None:
     stored_config = icechunk.Repository.fetch_config(storage)
     assert stored_config.inline_chunk_threshold_bytes == 5
     assert stored_config.compression.level == 2
-    assert stored_config.caching.manifests_cache_size == 8
+    assert stored_config.caching.num_chunk_refs == 8
     assert stored_config.storage.concurrency.ideal_concurrent_request_size == 1_000_000
