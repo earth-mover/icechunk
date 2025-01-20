@@ -403,12 +403,10 @@ async def test_group_update_attributes_async(
     assert new_group.attrs == new_attrs
 
 
-@pytest.mark.parametrize("method", ["create_array", "array"])
 def test_group_create_array(
     store: IcechunkStore,
     zarr_format: ZarrFormat,
     overwrite: bool,
-    method: Literal["create_array", "array"],
 ) -> None:
     """
     Test `Group.create_array`
@@ -418,25 +416,13 @@ def test_group_create_array(
     dtype = "uint8"
     data = np.arange(np.prod(shape)).reshape(shape).astype(dtype)
 
-    if method == "create_array":
-        array = group.create_array(name="array", shape=shape, dtype=dtype)
-        array[:] = data
-    elif method == "array":
-        with pytest.warns(DeprecationWarning):
-            array = group.array(name="array", shape=shape, dtype=dtype)
-            array[:] = data
-    else:
-        raise AssertionError
+    array = group.create_array(name="array", shape=shape, dtype=dtype)
+    array[:] = data
 
     if not overwrite:
-        if method == "create_array":
-            with pytest.raises(ContainsArrayError):
-                array = group.create_array(name="array", shape=shape, dtype=dtype)
-                array[:] = data
-        elif method == "array":
-            with pytest.raises(ContainsArrayError), pytest.warns(DeprecationWarning):
-                array = group.array(name="array", shape=shape, dtype=dtype)
-                array[:] = data
+        with pytest.raises(ContainsArrayError):
+            array = group.create_array(name="array", shape=shape, dtype=dtype)
+            array[:] = data
     assert array.shape == shape
     assert array.dtype == np.dtype(dtype)
     assert np.array_equal(array[:], data)
