@@ -20,7 +20,7 @@ if not CURRENTDIR.endswith("icechunk-python"):
 def get_commit(ref: str) -> str:
     return subprocess.run(
         ["git", "rev-parse", ref], capture_output=True, text=True, check=True
-    ).stdout.strip()
+    ).stdout.strip()[:8]
 
 
 def get_benchmark_deps(filepath: str) -> str:
