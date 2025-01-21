@@ -60,7 +60,9 @@ pytest --benchmark-compare benchmarks/*.py
 
 #### Comparing specific runs
 
-The best I have found is to
+The best I have found is to run with `--benchmark-autosave` or `--benchmark-save=SOME_NAME_YOU_LIKE`. This will persist benchmarks to
+`.benchmarks`.
+
 ``` sh
 pytest-benchmark list
 ```

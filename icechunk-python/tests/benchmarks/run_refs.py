@@ -67,9 +67,7 @@ def setup(ref: str) -> None:
     # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -nauto -m setup_benchmarks tests/benchmarks/test_benchmark_reads.py",
-        **pykwargs,
-        shell=True,
+        f"{activate} && pytest -nauto -m setup_benchmarks", **pykwargs, shell=True
     )
 
 
@@ -84,7 +82,7 @@ def run(ref):
         f"{activate} "
         # Note: .benchmarks is the default location for pytest-benchmark
         f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit}"
-        " tests/benchmarks/test_*.py",
+        " tests/benchmarks/",
         shell=True,
         cwd=pycwd,
         check=False,  # don't stop if benchmarks fail
