@@ -64,13 +64,20 @@ The best I have found is to
 ``` sh
 pytest-benchmark list
 ```
+which for me prints
+```
+...
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0019_icechunk-v0.1.0-alpha.12.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0020_icechunk-v0.1.0-alpha.8.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0021_icechunk-v0.1.0-alpha.10.json
+```
+
 Note the 4 digit ID of the runs you want. Then
 
 ``` sh
-pytest-benchmark compare 0020 0021 0019 --histogram=compare
+pytest-benchmark compare 0019 0020 0021 --group=func,param --sort=name --columns=median --name=short
 ```
-Then look at the `compare-*.svg` files.
-
+Passing `--histogram=compare` will save a boatload of `compare-*.svg` files.
 
 To easily run benchmarks for some named refs use `tests/benchmarks/run_refs.py`
 
