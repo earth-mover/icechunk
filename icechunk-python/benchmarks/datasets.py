@@ -7,7 +7,6 @@ from typing import Any, Self
 
 import fsspec
 import numpy as np
-import pooch
 
 import icechunk as ic
 import xarray as xr
@@ -160,6 +159,8 @@ def setup_synthetic_gb_dataset(
 
 
 def setup_era5_single(dataset: Dataset):
+    import pooch
+
     # FIXME: move to earthmover-sample-data
     url = "https://nsf-ncar-era5.s3.amazonaws.com/e5.oper.an.pl/194106/e5.oper.an.pl.128_060_pv.ll025sc.1941060100_1941060123.nc"
     print(f"Reading {url}")
