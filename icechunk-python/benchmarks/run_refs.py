@@ -64,7 +64,7 @@ def setup(ref: str) -> None:
         **pykwargs,
     )
 
-    print(f"setup_benchmarks for {ref}")
+    print(f"setup_benchmarks for {ref} / {commit}")
     subprocess.run(
         f"{activate} && pytest -nauto -m setup_benchmarks --force-setup=False --icechunk-prefix={ref}_{commit}/ benchmarks/",
         **pykwargs,
@@ -77,7 +77,7 @@ def run(ref):
     pycwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk/icechunk-python"
     activate = "source .venv/bin/activate"
 
-    print(f"running for {ref} / {commit}")
+    print(f"running benchmarks for {ref} / {commit}")
 
     # Note: .benchmarks is the default location for pytest-benchmark
     cmd = f"""
@@ -98,7 +98,5 @@ if __name__ == "__main__":
         "main",
     ]
     for ref in tqdm.tqdm(refs):
-        print("Setting up benchmarks")
         setup(ref)
-        print("Running benchmarks")
         run(ref)

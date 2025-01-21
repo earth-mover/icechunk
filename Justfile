@@ -51,5 +51,5 @@ pre-commit-python:
   just lint "-p icechunk-python"
 
 
-bench-compare *args='':
+bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
