@@ -24,29 +24,55 @@ Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 - [ ] How do I customize the folder name?
 - [ ] `--benchmark-autosave` is probably good, and then we write helper scripts around it?
 
-Run the read benchmarks:
+### Run the read benchmarks:
 ``` sh
-pytest benchmarks/test_benchmark_reads.py
+pytest tests/benchmarks/test_benchmark_reads.py
 ```
+
+### Save to a specific file
 
 Here is an example run that runs a specific benchmark `test_write_chunks` and saves it to a specific file.
 ```sh
-pytest --benchmark-save=write-chunks benchmarks/test_benchmark_writes.py::test_write_chunks
+pytest --benchmark-save=write-chunks tests/benchmarks/test_benchmark_writes.py::test_write_chunks
 ```
 
-Compare `HEAD` to `main`
+### Comparing runs:
+
+``` sh
+pytest --benchmark-compare benchmarks/*.py
+```
+
+This will automatically compare the run on `HEAD` against the most recently run benchmark.
+
+#### Compare `HEAD` to `main`
+
+We can use the above to somewhat quickly compare `HEAD` to `main`
 
 ``` sh
 git switch main
-pytest --benchmark-autosave benchmarks/*.py
+maturin develop --release
+pytest --benchmark-autosave tests/benchmarks/*.py
 
 git switch PR-BRANCH-NAME
-pytest --benchmark-autosave benchmarks/*.py
-
-
-
+maturin develop --release
+pytest --benchmark-compare benchmarks/*.py
 ```
 
+#### Comparing specific runs
+
+The best I have found is to
+``` sh
+pytest-benchmark list
+```
+Note the 4 digit ID of the runs you want. Then
+
+``` sh
+pytest-benchmark compare 0020 0021 0019 --histogram=compare
+```
+Then look at the `compare-*.svg` files.
+
+
+To easily run benchmarks for some named refs use `tests/benchmarks/run_refs.py`
 
 ## Design decisions / future choices
 
