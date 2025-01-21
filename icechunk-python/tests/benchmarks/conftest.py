@@ -1,7 +1,16 @@
 import pytest
 
+from icechunk import Repository, local_filesystem_storage
 from tests.benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
 from zarr.abc.store import Store
+
+
+@pytest.fixture(scope="function")
+def repo(tmpdir: str) -> Repository:
+    repo = Repository.create(
+        storage=local_filesystem_storage(tmpdir),
+    )
+    return repo
 
 
 @pytest.fixture(

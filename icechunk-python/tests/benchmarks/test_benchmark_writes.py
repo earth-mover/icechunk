@@ -3,8 +3,13 @@
 import numpy as np
 import pytest
 
+import zarr
+from icechunk import Repository, RepositoryConfig, local_filesystem_storage
 from tests.benchmarks import lib
 from tests.benchmarks.tasks import Executor, write
+
+NUM_CHUNK_REFS = 20_000
+NUM_VIRTUAL_CHUNK_REFS = 100_000
 
 
 # FIXME: figure out a reasonable default
@@ -24,7 +29,7 @@ def test_write_chunks(url, benchmark, executor):
     Importantly this benchmarks captures timings PER write task, summarizes them,
     and then records them in the .json file.
     """
-    pytest.skip()
+    pytest.skip("too slow for now. FIXME!")
     timer = benchmark.pedantic(
         # TODO: parametrize over some of these
         write,
@@ -47,6 +52,58 @@ def test_write_chunks(url, benchmark, executor):
     benchmark.extra_info["data"] = diags
 
 
-# TODO: write a large number of virtual chunk refs
-def write_million_chunk_refs(repo):
-    pass
+def repo_config_with(
+    *, inline_chunk_threshold_bytes: int | None = None
+) -> RepositoryConfig:
+    config = RepositoryConfig.default()
+    if inline_chunk_threshold_bytes is not None:
+        config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
+
+
+@pytest.mark.benchmark(group="refs-write")
+@pytest.mark.parametrize(
+    "repo_config",
+    [
+        pytest.param(repo_config_with(), id="default-inlined"),
+        pytest.param(repo_config_with(inline_chunk_threshold_bytes=0), id="not-inlined"),
+    ],
+)
+def test_write_many_chunk_refs(benchmark, repo_config: RepositoryConfig, tmpdir) -> None:
+    def write_chunk_refs(repo) -> None:
+        session = repo.writable_session("main")
+        group = zarr.group(session.store)
+        array = group.create_array(
+            name="array",
+            shape=(NUM_CHUNK_REFS,),
+            chunks=(1,),
+            dtype=np.int8,
+            dimension_names=("t",),
+        )
+        # TODO: configurable?
+        with zarr.config.set({"async.concurrency": 64}):
+            array[:] = -1
+        session.commit("written!")
+
+    repo = Repository.create(storage=local_filesystem_storage(tmpdir), config=repo_config)
+    benchmark(write_chunk_refs, repo)
+
+
+@pytest.mark.benchmark(group="refs-write")
+def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
+    @benchmark
+    def write():
+        session = repo.writable_session("main")
+        store = session.store
+        group = zarr.group(store)
+        group.create_array(
+            name="array",
+            shape=(NUM_VIRTUAL_CHUNK_REFS,),
+            chunks=(1,),
+            dtype=np.int8,
+            dimension_names=("t",),
+        )
+        for i in range(NUM_VIRTUAL_CHUNK_REFS):
+            store.set_virtual_ref(
+                f"array/c/{i}", location=f"s3://foo/bar/{i}.nc", offset=0, length=1
+            )
+        session.commit("written!")

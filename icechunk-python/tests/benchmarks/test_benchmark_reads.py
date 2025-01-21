@@ -66,15 +66,15 @@ def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
 
 @pytest.mark.benchmark(group="bytes-read")
 def test_time_first_bytes(synth_dataset: Dataset, benchmark) -> None:
+    if synth_dataset.first_byte_variable is None:
+        pytest.skip("first_byte_variable not set!")
+
+    @benchmark
     def open_and_read():
         # by opening the group repeatedly we force re-download of manifest
         # so that we actually measure what we want.
         group = zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
         group[synth_dataset.first_byte_variable][:]
-
-    if synth_dataset.first_byte_variable is None:
-        pytest.skip("first_byte_variable not set!")
-    benchmark(open_and_read)
 
 
 # TODO: synthetic dataset with very deep and large hierarchies for e.g. tree & members
