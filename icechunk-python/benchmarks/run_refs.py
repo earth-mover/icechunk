@@ -49,11 +49,11 @@ def setup(ref: str) -> None:
         cwd=base,
         check=False,
     )
-    subprocess.run(["git", "checkout", ref], **kwargs)
+    subprocess.run(["git", "checkout", "-q", ref], **kwargs)
     subprocess.run(["cp", "-r", "benchmarks", f"{pycwd}"], check=True)
     subprocess.run(["python3", "-m", "venv", ".venv"], cwd=pycwd, check=True)
     subprocess.run(
-        ["maturin", "build", "--release", "--out", "dist", "--find-interpreter"],
+        ["maturin", "build", "-q", "--release", "--out", "dist", "--find-interpreter"],
         **pykwargs,
     )
     subprocess.run(
