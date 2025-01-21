@@ -71,11 +71,15 @@ def run(ref):
     activate = "source .venv/bin/activate"
 
     print(f"running for {ref}")
+
+    commit = subprocess.run(
+        ["git", "rev-parse", ref], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
     subprocess.run(
         f"{activate} "
-        # .benchmarks is the default location for pytest-benchmark
-        # FIXME: switch `main`, `HEAD` to commit ID
-        f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}"
+        # Note: .benchmarks is the default location for pytest-benchmark
+        f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit}"
         " benchmarks/test_benchmark_reads.py",
         shell=True,
         cwd=pycwd,
