@@ -79,18 +79,14 @@ def run(ref):
 
     print(f"running for {ref} / {commit}")
 
+    # Note: .benchmarks is the default location for pytest-benchmark
     cmd = f"""
     pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit} --icechunk-prefix={ref}_{commit}/ benchmarks/
     """
     print(cmd)
-    subprocess.run(
-        f"{activate} "
-        # Note: .benchmarks is the default location for pytest-benchmark
-        f"&& {cmd}",
-        shell=True,
-        cwd=pycwd,
-        check=False,  # don't stop if benchmarks fail
-    )
+
+    # don't stop if benchmarks fail
+    subprocess.run(f"{activate} && {cmd}", shell=True, cwd=pycwd, check=False)
 
 
 if __name__ == "__main__":

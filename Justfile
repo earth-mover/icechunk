@@ -49,3 +49,7 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
 pre-commit-python:
   just format "--check -p icechunk-python"
   just lint "-p icechunk-python"
+
+
+bench-compare *args='':
+  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}

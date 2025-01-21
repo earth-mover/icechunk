@@ -27,6 +27,12 @@ pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
+## Just alias
+
+Some useful `just` aliases:
+
+| Compare these benchmark runs | `just bench-compare 0020 0021 0022` |
+
 ### Run the read benchmarks:
 ``` sh
 pytest benchmarks/test_benchmark_reads.py
@@ -34,7 +40,7 @@ pytest benchmarks/test_benchmark_reads.py
 
 This simply runs the benchmarks, but does not print or save anything.
 
-`--benchmark-autosave` will save timings to a JSON file in `.benchmarks`
+`--benchmark-autosave` will save timings to a JSON file in `.benchmarks` and print (too many) numbers to the screen.
 ```sh
 pytest --benchmark-autosave benchmarks/test_benchmark_reads.py
 ```
