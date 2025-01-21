@@ -78,6 +78,7 @@ def test_write_many_chunk_refs(benchmark, repo_config: RepositoryConfig, tmpdir)
             chunks=(1,),
             dtype=np.int8,
             dimension_names=("t",),
+            overwrite=True,
         )
         # TODO: configurable?
         with zarr.config.set({"async.concurrency": 64}):
@@ -101,6 +102,7 @@ def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
             chunks=(1,),
             dtype=np.int8,
             dimension_names=("t",),
+            overwrite=True,
         )
         for i in range(NUM_VIRTUAL_CHUNK_REFS):
             store.set_virtual_ref(
