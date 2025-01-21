@@ -29,6 +29,9 @@ Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
 ## Just alias
 
+> [!WARNING]
+> This doesn't work yet
+
 Some useful `just` aliases:
 
 | Compare these benchmark runs | `just bench-compare 0020 0021 0022` |
