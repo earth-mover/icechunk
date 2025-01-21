@@ -74,6 +74,7 @@ def run(ref):
     subprocess.run(
         f"{activate} "
         # .benchmarks is the default location for pytest-benchmark
+        # FIXME: switch `main`, `HEAD` to commit ID
         f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}"
         " benchmarks/test_benchmark_reads.py",
         shell=True,
@@ -84,8 +85,9 @@ def run(ref):
 
 if __name__ == "__main__":
     refs = [
-        # "icechunk-v0.1.0-alpha.8",
-        "icechunk-v0.1.0-alpha.12",
+        "icechunk-v0.1.0-alpha.8",
+        "icechunk-v0.1.0-alpha.10",
+        # "icechunk-v0.1.0-alpha.12",
         # "main",
     ]
     for ref in tqdm.tqdm(refs):

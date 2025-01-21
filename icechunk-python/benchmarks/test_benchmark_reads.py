@@ -64,7 +64,7 @@ def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
     benchmark(operator.methodcaller("compute"), subset[synth_dataset.load_variables])
 
 
-@pytest.mark.benchmark(group="zarr-read")
+@pytest.mark.benchmark(group="bytes-read")
 def test_time_first_bytes(synth_dataset: Dataset, benchmark) -> None:
     def open_and_read():
         # by opening the group repeatedly we force re-download of manifest
