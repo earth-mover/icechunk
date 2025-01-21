@@ -67,7 +67,7 @@ def setup(ref: str) -> None:
     # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -nauto -m setup_benchmarks --icechunk-prefix={ref}_{commit} benchmarks/",
+        f"{activate} && pytest -nauto -m setup_benchmarks --icechunk-prefix={ref}_{commit}/ benchmarks/",
         **pykwargs,
         shell=True,
     )
@@ -80,11 +80,14 @@ def run(ref):
 
     print(f"running for {ref} / {commit}")
 
+    cmd = f"""
+    pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit} --icechunk-prefix={ref}_{commit}/ benchmarks/
+    """
+    print(cmd)
     subprocess.run(
         f"{activate} "
         # Note: .benchmarks is the default location for pytest-benchmark
-        f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit} --icechunk-prefix={ref}_{commit}"
-        " benchmarks/",
+        f"&& {cmd}",
         shell=True,
         cwd=pycwd,
         check=False,  # don't stop if benchmarks fail

@@ -36,14 +36,20 @@ class StorageConfig:
             kwargs["path"] = self.path
         return self.constructor(config=self.config, **kwargs)
 
-    def with_extra(self, *, prefix: str | None = None) -> Self:
+    def with_extra(
+        self, *, prefix: str | None = None, force_idempotent: bool = False
+    ) -> Self:
         if self.prefix is not None:
-            new_prefix = prefix or "" + self.prefix
+            if force_idempotent and self.prefix.startswith(prefix):
+                return self
+            new_prefix = (prefix or "") + self.prefix
         else:
             new_prefix = None
 
         if self.path is not None:
-            new_path = prefix or "" + self.path
+            if force_idempotent and self.path.startswith(prefix):
+                return self
+            new_path = (prefix or "") + self.path
         else:
             new_path = None
         return type(self)(
