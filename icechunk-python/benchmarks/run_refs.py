@@ -5,8 +5,9 @@
 import os
 import subprocess
 import tempfile
+import tomllib
 
-import tqdm.contrib.concurrent
+import tqdm
 
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
@@ -16,11 +17,19 @@ if not CURRENTDIR.endswith("icechunk-python"):
     )
 
 
-def setup(ref):
+def get_benchmark_deps(filepath: str) -> str:
+    with open(filepath, mode="rb") as f:
+        data = tomllib.load(f)
+    return " ".join(data["project"]["optional-dependencies"].get("benchmark", ""))
+
+
+def setup(ref: str) -> None:
     base = f"{TMP}/icechunk-bench-{ref}"
     cwd = f"{TMP}/icechunk-bench-{ref}/icechunk"
     pycwd = f"{TMP}/icechunk-bench-{ref}/icechunk/icechunk-python"
     activate = "source .venv/bin/activate"
+
+    deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
 
     kwargs = dict(cwd=cwd, check=True)
     pykwargs = dict(cwd=pycwd, check=True)
@@ -31,7 +40,7 @@ def setup(ref):
     subprocess.run(
         ["git", "clone", "-q", "git@github.com:earth-mover/icechunk"],
         cwd=base,
-        check=True,
+        check=False,
     )
     subprocess.run(["git", "checkout", ref], **kwargs)
     subprocess.run(["cp", "-r", "benchmarks", pycwd], check=True)
@@ -43,8 +52,7 @@ def setup(ref):
     subprocess.run(
         f"{activate}"
         "&& pip install -q icechunk['test'] --find-links dist"
-        # TODO: figure this out from the current pyproject.toml [benchmark] section
-        "&& pip install pytest-benchmark s3fs h5netcdf pooch tqdm ",
+        f"&& pip install {deps}",
         shell=True,
         **pykwargs,
     )
@@ -52,7 +60,7 @@ def setup(ref):
     # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -nauto --setup_benchmarks benchmarks/test_benchmark_reads.py",
+        f"{activate} && pytest -nauto -m setup_benchmarks benchmarks/test_benchmark_reads.py",
         **pykwargs,
         shell=True,
     )
@@ -77,14 +85,13 @@ def run(ref):
 if __name__ == "__main__":
     refs = [
         # "icechunk-v0.1.0-alpha.8",
-        "icechunk-v0.1.0-alpha.10",
+        "icechunk-v0.1.0-alpha.12",
         # "main",
     ]
-    # TODO: parallelize the setup either here or externally
-    #       will need to provide an extra prefix to setup_benchmarks
-    #       somehow the Dataset class will have to take this extra prefix in to account.
-    #       A context manager may be a good idea?
-    print("Setting up benchmarks")
-    [setup(ref) for ref in tqdm.tqdm(refs)]
-    print("Running benchmarks")
-    [run(ref) for ref in tqdm.tqdm(refs)]
+    for ref in tqdm.tqdm(refs):
+        # TODO: figure how not to duplicate the setup work for a given ref.
+        #       not sure how to specify the ref as a `prefix` to Storage
+        print("Setting up benchmarks")
+        setup(ref)
+        print("Running benchmarks")
+        run(ref)
