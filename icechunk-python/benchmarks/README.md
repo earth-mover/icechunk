@@ -27,7 +27,7 @@ pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
-## Just alias
+### Just aliases
 
 > [!WARNING]
 > This doesn't work yet
