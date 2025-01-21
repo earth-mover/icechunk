@@ -23,7 +23,7 @@ def test_recreate_datasets(synth_dataset, request):
         )
 
     if synth_dataset.setupfn is not None:
-        synth_dataset.setup()
+        synth_dataset.setup(force=request.config.getoption("--force-setup"))
 
 
 def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:

@@ -120,10 +120,23 @@ class Dataset:
         repo = ic.Repository.open(self.storage)
         return repo.readonly_session(branch="main").store
 
-    def setup(self) -> None:
+    def setup(self, force: bool = False) -> None:
+        """
+        force: if True, recreate from scratch. If False, try opening the store,
+        if it succeeds, do nothing.
+        """
         if self.setupfn is None:
             raise NotImplementedError("setupfn has not been provided.")
-        self.setupfn(self)
+
+        if force:
+            self.setupfn(self)
+            return
+
+        try:
+            _ = self.store
+        except ic.IcechunkError as e:
+            print(e)
+            self.setupfn(self)
 
 
 def setup_synthetic_gb_dataset(

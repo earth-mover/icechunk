@@ -64,10 +64,9 @@ def setup(ref: str) -> None:
         **pykwargs,
     )
 
-    # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -nauto -m setup_benchmarks --icechunk-prefix={ref}_{commit}/ benchmarks/",
+        f"{activate} && pytest -nauto -m setup_benchmarks --force-setup=False --icechunk-prefix={ref}_{commit}/ benchmarks/",
         **pykwargs,
         shell=True,
     )
@@ -103,8 +102,6 @@ if __name__ == "__main__":
         "main",
     ]
     for ref in tqdm.tqdm(refs):
-        # TODO: figure how not to duplicate the setup work for a given ref.
-        #       not sure how to specify the ref as a `prefix` to Storage
         print("Setting up benchmarks")
         setup(ref)
         print("Running benchmarks")

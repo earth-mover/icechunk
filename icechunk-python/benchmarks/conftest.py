@@ -48,3 +48,13 @@ def pytest_addoption(parser):
         path in icechunk benchmark datasets.
         """,
     )
+
+    parser.addoption(
+        "--force-setup",
+        action="store",
+        default=True,
+        help="""
+        Force running the setup_benchmarks code even if there is a valid repo
+        for this icechunk version at that URI. True by default.
+        """,
+    )
