@@ -95,8 +95,9 @@ if __name__ == "__main__":
     refs = [
         "icechunk-v0.1.0-alpha.8",
         "icechunk-v0.1.0-alpha.10",
-        # "icechunk-v0.1.0-alpha.12",
-        # "main",
+        "icechunk-v0.1.0-alpha.11",
+        "icechunk-v0.1.0-alpha.12",
+        "main",
     ]
     for ref in tqdm.tqdm(refs):
         # TODO: figure how not to duplicate the setup work for a given ref.
