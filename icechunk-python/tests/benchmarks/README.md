@@ -14,7 +14,7 @@ Running the read benchmarks requires benchmark datasets be created.
 These will need to be (re)created any time the `Dataset` changes, or the format changes.
 Do so with
 ``` sh
-pytest -nauto -m setup_benchmarks benchmarks/test_benchmark_reads.py
+pytest -nauto -m setup_benchmarks
 ```
 As of Jan 20, 2025 this command takes about 3 minutes to run.
 

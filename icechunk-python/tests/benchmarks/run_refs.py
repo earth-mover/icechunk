@@ -17,6 +17,12 @@ if not CURRENTDIR.endswith("icechunk-python"):
     )
 
 
+def get_commit(ref: str) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", ref], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
 def get_benchmark_deps(filepath: str) -> str:
     with open(filepath, mode="rb") as f:
         data = tomllib.load(f)
@@ -24,9 +30,10 @@ def get_benchmark_deps(filepath: str) -> str:
 
 
 def setup(ref: str) -> None:
-    base = f"{TMP}/icechunk-bench-{ref}"
-    cwd = f"{TMP}/icechunk-bench-{ref}/icechunk"
-    pycwd = f"{TMP}/icechunk-bench-{ref}/icechunk/icechunk-python"
+    commit = get_commit(ref)
+    base = f"{TMP}/icechunk-bench-{ref}_{commit}"
+    cwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk"
+    pycwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk/icechunk-python"
     activate = "source .venv/bin/activate"
 
     deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
@@ -43,7 +50,7 @@ def setup(ref: str) -> None:
         check=False,
     )
     subprocess.run(["git", "checkout", ref], **kwargs)
-    subprocess.run(["cp", "-r", "benchmarks", pycwd], check=True)
+    subprocess.run(["cp", "-r", "tests/benchmarks", f"{pycwd}/tests"], check=True)
     subprocess.run(["python3", "-m", "venv", ".venv"], cwd=pycwd, check=True)
     subprocess.run(
         ["maturin", "build", "--release", "--out", "dist", "--find-interpreter"],
@@ -60,21 +67,18 @@ def setup(ref: str) -> None:
     # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -nauto -m setup_benchmarks benchmarks/test_benchmark_reads.py",
+        f"{activate} && pytest -nauto -m setup_benchmarks tests/benchmarks/test_benchmark_reads.py",
         **pykwargs,
         shell=True,
     )
 
 
 def run(ref):
-    pycwd = f"{TMP}/icechunk-bench-{ref}/icechunk/icechunk-python"
+    commit = get_commit(ref)
+    pycwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk/icechunk-python"
     activate = "source .venv/bin/activate"
 
-    print(f"running for {ref}")
-
-    commit = subprocess.run(
-        ["git", "rev-parse", ref], capture_output=True, text=True, check=True
-    ).stdout.strip()
+    print(f"running for {ref} / {commit}")
 
     subprocess.run(
         f"{activate} "

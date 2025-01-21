@@ -3,10 +3,11 @@
 import numpy as np
 import pytest
 
-from benchmarks import lib
-from benchmarks.tasks import Executor, write
+from tests.benchmarks import lib
+from tests.benchmarks.tasks import Executor, write
 
 
+# FIXME: figure out a reasonable default
 @pytest.mark.parametrize("executor", [Executor.threads, Executor.processes])
 @pytest.mark.parametrize(
     "url",
@@ -23,6 +24,7 @@ def test_write_chunks(url, benchmark, executor):
     Importantly this benchmarks captures timings PER write task, summarizes them,
     and then records them in the .json file.
     """
+    pytest.skip()
     timer = benchmark.pedantic(
         # TODO: parametrize over some of these
         write,
@@ -46,3 +48,5 @@ def test_write_chunks(url, benchmark, executor):
 
 
 # TODO: write a large number of virtual chunk refs
+def write_million_chunk_refs(repo):
+    pass

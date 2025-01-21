@@ -4,7 +4,7 @@ import pytest
 
 import xarray as xr
 import zarr
-from benchmarks.datasets import Dataset
+from tests.benchmarks.datasets import Dataset
 
 # TODO: configurable?
 zarr.config.set({"async.concurrency": 64})

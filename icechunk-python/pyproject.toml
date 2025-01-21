@@ -66,6 +66,7 @@ minversion = "7"
 testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
+# FIXME: decide what to do here
 addopts = ["-ra", "--strict-config", "--strict-markers", "--benchmark-disable"]
 filterwarnings = [
   "error",
