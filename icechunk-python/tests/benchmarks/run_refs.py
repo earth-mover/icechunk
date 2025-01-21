@@ -84,7 +84,7 @@ def run(ref):
         f"{activate} "
         # Note: .benchmarks is the default location for pytest-benchmark
         f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit}"
-        " benchmarks/test_benchmark_reads.py",
+        " tests/benchmarks/test_*.py",
         shell=True,
         cwd=pycwd,
         check=False,  # don't stop if benchmarks fail

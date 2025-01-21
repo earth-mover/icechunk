@@ -16,13 +16,13 @@ from concurrent import futures
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum, auto
-from typing import Annotated, cast
+from typing import cast
 from urllib.parse import urlparse
 
 import numpy as np
 import tqdm
-import typer
 
+# import typer
 import zarr
 from icechunk import Repository, S3Options, Session, Storage
 from icechunk.distributed import merge_sessions
@@ -104,10 +104,10 @@ class Executor(StrEnum):
     dask_distributed = auto()
 
 
-app = typer.Typer()
+# app = typer.Typer()
 
 
-@app.command()
+# @app.command()
 def read(
     # data
     url,
@@ -152,11 +152,12 @@ def initialize_store(repo: Repository, *, shape, chunks):
     session.commit("initialized")
 
 
-@app.command()
+# @app.command()
 def write(
     # data
     url: str,
-    num_arrays: Annotated[int, typer.Option(min=1, max=1)] = 1,
+    # num_arrays: Annotated[int, typer.Option(min=1, max=1)] = 1,
+    num_arrays: int = 1,
     # scale:   # TODO: [small, medium, large]
     shape: list[int] = [3, 720, 1440],  # noqa: B006
     chunks: list[int] = [1, -1, -1],  # noqa: B006
@@ -220,7 +221,7 @@ def write(
     return timer
 
 
-@app.command()
+# @app.command()
 def verify(
     # data
     # execution
@@ -231,7 +232,7 @@ def verify(
     pass
 
 
-@app.command()
+# @app.command()
 def create(
     # data
     # execution
@@ -242,5 +243,5 @@ def create(
     pass
 
 
-if __name__ == "__main__":
-    app()
+# if __name__ == "__main__":
+#     app()
