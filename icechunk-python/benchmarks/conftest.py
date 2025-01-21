@@ -1,6 +1,6 @@
 import pytest
 
-from tests.benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
+from benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
 from zarr.abc.store import Store
 
 
@@ -13,7 +13,11 @@ from zarr.abc.store import Store
 )
 def synth_dataset(request) -> Store:
     """For now, these are synthetic datasets stored in the cloud."""
-    return request.param
+    extra_prefix = request.config.getoption("--icechunk-prefix")
+    print(f"returning dataset with {extra_prefix=}")
+    ds = request.param
+    ds.storage_config = ds.storage_config.with_extra(prefix=extra_prefix)
+    return ds
 
 
 # This hook is used instead of `pyproject.toml` so that we can run the benchmark infra

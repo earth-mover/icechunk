@@ -113,12 +113,9 @@ class Dataset:
         repo = ic.Repository.open(self.storage)
         return repo.readonly_session(branch="main").store
 
-    def setup(self, *, extra_prefix: str | None = None) -> None:
+    def setup(self) -> None:
         if self.setupfn is None:
             raise NotImplementedError("setupfn has not been provided.")
-
-        print(f"initializing dataset with {extra_prefix=}")
-        self.storage_config = self.storage_config.with_extra(prefix=extra_prefix)
         self.setupfn(self)
 
 

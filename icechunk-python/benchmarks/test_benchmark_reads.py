@@ -4,7 +4,7 @@ import pytest
 
 import xarray as xr
 import zarr
-from tests.benchmarks.datasets import Dataset
+from benchmarks.datasets import Dataset
 
 # TODO: configurable?
 zarr.config.set({"async.concurrency": 64})
@@ -23,7 +23,7 @@ def test_recreate_datasets(synth_dataset, request):
         )
 
     if synth_dataset.setupfn is not None:
-        synth_dataset.setup(extra_prefix=request.config.getoption("--icechunk-prefix"))
+        synth_dataset.setup()
 
 
 def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:

@@ -50,7 +50,7 @@ def setup(ref: str) -> None:
         check=False,
     )
     subprocess.run(["git", "checkout", ref], **kwargs)
-    subprocess.run(["cp", "-r", "tests/benchmarks", f"{pycwd}/tests"], check=True)
+    subprocess.run(["cp", "-r", "benchmarks", f"{pycwd}"], check=True)
     subprocess.run(["python3", "-m", "venv", ".venv"], cwd=pycwd, check=True)
     subprocess.run(
         ["maturin", "build", "--release", "--out", "dist", "--find-interpreter"],
@@ -67,7 +67,9 @@ def setup(ref: str) -> None:
     # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -nauto -m setup_benchmarks", **pykwargs, shell=True
+        f"{activate} && pytest -s -nauto -m setup_benchmarks --icechunk-prefix={ref}_{commit}",
+        **pykwargs,
+        shell=True,
     )
 
 
@@ -82,7 +84,7 @@ def run(ref):
         f"{activate} "
         # Note: .benchmarks is the default location for pytest-benchmark
         f"&& pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit} --icechunk-prefix={ref}_{commit}"
-        " tests/benchmarks/",
+        " benchmarks/",
         shell=True,
         cwd=pycwd,
         check=False,  # don't stop if benchmarks fail
@@ -91,9 +93,9 @@ def run(ref):
 
 if __name__ == "__main__":
     refs = [
-        "icechunk-v0.1.0-alpha.8",
-        "icechunk-v0.1.0-alpha.10",
-        "icechunk-v0.1.0-alpha.11",
+        # "icechunk-v0.1.0-alpha.8",
+        # "icechunk-v0.1.0-alpha.10",
+        # "icechunk-v0.1.0-alpha.11",
         "icechunk-v0.1.0-alpha.12",
         "main",
     ]

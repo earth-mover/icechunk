@@ -24,9 +24,9 @@ import tqdm
 
 # import typer
 import zarr
+from benchmarks import lib
 from icechunk import Repository, S3Options, Session, Storage
 from icechunk.distributed import merge_sessions
-from tests.benchmarks import lib
 
 BRANCH_NAME = "main"
 

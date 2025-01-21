@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 
 import zarr
+from benchmarks import lib
+from benchmarks.tasks import Executor, write
 from icechunk import Repository, RepositoryConfig, local_filesystem_storage
-from tests.benchmarks import lib
-from tests.benchmarks.tasks import Executor, write
 
 NUM_CHUNK_REFS = 20_000
 NUM_VIRTUAL_CHUNK_REFS = 100_000
