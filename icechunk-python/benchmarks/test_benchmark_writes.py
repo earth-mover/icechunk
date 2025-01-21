@@ -61,6 +61,7 @@ def repo_config_with(
 
 
 @pytest.mark.benchmark(group="refs-write")
+@pytest.mark.parametrize("commit", [True, False])
 @pytest.mark.parametrize(
     "repo_config",
     [
@@ -68,44 +69,60 @@ def repo_config_with(
         pytest.param(repo_config_with(inline_chunk_threshold_bytes=0), id="not-inlined"),
     ],
 )
-def test_write_many_chunk_refs(benchmark, repo_config: RepositoryConfig, tmpdir) -> None:
+def test_write_many_chunk_refs(
+    commit: bool, benchmark, repo_config: RepositoryConfig, tmpdir
+) -> None:
+    """Benchmarking the writing of many chunk refs, inlined and not; committed and not;"""
+
+    # 1. benchmark only the writes with no commit
+    # 2. one with commit
     def write_chunk_refs(repo) -> None:
         session = repo.writable_session("main")
-        group = zarr.group(session.store)
-        array = group.create_array(
-            name="array",
-            shape=(NUM_CHUNK_REFS,),
-            chunks=(1,),
-            dtype=np.int8,
-            dimension_names=("t",),
-            overwrite=True,
-        )
+        group = zarr.open_group(session.store)
+        array = group.open_array("array")
         # TODO: configurable?
         with zarr.config.set({"async.concurrency": 64}):
             array[:] = -1
-        session.commit("written!")
+        if commit:
+            session.commit("written!")
 
     repo = Repository.create(storage=local_filesystem_storage(tmpdir), config=repo_config)
+    session = repo.writable_session("main")
+    group = zarr.group(session.store)
+    group.create_array(
+        name="array",
+        shape=(NUM_CHUNK_REFS,),
+        chunks=(1,),
+        dtype=np.int8,
+        dimension_names=("t",),
+    )
+    session.commit("initialized")
+
     benchmark(write_chunk_refs, repo)
 
 
 @pytest.mark.benchmark(group="refs-write")
 def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
+    """Benchmark the setting of many virtual chunk refs."""
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store)
+    group.create_array(
+        name="array",
+        shape=(NUM_VIRTUAL_CHUNK_REFS,),
+        chunks=(1,),
+        dtype=np.int8,
+        dimension_names=("t",),
+        overwrite=True,
+    )
+    session.commit("initialized")
+
     @benchmark
     def write():
+        # always create a new session so we have a clean changelog
         session = repo.writable_session("main")
         store = session.store
-        group = zarr.group(store)
-        group.create_array(
-            name="array",
-            shape=(NUM_VIRTUAL_CHUNK_REFS,),
-            chunks=(1,),
-            dtype=np.int8,
-            dimension_names=("t",),
-            overwrite=True,
-        )
         for i in range(NUM_VIRTUAL_CHUNK_REFS):
             store.set_virtual_ref(
                 f"array/c/{i}", location=f"s3://foo/bar/{i}.nc", offset=0, length=1
             )
-        session.commit("written!")

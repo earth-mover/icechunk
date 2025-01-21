@@ -15,6 +15,9 @@ zarr.config.set({"async.concurrency": 64})
 def test_recreate_datasets(synth_dataset, request):
     """
     Helper to (re)create Icechunk repos when format or Dataset changes.
+    Use `pytest -m setup_benchmarks` to run it
+    `--force-setup=True` will always recreate.
+    `--force-setup=False` will recreate if icechunk cannot create a Repository (perhaps due to format change).
     """
     # Check if the mark is passed via the command line
     if "setup_benchmarks" not in request.config.getoption("-m", default=""):
@@ -27,35 +30,46 @@ def test_recreate_datasets(synth_dataset, request):
 
 
 def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:
-    """time to create the icechunk store object"""
+    """time to create the icechunk create the Repo, session, and store objects."""
     benchmark(operator.attrgetter("store"), synth_dataset)
 
 
 @pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_open(synth_dataset: Dataset, benchmark) -> None:
-    benchmark(zarr.open_group, synth_dataset.store, path=synth_dataset.group, mode="r")
+    """
+    We repeatedly create the store inside the benchmarked function to
+    test the "cold open" time, and downloading of the snapshot file.
+    """
+
+    @benchmark
+    def fn():
+        zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
 
 
 @pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_members(synth_dataset: Dataset, benchmark) -> None:
+    # list_dir, maybe warmup=1
     group = zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
     benchmark(operator.methodcaller("members"), group)
 
 
 @pytest.mark.benchmark(group="xarray-read", min_rounds=10)
 def test_time_xarray_open(synth_dataset: Dataset, benchmark) -> None:
-    benchmark(
-        xr.open_zarr,
-        synth_dataset.store,
-        group=synth_dataset.group,
-        chunks=None,
-        consolidated=False,
-    )
+    @benchmark
+    def fn():
+        xr.open_zarr(
+            synth_dataset.store,
+            group=synth_dataset.group,
+            chunks=None,
+            consolidated=False,
+        )
 
 
 # TODO: mark as slow?
 @pytest.mark.benchmark(group="xarray-read", min_rounds=2)
 def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
+    """128MB vs 8MB chunks. should see a difference."""
+    # TODO: switch out concurrency "ideal_request_size"
     ds = xr.open_zarr(
         synth_dataset.store, group=synth_dataset.group, chunks=None, consolidated=False
     )
@@ -66,13 +80,14 @@ def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
 
 @pytest.mark.benchmark(group="bytes-read")
 def test_time_first_bytes(synth_dataset: Dataset, benchmark) -> None:
+    """TODO: this should be sensitive to manifest splitting"""
     if synth_dataset.first_byte_variable is None:
         pytest.skip("first_byte_variable not set!")
 
     @benchmark
     def open_and_read():
-        # by opening the group repeatedly we force re-download of manifest
-        # so that we actually measure what we want.
+        # by opening the group repeatedly inside the benchmarked function
+        # we force re-download of manifest so that we actually measure what we want.
         group = zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
         group[synth_dataset.first_byte_variable][:]
 
