@@ -19,11 +19,11 @@ def test_recreate_datasets(synth_dataset, request):
     # Check if the mark is passed via the command line
     if "setup_benchmarks" not in request.config.getoption("-m", default=""):
         pytest.skip(
-            "Skipping test because 'setup_benchmarks' is not set in the command line."
+            "Skipping re-creating benchmarks because 'setup_benchmarks' is not set in the command line."
         )
 
     if synth_dataset.setupfn is not None:
-        synth_dataset.setup()
+        synth_dataset.setup(extra_prefix=request.config.getoption("--icechunk-prefix"))
 
 
 def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:

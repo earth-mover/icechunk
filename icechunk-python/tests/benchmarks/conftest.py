@@ -1,16 +1,7 @@
 import pytest
 
-from icechunk import Repository, local_filesystem_storage
 from tests.benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
 from zarr.abc.store import Store
-
-
-@pytest.fixture(scope="function")
-def repo(tmpdir: str) -> Repository:
-    repo = Repository.create(
-        storage=local_filesystem_storage(tmpdir),
-    )
-    return repo
 
 
 @pytest.fixture(
@@ -31,4 +22,16 @@ def synth_dataset(request) -> Store:
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "setup_benchmarks: Run synthetic dataset setup code for benchmarks."
+    )
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--icechunk-prefix",
+        action="store",
+        default="",
+        help="""
+        extra prefix that is prefix-ed to the configured prefix or
+        path in icechunk benchmark datasets.
+        """,
     )

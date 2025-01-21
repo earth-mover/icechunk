@@ -1,9 +1,9 @@
 import datetime
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import fsspec
 import numpy as np
@@ -17,12 +17,66 @@ rng = np.random.default_rng(seed=123)
 
 
 @dataclass
+class StorageConfig:
+    """wrapper that allows us to config the prefix for a ref."""
+
+    constructor: Callable
+    bucket: str | None = None
+    prefix: str | None = None
+    path: str | None = None
+    config: Any | None = None
+
+    def create(self) -> ic.Storage:
+        kwargs = {}
+        if self.bucket is not None:
+            kwargs["bucket"] = self.bucket
+        if self.prefix is not None:
+            kwargs["prefix"] = self.prefix
+        if self.path is not None:
+            kwargs["path"] = self.path
+        if self.config is not None:
+            kwargs["config"] = self.config
+        return self.constructor(**kwargs)
+
+    def with_extra(self, *, prefix: str | None = None) -> Self:
+        if self.prefix is not None:
+            new_prefix = prefix or "" + self.prefix
+        else:
+            new_prefix = None
+
+        if self.path is not None:
+            new_path = prefix or "" + self.path
+        else:
+            new_path = None
+        return type(self)(
+            constructor=self.constructor,
+            bucket=self.bucket,
+            prefix=new_prefix,
+            path=new_path,
+        )
+
+    def clear_uri(self) -> str:
+        """URI to clear when re-creating data from scratch."""
+        if self.constructor is ic.Storage.new_s3:
+            protocol = "s3://"
+        else:
+            protocol = ""
+
+        if self.bucket is not None:
+            return f"{protocol}{self.bucket}/{self.prefix}"
+        elif self.path is not None:
+            return self.path
+        else:
+            raise NotImplementedError("I don't know what to do here.")
+
+
+@dataclass
 class Dataset:
     """
     Helper class that defines a Dataset used for a benchmark.
     """
 
-    storage: ic.Storage
+    storage_config: StorageConfig
     # data variable to load in `time_xarray_read_chunks`
     load_variables: list[str]
     # Passed to .isel for `time_xarray_read_chunks`
@@ -33,13 +87,19 @@ class Dataset:
     group: str | None = None
     # function used to construct the dataset prior to read benchmarks
     setupfn: Callable | None = None
-    # URI to clear when re-creating data from scratch
-    clear_uri: str | None = None
+    _storage: ic.Storage | None = field(default=None, init=False)
+
+    @property
+    def storage(self) -> ic.Storage:
+        if self._storage is None:
+            self._storage = self.storage_config.create()
+        return self._storage
 
     def create(self) -> ic.Repository:
-        if self.clear_uri is None:
+        clear_uri = self.storage_config.clear_uri()
+        if clear_uri is None:
             raise NotImplementedError
-        if not self.clear_uri.startswith("s3://"):
+        if not clear_uri.startswith("s3://"):
             raise NotImplementedError("Only S3 URIs supported at the moment.")
         fs = fsspec.filesystem("s3")
         try:
@@ -53,10 +113,12 @@ class Dataset:
         repo = ic.Repository.open(self.storage)
         return repo.readonly_session(branch="main").store
 
-    def setup(self) -> None:
+    def setup(self, *, extra_prefix: str | None = None) -> None:
         if self.setupfn is None:
             raise NotImplementedError("setupfn has not been provided.")
 
+        print(f"initializing dataset with {extra_prefix=}")
+        self.storage_config = self.storage_config.with_extra(prefix=extra_prefix)
         self.setupfn(self)
 
 
@@ -112,7 +174,8 @@ def setup_era5_single(dataset: Dataset):
 
 # TODO: passing Storage directly is nice, but doesn't let us add an extra prefix.
 ERA5 = Dataset(
-    storage=ic.Storage.new_s3(
+    storage_config=StorageConfig(
+        constructor=ic.Storage.new_s3,
         bucket="icechunk-test",
         prefix="era5-demo-repository-a10",
         config=ic.S3Options(),
@@ -123,8 +186,8 @@ ERA5 = Dataset(
 )
 
 ERA5_SINGLE = Dataset(
-    clear_uri="s3://icechunk-test/perf-era5-single",
-    storage=ic.Storage.new_s3(
+    storage_config=StorageConfig(
+        constructor=ic.Storage.new_s3,
         bucket="icechunk-test",
         prefix="perf-era5-single",
         config=ic.S3Options(),
@@ -136,8 +199,8 @@ ERA5_SINGLE = Dataset(
 )
 
 GB_128MB_CHUNKS = Dataset(
-    clear_uri="s3://icechunk-test/gb-128mb-chunks",
-    storage=ic.Storage.new_s3(
+    storage_config=StorageConfig(
+        constructor=ic.Storage.new_s3,
         bucket="icechunk-test",
         prefix="gb-128mb-chunks",
         config=ic.S3Options(),
@@ -149,8 +212,8 @@ GB_128MB_CHUNKS = Dataset(
 )
 
 GB_8MB_CHUNKS = Dataset(
-    clear_uri="s3://icechunk-test/gb-8mb-chunks",
-    storage=ic.Storage.new_s3(
+    storage_config=StorageConfig(
+        constructor=ic.Storage.new_s3,
         bucket="icechunk-test",
         prefix="gb-8mb-chunks",
         config=ic.S3Options(),
@@ -163,7 +226,8 @@ GB_8MB_CHUNKS = Dataset(
 
 # TODO
 GPM_IMERG_VIRTUAL = Dataset(
-    storage=ic.s3_storage(
+    storage_config=StorageConfig(
+        constructor=ic.Storage.new_s3,
         bucket="earthmover-icechunk-us-west-2",
         prefix="nasa-impact/GPM_3IMERGHH.07-virtual-1998",
         # access_key_id=access_key_id,
