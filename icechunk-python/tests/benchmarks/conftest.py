@@ -27,6 +27,7 @@ def synth_dataset(request) -> Store:
 
 # This hook is used instead of `pyproject.toml` so that we can run the benchmark infra
 # on versions older than alpha-13
+# TODO: Migrate to pyproject.toml after 1.0 has been released.
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "setup_benchmarks: Run synthetic dataset setup code for benchmarks."

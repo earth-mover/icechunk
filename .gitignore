@@ -9,6 +9,6 @@
 # hypothesis
 .hypothesis
 
-devel
+/devel
 
 .ipynb_checkpoints

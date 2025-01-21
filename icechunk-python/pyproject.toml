@@ -43,6 +43,8 @@ test = [
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
+  # needed for the --benchmark-disable option
+  "pytest-benchmark",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -66,7 +68,8 @@ minversion = "7"
 testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
-# FIXME: decide what to do here
+# --benchmark-disable runs the benchmark code once to verify correctness
+# but skips the benchmarking
 addopts = ["-ra", "--strict-config", "--strict-markers", "--benchmark-disable"]
 filterwarnings = [
   "error",
