@@ -59,7 +59,7 @@ def setup(ref: str) -> None:
     subprocess.run(
         f"{activate}"
         "&& pip install -q icechunk['test'] --find-links dist"
-        f"&& pip install {deps}",
+        f"&& pip install -q {deps}",
         shell=True,
         **pykwargs,
     )
@@ -67,7 +67,7 @@ def setup(ref: str) -> None:
     # FIXME: make this configurable
     print(f"setup_benchmarks for {ref}")
     subprocess.run(
-        f"{activate} && pytest -s -nauto -m setup_benchmarks --icechunk-prefix={ref}_{commit}",
+        f"{activate} && pytest -nauto -m setup_benchmarks --icechunk-prefix={ref}_{commit} benchmarks/",
         **pykwargs,
         shell=True,
     )

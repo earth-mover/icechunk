@@ -21,10 +21,10 @@ class StorageConfig:
     """wrapper that allows us to config the prefix for a ref."""
 
     constructor: Callable
+    config: Any
     bucket: str | None = None
     prefix: str | None = None
     path: str | None = None
-    config: Any | None = None
 
     def create(self) -> ic.Storage:
         kwargs = {}
@@ -34,9 +34,7 @@ class StorageConfig:
             kwargs["prefix"] = self.prefix
         if self.path is not None:
             kwargs["path"] = self.path
-        if self.config is not None:
-            kwargs["config"] = self.config
-        return self.constructor(**kwargs)
+        return self.constructor(config=self.config, **kwargs)
 
     def with_extra(self, *, prefix: str | None = None) -> Self:
         if self.prefix is not None:
@@ -53,11 +51,12 @@ class StorageConfig:
             bucket=self.bucket,
             prefix=new_prefix,
             path=new_path,
+            config=self.config,
         )
 
     def clear_uri(self) -> str:
         """URI to clear when re-creating data from scratch."""
-        if self.constructor is ic.Storage.new_s3:
+        if self.constructor == ic.Storage.new_s3:
             protocol = "s3://"
         else:
             protocol = ""
@@ -100,10 +99,12 @@ class Dataset:
         if clear_uri is None:
             raise NotImplementedError
         if not clear_uri.startswith("s3://"):
-            raise NotImplementedError("Only S3 URIs supported at the moment.")
+            raise NotImplementedError(
+                f"Only S3 URIs supported at the moment. Received {clear_uri}"
+            )
         fs = fsspec.filesystem("s3")
         try:
-            fs.rm(f"{self.clear_uri}", recursive=True)
+            fs.rm(f"{clear_uri}", recursive=True)
         except FileNotFoundError:
             pass
         return ic.Repository.create(self.storage)
@@ -227,6 +228,7 @@ GPM_IMERG_VIRTUAL = Dataset(
         constructor=ic.Storage.new_s3,
         bucket="earthmover-icechunk-us-west-2",
         prefix="nasa-impact/GPM_3IMERGHH.07-virtual-1998",
+        config=ic.S3Options(),
         # access_key_id=access_key_id,
         # secret_access_key=secret,
         # session_token=session_token,
