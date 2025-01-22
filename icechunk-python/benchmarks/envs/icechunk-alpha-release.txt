@@ -1,0 +1,9 @@
+icechunk==0.1.0-alpha.1
+zarr==3.0.0b0
+dask==2024.10.0
+distributed==2024.10.0
+xarray==2024.10.0
+coiled
+jupyterlab
+jupyter-server-proxy
+h5netcdf
