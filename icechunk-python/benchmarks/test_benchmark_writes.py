@@ -81,7 +81,7 @@ def test_write_many_chunk_refs(
     def write_chunk_refs(repo) -> None:
         session = repo.writable_session("main")
         group = zarr.open_group(session.store)
-        array = group.open_array("array")
+        array = group.array("array")
         # TODO: configurable?
         with zarr.config.set({"async.concurrency": 64}):
             array[:] = -1
