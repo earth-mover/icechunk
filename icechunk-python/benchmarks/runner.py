@@ -77,11 +77,11 @@ class Runner:
             **pykwargs,
         )
 
-    def setup(self):
+    def setup(self, force: bool):
         print(f"setup_benchmarks for {ref} / {self.commit}")
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
         cmd = (
-            "pytest -nauto -m setup_benchmarks --force-setup=False "
+            f"pytest -nauto -m setup_benchmarks --force-setup={force} "
             f"--icechunk-prefix=benchmarks/{self.ref}_{self.commit}/ "
             "benchmarks/"
         )
@@ -94,7 +94,9 @@ class Runner:
 
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
 
+        # shorten the name so `pytest-benchmark compare` is readable
         clean_ref = ref.removeprefix("icechunk-v0.1.0-alph")
+
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
             f"pytest -q "
@@ -116,6 +118,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest")
+    parser.add_argument("--force-setup", help="forced recreation of datasets?", type=bool)
     args = parser.parse_args()
 
     refs = args.refs
@@ -133,8 +136,8 @@ if __name__ == "__main__":
     # ]
     for ref in tqdm.tqdm(refs):
         runner = Runner(ref)
-        # runner.initialize()
-        # runner.setup()
+        runner.initialize()
+        runner.setup(force=args.force_setup)
         runner.run(pytest_extra=args.pytest)
 
     if len(refs) > 1:

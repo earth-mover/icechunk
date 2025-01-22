@@ -26,7 +26,8 @@ def test_recreate_datasets(synth_dataset, request):
         )
 
     if synth_dataset.setupfn is not None:
-        synth_dataset.setup(force=request.config.getoption("--force-setup"))
+        force = request.config.getoption("--force-setup") == "True"
+        synth_dataset.setup(force=force)
 
 
 @pytest.mark.read_benchmark

@@ -128,12 +128,14 @@ class Dataset:
             raise NotImplementedError("setupfn has not been provided.")
 
         if force:
+            print("forced re-creating")
             self.setupfn(self)
             return
 
         try:
             _ = self.store
         except ic.IcechunkError as e:
+            print("Read of existing store failed. Re-creating")
             print(e)
             self.setupfn(self)
 
