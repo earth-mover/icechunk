@@ -12,8 +12,7 @@ from functools import partial
 
 import tqdm
 import tqdm.contrib.concurrent
-
-from benchmarks.helpers import assert_cwd_is_icechunk_python, get_commit
+from helpers import assert_cwd_is_icechunk_python, get_commit
 
 PIP_OPTIONS = "--disable-pip-version-check -q"
 TMP = tempfile.gettempdir()
@@ -115,14 +114,14 @@ class Runner:
 
 def init_for_ref(ref: str, force_setup: bool):
     runner = Runner(ref)
-    # runner.initialize()
+    runner.initialize()
     runner.setup(force=force_setup)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
-    parser.add_argument("--pytest", help="passed to pytest")
+    parser.add_argument("--pytest", help="passed to pytest", default="")
     parser.add_argument(
         "--force-setup", help="forced recreation of datasets?", type=bool, default=False
     )
