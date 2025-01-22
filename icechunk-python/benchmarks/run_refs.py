@@ -3,6 +3,7 @@
 # AKA a shitty version of asv's env management
 
 import argparse
+import glob
 import os
 import subprocess
 import tempfile
@@ -80,10 +81,11 @@ def run(ref: str, *, pytest_extra: str = "") -> None:
 
     print(f"running benchmarks for {ref} / {commit}")
 
+    clean_ref = ref.removeprefix("icechunk-v0.1.0-alph")
     # Note: .benchmarks is the default location for pytest-benchmark
     cmd = (
         f"pytest --benchmark-storage={CURRENTDIR}/.benchmarks "
-        f" --benchmark-save={ref}_{commit} "
+        f" --benchmark-save={clean_ref}_{commit} "
         f"--icechunk-prefix=benchmarks/{ref}_{commit}/ "
         f"{pytest_extra} "
         "benchmarks/"
@@ -117,8 +119,6 @@ if __name__ == "__main__":
         # setup(ref)
         run(ref, pytest_extra=args.pytest)
 
-    import glob
-
     files = sorted(glob.glob("./.benchmarks/**/*.json", recursive=True))[-len(refs) :]
     # TODO: Use `just` here when we figure that out.
     subprocess.run(
@@ -128,7 +128,7 @@ if __name__ == "__main__":
             "--group=group,func,param",
             "--sort=fullname",
             "--columns=median",
-            "--name=short",
+            "--name=normal",
             *files,
         ]
     )
