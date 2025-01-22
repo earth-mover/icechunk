@@ -31,6 +31,8 @@ from icechunk._icechunk_python import (
     __version__,
 )
 from icechunk.credentials import (
+    AnyAzureCredential,
+    AnyAzureStaticCredential,
     AnyCredential,
     AnyGcsCredential,
     AnyGcsStaticCredential,
