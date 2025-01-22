@@ -66,9 +66,7 @@ minversion = "7"
 testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
-# --benchmark-disable runs the benchmark code once to verify correctness
-# but skips the benchmarking
-addopts = ["-ra", "--strict-config", "--strict-markers", "--benchmark-disable"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
 filterwarnings = [
   "error",
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
