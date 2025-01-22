@@ -79,7 +79,6 @@ filterwarnings = [
   "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
   "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
   "ignore::ResourceWarning",
-  "ignore:PytestDeprecationWarning:The configuration option",
 ]
 
 [tool.pyright]

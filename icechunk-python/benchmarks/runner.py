@@ -86,7 +86,7 @@ class Runner:
         print(f"setup_benchmarks for {self.ref} / {self.commit}")
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
         cmd = (
-            f"pytest -nauto -m setup_benchmarks --force-setup={force} "
+            f"pytest -q -nauto -m setup_benchmarks --force-setup={force} "
             f"--icechunk-prefix=benchmarks/{self.ref}_{self.commit}/ "
             "benchmarks/"
         )
@@ -129,7 +129,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest")
-    parser.add_argument("--force-setup", help="forced recreation of datasets?", type=bool)
+    parser.add_argument(
+        "--force-setup", help="forced recreation of datasets?", type=bool, default=False
+    )
     args = parser.parse_args()
 
     refs = args.refs
@@ -149,6 +151,9 @@ if __name__ == "__main__":
     tqdm.contrib.concurrent.process_map(
         partial(init_for_ref, force_setup=args.force_setup), refs
     )
+    # For debugging
+    # for ref in refs:
+    #     init_for_ref(ref, force_setup=args.force_setup)
 
     for ref in tqdm.tqdm(refs):
         runner = Runner(ref)
