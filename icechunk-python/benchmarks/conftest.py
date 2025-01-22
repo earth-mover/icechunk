@@ -1,6 +1,6 @@
 import pytest
 
-from benchmarks.datasets import ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
+from benchmarks.datasets import ERA5, ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
 from icechunk import Repository, local_filesystem_storage
 from zarr.abc.store import Store
 
@@ -12,6 +12,7 @@ def repo(tmpdir: str) -> Repository:
 
 @pytest.fixture(
     params=[
+        pytest.param(ERA5, id="era5-weatherbench"),
         pytest.param(ERA5_SINGLE, id="era5-single"),
         pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
         pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
