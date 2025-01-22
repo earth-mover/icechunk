@@ -10,6 +10,7 @@ import tempfile
 import tomllib
 
 import tqdm
+import tqdm.contrib.concurrent
 
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
@@ -43,6 +44,8 @@ class Runner:
         self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
 
     def initialize(self) -> None:
+        ref = self.ref
+
         deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
         kwargs = dict(cwd=self.cwd, check=True)
         pykwargs = dict(cwd=self.pycwd, check=True)
@@ -114,6 +117,12 @@ class Runner:
         )
 
 
+def init_for_ref(ref):
+    runner = Runner(ref)
+    runner.initialize()
+    runner.setup(force=args.force_setup)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
@@ -134,10 +143,11 @@ if __name__ == "__main__":
     #     "icechunk-v0.1.0-alpha.12",
     #     # "main",
     # ]
+
+    tqdm.contrib.concurrent.process_map(init_for_ref, refs)
+
     for ref in tqdm.tqdm(refs):
         runner = Runner(ref)
-        runner.initialize()
-        runner.setup(force=args.force_setup)
         runner.run(pytest_extra=args.pytest)
 
     if len(refs) > 1:
