@@ -155,6 +155,8 @@ def setup_synthetic_gb_dataset(
         chunks=chunk_shape,
         dtype=np.int64,
         dimension_names=("t", "y", "x"),
+        compressors=None,
+        filters=None,
     )
     array[:] = rng.integers(-1000, high=1000, size=shape, dtype=np.int64)
     session.commit("initialized")
