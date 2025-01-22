@@ -91,13 +91,17 @@ def test_write_many_chunk_refs(
     repo = Repository.create(storage=local_filesystem_storage(tmpdir), config=repo_config)
     session = repo.writable_session("main")
     group = zarr.group(session.store)
-    group.create_array(
+    kwargs = dict(
         name="array",
         shape=(NUM_CHUNK_REFS,),
         chunks=(1,),
         dtype=np.int8,
         dimension_names=("t",),
     )
+    try:
+        group.create_array(**kwargs)
+    except AttributeError:
+        group.array(**kwargs)
     session.commit("initialized")
 
     benchmark(write_chunk_refs, repo)
