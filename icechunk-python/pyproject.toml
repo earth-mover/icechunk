@@ -43,8 +43,6 @@ test = [
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
-  # needed for the --benchmark-disable option
-  "pytest-benchmark",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -65,7 +63,7 @@ exclude = ["README.md"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
-testpaths = ["tests", "benchmarks"]
+testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 # --benchmark-disable runs the benchmark code once to verify correctness
