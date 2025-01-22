@@ -97,7 +97,7 @@ class Runner:
 
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
-            f"pytest -q "
+            f"pytest -q --durations 10 "
             f"--benchmark-storage={CURRENTDIR}/.benchmarks "
             f"--benchmark-save={clean_ref}_{self.commit} "
             f"--icechunk-prefix=benchmarks/{ref}_{self.commit}/ "
