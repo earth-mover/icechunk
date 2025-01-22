@@ -12,6 +12,7 @@ import tomllib
 import tqdm
 import tqdm.contrib.concurrent
 
+PIP_OPTIONS = "--disable-pip-version-check -q"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
 if not CURRENTDIR.endswith("icechunk-python"):
@@ -74,8 +75,8 @@ class Runner:
         )
         subprocess.run(
             f"{self.activate}"
-            "&& pip install -q icechunk['test'] --find-links dist"
-            f"&& pip install -q {deps}",
+            f"&& pip install {PIP_OPTIONS} icechunk['test'] --find-links dist"
+            f"&& pip install {PIP_OPTIONS} {deps}",
             shell=True,
             **pykwargs,
         )
