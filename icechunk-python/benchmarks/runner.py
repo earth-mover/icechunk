@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import tomllib
+from functools import partial
 
 import tqdm
 import tqdm.contrib.concurrent
@@ -82,7 +83,7 @@ class Runner:
         )
 
     def setup(self, force: bool):
-        print(f"setup_benchmarks for {ref} / {self.commit}")
+        print(f"setup_benchmarks for {self.ref} / {self.commit}")
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
         cmd = (
             f"pytest -nauto -m setup_benchmarks --force-setup={force} "
@@ -118,10 +119,10 @@ class Runner:
         )
 
 
-def init_for_ref(ref):
+def init_for_ref(ref: str, force_setup: bool):
     runner = Runner(ref)
     runner.initialize()
-    runner.setup(force=args.force_setup)
+    runner.setup(force=force_setup)
 
 
 if __name__ == "__main__":
@@ -145,7 +146,9 @@ if __name__ == "__main__":
     #     # "main",
     # ]
 
-    tqdm.contrib.concurrent.process_map(init_for_ref, refs)
+    tqdm.contrib.concurrent.process_map(
+        partial(init_for_ref, force_setup=args.force_setup), refs
+    )
 
     for ref in tqdm.tqdm(refs):
         runner = Runner(ref)
