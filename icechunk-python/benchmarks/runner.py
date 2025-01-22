@@ -79,7 +79,8 @@ class Runner:
         print(f"setup_benchmarks for {self.ref} / {self.commit}")
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
         cmd = (
-            f"pytest -q -nauto -m setup_benchmarks --force-setup={force} "
+            f"pytest -q --durations 10 -nauto "
+            "-m setup_benchmarks --force-setup={force} "
             f"--icechunk-prefix=benchmarks/{self.ref}_{self.commit}/ "
             "benchmarks/"
         )
