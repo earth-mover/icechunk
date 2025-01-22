@@ -13,19 +13,13 @@ from functools import partial
 import tqdm
 import tqdm.contrib.concurrent
 
+from benchmarks.helpers import assert_cwd_is_icechunk_python, get_commit
+
 PIP_OPTIONS = "--disable-pip-version-check -q"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
-if not CURRENTDIR.endswith("icechunk-python"):
-    raise ValueError(
-        "Running in the wrong directory. Please run from the `icechunk-python` directory."
-    )
 
-
-def get_commit(ref: str) -> str:
-    return subprocess.run(
-        ["git", "rev-parse", ref], capture_output=True, text=True, check=True
-    ).stdout.strip()[:8]
+assert_cwd_is_icechunk_python()
 
 
 def get_benchmark_deps(filepath: str) -> str:
@@ -121,7 +115,7 @@ class Runner:
 
 def init_for_ref(ref: str, force_setup: bool):
     runner = Runner(ref)
-    runner.initialize()
+    # runner.initialize()
     runner.setup(force=force_setup)
 
 

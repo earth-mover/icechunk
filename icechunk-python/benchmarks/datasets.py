@@ -199,12 +199,15 @@ ERA5 = Dataset(
     storage_config=StorageConfig(
         constructor=ic.Storage.new_s3,
         bucket="icechunk-test",
-        prefix="era5-demo-repository-a10",
+        prefix="era5-weatherbench",
         config=ic.S3Options(),
     ),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
     first_byte_variable="latitude",
+    group="1x721x1440",
+    # don't set setupfn here so we don't run a really expensive job
+    # by mistake
 )
 
 ERA5_SINGLE = Dataset(

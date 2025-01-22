@@ -24,6 +24,16 @@ Use the `--force-setup` flag to avoid re-creating datasets if possible.
 pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
 ```
 
+
+### ERA5
+
+`benchmarks/create_era5.py` creates an ERA5 dataset.
+As of now, this writes 4 arrays with 5 years of data so 5*365*24=43_800 chunks per array for ~200k chunks.
+It is separate from the default `setup_benchmarks` infrastructure because it is a relatively big ingest, and requires an account with Coiled (for now).
+Run this in an environment with the icechunk version you want.
+It records the dask performance report to `reports/` though it would be nice to instrument this more.
+This takes about 5 minutes to run (depending on cloud scaling time).
+
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
@@ -68,13 +78,7 @@ This will automatically compare the run on `HEAD` against the most recently run 
 We can use the above to somewhat quickly compare `HEAD` to `main`
 
 ``` sh
-git switch main
-maturin develop --release
-pytest --benchmark-autosave benchmarks/*.py
-
-git switch PR-BRANCH-NAME
-maturin develop --release
-pytest --benchmark-compare benchmarks/*.py
+python benchmarks/runner.py --pytest="-k read_benchmark" --refs main
 ```
 
 #### Comparing specific runs
