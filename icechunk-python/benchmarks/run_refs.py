@@ -2,6 +2,7 @@
 # helper script to run and save benchmarks against named refs.
 # AKA a shitty version of asv's env management
 
+import argparse
 import os
 import subprocess
 import tempfile
@@ -72,7 +73,7 @@ def setup(ref: str) -> None:
     )
 
 
-def run(ref):
+def run(ref: str, *, pytest_extra: str = "") -> None:
     commit = get_commit(ref)
     pycwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk/icechunk-python"
     activate = "source .venv/bin/activate"
@@ -80,9 +81,13 @@ def run(ref):
     print(f"running benchmarks for {ref} / {commit}")
 
     # Note: .benchmarks is the default location for pytest-benchmark
-    cmd = f"""
-    pytest --benchmark-storage={CURRENTDIR}/.benchmarks --benchmark-save={ref}_{commit} --icechunk-prefix=benchmarks/{ref}_{commit}/ benchmarks/
-    """
+    cmd = (
+        f"pytest --benchmark-storage={CURRENTDIR}/.benchmarks "
+        f" --benchmark-save={ref}_{commit} "
+        f"--icechunk-prefix=benchmarks/{ref}_{commit}/ "
+        f"{pytest_extra} "
+        "benchmarks/"
+    )
     print(cmd)
 
     # don't stop if benchmarks fail
@@ -90,13 +95,40 @@ def run(ref):
 
 
 if __name__ == "__main__":
-    refs = [
-        # "icechunk-v0.1.0-alpha.8",
-        # "icechunk-v0.1.0-alpha.10",
-        # "icechunk-v0.1.0-alpha.11",
-        "icechunk-v0.1.0-alpha.12",
-        "main",
-    ]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
+    parser.add_argument("--pytest", help="passed to pytest")
+    args = parser.parse_args()
+
+    refs = args.refs
+    # refs = [
+    #     # "0.1.0-alpha.2-python",  # first release
+    #     "icechunk-v0.1.0-alpha.8",
+    #     # concurrent chunk fetch
+    #     # list_dir reimplemented
+    #     # "icechunk-v0.1.0-alpha.10",
+    #     # metadata file download performance
+    #     # "icechunk-v0.1.0-alpha.11",
+    #     # concurrently download bytes
+    #     "icechunk-v0.1.0-alpha.12",
+    #     # "main",
+    # ]
     for ref in tqdm.tqdm(refs):
-        setup(ref)
-        run(ref)
+        # setup(ref)
+        run(ref, pytest_extra=args.pytest)
+
+    import glob
+
+    files = sorted(glob.glob("./.benchmarks/**/*.json", recursive=True))[-len(refs) :]
+    # TODO: Use `just` here when we figure that out.
+    subprocess.run(
+        [
+            "pytest-benchmark",
+            "compare",
+            "--group=group,func,param",
+            "--sort=fullname",
+            "--columns=median",
+            "--name=short",
+            *files,
+        ]
+    )
