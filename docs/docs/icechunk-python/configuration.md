@@ -7,7 +7,7 @@ When creating and opening Icechunk stores, there are a two different sets of con
 
 ## Storage Config
 
-Icechunk can be confirgured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
+Icechunk can be configured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
 
 ### S3 Storage
 
