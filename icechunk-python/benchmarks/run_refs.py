@@ -31,69 +31,85 @@ def get_benchmark_deps(filepath: str) -> str:
     return " ".join(data["project"]["optional-dependencies"].get("benchmark", ""))
 
 
-def setup(ref: str) -> None:
-    commit = get_commit(ref)
-    base = f"{TMP}/icechunk-bench-{ref}_{commit}"
-    cwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk"
-    pycwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk/icechunk-python"
-    activate = "source .venv/bin/activate"
+class Runner:
+    activate: str = "source .venv/bin/activate"
 
-    deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
+    def __init__(self, ref: str):
+        self.ref = ref
+        self.commit = get_commit(ref)
+        suffix = f"{self.ref}_{self.commit}"
+        self.base = f"{TMP}/icechunk-bench-{suffix}"
+        self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
+        self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
 
-    kwargs = dict(cwd=cwd, check=True)
-    pykwargs = dict(cwd=pycwd, check=True)
+    def initialize(self) -> None:
+        deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
+        kwargs = dict(cwd=self.cwd, check=True)
+        pykwargs = dict(cwd=self.pycwd, check=True)
 
-    print(f"checking out {ref} to {base}")
-    subprocess.run(["mkdir", base], check=False)
-    # TODO: copy the local one instead to save time?
-    subprocess.run(
-        ["git", "clone", "-q", "git@github.com:earth-mover/icechunk"],
-        cwd=base,
-        check=False,
-    )
-    subprocess.run(["git", "checkout", "-q", ref], **kwargs)
-    subprocess.run(["cp", "-r", "benchmarks", f"{pycwd}"], check=True)
-    subprocess.run(["python3", "-m", "venv", ".venv"], cwd=pycwd, check=True)
-    subprocess.run(
-        ["maturin", "build", "-q", "--release", "--out", "dist", "--find-interpreter"],
-        **pykwargs,
-    )
-    subprocess.run(
-        f"{activate}"
-        "&& pip install -q icechunk['test'] --find-links dist"
-        f"&& pip install -q {deps}",
-        shell=True,
-        **pykwargs,
-    )
+        print(f"checking out {ref} to {self.base}")
+        subprocess.run(["mkdir", self.base], check=False)
+        # TODO: copy the local one instead to save time?
+        subprocess.run(
+            ["git", "clone", "-q", "git@github.com:earth-mover/icechunk"],
+            cwd=self.base,
+            check=False,
+        )
+        subprocess.run(["git", "checkout", "-q", ref], **kwargs)
+        subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
+        subprocess.run(
+            [
+                "maturin",
+                "build",
+                "-q",
+                "--release",
+                "--out",
+                "dist",
+                "--find-interpreter",
+            ],
+            **pykwargs,
+        )
+        subprocess.run(
+            f"{self.activate}"
+            "&& pip install -q icechunk['test'] --find-links dist"
+            f"&& pip install -q {deps}",
+            shell=True,
+            **pykwargs,
+        )
 
-    print(f"setup_benchmarks for {ref} / {commit}")
-    subprocess.run(
-        f"{activate} && pytest -nauto -m setup_benchmarks --force-setup=False --icechunk-prefix=benchmarks/{ref}_{commit}/ benchmarks/",
-        **pykwargs,
-        shell=True,
-    )
+    def setup(self):
+        print(f"setup_benchmarks for {ref} / {self.commit}")
+        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
+        cmd = (
+            "pytest -nauto -m setup_benchmarks --force-setup=False "
+            f"--icechunk-prefix=benchmarks/{self.ref}_{self.commit}/ "
+            "benchmarks/"
+        )
+        subprocess.run(
+            f"{self.activate} && {cmd}", cwd=self.pycwd, check=True, shell=True
+        )
 
+    def run(self, *, pytest_extra: str = "") -> None:
+        print(f"running benchmarks for {self.ref} / {self.commit}")
 
-def run(ref: str, *, pytest_extra: str = "") -> None:
-    commit = get_commit(ref)
-    pycwd = f"{TMP}/icechunk-bench-{ref}_{commit}/icechunk/icechunk-python"
-    activate = "source .venv/bin/activate"
+        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
 
-    print(f"running benchmarks for {ref} / {commit}")
+        clean_ref = ref.removeprefix("icechunk-v0.1.0-alph")
+        # Note: .benchmarks is the default location for pytest-benchmark
+        cmd = (
+            f"pytest -q "
+            f"--benchmark-storage={CURRENTDIR}/.benchmarks "
+            f"--benchmark-save={clean_ref}_{self.commit} "
+            f"--icechunk-prefix=benchmarks/{ref}_{self.commit}/ "
+            f"{pytest_extra} "
+            "benchmarks/"
+        )
+        print(cmd)
 
-    clean_ref = ref.removeprefix("icechunk-v0.1.0-alph")
-    # Note: .benchmarks is the default location for pytest-benchmark
-    cmd = (
-        f"pytest --benchmark-storage={CURRENTDIR}/.benchmarks "
-        f" --benchmark-save={clean_ref}_{commit} "
-        f"--icechunk-prefix=benchmarks/{ref}_{commit}/ "
-        f"{pytest_extra} "
-        "benchmarks/"
-    )
-    print(cmd)
-
-    # don't stop if benchmarks fail
-    subprocess.run(f"{activate} && {cmd}", shell=True, cwd=pycwd, check=False)
+        # don't stop if benchmarks fail
+        subprocess.run(
+            f"{self.activate} && {cmd}", shell=True, cwd=self.pycwd, check=False
+        )
 
 
 if __name__ == "__main__":
@@ -116,19 +132,22 @@ if __name__ == "__main__":
     #     # "main",
     # ]
     for ref in tqdm.tqdm(refs):
-        # setup(ref)
-        run(ref, pytest_extra=args.pytest)
+        runner = Runner(ref)
+        # runner.initialize()
+        # runner.setup()
+        runner.run(pytest_extra=args.pytest)
 
-    files = sorted(glob.glob("./.benchmarks/**/*.json", recursive=True))[-len(refs) :]
-    # TODO: Use `just` here when we figure that out.
-    subprocess.run(
-        [
-            "pytest-benchmark",
-            "compare",
-            "--group=group,func,param",
-            "--sort=fullname",
-            "--columns=median",
-            "--name=normal",
-            *files,
-        ]
-    )
+    if len(refs) > 1:
+        files = sorted(glob.glob("./.benchmarks/**/*.json", recursive=True))[-len(refs) :]
+        # TODO: Use `just` here when we figure that out.
+        subprocess.run(
+            [
+                "pytest-benchmark",
+                "compare",
+                "--group=group,func,param",
+                "--sort=fullname",
+                "--columns=median",
+                "--name=normal",
+                *files,
+            ]
+        )

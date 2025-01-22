@@ -37,7 +37,7 @@ def pytest_configure(config):
         "markers", "setup_benchmarks: Run synthetic dataset setup code for benchmarks."
     )
     config.addinivalue_line("markers", "read_benchmark: Read benchmark.")
-    config.addinivalue_line("markers", "write_benchmark: Read benchmark.")
+    config.addinivalue_line("markers", "write_benchmark: Write benchmark.")
 
 
 def pytest_addoption(parser):
