@@ -29,11 +29,13 @@ def test_recreate_datasets(synth_dataset, request):
         synth_dataset.setup(force=request.config.getoption("--force-setup"))
 
 
+@pytest.mark.read_benchmark
 def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:
     """time to create the icechunk create the Repo, session, and store objects."""
     benchmark(operator.attrgetter("store"), synth_dataset)
 
 
+@pytest.mark.read_benchmark
 @pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_open(synth_dataset: Dataset, benchmark) -> None:
     """
@@ -46,6 +48,7 @@ def test_time_zarr_open(synth_dataset: Dataset, benchmark) -> None:
         zarr.open_group(synth_dataset.store, path=synth_dataset.group, mode="r")
 
 
+@pytest.mark.read_benchmark
 @pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_members(synth_dataset: Dataset, benchmark) -> None:
     # list_dir, maybe warmup=1
@@ -53,6 +56,7 @@ def test_time_zarr_members(synth_dataset: Dataset, benchmark) -> None:
     benchmark(operator.methodcaller("members"), group)
 
 
+@pytest.mark.read_benchmark
 @pytest.mark.benchmark(group="xarray-read", min_rounds=10)
 def test_time_xarray_open(synth_dataset: Dataset, benchmark) -> None:
     @benchmark
@@ -66,6 +70,7 @@ def test_time_xarray_open(synth_dataset: Dataset, benchmark) -> None:
 
 
 # TODO: mark as slow?
+@pytest.mark.read_benchmark
 @pytest.mark.benchmark(group="xarray-read", min_rounds=2)
 def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
     """128MB vs 8MB chunks. should see a difference."""
@@ -78,6 +83,7 @@ def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
     benchmark(operator.methodcaller("compute"), subset[synth_dataset.load_variables])
 
 
+@pytest.mark.read_benchmark
 @pytest.mark.benchmark(group="bytes-read")
 def test_time_first_bytes(synth_dataset: Dataset, benchmark) -> None:
     """TODO: this should be sensitive to manifest splitting"""

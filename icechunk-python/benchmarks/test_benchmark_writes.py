@@ -13,6 +13,7 @@ NUM_VIRTUAL_CHUNK_REFS = 100_000
 
 
 # FIXME: figure out a reasonable default
+@pytest.mark.write_benchmark
 @pytest.mark.parametrize("executor", [Executor.threads, Executor.processes])
 @pytest.mark.parametrize(
     "url",
@@ -60,6 +61,7 @@ def repo_config_with(
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
 
 
+@pytest.mark.write_benchmark
 @pytest.mark.benchmark(group="refs-write")
 @pytest.mark.parametrize("commit", [True, False])
 @pytest.mark.parametrize(
@@ -101,6 +103,7 @@ def test_write_many_chunk_refs(
     benchmark(write_chunk_refs, repo)
 
 
+@pytest.mark.write_benchmark
 @pytest.mark.benchmark(group="refs-write")
 def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
     """Benchmark the setting of many virtual chunk refs."""
