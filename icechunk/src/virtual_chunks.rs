@@ -276,8 +276,8 @@ impl S3Fetcher {
         let client = &self.client;
         let results = split_in_multiple_requests(
             range,
-            self.settings.concurrency.ideal_concurrent_request_size.get(),
-            self.settings.concurrency.max_concurrent_requests_for_object.get(),
+            self.settings.concurrency().ideal_concurrent_request_size().get(),
+            self.settings.concurrency().max_concurrent_requests_for_object().get(),
         )
         .map(|range| async move {
             let key = key.to_string();

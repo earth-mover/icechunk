@@ -110,7 +110,7 @@ pub struct Store {
 
 impl Store {
     pub async fn from_session(session: Arc<RwLock<Session>>) -> Self {
-        let conc = session.read().await.config().get_partial_values_concurrency;
+        let conc = session.read().await.config().get_partial_values_concurrency();
         Self::from_session_and_config(session, conc)
     }
 
@@ -123,7 +123,7 @@ impl Store {
 
     pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
-        let conc = session.config().get_partial_values_concurrency;
+        let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 

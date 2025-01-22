@@ -117,11 +117,11 @@ impl AssetManager {
         Self::new(
             storage,
             storage_settings,
-            config.num_snapshot_nodes,
-            config.num_chunk_refs,
-            config.num_transaction_changes,
-            config.num_bytes_attributes,
-            config.num_bytes_chunks,
+            config.num_snapshot_nodes(),
+            config.num_chunk_refs(),
+            config.num_transaction_changes(),
+            config.num_bytes_attributes(),
+            config.num_bytes_chunks(),
         )
     }
 
@@ -726,11 +726,11 @@ mod test {
             settings,
             // the cache can only fit 6 refs.
             &CachingConfig {
-                num_snapshot_nodes: 0,
-                num_chunk_refs: 6,
-                num_transaction_changes: 0,
-                num_bytes_attributes: 0,
-                num_bytes_chunks: 0,
+                num_snapshot_nodes: Some(0),
+                num_chunk_refs: Some(6),
+                num_transaction_changes: Some(0),
+                num_bytes_attributes: Some(0),
+                num_bytes_chunks: Some(0),
             },
         );
 

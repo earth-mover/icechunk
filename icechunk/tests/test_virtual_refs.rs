@@ -71,7 +71,10 @@ mod tests {
             .collect();
 
         Repository::create(
-            Some(RepositoryConfig { virtual_chunk_containers, ..Default::default() }),
+            Some(RepositoryConfig {
+                virtual_chunk_containers: Some(virtual_chunk_containers),
+                ..Default::default()
+            }),
             storage,
             creds,
         )
@@ -416,19 +419,19 @@ mod tests {
 
         let mut config = repo.config().clone();
         config.storage = Some(storage::Settings {
-            concurrency: ConcurrencySettings {
-                max_concurrent_requests_for_object: 100.try_into()?,
-                ideal_concurrent_request_size: 1.try_into()?,
-            },
+            concurrency: Some(ConcurrencySettings {
+                max_concurrent_requests_for_object: Some(100.try_into()?),
+                ideal_concurrent_request_size: Some(1.try_into()?),
+            }),
         });
         let repo = repo.reopen(Some(config), None)?;
         assert_eq!(
             repo.config()
-                .storage
+                .storage()
                 .as_ref()
                 .unwrap()
-                .concurrency
-                .ideal_concurrent_request_size,
+                .concurrency()
+                .ideal_concurrent_request_size(),
             1.try_into()?
         );
         let session = repo
