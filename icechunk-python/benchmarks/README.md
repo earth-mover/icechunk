@@ -23,6 +23,7 @@ Use the `--force-setup` flag to avoid re-creating datasets if possible.
 ``` sh
 pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
 ```
+Use `---icechunk-prefix` to add an extra prefix during both setup and running of benchmarks.
 
 
 ### ERA5
@@ -36,6 +37,22 @@ This takes about 5 minutes to run (depending on cloud scaling time).
 
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
+
+### `runner.py`
+
+`runner.py` abstracts the painful task of setting up envs with different versions (with potential format changes), and recreating datasets where needed.
+Datasets are written to `s3://icechunk-test/benchmarks/REFNAME_SHORTCOMMIT`.
+
+Usage:
+``` sh
+python benchmarks/runner.py icechunk-v0.1.0-alpha.12 main
+```
+This will
+1. setup a virtual env with the icechunk version
+2. compile it,
+3. run `setup_benchmarks` with `force-setup=False`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version.
+4. Runs the benchmarks.
+5. Compares the benchmarks.
 
 ### Just aliases
 
