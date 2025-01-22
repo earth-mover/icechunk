@@ -38,6 +38,25 @@ This takes about 5 minutes to run (depending on cloud scaling time).
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
+### TL;DR
+
+Assuming no format changes between `main` and the PR branch, here's how I benchmarked the `getsize` improvement.
+
+I added a new benchmarks: `test_time_getsize` and `test_time_getsize_prefix`
+
+``` sh
+# Start on the PR branch
+git switch push-uknyqnpypzro
+# this will build the main branch, and re-create the datasets
+# And uses the pytest -k option to only run the new benchmarks
+python benchmarks/runner.py --pytest "-k getsize" main
+# It will print this to the screen
+# > pytest [...] --benchmark-save=main_3abfa48a --icechunk-prefix=benchmarks/main_3abfa48a/  benchmarks/
+# note the created prefix: main_(first-8-characters-of-commit), for convenienve export it
+export PREFIX=benchmarks/main_3abfa48a/
+pytest --benchmark-compare -k getsize --icechunk-prefix="$PREFIX" benchmarks/
+```
+
 ### `runner.py`
 
 `runner.py` abstracts the painful task of setting up envs with different versions (with potential format changes), and recreating datasets where needed.

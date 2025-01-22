@@ -36,6 +36,32 @@ def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:
     benchmark(operator.attrgetter("store"), synth_dataset)
 
 
+@pytest.mark.benchmark(warmup=1)
+def test_time_getsize_key(synth_dataset: Dataset, benchmark) -> None:
+    from zarr.core.sync import sync
+
+    store = synth_dataset.store
+
+    @benchmark
+    def fn():
+        for array in synth_dataset.load_variables:
+            key = f"{synth_dataset.group or ''}/{array}/zarr.json"
+            sync(store.getsize(key))
+
+
+def test_time_getsize_prefix(synth_dataset: Dataset, benchmark) -> None:
+    if synth_dataset.first_byte_variable is None:
+        pytest.skip()
+    store = synth_dataset.store
+    group = zarr.open_group(store, path=synth_dataset.group, mode="r")
+    # Using a relatively small variable.
+    array = group[synth_dataset.first_byte_variable]
+
+    @benchmark
+    def fn():
+        array.nbytes_stored()
+
+
 @pytest.mark.read_benchmark
 @pytest.mark.benchmark(group="zarr-read")
 def test_time_zarr_open(synth_dataset: Dataset, benchmark) -> None:
