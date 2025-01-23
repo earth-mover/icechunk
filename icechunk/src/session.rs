@@ -1296,15 +1296,11 @@ async fn flush(
         }
     }
 
-    dbg!(&flush_data.manifest_refs);
-
     // Now we need to go through all the new arrays, and generate manifests for them
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         flush_data.write_manifest_for_new_node(node_id, node_path).await?;
     }
-
-    dbg!(&flush_data.manifest_refs);
 
     let all_nodes = updated_nodes(
         flush_data.asset_manager,
@@ -1313,18 +1309,15 @@ async fn flush(
     )
     .await?
     .map(|node| {
-        dbg!(&node.path);
         let id = &node.id;
         // TODO: many clones
         if let NodeData::Array(meta, original_manifests) = node.node_data {
             if let Some(manifests) = flush_data.manifest_refs.get(id) {
-                dbg!("found");
                 NodeSnapshot {
                     node_data: NodeData::Array(meta.clone(), manifests.clone()),
                     ..node
                 }
             } else {
-                dbg!("not found");
                 NodeSnapshot {
                     node_data: NodeData::Array(meta, original_manifests),
                     ..node
