@@ -23,24 +23,24 @@ with a bucket or file path that you have access to.
 
 ```python
 import xarray as xr
-from icechunk import Repository, StorageConfig
+import icechunk
 ```
 
 === "S3 Storage"
 
     ```python
-    storage_config = StorageConfig.s3_from_env(
+    storage_config = icechunk.s3_storage(
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    repo = Repository.create(storage_config)
+    repo = icechunk.Repository.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python
-    storage_config = StorageConfig.filesystem("./icechunk-xarray")
-    repo = Repository.create(storage_config)
+    storage_config = icechunk.local_filesystem_storage("./icechunk-xarray")
+    repo = icechunk.Repository.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray
@@ -70,13 +70,12 @@ Create a new writable session on the `main` branch to get the `IcechunkStore`:
 
 ```python
 session = repo.writable_session("main")
-store = session.store()
 ```
 
 Writing Xarray data to Icechunk is as easy as calling `Dataset.to_zarr`:
 
 ```python
-ds1.to_zarr(store, zarr_format=3, consolidated=False)
+ds1.to_zarr(session.store, zarr_format=3, consolidated=False)
 ```
 
 !!! note
@@ -102,7 +101,7 @@ this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='tim
 ```python
 # we have to get a new session after committing
 session = repo.writable_session("main")
-ds2.to_zarr(session.store(), append_dim='time')
+ds2.to_zarr(session.store, append_dim='time')
 ```
 
 And then we'll commit the changes:
@@ -144,9 +143,9 @@ xr.open_zarr(store, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-store = repo.readable_session(snapshot_id='ME4VKFPA5QAY0B2YSG8G').store()
+session = repo.readable_session(snapshot_id='ME4VKFPA5QAY0B2YSG8G')
 
-xr.open_zarr(store, consolidated=False)
+xr.open_zarr(session.store, consolidated=False)
 # <xarray.Dataset> Size: 9MB
 # Dimensions:  (time: 18, y: 205, x: 275)
 # Coordinates:
