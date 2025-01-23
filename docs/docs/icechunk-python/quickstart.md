@@ -21,7 +21,7 @@ pip install icechunk
 ## Create a new Icechunk repository
 
 To get started, let's create a new Icechunk repository.
-We recommend creating your repo on S3 to get the most out of Icechunk's cloud-native design.
+We recommend creating your repo on a cloud storage platform to get the most out of Icechunk's cloud-native design.
 However, you can also create a repo on your local filesystem.
 
 === "S3 Storage"
