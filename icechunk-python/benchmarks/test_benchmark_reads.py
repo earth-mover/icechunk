@@ -56,10 +56,7 @@ def test_time_getsize_prefix(synth_dataset: Dataset, benchmark) -> None:
     group = zarr.open_group(store, path=synth_dataset.group, mode="r")
     # Using a relatively small variable.
     array = group[synth_dataset.first_byte_variable]
-
-    @benchmark
-    def fn():
-        array.nbytes_stored()
+    benchmark(operator.methodcaller("nbytes_stored"), array)
 
 
 @pytest.mark.read_benchmark
