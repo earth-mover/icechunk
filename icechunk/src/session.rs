@@ -527,7 +527,7 @@ impl Session {
         &self,
     ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
     {
-        let threshold = self.config.inline_chunk_threshold_bytes as usize;
+        let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         move |data: Bytes| {
             async move {
@@ -646,7 +646,7 @@ impl Session {
                     &self.change_set,
                     message,
                     properties,
-                    self.config.compression.level,
+                    self.config().compression().level(),
                 )
                 .await
             }
@@ -669,7 +669,7 @@ impl Session {
                         &self.change_set,
                         message,
                         properties,
-                        self.config.compression.level,
+                        self.config().compression().level(),
                     )
                     .await
                 }
@@ -1233,7 +1233,7 @@ async fn do_commit(
         branch_name,
         new_snapshot.clone(),
         Some(&parent_snapshot),
-        config.unsafe_overwrite_refs,
+        config.unsafe_overwrite_refs(),
     )
     .await
     {

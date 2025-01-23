@@ -30,7 +30,7 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
@@ -102,30 +102,64 @@ const CONFIG_PATH: &str = "config.yaml";
 
 pub type ETag = String;
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
-    pub max_concurrent_requests_for_object: NonZeroU16,
-    pub ideal_concurrent_request_size: NonZeroU64,
+    pub max_concurrent_requests_for_object: Option<NonZeroU16>,
+    pub ideal_concurrent_request_size: Option<NonZeroU64>,
 }
 
-// AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
-// 8-16 MB requests
-// 85-90 MB/s per request
-// these numbers would saturate a 12.5 Gbps network
-impl Default for ConcurrencySettings {
-    fn default() -> Self {
+impl ConcurrencySettings {
+    // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
+    // 8-16 MB requests
+    // 85-90 MB/s per request
+    // these numbers would saturate a 12.5 Gbps network
+
+    pub fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
+        self.max_concurrent_requests_for_object
+            .unwrap_or_else(|| NonZeroU16::new(18).unwrap_or(NonZeroU16::MIN))
+    }
+    pub fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
+        self.ideal_concurrent_request_size.unwrap_or_else(|| {
+            NonZeroU64::new(12 * 1024 * 1024).unwrap_or(NonZeroU64::MIN)
+        })
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
         Self {
-            max_concurrent_requests_for_object: NonZeroU16::new(18)
-                .unwrap_or(NonZeroU16::MIN),
-            ideal_concurrent_request_size: NonZeroU64::new(12 * 1024 * 1024)
-                .unwrap_or(NonZeroU64::MIN),
+            max_concurrent_requests_for_object: other
+                .max_concurrent_requests_for_object
+                .or(self.max_concurrent_requests_for_object),
+            ideal_concurrent_request_size: other
+                .ideal_concurrent_request_size
+                .or(self.ideal_concurrent_request_size),
         }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
-    pub concurrency: ConcurrencySettings,
+    pub concurrency: Option<ConcurrencySettings>,
+}
+
+static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
+
+impl Settings {
+    pub fn concurrency(&self) -> &ConcurrencySettings {
+        self.concurrency
+            .as_ref()
+            .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            concurrency: match (&self.concurrency, other.concurrency) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+        }
+    }
 }
 
 pub enum Reader {
@@ -374,8 +408,8 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     ) -> StorageResult<Reader> {
         let parts = split_in_multiple_requests(
             range,
-            settings.concurrency.ideal_concurrent_request_size.get(),
-            settings.concurrency.max_concurrent_requests_for_object.get(),
+            settings.concurrency().ideal_concurrent_request_size().get(),
+            settings.concurrency().max_concurrent_requests_for_object().get(),
         )
         .collect::<Vec<_>>();
 

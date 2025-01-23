@@ -256,21 +256,25 @@ impl Storage for ObjectStorage {
         let scheme = url.as_ref().map(|url| url.scheme()).unwrap_or("s3");
         match scheme {
             "file" => Settings {
-                concurrency: ConcurrencySettings {
-                    max_concurrent_requests_for_object: NonZeroU16::new(5)
-                        .unwrap_or(NonZeroU16::MIN),
-                    ideal_concurrent_request_size: NonZeroU64::new(4 * 1024)
-                        .unwrap_or(NonZeroU64::MIN),
-                },
+                concurrency: Some(ConcurrencySettings {
+                    max_concurrent_requests_for_object: Some(
+                        NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
+                    ),
+                    ideal_concurrent_request_size: Some(
+                        NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
+                    ),
+                }),
             },
             "memory" => Settings {
-                concurrency: ConcurrencySettings {
+                concurrency: Some(ConcurrencySettings {
                     // we do != 1 because we use this store for tests
-                    max_concurrent_requests_for_object: NonZeroU16::new(5)
-                        .unwrap_or(NonZeroU16::MIN),
-                    ideal_concurrent_request_size: NonZeroU64::new(1)
-                        .unwrap_or(NonZeroU64::MIN),
-                },
+                    max_concurrent_requests_for_object: Some(
+                        NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
+                    ),
+                    ideal_concurrent_request_size: Some(
+                        NonZeroU64::new(1).unwrap_or(NonZeroU64::MIN),
+                    ),
+                }),
             },
 
             _ => base,
