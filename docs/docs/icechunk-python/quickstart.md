@@ -15,7 +15,7 @@ pip install icechunk
 !!! note
 
     Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
-    Using it today requires installing the latest pre-release of Zarr Python 3.
+    Using it today requires installing Zarr Python 3.
 
 
 ## Create a new Icechunk repository
@@ -27,18 +27,29 @@ However, you can also create a repo on your local filesystem.
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.s3_from_env(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1"
-    )
-    repo = icechunk.Repository.create(storage_config)
+    storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+    repo = icechunk.Repository.create(storage)
+    ```
+
+=== "Google Cloud Storage"
+
+    ```python
+    storage = icechunk.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+    repo = icechunk.Repository.create(storage)
+    ```
+
+=== "Azure Blob Storage"
+
+    ```python
+    storage = icechunk.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
+    repo = icechunk.Repository.create(storage)
     ```
 
 === "Local Storage"
 
     ```python
-    storage_config = icechunk.StorageConfig.filesystem("./icechunk-local")
-    repo = icechunk.Repository.create(storage_config)
+    storage = icechunk.local_filesystem_storage("./icechunk-local")
+    repo = icechunk.Repository.create(storage)
     ```
 
 ## Accessing the Icechunk store
@@ -53,7 +64,7 @@ session = repo.writable_session("main")
 Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
 
 ```python
-store = session.store()
+store = session.store
 ```
 
 ## Write some data and commit
@@ -91,7 +102,7 @@ At this point, we have already committed using our session, so we need to get a 
 
 ```python
 session_2 = repo.writable_session("main")
-store_2 = session_2.store()
+store_2 = session_2.store
 group = zarr.open_group(store_2)
 array = group["my_array"]
 ```
@@ -130,7 +141,7 @@ for anc in hist:
 assert array[0] == 2
 # check out earlier snapshot
 earlier_session = repo.readonly_session(snapshot_id=hist[1].id)
-store = earlier_session.store()
+store = earlier_session.store
 
 # get the array
 group = zarr.open_group(store)
