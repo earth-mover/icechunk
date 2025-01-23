@@ -64,7 +64,7 @@ session = repo.writable_session("main")
 Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
 
 ```python
-store = session.store
+store = session.store  # A zarr store
 ```
 
 ## Write some data and commit
@@ -74,7 +74,7 @@ Let's first create a group and an array within it.
 
 ```python
 group = zarr.group(store)
-array = group.create("my_array", shape=10, dtype=int)
+array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
 ```
 
 Now let's write some data
@@ -124,7 +124,7 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python
-hist = repo.ancestry(snapshot_id_2)
+hist = repo.ancestry(snapshot=snapshot_id_2)
 for anc in hist:
     print(anc.id, anc.message, anc.written_at)
 
@@ -140,11 +140,11 @@ for anc in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-earlier_session = repo.readonly_session(snapshot_id=hist[1].id)
+earlier_session = repo.readonly_session(snapshot=snapshot_id=hist[1].id)
 store = earlier_session.store
 
 # get the array
-group = zarr.open_group(store)
+group = zarr.open_group(store, mode="r")
 array = group["my_array]
 
 # verify data matches first version

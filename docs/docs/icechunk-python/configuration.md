@@ -1,13 +1,13 @@
 # Configuration
 
-When creating and opening Icechunk stores, there are a two different sets of configuration to be aware of:
+When creating and opening Icechunk repositories, there are a two different sets of configuration to be aware of:
 
-- [`Store`](./reference.md#icechunk.Storage) - for configuring access to the object store or filesystem
+- [`Storage`](./reference.md#icechunk.Storage) - for configuring access to the object store or filesystem
 - [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) - for configuring the behavior of the Icechunk Repository itself
 
 ## Storage
 
-Icechunk can be configured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
+Icechunk can be configured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk repository, along with any options or information needed to access data from a given storage type.
 
 ### S3 Storage
 
