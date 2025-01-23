@@ -38,6 +38,56 @@ This takes about 5 minutes to run (depending on cloud scaling time).
 ## Running benchmarks
 Following `pytest` convention, benchmarks are in `benchmarks/test_*.py`.
 
+### TL;DR
+
+Assuming no format changes between `main` and the PR branch, here's how I benchmarked the `getsize` improvement.
+
+I added a new benchmarks: `test_time_getsize` and `test_time_getsize_prefix`
+
+``` sh
+# Start on the PR branch
+git switch push-uknyqnpypzro
+# this will build the main branch, and re-create the datasets
+# And uses the pytest -k option to only run the new benchmarks
+python benchmarks/runner.py --pytest "-k getsize" main
+# It will print this to the screen
+# > pytest [...] --benchmark-save=main_3abfa48a --icechunk-prefix=benchmarks/main_3abfa48a/  benchmarks/
+# note the created prefix: main_(first-8-characters-of-commit), for convenienve export it
+export PREFIX=benchmarks/main_3abfa48a/
+pytest --benchmark-compare -k getsize --benchmark-group-by=group,func,param --benchmark-columns=median --benchmark-sort=name --icechunk-prefix=$PREFIX benchmarks/
+```
+
+This prints out
+```
+-------- benchmark 'test_time_getsize_key era5-single': 2 tests --------
+Name (time in us)                                       Median
+------------------------------------------------------------------------
+test_time_getsize_key[era5-single] (0034_main_3a)     110.2501 (1.05)
+test_time_getsize_key[era5-single] (NOW)              104.7080 (1.0)
+------------------------------------------------------------------------
+
+-------- benchmark 'test_time_getsize_key gb-128mb': 2 tests --------
+Name (time in us)                                    Median
+---------------------------------------------------------------------
+test_time_getsize_key[gb-128mb] (0034_main_3a)     106.5000 (1.05)
+test_time_getsize_key[gb-128mb] (NOW)              101.2499 (1.0)
+---------------------------------------------------------------------
+
+-------- benchmark 'test_time_getsize_key gb-8mb': 2 tests --------
+Name (time in us)                                  Median
+-------------------------------------------------------------------
+test_time_getsize_key[gb-8mb] (0034_main_3a)     105.6660 (1.05)
+test_time_getsize_key[gb-8mb] (NOW)              100.8749 (1.0)
+-------------------------------------------------------------------
+
+------- benchmark 'test_time_getsize_prefix era5-single': 2 tests --------
+Name (time in ms)                                         Median
+--------------------------------------------------------------------------
+test_time_getsize_prefix[era5-single] (0034_main_3a)     68.8355 (31.10)
+test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
+--------------------------------------------------------------------------
+```
+
 ### `runner.py`
 
 `runner.py` abstracts the painful task of setting up envs with different versions (with potential format changes), and recreating datasets where needed.

@@ -565,6 +565,11 @@ impl Store {
         Ok(futures::stream::iter(results.into_iter().map(Ok)))
     }
 
+    pub async fn getsize(&self, key: &str) -> StoreResult<u64> {
+        let repo = self.session.read().await;
+        get_key_size(key, &repo).await
+    }
+
     async fn set_array_meta(
         &self,
         path: Path,
@@ -766,6 +771,28 @@ async fn get_chunk_bytes(
     }))
 }
 
+async fn get_metadata_size(key: &str, path: &Path, repo: &Session) -> StoreResult<u64> {
+    let bytes = get_metadata(key, path, &ByteRange::From(0), repo).await?;
+    Ok(bytes.len() as u64)
+}
+
+async fn get_chunk_size(
+    _key: &str,
+    path: &Path,
+    coords: &ChunkIndices,
+    repo: &Session,
+) -> StoreResult<u64> {
+    let chunk_ref = repo.get_chunk_ref(path, coords).await?;
+    let size = chunk_ref
+        .map(|payload| match payload {
+            ChunkPayload::Inline(bytes) => bytes.len() as u64,
+            ChunkPayload::Virtual(virtual_chunk_ref) => virtual_chunk_ref.length,
+            ChunkPayload::Ref(chunk_ref) => chunk_ref.length,
+        })
+        .unwrap_or(0);
+    Ok(size)
+}
+
 async fn get_key(
     key: &str,
     byte_range: &ByteRange,
@@ -777,6 +804,20 @@ async fn get_key(
         }
         Key::Chunk { node_path, coords } => {
             get_chunk_bytes(key, node_path, coords, byte_range, repo).await
+        }
+        Key::ZarrV2(key) => {
+            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+        }
+    }?;
+
+    Ok(bytes)
+}
+
+async fn get_key_size(key: &str, repo: &Session) -> StoreResult<u64> {
+    let bytes = match Key::parse(key)? {
+        Key::Metadata { node_path } => get_metadata_size(key, &node_path, repo).await,
+        Key::Chunk { node_path, coords } => {
+            get_chunk_size(key, &node_path, &coords, repo).await
         }
         Key::ZarrV2(key) => {
             Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
