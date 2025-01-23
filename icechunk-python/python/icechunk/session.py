@@ -26,8 +26,10 @@ class ConflictError(Exception):
         """
         The expected parent snapshot ID.
 
-        This is the snapshot ID that the session was based on when the
-        commit operation was called.
+        Returns
+        -------
+        str
+            The snapshot ID that the session was based on when the commit operation was called.
         """
         return self._error.expected_parent
 
@@ -36,9 +38,10 @@ class ConflictError(Exception):
         """
         The actual parent snapshot ID of the branch that the session attempted to commit to.
 
-        When the session is based on a branch, this is the snapshot ID of the branch tip. If this
-        error is raised, it means the branch was modified and committed by another session after
-        the session was created.
+        Returns
+        -------
+        str
+            The snapshot ID of the branch tip. If this error is raised, it means the branch was modified and committed by another session after the session was created.
         """
         return self._error.actual_parent
 
@@ -58,6 +61,11 @@ class RebaseFailedError(Exception):
     def snapshot_id(self) -> str:
         """
         The snapshot ID that the rebase operation failed on.
+
+        Returns
+        -------
+        str
+            The snapshot ID that the rebase operation failed on.
         """
         return self._error.snapshot
 
@@ -65,6 +73,11 @@ class RebaseFailedError(Exception):
     def conflicts(self) -> list[Conflict]:
         """
         List of conflicts that occurred during the rebase operation.
+
+        Returns
+        -------
+        list of Conflict
+            List of conflicts that occurred during the rebase operation.
         """
         return self._error.conflicts
 
@@ -96,57 +109,114 @@ class Session:
 
     @property
     def read_only(self) -> bool:
-        """Whether the session is read-only."""
+        """
+        Whether the session is read-only.
+
+        Returns
+        -------
+        bool
+            True if the session is read-only, False otherwise.
+        """
         return self._session.read_only
 
     @property
     def snapshot_id(self) -> str:
-        """The base snapshot ID of the session"""
+        """
+        The base snapshot ID of the session.
+
+        Returns
+        -------
+        str
+            The base snapshot ID of the session.
+        """
         return self._session.snapshot_id
 
     @property
     def branch(self) -> str | None:
-        """The branch that the session is based on. This is only set if the
-        session is writable"""
+        """
+        The branch that the session is based on. This is only set if the session is writable.
+
+        Returns
+        -------
+        str or None
+            The branch that the session is based on if the session is writable, None otherwise.
+        """
         return self._session.branch
 
     @property
     def has_uncommitted_changes(self) -> bool:
-        """Whether the session has uncommitted changes. This is only possibly
-        true if the session is writable"""
+        """
+        Whether the session has uncommitted changes. This is only possibly true if the session is writable.
+
+        Returns
+        -------
+        bool
+            True if the session has uncommitted changes, False otherwise.
+        """
         return self._session.has_uncommitted_changes
 
     def discard_changes(self) -> None:
-        """When the session is writable, discard any uncommitted changes"""
+        """
+        When the session is writable, discard any uncommitted changes.
+        """
         self._session.discard_changes()
 
     @property
     def store(self) -> IcechunkStore:
-        """Get a zarr Store object for reading and writing data from the repository using zarr python"""
+        """
+        Get a zarr Store object for reading and writing data from the repository using zarr python.
+
+        Returns
+        -------
+        IcechunkStore
+            A zarr Store object for reading and writing data from the repository.
+        """
         return IcechunkStore(self._session.store)
 
     def all_virtual_chunk_locations(self) -> list[str]:
-        """Return the location URLs of all virtual chunks"""
+        """
+        Return the location URLs of all virtual chunks.
+
+        Returns
+        -------
+        list of str
+            The location URLs of all virtual chunks.
+        """
         return self._session.all_virtual_chunk_locations()
 
     def merge(self, other: Self) -> None:
-        """Merge the changes for this session with the changes from another session"""
+        """
+        Merge the changes for this session with the changes from another session.
+
+        Parameters
+        ----------
+        other : Self
+            The other session to merge changes from.
+        """
         self._session.merge(other._session)
 
     def commit(self, message: str) -> str:
-        """Commit the changes in the session to the repository
+        """
+        Commit the changes in the session to the repository.
 
-        When successful, the writable session is completed and the session is now read-only
-        and based on the new commit. The snapshot ID of the new commit is returned.
+        When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
 
-        If the session is out of date, this will raise a ConflictError exception depicting
-        the conflict that occurred. The session will need to be rebased before committing.
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
 
-        Args:
-            message (str): The message to write with the commit
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
 
-        Returns:
-            str: The snapshot ID of the new commit
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        Raises
+        ------
+        ConflictError
+            If the session is out of date and a conflict occurs.
         """
         try:
             return self._session.commit(message)
@@ -154,24 +224,22 @@ class Session:
             raise ConflictError(e) from None
 
     def rebase(self, solver: ConflictSolver) -> None:
-        """Rebase the session to the latest ancestry of the branch.
+        """
+        Rebase the session to the latest ancestry of the branch.
 
-        This method will iteratively crawl the ancestry of the branch and apply the changes
-        from the branch to the session. If a conflict is detected, the conflict solver will
-        be used to optionally resolve the conflict. When complete, the session will be based
-        on the latest commit of the branch and the session will be ready to attempt another
-        commit.
+        This method will iteratively crawl the ancestry of the branch and apply the changes from the branch to the session. If a conflict is detected, the conflict solver will be used to optionally resolve the conflict. When complete, the session will be based on the latest commit of the branch and the session will be ready to attempt another commit.
 
-        When a conflict is detected and a resolution is not possible with the proivided
-        solver, a RebaseFailed exception will be raised. This exception will contain the
-        snapshot ID that the rebase failed on and a list of conflicts that occurred.
+        When a conflict is detected and a resolution is not possible with the provided solver, a RebaseFailed exception will be raised. This exception will contain the snapshot ID that the rebase failed on and a list of conflicts that occurred.
 
-        Args:
-            solver (ConflictSolver): The conflict solver to use when a conflict is detected
+        Parameters
+        ----------
+        solver : ConflictSolver
+            The conflict solver to use when a conflict is detected.
 
-        Raises:
-            RebaseFailed: When a conflict is detected and the solver fails to resolve it
-
+        Raises
+        ------
+        RebaseFailedError
+            When a conflict is detected and the solver fails to resolve it.
         """
         try:
             self._session.rebase(solver)
