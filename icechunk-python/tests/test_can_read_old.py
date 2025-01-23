@@ -83,15 +83,13 @@ async def write_a_test_repo() -> None:
     # these chunks will be inline
     small_chunks = group1.create_array(
         "small_chunks",
-        shape=(5),
-        chunks=(1),
+        shape=(5,),
+        chunks=(1,),
         dtype="int8",
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
     session.commit("empty structure")
-    session = repo.writable_session("main")
-    store = session.store
 
     session = repo.writable_session("main")
     store = session.store

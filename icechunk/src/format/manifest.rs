@@ -1,6 +1,11 @@
 use ::futures::{pin_mut, Stream, TryStreamExt};
 use itertools::Itertools;
-use std::{collections::BTreeMap, convert::Infallible, ops::Bound, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    convert::Infallible,
+    ops::{Bound, Range},
+    sync::Arc,
+};
 use thiserror::Error;
 
 use bytes::Bytes;
@@ -13,8 +18,7 @@ use super::{
     IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestExtents(pub Vec<ChunkIndices>);
+type ManifestExtents = Range<ChunkIndices>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRef {
@@ -118,11 +122,23 @@ pub struct ChunkInfo {
     pub payload: ChunkPayload,
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq)]
 pub struct Manifest {
     pub icechunk_manifest_format_version: IcechunkFormatVersion,
     pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
+    pub id: ManifestId,
     pub(crate) chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
+}
+
+impl Default for Manifest {
+    fn default() -> Self {
+        Self {
+            icechunk_manifest_format_version: Default::default(),
+            icechunk_manifest_format_flags: Default::default(),
+            id: ManifestId::random(),
+            chunks: Default::default(),
+        }
+    }
 }
 
 impl Manifest {
@@ -132,8 +148,7 @@ impl Manifest {
         coord: &ChunkIndices,
     ) -> IcechunkResult<&ChunkPayload> {
         self.chunks.get(node).and_then(|m| m.get(coord)).ok_or_else(|| {
-            // FIXME: error
-            IcechunkFormatError::ChunkCoordinatesNotFound { coords: ChunkIndices(vec![]) }
+            IcechunkFormatError::ChunkCoordinatesNotFound { coords: coord.clone() }
         })
     }
 
@@ -149,16 +164,17 @@ impl Manifest {
             chunks,
             icechunk_manifest_format_version: SpecVersionBin::current() as u8,
             icechunk_manifest_format_flags: Default::default(),
+            id: ManifestId::random(),
         }
     }
 
     pub async fn from_stream<E>(
-        chunks: impl Stream<Item = Result<ChunkInfo, E>>,
-    ) -> Result<Self, E> {
+        stream: impl Stream<Item = Result<ChunkInfo, E>>,
+    ) -> Result<Option<Self>, E> {
+        pin_mut!(stream);
         let mut chunk_map: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>> =
             BTreeMap::new();
-        pin_mut!(chunks);
-        while let Some(chunk) = chunks.try_next().await? {
+        while let Some(chunk) = stream.try_next().await? {
             // This could be done with BTreeMap.entry instead, but would require cloning both keys
             match chunk_map.get_mut(&chunk.node) {
                 Some(m) => {
@@ -172,13 +188,17 @@ impl Manifest {
                 }
             };
         }
-        Ok(Self::new(chunk_map))
+        if chunk_map.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Self::new(chunk_map)))
+        }
     }
 
     /// Used for tests
     pub async fn from_iter<T: IntoIterator<Item = ChunkInfo>>(
         iter: T,
-    ) -> Result<Self, Infallible> {
+    ) -> Result<Option<Self>, Infallible> {
         Self::from_stream(futures::stream::iter(iter.into_iter().map(Ok))).await
     }
 
@@ -234,6 +254,7 @@ impl Iterator for PayloadIterator {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
 
     use std::error::Error;
@@ -276,8 +297,8 @@ mod tests {
                 length: 4,
             }),
         };
-        let manifest = Arc::new(Manifest::from_iter(vec![chunk1]).await?);
-        let chunks = manifest.iter(array_ids[0].clone()).collect::<Vec<_>>();
+        let manifest = Manifest::from_iter(vec![chunk1]).await?.unwrap();
+        let chunks = Arc::new(manifest).iter(array_ids[0].clone()).collect::<Vec<_>>();
         assert_eq!(chunks, vec![]);
 
         Ok(())

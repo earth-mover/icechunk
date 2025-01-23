@@ -14,9 +14,10 @@ use crate::metadata::{
 };
 
 use super::{
-    manifest::ManifestRef, AttributesId, ChunkIndices, IcechunkFormatError,
-    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
-    SnapshotId, TableOffset,
+    format_constants::SpecVersionBin,
+    manifest::{Manifest, ManifestRef},
+    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatVersion,
+    IcechunkResult, ManifestId, NodeId, ObjectId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,11 +130,23 @@ pub struct SnapshotMetadata {
 
 pub type SnapshotProperties = HashMap<String, Value>;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
     pub format_version: IcechunkFormatVersion,
-    pub size: u64,
+    pub size_bytes: u64,
+    pub num_rows: u32,
+}
+
+impl ManifestFileInfo {
+    pub fn new(manifest: &Manifest, size_bytes: u64) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            format_version: SpecVersionBin::current() as u8,
+            num_rows: manifest.len() as u32,
+            size_bytes,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -144,7 +157,7 @@ pub struct AttributeFileInfo {
 
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
-    pub manifest_files: Vec<ManifestFileInfo>,
+    pub manifest_files: HashMap<ManifestId, ManifestFileInfo>,
     pub attribute_files: Vec<AttributeFileInfo>,
 
     pub total_parents: u32,
@@ -190,7 +203,10 @@ impl Snapshot {
         let started_at = Utc::now();
         let properties = properties.unwrap_or_default();
         Self {
-            manifest_files,
+            manifest_files: manifest_files
+                .into_iter()
+                .map(|fi| (fi.id.clone(), fi))
+                .collect(),
             attribute_files,
             total_parents,
             short_term_parents,
@@ -261,8 +277,7 @@ impl Snapshot {
     }
 
     pub fn manifest_info(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
-        // FIXME: optimize
-        self.manifest_files.iter().find(|info| &info.id == id)
+        self.manifest_files.get(id)
     }
 }
 
@@ -306,9 +321,7 @@ impl Iterator for NodeIterator {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::format::{
-        format_constants::SpecVersionBin, manifest::ManifestExtents, IcechunkFormatError,
-    };
+    use crate::format::{format_constants::SpecVersionBin, IcechunkFormatError};
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -362,11 +375,11 @@ mod tests {
             ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ManifestExtents(vec![]),
+            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ManifestExtents(vec![]),
+            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
         };
 
         let oid = ObjectId::random();
@@ -428,12 +441,14 @@ mod tests {
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
                 format_version: SpecVersionBin::current() as u8,
-                size: 1_000_000,
+                size_bytes: 1_000_000,
+                num_rows: 100_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
                 format_version: SpecVersionBin::current() as u8,
-                size: 1_000_000,
+                size_bytes: 1_000_000,
+                num_rows: 100_000,
             },
         ];
         let st = Snapshot::from_iter(&initial, None, manifests, vec![], nodes);
