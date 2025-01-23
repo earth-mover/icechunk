@@ -67,10 +67,14 @@ class Runner:
             ],
             **pykwargs,
         )
+        # This is quite ugly but is the only way I can figure out to force pip
+        # to install the wheel we just built
         subprocess.run(
-            f"{self.activate}"
-            f"&& pip install {PIP_OPTIONS} icechunk['test'] --find-links dist"
-            f"&& pip install {PIP_OPTIONS} {deps}",
+            f"{self.activate} "
+            f"&& pip install {PIP_OPTIONS} icechunk[test]"
+            f"&& pip install {PIP_OPTIONS} {deps}"
+            f"&& pip uninstall -y icechunk"
+            f"&& pip install -v icechunk --no-index --find-links=dist",
             shell=True,
             **pykwargs,
         )

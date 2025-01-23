@@ -54,7 +54,7 @@ python benchmarks/runner.py --pytest "-k getsize" main
 # > pytest [...] --benchmark-save=main_3abfa48a --icechunk-prefix=benchmarks/main_3abfa48a/  benchmarks/
 # note the created prefix: main_(first-8-characters-of-commit), for convenienve export it
 export PREFIX=benchmarks/main_3abfa48a/
-pytest --benchmark-compare -k getsize --icechunk-prefix="$PREFIX" benchmarks/
+pytest --benchmark-compare -k getsize --icechunk-prefix="$PREFIX" --benchmark-column=median benchmarks/
 ```
 
 ### `runner.py`
