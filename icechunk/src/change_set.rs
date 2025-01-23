@@ -359,6 +359,7 @@ impl ChangeSet {
         })
     }
 
+    // Applies the changeset to an existing node, yielding a new node if it hasn't been deleted
     pub fn update_existing_node(&self, node: NodeSnapshot) -> Option<NodeSnapshot> {
         if self.is_deleted(&node.path, &node.id) {
             return None;
