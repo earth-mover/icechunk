@@ -419,16 +419,16 @@ AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 class Storage:
     """Storage configuration for an IcechunkStore
 
-    Currently supports memory, filesystem, and S3 storage backends.
+    Currently supports memory, filesystem S3, azure blob, and google cloud storage backends.
     Use the class methods to create a StorageConfig object with the desired backend.
 
     Ex:
     ```
-    storage_config = StorageConfig.memory("prefix")
-    storage_config = StorageConfig.filesystem("/path/to/root")
-    storage_config = StorageConfig.object_store("s3://bucket/prefix", vec!["my", "options"])
-    storage_config = StorageConfig.s3_from_env("bucket", "prefix")
-    storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
+    storage = icechunk.in_memory_storage("prefix")
+    storage = icechunk.local_filesystem_storage("/path/to/root")
+    storage = icechunk.s3_storage("bucket", "prefix", ...)
+    storage = icechunk.gcs_storage("bucket", "prefix", ...)
+    storage = icechunk.azure_storage("container", "prefix", ...)
     ```
     """
 
