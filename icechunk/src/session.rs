@@ -1143,7 +1143,7 @@ struct FlushProcess<'a> {
     parent_id: &'a SnapshotId,
     compression_level: u8,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
-    manifest_files: Vec<ManifestFileInfo>,
+    manifest_files: HashSet<ManifestFileInfo>,
 }
 
 impl<'a> FlushProcess<'a> {
@@ -1163,6 +1163,8 @@ impl<'a> FlushProcess<'a> {
         }
     }
 
+    /// Write a manifest for a node that was created in this session
+    /// It doesn't need to look at previous manifests because the node is new
     async fn write_manifest_for_new_node(
         &mut self,
         node_id: &NodeId,
@@ -1186,7 +1188,7 @@ impl<'a> FlushProcess<'a> {
 
             let file_info =
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.push(file_info);
+            self.manifest_files.insert(file_info);
 
             let new_ref =
                 ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
@@ -1199,6 +1201,9 @@ impl<'a> FlushProcess<'a> {
         Ok(())
     }
 
+    /// Write a manifest for a node that was modified in this session
+    /// It needs to update the chunks according to the change set
+    /// and record the new manifest
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
@@ -1225,7 +1230,7 @@ impl<'a> FlushProcess<'a> {
 
             let file_info =
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.push(file_info);
+            self.manifest_files.insert(file_info);
 
             let new_ref =
                 ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
@@ -1237,14 +1242,10 @@ impl<'a> FlushProcess<'a> {
         Ok(())
     }
 
+    /// Record the previous manifests for an array that was not modified in the session
     fn copy_previous_manifest(&mut self, node: &NodeSnapshot, old_snapshot: &Snapshot) {
         match &node.node_data {
             NodeData::Array(_, array_refs) => {
-                self.manifest_refs
-                    .entry(node.id.clone())
-                    .and_modify(|v| v.extend(array_refs.iter().cloned()))
-                    .or_insert_with(|| array_refs.clone());
-
                 self.manifest_files.extend(array_refs.iter().map(|mr| {
                     // It's ok to unwrap here, the snapshot had the node, it has to have the
                     // manifest file info
@@ -1295,11 +1296,15 @@ async fn flush(
         }
     }
 
+    dbg!(&flush_data.manifest_refs);
+
     // Now we need to go through all the new arrays, and generate manifests for them
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         flush_data.write_manifest_for_new_node(node_id, node_path).await?;
     }
+
+    dbg!(&flush_data.manifest_refs);
 
     let all_nodes = updated_nodes(
         flush_data.asset_manager,
@@ -1308,15 +1313,18 @@ async fn flush(
     )
     .await?
     .map(|node| {
+        dbg!(&node.path);
         let id = &node.id;
         // TODO: many clones
         if let NodeData::Array(meta, original_manifests) = node.node_data {
             if let Some(manifests) = flush_data.manifest_refs.get(id) {
+                dbg!("found");
                 NodeSnapshot {
                     node_data: NodeData::Array(meta.clone(), manifests.clone()),
                     ..node
                 }
             } else {
+                dbg!("not found");
                 NodeSnapshot {
                     node_data: NodeData::Array(meta, original_manifests),
                     ..node
@@ -1330,7 +1338,7 @@ async fn flush(
     let mut new_snapshot = Snapshot::from_iter(
         old_snapshot.as_ref(),
         Some(properties),
-        flush_data.manifest_files,
+        flush_data.manifest_files.into_iter().collect(),
         vec![],
         all_nodes,
     );
@@ -1412,20 +1420,44 @@ async fn fetch_manifest(
 }
 
 /// Map the iterator to accumulate the extents of the chunks traversed
+///
+/// As we are processing chunks to create a manifest, we need to keep track
+/// of the extents of the manifests. This means, for each coordinate, we need
+/// to record its minimum and maximum values.
+///
+/// This very ugly code does that, without having to traverse the iterator twice.
+/// It adapts the stream using [`StreamExt::map_ok`] and keeps a running min/max
+/// for each coordinate.
+///
+/// When the iterator is fully traversed, the min and max values will be
+/// available in `from` and `to` arguments.
+///
+/// Yes, this is horrible.
 fn aggregate_extents<'a, T: std::fmt::Debug, E>(
     from: &'a mut ChunkIndices,
     to: &'a mut ChunkIndices,
     it: impl Stream<Item = Result<T, E>> + 'a,
-    f: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
+    extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
 ) -> impl Stream<Item = Result<T, E>> + 'a {
+    // we initialize the destination with an empty array, because we don't know
+    // the dimensions of the array yet. On the first element we will re-initialize
     from.0 = Vec::new();
     to.0 = Vec::new();
     it.map_ok(move |t| {
-        let idx = f(&t);
+        // these are the coordinates for the chunk
+        let idx = extract_index(&t);
+
+        // we need to initialize the mins/maxes the first time
+        // we initialize with the value of the first element
+        // this obviously doesn't work for empty streams
+        // but we never generate manifests for them
         if from.0.is_empty() {
             from.0 = idx.0.clone();
+            // important to remember that `to` is not inclusive, so we need +1
             to.0 = idx.0.iter().map(|n| n + 1).collect();
         } else {
+            // We need to iterate over coordinates, and update the
+            // minimum and maximum for each if needed
             for (coord_idx, value) in idx.0.iter().enumerate() {
                 if let Some(from_current) = from.0.get_mut(coord_idx) {
                     if value < from_current {

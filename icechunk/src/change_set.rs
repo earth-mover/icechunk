@@ -372,14 +372,14 @@ impl ChangeSet {
         let new_atts = session_atts.unwrap_or(node.user_attributes);
         match node.node_data {
             NodeData::Group => Some(NodeSnapshot { user_attributes: new_atts, ..node }),
-            NodeData::Array(old_zarr_meta, _) => {
+            NodeData::Array(old_zarr_meta, manifests) => {
                 let new_zarr_meta = self
                     .get_updated_zarr_metadata(&node.id)
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 
                 Some(NodeSnapshot {
-                    node_data: NodeData::Array(new_zarr_meta, vec![]),
+                    node_data: NodeData::Array(new_zarr_meta, manifests),
                     user_attributes: new_atts,
                     ..node
                 })

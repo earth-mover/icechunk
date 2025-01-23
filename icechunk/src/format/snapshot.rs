@@ -130,7 +130,7 @@ pub struct SnapshotMetadata {
 
 pub type SnapshotProperties = HashMap<String, Value>;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
     pub format_version: IcechunkFormatVersion,

@@ -102,3 +102,36 @@ async def test_issue_418() -> None:
     assert (await store._store.get("time/c/0")) == b"firs"  # codespell:ignore firs
     assert (await store._store.get("time/c/1")) == b"econ"
     assert (await store._store.get("time/c/2")) == b"thir"
+
+
+async def test_read_chunks_from_old_array() -> None:
+    # This regression appeared during the change to manifest per array
+    repo = Repository.create(
+        storage=in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    root = zarr.Group.from_store(store=store, zarr_format=3)
+    array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
+
+    array1[:] = 42
+    assert array1[0] == 42
+    print("about to commit 1")
+    session.commit("create array 1")
+
+    session = repo.writable_session("main")
+    store = session.store
+    root = zarr.group(store=store, zarr_format=3)
+    # array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
+    array2 = root.require_array(name="array2", shape=((2,)), chunks=((1,)), dtype="i4")
+    # assert array1[0] == 42
+    array2[:] = 84
+    print("about to commit 2")
+    session.commit("create array 2")
+
+    session = repo.readonly_session(branch="main")
+    store = session.store
+    root = zarr.Group.open(store=store, zarr_format=3)
+    array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
+    assert array1[0] == 42
