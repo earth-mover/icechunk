@@ -456,6 +456,14 @@ class Storage:
         credentials: AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
+    def new_tigris(
+        cls,
+        config: S3Options,
+        bucket: str,
+        prefix: str | None,
+        credentials: AnyS3Credential | None = None,
+    ) -> Storage: ...
+    @classmethod
     def new_in_memory(cls) -> Storage: ...
     @classmethod
     def new_local_filesystem(cls, path: str) -> Storage: ...

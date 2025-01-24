@@ -51,7 +51,7 @@ impl VirtualChunkContainer {
             (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()),
             (ObjectStoreConfig::Azure(_), Credentials::Azure(_)) => Ok(()),
-            (ObjectStoreConfig::Tigris {}, _) => Ok(()), // TODO
+            (ObjectStoreConfig::Tigris(_), Credentials::S3(_)) => Ok(()),
             _ => Err("credentials do not match store type".to_string()),
         }
     }
@@ -93,7 +93,12 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "tigris".to_string(),
                 url_prefix: "tigris".to_string(),
-                store: ObjectStoreConfig::Tigris {},
+                store: ObjectStoreConfig::Tigris(S3Options {
+                    region: None,
+                    endpoint_url: Some("https://fly.storage.tigris.dev".to_string()),
+                    anonymous: false,
+                    allow_http: false,
+                }),
             },
         ),
         (
@@ -230,6 +235,33 @@ impl VirtualChunkResolver {
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
+            ObjectStoreConfig::Tigris(opts) => {
+                let creds = match self.credentials.get(&cont.name) {
+                    Some(Credentials::S3(creds)) => creds,
+                    Some(_) => {
+                        Err(VirtualReferenceError::InvalidCredentials("S3".to_string()))?
+                    }
+                    None => {
+                        if opts.anonymous {
+                            &S3Credentials::Anonymous
+                        } else {
+                            &S3Credentials::FromEnv
+                        }
+                    }
+                };
+                let opts = if opts.endpoint_url.is_some() {
+                    opts
+                } else {
+                    &S3Options {
+                        endpoint_url: Some("https://fly.storage.tigris.dev".to_string()),
+                        ..opts.clone()
+                    }
+                };
+                Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
+            }
+            ObjectStoreConfig::LocalFileSystem { .. } => {
+                Ok(Arc::new(LocalFSFetcher::new(cont).await))
+            }
             // FIXME: implement
             ObjectStoreConfig::Gcs { .. } => {
                 unimplemented!("support for virtual chunks on gcs")
@@ -237,14 +269,8 @@ impl VirtualChunkResolver {
             ObjectStoreConfig::Azure { .. } => {
                 unimplemented!("support for virtual chunks on gcs")
             }
-            ObjectStoreConfig::Tigris { .. } => {
-                unimplemented!("support for virtual chunks on Tigris")
-            }
-            ObjectStoreConfig::LocalFileSystem { .. } => {
-                Ok(Arc::new(LocalFSFetcher::new(cont).await))
-            }
             ObjectStoreConfig::InMemory {} => {
-                unimplemented!("support for virtual chunks on Tigris")
+                unimplemented!("support for virtual chunks in Memory")
             }
         }
     }
