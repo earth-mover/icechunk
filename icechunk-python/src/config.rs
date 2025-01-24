@@ -779,6 +779,28 @@ impl PyRepositoryConfig {
         RepositoryConfig::default().into()
     }
 
+    #[new]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, unsafe_overwrite_refs = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None))]
+    pub fn new(
+        inline_chunk_threshold_bytes: Option<u16>,
+        unsafe_overwrite_refs: Option<bool>,
+        get_partial_values_concurrency: Option<u16>,
+        compression: Option<Py<PyCompressionConfig>>,
+        caching: Option<Py<PyCachingConfig>>,
+        storage: Option<Py<PyStorageSettings>>,
+        virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
+    ) -> Self {
+        Self {
+            inline_chunk_threshold_bytes,
+            unsafe_overwrite_refs,
+            get_partial_values_concurrency,
+            compression,
+            caching,
+            storage,
+            virtual_chunk_containers,
+        }
+    }
+
     pub fn set_virtual_chunk_container(&mut self, cont: PyVirtualChunkContainer) {
         // TODO: this is a very ugly way to do it but, it avoids duplicating logic
         let this: &PyRepositoryConfig = &*self;

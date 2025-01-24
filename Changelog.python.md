@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a15
+
+### Fixes
+
+- Add a constructor to `RepositoryConfig`
+
 ## Python Icechunk Library 0.1.0a14
 
 ### Features
