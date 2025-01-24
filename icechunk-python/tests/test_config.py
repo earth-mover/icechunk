@@ -154,7 +154,11 @@ def test_can_change_deep_config_values() -> None:
     repo = icechunk.Repository.create(
         storage=storage,
     )
-    config = icechunk.RepositoryConfig.default()
+    config = icechunk.RepositoryConfig(
+        inline_chunk_threshold_bytes=11,
+        unsafe_overwrite_refs=False,
+        compression=icechunk.CompressionConfig(level=0),
+    )
     config.inline_chunk_threshold_bytes = 5
     config.unsafe_overwrite_refs = True
     config.get_partial_values_concurrency = 42

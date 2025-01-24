@@ -140,6 +140,16 @@ class StorageSettings:
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
 
+    def __init__(
+        self,
+        inline_chunk_threshold_bytes: int | None,
+        unsafe_overwrite_refs: bool | None,
+        get_partial_values_concurrency: int | None,
+        compression: CompressionConfig | None,
+        caching: CachingConfig | None,
+        storage: StorageSettings | None,
+        virtual_chunk_containers: dict[str, VirtualChunkContainer] | None,
+    ) -> None: ...
     @staticmethod
     def default() -> RepositoryConfig: ...
     @property
