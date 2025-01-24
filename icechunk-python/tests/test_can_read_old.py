@@ -128,6 +128,8 @@ async def write_a_test_repo() -> None:
     snap4 = session.commit("delete a chunk")
 
     repo.create_tag("it works!", snapshot_id=snap4)
+    repo.create_tag("deleted", snapshot_id=snap4)
+    repo.delete_tag("deleted")
 
     session = repo.writable_session("my-branch")
     store = session.store
@@ -194,6 +196,9 @@ async def test_icechunk_can_read_old_repo() -> None:
     assert [p.message for p in repo.ancestry(tag="it works!")] == expected_branch_history[
         1:
     ]
+
+    with pytest.raises(ValueError, match="ref not found"):
+        repo.readonly_session(tag="deleted")
 
     session = repo.writable_session("my-branch")
     store = session.store
