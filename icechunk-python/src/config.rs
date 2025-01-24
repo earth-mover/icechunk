@@ -358,7 +358,7 @@ pub enum PyObjectStoreConfig {
     S3(PyS3Options),
     Gcs(Option<HashMap<String, String>>),
     Azure(HashMap<String, String>),
-    Tigris(),
+    Tigris(PyS3Options),
 }
 
 impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
@@ -376,7 +376,7 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::Gcs(opts.clone().unwrap_or_default())
             }
             PyObjectStoreConfig::Azure(opts) => ObjectStoreConfig::Azure(opts.clone()),
-            PyObjectStoreConfig::Tigris() => ObjectStoreConfig::Tigris {},
+            PyObjectStoreConfig::Tigris(opts) => ObjectStoreConfig::Tigris(opts.into()),
         }
     }
 }
@@ -394,7 +394,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
             ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
             ObjectStoreConfig::Azure(opts) => PyObjectStoreConfig::Azure(opts),
-            ObjectStoreConfig::Tigris {} => PyObjectStoreConfig::Tigris(),
+            ObjectStoreConfig::Tigris(opts) => PyObjectStoreConfig::Tigris(opts.into()),
         }
     }
 }
@@ -879,6 +879,26 @@ impl PyStorage {
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_s3_storage(
+            config.into(),
+            bucket,
+            prefix,
+            credentials.map(|cred| cred.into()),
+        )
+        .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[classmethod]
+    pub fn new_tigris(
+        _cls: &Bound<'_, PyType>,
+        config: &PyS3Options,
+        bucket: String,
+        prefix: Option<String>,
+        credentials: Option<PyS3Credentials>,
+    ) -> PyResult<Self> {
+        let storage = icechunk::storage::new_tigris_storage(
             config.into(),
             bucket,
             prefix,

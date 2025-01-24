@@ -494,6 +494,27 @@ pub fn new_s3_storage(
     Ok(Arc::new(st))
 }
 
+pub fn new_tigris_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let config = S3Options {
+        endpoint_url: Some(
+            config.endpoint_url.unwrap_or("https://fly.storage.tigris.dev".to_string()),
+        ),
+        ..config
+    };
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+    )?;
+    Ok(Arc::new(st))
+}
+
 pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_in_memory()?;
     Ok(Arc::new(st))

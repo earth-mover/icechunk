@@ -30,9 +30,7 @@ pub enum ObjectStoreConfig {
     S3(S3Options),
     Gcs(HashMap<String, String>),
     Azure(HashMap<String, String>),
-    Tigris {
-        // TODO:
-    },
+    Tigris(S3Options),
 }
 
 #[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize, Clone, Copy)]
