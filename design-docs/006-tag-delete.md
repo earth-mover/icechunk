@@ -45,7 +45,7 @@ without having to resolve the tag again.
 
 ## Design
 
-We implement logic delete for tags. Tags will be flagged
+We implement logical delete for tags. Tags will be flagged
 as deleted and they won't resolve. But new tags won't be able to
 use the name of a deleted tag.
 
