@@ -83,15 +83,13 @@ async def write_a_test_repo() -> None:
     # these chunks will be inline
     small_chunks = group1.create_array(
         "small_chunks",
-        shape=(5),
-        chunks=(1),
+        shape=(5,),
+        chunks=(1,),
         dtype="int8",
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
     session.commit("empty structure")
-    session = repo.writable_session("main")
-    store = session.store
 
     session = repo.writable_session("main")
     store = session.store
@@ -130,6 +128,8 @@ async def write_a_test_repo() -> None:
     snap4 = session.commit("delete a chunk")
 
     repo.create_tag("it works!", snapshot_id=snap4)
+    repo.create_tag("deleted", snapshot_id=snap4)
+    repo.delete_tag("deleted")
 
     session = repo.writable_session("my-branch")
     store = session.store
@@ -196,6 +196,9 @@ async def test_icechunk_can_read_old_repo() -> None:
     assert [p.message for p in repo.ancestry(tag="it works!")] == expected_branch_history[
         1:
     ]
+
+    with pytest.raises(ValueError, match="ref not found"):
+        repo.readonly_session(tag="deleted")
 
     session = repo.writable_session("my-branch")
     store = session.store

@@ -10,7 +10,7 @@ use crate::format::{
         SnapshotProperties,
     },
     transaction_log::TransactionLog,
-    ChunkIndices, IcechunkFormatVersion, NodeId, Path,
+    ChunkIndices, IcechunkFormatVersion, ManifestId, NodeId, Path,
 };
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +28,7 @@ pub struct SnapshotDeserializer {
 
 #[derive(Debug, Serialize)]
 pub struct SnapshotSerializer<'a> {
-    manifest_files: &'a Vec<ManifestFileInfo>,
+    manifest_files: Vec<ManifestFileInfo>,
     attribute_files: &'a Vec<AttributeFileInfo>,
     total_parents: u32,
     short_term_parents: u16,
@@ -42,7 +42,11 @@ pub struct SnapshotSerializer<'a> {
 impl From<SnapshotDeserializer> for Snapshot {
     fn from(value: SnapshotDeserializer) -> Self {
         Self {
-            manifest_files: value.manifest_files,
+            manifest_files: value
+                .manifest_files
+                .into_iter()
+                .map(|fi| (fi.id.clone(), fi))
+                .collect(),
             nodes: value.nodes,
             attribute_files: value.attribute_files,
             total_parents: value.total_parents,
@@ -58,7 +62,7 @@ impl From<SnapshotDeserializer> for Snapshot {
 impl<'a> From<&'a Snapshot> for SnapshotSerializer<'a> {
     fn from(value: &'a Snapshot) -> Self {
         Self {
-            manifest_files: &value.manifest_files,
+            manifest_files: value.manifest_files.values().cloned().collect(),
             attribute_files: &value.attribute_files,
             nodes: &value.nodes,
             total_parents: value.total_parents,
@@ -75,6 +79,7 @@ impl<'a> From<&'a Snapshot> for SnapshotSerializer<'a> {
 pub struct ManifestDeserializer {
     icechunk_manifest_format_version: IcechunkFormatVersion,
     icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
+    id: ManifestId,
     chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
@@ -82,6 +87,7 @@ pub struct ManifestDeserializer {
 pub struct ManifestSerializer<'a> {
     icechunk_manifest_format_version: &'a IcechunkFormatVersion,
     icechunk_manifest_format_flags: &'a BTreeMap<String, rmpv::Value>,
+    id: &'a ManifestId,
     chunks: &'a BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
@@ -90,6 +96,7 @@ impl From<ManifestDeserializer> for Manifest {
         Self {
             icechunk_manifest_format_version: value.icechunk_manifest_format_version,
             icechunk_manifest_format_flags: value.icechunk_manifest_format_flags,
+            id: value.id,
             chunks: value.chunks,
         }
     }
@@ -100,6 +107,7 @@ impl<'a> From<&'a Manifest> for ManifestSerializer<'a> {
         Self {
             icechunk_manifest_format_version: &value.icechunk_manifest_format_version,
             icechunk_manifest_format_flags: &value.icechunk_manifest_format_flags,
+            id: &value.id,
             chunks: &value.chunks,
         }
     }

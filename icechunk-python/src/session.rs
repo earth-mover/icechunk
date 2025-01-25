@@ -82,7 +82,7 @@ impl PySession {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
             let session = self.0.blocking_read();
-            let conc = session.config().get_partial_values_concurrency;
+            let conc = session.config().get_partial_values_concurrency();
             let store = Store::from_session_and_config(self.0.clone(), conc);
 
             let store = Arc::new(store);

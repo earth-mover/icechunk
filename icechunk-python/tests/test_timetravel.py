@@ -1,5 +1,7 @@
 from typing import cast
 
+import pytest
+
 import icechunk as ic
 import zarr
 import zarr.core
@@ -152,3 +154,20 @@ async def test_branch_reset() -> None:
     assert (
         await store.get("b/zarr.json", zarr.core.buffer.default_buffer_prototype())
     ) is None
+
+
+async def test_tag_delete() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    snap = repo.lookup_branch("main")
+    print(snap)
+    repo.create_tag("tag", snap)
+    repo.delete_tag("tag")
+
+    with pytest.raises(ValueError):
+        repo.delete_tag("tag")
+
+    with pytest.raises(ValueError):
+        repo.create_tag("tag", snap)

@@ -8,3 +8,7 @@
 
 # hypothesis
 .hypothesis
+
+/devel
+
+.ipynb_checkpoints

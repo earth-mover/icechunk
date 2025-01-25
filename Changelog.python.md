@@ -1,5 +1,45 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a15
+
+### Fixes
+
+- Add a constructor to `RepositoryConfig`
+
+## Python Icechunk Library 0.1.0a14
+
+### Features
+
+- Now each array has its own chunk manifest, speeding up reads for large repositories
+- The snapshot now keeps track of the chunk space bounding box for each manifest
+- Configuration settings can now be overridden in a field-by-field basis
+  Example:
+  ```python
+   config = icechunk.RepositoryConfig(inline_chunk_threshold_byte=0)
+   storage = ...
+
+   repo = icechunk.Repository.open(
+       storage=storage,
+       config=config,
+   )
+  ```
+  will use 0 for `inline_chunk_threshold_byte` but all other configuration fields will come from
+  the repository persistent config. If persistent config is not set, configuration defaults will
+  take its place.
+- In preparation for on-disk format stability, all metadata files include extensive format information;
+  including a set of magic bytes, file type, spec version, compression format, etc.
+
+### Performance
+
+- Zarr's `getsize` got orders of magnitude faster because it's implemented natively and with
+  no need of any I/O
+- We added several performance benchmarks to the repository
+- Better configuration for metadata asset caches, now based on their sizes instead of their number
+
+### Fixes
+
+- `from icechunk import *` no longer fails
+
 ## Python Icechunk Library 0.1.0a12
 
 ### Features

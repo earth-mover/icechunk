@@ -3,4 +3,4 @@
 skip = .git*,*.svg,*.lock,*.css,.codespellrc
 check-hidden = true
 ignore-regex = ^\s*"image/\S+": ".*|\bND\b
-ignore-words-list = crate
+ignore-words-list = crate,firs,anc

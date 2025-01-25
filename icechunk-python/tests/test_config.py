@@ -28,11 +28,12 @@ def test_config_fetch() -> None:
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     storage = icechunk.in_memory_storage()
-    icechunk.Repository.create(
+    repo = icechunk.Repository.create(
         storage=storage,
         config=config,
     )
 
+    assert repo.config == config
     assert icechunk.Repository.fetch_config(storage) == config
 
 
@@ -124,6 +125,10 @@ def test_virtual_chunk_containers() -> None:
     )
     container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
     config.set_virtual_chunk_container(container)
+    assert (
+        repr(config)
+        == r"RepositoryConfig(inline_chunk_threshold_bytes=None, unsafe_overwrite_refs=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None)"
+    )
     assert len(config.virtual_chunk_containers) > 1
     found_cont = [
         cont
@@ -149,13 +154,24 @@ def test_can_change_deep_config_values() -> None:
     repo = icechunk.Repository.create(
         storage=storage,
     )
-    config = icechunk.RepositoryConfig.default()
+    config = icechunk.RepositoryConfig(
+        inline_chunk_threshold_bytes=11,
+        unsafe_overwrite_refs=False,
+        compression=icechunk.CompressionConfig(level=0),
+    )
     config.inline_chunk_threshold_bytes = 5
+    config.unsafe_overwrite_refs = True
+    config.get_partial_values_concurrency = 42
+    config.compression = icechunk.CompressionConfig(level=8)
     config.compression.level = 2
-    config.caching.manifests_cache_size = 8
+    config.caching = icechunk.CachingConfig(num_chunk_refs=8)
     config.storage = storage.default_settings()
     config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
 
+    assert (
+        repr(config)
+        == r"RepositoryConfig(inline_chunk_threshold_bytes=5, unsafe_overwrite_refs=True, get_partial_values_concurrency=42, compression=CompressionConfig(algorithm=None, level=2), caching=CachingConfig(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None), storage=StorageSettings(concurrency=StorageConcurrencySettings(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000)))"
+    )
     repo = icechunk.Repository.open(
         storage=storage,
         config=config,
@@ -165,5 +181,5 @@ def test_can_change_deep_config_values() -> None:
     stored_config = icechunk.Repository.fetch_config(storage)
     assert stored_config.inline_chunk_threshold_bytes == 5
     assert stored_config.compression.level == 2
-    assert stored_config.caching.manifests_cache_size == 8
+    assert stored_config.caching.num_chunk_refs == 8
     assert stored_config.storage.concurrency.ideal_concurrent_request_size == 1_000_000

@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
-        manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestRef},
+        manifest::{ChunkInfo, ChunkPayload},
         snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
-        ChunkIndices, ManifestId, NodeId, Path,
+        ChunkIndices, NodeId, Path,
     },
     metadata::UserAttributes,
     session::SessionResult,
@@ -57,6 +57,10 @@ impl ChangeSet {
     ) -> impl Iterator<Item = (&NodeId, &HashMap<ChunkIndices, Option<ChunkPayload>>)>
     {
         self.set_chunks.iter()
+    }
+
+    pub fn has_chunk_changes(&self, node: &NodeId) -> bool {
+        self.set_chunks.get(node).map(|m| !m.is_empty()).unwrap_or(false)
     }
 
     pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
@@ -204,19 +208,24 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + '_ {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.array_chunks_iterator(node_id, path).filter_map(|(coords, payload)| {
-                payload.as_ref().map(|p| {
-                    (
-                        path.clone(),
-                        ChunkInfo {
-                            node: node_id.clone(),
-                            coord: coords.clone(),
-                            payload: p.clone(),
-                        },
-                    )
-                })
-            })
+            self.new_array_chunk_iterator(node_id, path).map(|ci| (path.clone(), ci))
         })
+    }
+
+    pub fn new_array_chunk_iterator<'a>(
+        &'a self,
+        node_id: &'a NodeId,
+        node_path: &Path,
+    ) -> impl Iterator<Item = ChunkInfo> + 'a {
+        self.array_chunks_iterator(node_id, node_path).filter_map(
+            move |(coords, payload)| {
+                payload.as_ref().map(|p| ChunkInfo {
+                    node: node_id.clone(),
+                    coord: coords.clone(),
+                    payload: p.clone(),
+                })
+            },
+        )
     }
 
     pub fn new_nodes(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
@@ -337,10 +346,7 @@ impl ChangeSet {
         })
     }
 
-    pub fn new_nodes_iterator<'a>(
-        &'a self,
-        manifest_id: Option<&'a ManifestId>,
-    ) -> impl Iterator<Item = NodeSnapshot> + 'a {
+    pub fn new_nodes_iterator(&self) -> impl Iterator<Item = NodeSnapshot> + '_ {
         self.new_nodes().filter_map(move |(path, node_id)| {
             if self.is_deleted(path, node_id) {
                 return None;
@@ -349,31 +355,12 @@ impl ChangeSet {
             // know it's a new node
             #[allow(clippy::expect_used)]
             let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
-            match node.node_data {
-                NodeData::Group => Some(node),
-                NodeData::Array(meta, _no_manifests_yet) => {
-                    let new_manifests = manifest_id
-                        .map(|mid| {
-                            vec![ManifestRef {
-                                object_id: mid.clone(),
-                                extents: ManifestExtents(vec![]),
-                            }]
-                        })
-                        .unwrap_or_default();
-                    Some(NodeSnapshot {
-                        node_data: NodeData::Array(meta, new_manifests),
-                        ..node
-                    })
-                }
-            }
+            Some(node)
         })
     }
 
-    pub fn update_existing_node(
-        &self,
-        node: NodeSnapshot,
-        new_manifests: Option<Vec<ManifestRef>>,
-    ) -> Option<NodeSnapshot> {
+    // Applies the changeset to an existing node, yielding a new node if it hasn't been deleted
+    pub fn update_existing_node(&self, node: NodeSnapshot) -> Option<NodeSnapshot> {
         if self.is_deleted(&node.path, &node.id) {
             return None;
         }
@@ -385,17 +372,14 @@ impl ChangeSet {
         let new_atts = session_atts.unwrap_or(node.user_attributes);
         match node.node_data {
             NodeData::Group => Some(NodeSnapshot { user_attributes: new_atts, ..node }),
-            NodeData::Array(old_zarr_meta, _) => {
+            NodeData::Array(old_zarr_meta, manifests) => {
                 let new_zarr_meta = self
                     .get_updated_zarr_metadata(&node.id)
                     .cloned()
                     .unwrap_or(old_zarr_meta);
 
                 Some(NodeSnapshot {
-                    node_data: NodeData::Array(
-                        new_zarr_meta,
-                        new_manifests.unwrap_or_default(),
-                    ),
+                    node_data: NodeData::Array(new_zarr_meta, manifests),
                     user_attributes: new_atts,
                     ..node
                 })
@@ -409,6 +393,7 @@ impl ChangeSet {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::num::NonZeroU64;
 

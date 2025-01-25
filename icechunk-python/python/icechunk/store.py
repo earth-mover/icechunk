@@ -332,3 +332,6 @@ class IcechunkStore(Store, SyncMixin):
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_dir(prefix)
+
+    async def getsize(self, key: str) -> int:
+        return await self._store.getsize(key)

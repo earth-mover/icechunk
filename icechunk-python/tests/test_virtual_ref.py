@@ -148,7 +148,7 @@ async def test_write_minio_virtual_refs() -> None:
 
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
     assert first is not None
-    assert first.to_bytes() == b"firs"
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
     assert await store.get("c/1/0/0", prototype=buffer_prototype) == first
     assert await store.get("c/4/0/0", prototype=buffer_prototype) == first
 

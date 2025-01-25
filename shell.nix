@@ -1,7 +1,7 @@
 let
   # Pinned nixpkgs, deterministic. Last updated to nixos-unstable as of: 2024-12-10
   pkgs = import (fetchTarball
-    "https://github.com/NixOS/nixpkgs/archive/22c3f2cf41a0e70184334a958e6b124fb0ce3e01.tar.gz")
+    "https://github.com/NixOS/nixpkgs/archive/5df43628fdf08d642be8ba5b3625a6c70731c19c.tar.gz")
     { };
 
   # Rolling updates, not deterministic.
@@ -17,7 +17,6 @@ in pkgs.mkShell.override {
   packages = with pkgs; [
     rustc
     cargo
-    cargo-watch
     cargo-nextest # test runner
     cargo-deny
     rust-analyzer # rust lsp server

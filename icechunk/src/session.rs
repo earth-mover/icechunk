@@ -1,6 +1,7 @@
 use std::{
     cmp::min,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    convert::Infallible,
     future::{ready, Future},
     iter,
     ops::Range,
@@ -10,7 +11,7 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,9 +20,8 @@ use crate::{
     change_set::ChangeSet,
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     format::{
-        format_constants::SpecVersionBin,
         manifest::{
-            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
+            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestRef,
             VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
         },
         snapshot::{
@@ -527,7 +527,7 @@ impl Session {
         &self,
     ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
     {
-        let threshold = self.config.inline_chunk_threshold_bytes as usize;
+        let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         move |data: Bytes| {
             async move {
@@ -564,8 +564,8 @@ impl Session {
     ) -> SessionResult<Option<ChunkPayload>> {
         // FIXME: use manifest extents
         for manifest in manifests {
-            let manifest_structure = self.fetch_manifest(&manifest.object_id).await?;
-            match manifest_structure.get_chunk_payload(&node, coords) {
+            let manifest = self.fetch_manifest(&manifest.object_id).await?;
+            match manifest.get_chunk_payload(&node, coords) {
                 Ok(payload) => {
                     return Ok(Some(payload.clone()));
                 }
@@ -583,8 +583,7 @@ impl Session {
     pub async fn list_nodes(
         &self,
     ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
-        updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id, None)
-            .await
+        updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id).await
     }
 
     pub async fn all_chunks(
@@ -646,7 +645,7 @@ impl Session {
                     &self.change_set,
                     message,
                     properties,
-                    self.config.compression.level,
+                    self.config().compression().level(),
                 )
                 .await
             }
@@ -669,7 +668,7 @@ impl Session {
                         &self.change_set,
                         message,
                         properties,
-                        self.config.compression.level,
+                        self.config().compression().level(),
                     )
                     .await
                 }
@@ -769,9 +768,9 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
-            let anc = current_snapshot.local_ancestry().map(|meta| meta.id);
+            let ancestry = current_snapshot.local_ancestry().map(|meta| meta.id);
             let new_commits = iter::once(ref_data.snapshot.clone())
-                .chain(anc.take_while(|snap_id| snap_id != &self.snapshot_id))
+                .chain(ancestry.take_while(|snap_id| snap_id != &self.snapshot_id))
                 .collect::<Vec<_>>();
 
             // TODO: this clone is expensive
@@ -822,22 +821,32 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.filter_map(move |node| async move {
-        // This iterator should yield chunks for existing arrays + any updates.
-        // we check for deletion here in the case that `path` exists in the snapshot,
-        // and was deleted and then recreated in this changeset.
-        if change_set.is_deleted(&node.path, &node.id) {
-            None
-        } else {
-            let path = node.path.clone();
-            Some(
-                node_chunk_iterator(asset_manager, change_set, snapshot_id, &node.path)
-                    .await
-                    .map_ok(move |ci| (path.clone(), ci)),
-            )
-        }
+    let res = nodes.then(move |node| async move {
+        updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node).await
     });
     Ok(res.flatten())
+}
+
+async fn updated_node_chunks_iterator<'a>(
+    asset_manager: &'a AssetManager,
+    change_set: &'a ChangeSet,
+    snapshot_id: &'a SnapshotId,
+    node: NodeSnapshot,
+) -> impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a {
+    // This iterator should yield chunks for existing arrays + any updates.
+    // we check for deletion here in the case that `path` exists in the snapshot,
+    // and was deleted and then recreated in this changeset.
+    if change_set.is_deleted(&node.path, &node.id) {
+        Either::Left(stream::empty())
+    } else {
+        let path = node.path.clone();
+        Either::Right(
+            // TODO: avoid clone
+            verified_node_chunk_iterator(asset_manager, snapshot_id, change_set, node)
+                .await
+                .map_ok(move |ci| (path.clone(), ci)),
+        )
+    }
 }
 
 /// Warning: The presence of a single error may mean multiple missing items
@@ -986,23 +995,12 @@ async fn updated_existing_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-    manifest_id: Option<&'a ManifestId>,
 ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
-    let manifest_refs = manifest_id.map(|mid| {
-        vec![ManifestRef { object_id: mid.clone(), extents: ManifestExtents(vec![]) }]
-    });
-    let updated_nodes =
-        asset_manager.fetch_snapshot(parent_id).await?.iter_arc().filter_map(
-            move |node| {
-                let new_manifests = if node.node_type() == NodeType::Array {
-                    //FIXME: it could be none for empty arrays
-                    manifest_refs.clone()
-                } else {
-                    None
-                };
-                change_set.update_existing_node(node, new_manifests)
-            },
-        );
+    let updated_nodes = asset_manager
+        .fetch_snapshot(parent_id)
+        .await?
+        .iter_arc()
+        .filter_map(move |node| change_set.update_existing_node(node));
 
     Ok(updated_nodes)
 }
@@ -1013,11 +1011,10 @@ async fn updated_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-    manifest_id: Option<&'a ManifestId>,
 ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
-    Ok(updated_existing_nodes(asset_manager, change_set, parent_id, manifest_id)
+    Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
         .await?
-        .chain(change_set.new_nodes_iterator(manifest_id)))
+        .chain(change_set.new_nodes_iterator()))
 }
 
 async fn get_node(
@@ -1140,45 +1137,201 @@ pub fn construct_valid_byte_range(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+struct FlushProcess<'a> {
+    asset_manager: &'a AssetManager,
+    change_set: &'a ChangeSet,
+    parent_id: &'a SnapshotId,
+    compression_level: u8,
+    manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
+    manifest_files: HashSet<ManifestFileInfo>,
+}
+
+impl<'a> FlushProcess<'a> {
+    fn new(
+        asset_manager: &'a AssetManager,
+        change_set: &'a ChangeSet,
+        parent_id: &'a SnapshotId,
+        compression_level: u8,
+    ) -> Self {
+        Self {
+            asset_manager,
+            change_set,
+            parent_id,
+            compression_level,
+            manifest_refs: Default::default(),
+            manifest_files: Default::default(),
+        }
+    }
+
+    /// Write a manifest for a node that was created in this session
+    /// It doesn't need to look at previous manifests because the node is new
+    async fn write_manifest_for_new_node(
+        &mut self,
+        node_id: &NodeId,
+        node_path: &Path,
+    ) -> SessionResult<()> {
+        let mut from = ChunkIndices(vec![]);
+        let mut to = ChunkIndices(vec![]);
+        let chunks = stream::iter(
+            self.change_set
+                .new_array_chunk_iterator(node_id, node_path)
+                .map(Ok::<ChunkInfo, Infallible>),
+        );
+        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
+
+        if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
+            let new_manifest = Arc::new(new_manifest);
+            let new_manifest_size = self
+                .asset_manager
+                .write_manifest(Arc::clone(&new_manifest), self.compression_level)
+                .await?;
+
+            let file_info =
+                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+            self.manifest_files.insert(file_info);
+
+            let new_ref =
+                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+
+            self.manifest_refs
+                .entry(node_id.clone())
+                .and_modify(|v| v.push(new_ref.clone()))
+                .or_insert_with(|| vec![new_ref]);
+        }
+        Ok(())
+    }
+
+    /// Write a manifest for a node that was modified in this session
+    /// It needs to update the chunks according to the change set
+    /// and record the new manifest
+    async fn write_manifest_for_existing_node(
+        &mut self,
+        node: &NodeSnapshot,
+    ) -> SessionResult<()> {
+        let updated_chunks = updated_node_chunks_iterator(
+            self.asset_manager,
+            self.change_set,
+            self.parent_id,
+            node.clone(),
+        )
+        .await
+        .map_ok(|(_path, chunk_info)| chunk_info);
+        let mut from = ChunkIndices(vec![]);
+        let mut to = ChunkIndices(vec![]);
+        let updated_chunks =
+            aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
+
+        if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
+            let new_manifest = Arc::new(new_manifest);
+            let new_manifest_size = self
+                .asset_manager
+                .write_manifest(Arc::clone(&new_manifest), self.compression_level)
+                .await?;
+
+            let file_info =
+                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+            self.manifest_files.insert(file_info);
+
+            let new_ref =
+                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+            self.manifest_refs
+                .entry(node.id.clone())
+                .and_modify(|v| v.push(new_ref.clone()))
+                .or_insert_with(|| vec![new_ref]);
+        }
+        Ok(())
+    }
+
+    /// Record the previous manifests for an array that was not modified in the session
+    fn copy_previous_manifest(&mut self, node: &NodeSnapshot, old_snapshot: &Snapshot) {
+        match &node.node_data {
+            NodeData::Array(_, array_refs) => {
+                self.manifest_files.extend(array_refs.iter().map(|mr| {
+                    // It's ok to unwrap here, the snapshot had the node, it has to have the
+                    // manifest file info
+                    #[allow(clippy::expect_used)]
+                    old_snapshot
+                        .manifest_files
+                        .get(&mr.object_id)
+                        .expect(
+                            "Bug in flush function, no manifest file found in snapshot",
+                        )
+                        .clone()
+                }));
+            }
+            NodeData::Group => {}
+        }
+    }
+}
+
 async fn flush(
-    asset_manager: &AssetManager,
-    change_set: &ChangeSet,
-    parent_id: &SnapshotId,
+    mut flush_data: FlushProcess<'_>,
     message: &str,
     properties: SnapshotProperties,
-    compression_level: u8,
 ) -> SessionResult<SnapshotId> {
-    if change_set.is_empty() {
+    if flush_data.change_set.is_empty() {
         return Err(SessionError::NoChangesToCommit);
     }
 
-    let chunks = all_chunks(asset_manager, change_set, parent_id)
-        .await?
-        .map_ok(|(_path, chunk_info)| chunk_info);
+    let old_snapshot =
+        flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
-    let new_manifest = Arc::new(Manifest::from_stream(chunks).await?);
-    let new_manifest_info =
-        asset_manager.write_manifest(new_manifest, compression_level).await?;
+    // We first go through all existing nodes to see if we need to rewrite any manifests
 
-    let new_manifest_id = new_manifest_info.as_ref().map(|info| &info.0);
-    let all_nodes =
-        updated_nodes(asset_manager, change_set, parent_id, new_manifest_id).await?;
+    for node in old_snapshot.iter().filter(|node| node.node_type() == NodeType::Array) {
+        let node_id = &node.id;
 
-    let old_snapshot = asset_manager.fetch_snapshot(parent_id).await?;
+        if flush_data.change_set.array_is_deleted(&(node.path.clone(), node_id.clone())) {
+            continue;
+        }
+
+        if flush_data.change_set.has_chunk_changes(node_id) {
+            // Array wasn't deleted and has changes in this session
+            flush_data.write_manifest_for_existing_node(node).await?;
+        } else {
+            // Array wasn't deleted but has no changes in this session
+            // FIXME: deal with the case of metadata shrinking an existing array, we should clear
+            // extra chunks that no longer fit in the array
+            flush_data.copy_previous_manifest(node, old_snapshot.as_ref());
+        }
+    }
+
+    // Now we need to go through all the new arrays, and generate manifests for them
+
+    for (node_path, node_id) in flush_data.change_set.new_arrays() {
+        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
+    }
+
+    let all_nodes = updated_nodes(
+        flush_data.asset_manager,
+        flush_data.change_set,
+        flush_data.parent_id,
+    )
+    .await?
+    .map(|node| {
+        let id = &node.id;
+        // TODO: many clones
+        if let NodeData::Array(meta, original_manifests) = node.node_data {
+            if let Some(manifests) = flush_data.manifest_refs.get(id) {
+                NodeSnapshot {
+                    node_data: NodeData::Array(meta.clone(), manifests.clone()),
+                    ..node
+                }
+            } else {
+                NodeSnapshot {
+                    node_data: NodeData::Array(meta, original_manifests),
+                    ..node
+                }
+            }
+        } else {
+            node
+        }
+    });
+
     let mut new_snapshot = Snapshot::from_iter(
         old_snapshot.as_ref(),
         Some(properties),
-        new_manifest_info
-            .as_ref()
-            .map(|(mid, msize)| {
-                vec![ManifestFileInfo {
-                    id: mid.clone(),
-                    format_version: SpecVersionBin::current() as u8,
-                    size: *msize,
-                }]
-            })
-            .unwrap_or_default(),
+        flush_data.manifest_files.into_iter().collect(),
         vec![],
         all_nodes,
     );
@@ -1187,15 +1340,22 @@ async fn flush(
 
     let new_snapshot = Arc::new(new_snapshot);
     // FIXME: this should execute in a non-blocking context
-    let tx_log =
-        TransactionLog::new(change_set, old_snapshot.iter(), new_snapshot.iter());
+    let tx_log = TransactionLog::new(
+        flush_data.change_set,
+        old_snapshot.iter(),
+        new_snapshot.iter(),
+    );
     let new_snapshot_id = &new_snapshot.metadata.id;
-    asset_manager.write_snapshot(Arc::clone(&new_snapshot), compression_level).await?;
-    asset_manager
+    flush_data
+        .asset_manager
+        .write_snapshot(Arc::clone(&new_snapshot), flush_data.compression_level)
+        .await?;
+    flush_data
+        .asset_manager
         .write_transaction_log(
             new_snapshot_id.clone(),
             Arc::new(tx_log),
-            compression_level,
+            flush_data.compression_level,
         )
         .await?;
 
@@ -1217,15 +1377,9 @@ async fn do_commit(
 ) -> SessionResult<SnapshotId> {
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let new_snapshot = flush(
-        asset_manager,
-        change_set,
-        snapshot_id,
-        message,
-        properties,
-        compression_level,
-    )
-    .await?;
+    let flush_data =
+        FlushProcess::new(asset_manager, change_set, snapshot_id, compression_level);
+    let new_snapshot = flush(flush_data, message, properties).await?;
 
     let id = match update_branch(
         storage,
@@ -1233,7 +1387,7 @@ async fn do_commit(
         branch_name,
         new_snapshot.clone(),
         Some(&parent_snapshot),
-        config.unsafe_overwrite_refs,
+        config.unsafe_overwrite_refs(),
     )
     .await
     {
@@ -1255,7 +1409,64 @@ async fn fetch_manifest(
     let manifest_info = snapshot.manifest_info(manifest_id).ok_or_else(|| {
         IcechunkFormatError::ManifestInfoNotFound { manifest_id: manifest_id.clone() }
     })?;
-    Ok(asset_manager.fetch_manifest(manifest_id, manifest_info.size).await?)
+    Ok(asset_manager.fetch_manifest(manifest_id, manifest_info.size_bytes).await?)
+}
+
+/// Map the iterator to accumulate the extents of the chunks traversed
+///
+/// As we are processing chunks to create a manifest, we need to keep track
+/// of the extents of the manifests. This means, for each coordinate, we need
+/// to record its minimum and maximum values.
+///
+/// This very ugly code does that, without having to traverse the iterator twice.
+/// It adapts the stream using [`StreamExt::map_ok`] and keeps a running min/max
+/// for each coordinate.
+///
+/// When the iterator is fully traversed, the min and max values will be
+/// available in `from` and `to` arguments.
+///
+/// Yes, this is horrible.
+fn aggregate_extents<'a, T: std::fmt::Debug, E>(
+    from: &'a mut ChunkIndices,
+    to: &'a mut ChunkIndices,
+    it: impl Stream<Item = Result<T, E>> + 'a,
+    extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
+) -> impl Stream<Item = Result<T, E>> + 'a {
+    // we initialize the destination with an empty array, because we don't know
+    // the dimensions of the array yet. On the first element we will re-initialize
+    from.0 = Vec::new();
+    to.0 = Vec::new();
+    it.map_ok(move |t| {
+        // these are the coordinates for the chunk
+        let idx = extract_index(&t);
+
+        // we need to initialize the mins/maxes the first time
+        // we initialize with the value of the first element
+        // this obviously doesn't work for empty streams
+        // but we never generate manifests for them
+        if from.0.is_empty() {
+            from.0 = idx.0.clone();
+            // important to remember that `to` is not inclusive, so we need +1
+            to.0 = idx.0.iter().map(|n| n + 1).collect();
+        } else {
+            // We need to iterate over coordinates, and update the
+            // minimum and maximum for each if needed
+            for (coord_idx, value) in idx.0.iter().enumerate() {
+                if let Some(from_current) = from.0.get_mut(coord_idx) {
+                    if value < from_current {
+                        *from_current = *value
+                    }
+                }
+                if let Some(to_current) = to.0.get_mut(coord_idx) {
+                    let range_value = value + 1;
+                    if range_value > *to_current {
+                        *to_current = range_value
+                    }
+                }
+            }
+        }
+        t
+    })
 }
 
 #[cfg(test)]
@@ -1274,7 +1485,9 @@ mod tests {
         refs::{fetch_ref, Ref},
         repository::VersionInfo,
         storage::{logging::LoggingStorage, new_in_memory_storage},
-        strategies::{empty_writable_session, node_paths, zarr_array_metadata},
+        strategies::{
+            chunk_indices, empty_writable_session, node_paths, zarr_array_metadata,
+        },
         ObjectStorage, Repository,
     };
 
@@ -1392,6 +1605,38 @@ mod tests {
         prop_assert!(session.delete_group(path.clone()).await.is_ok());
     }
 
+    #[proptest(async = "tokio")]
+    async fn test_aggregate_extents(
+        #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
+        indices: Vec<ChunkIndices>,
+    ) {
+        let mut from = ChunkIndices(vec![]);
+        let mut to = ChunkIndices(vec![]);
+
+        let expected_from = ChunkIndices(vec![
+            indices.iter().map(|i| i.0[0]).min().unwrap(),
+            indices.iter().map(|i| i.0[1]).min().unwrap(),
+            indices.iter().map(|i| i.0[2]).min().unwrap(),
+        ]);
+        let expected_to = ChunkIndices(vec![
+            indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
+            indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
+            indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
+        ]);
+
+        let _ = aggregate_extents(
+            &mut from,
+            &mut to,
+            stream::iter(indices.into_iter().map(Ok::<ChunkIndices, Infallible>)),
+            |idx| idx,
+        )
+        .count()
+        .await;
+
+        prop_assert_eq!(from, expected_from);
+        prop_assert_eq!(to, expected_to);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
@@ -1417,10 +1662,11 @@ mod tests {
         };
 
         let manifest =
-            Arc::new(Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?);
-
-        let (manifest_id, manifest_size) =
-            asset_manager.write_manifest(Arc::clone(&manifest), 1).await?.unwrap();
+            Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
+        let manifest = Arc::new(manifest);
+        let manifest_id = &manifest.id;
+        let manifest_size =
+            asset_manager.write_manifest(Arc::clone(&manifest), 1).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -1445,7 +1691,7 @@ mod tests {
         };
         let manifest_ref = ManifestRef {
             object_id: manifest_id.clone(),
-            extents: ManifestExtents(vec![]),
+            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2]),
         };
         let array1_path: Path = "/array1".try_into().unwrap();
         let node_id = NodeId::random();
@@ -1467,11 +1713,7 @@ mod tests {
         ];
 
         let initial = Snapshot::empty();
-        let manifests = vec![ManifestFileInfo {
-            id: manifest_id.clone(),
-            format_version: manifest.icechunk_manifest_format_version,
-            size: manifest_size,
-        }];
+        let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
             &initial,
             None,
@@ -1672,8 +1914,8 @@ mod tests {
             shape: vec![1, 1, 2],
             data_type: DataType::Float16,
             chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
                 NonZeroU64::new(1).unwrap(),
             ]),
             chunk_key_encoding: ChunkKeyEncoding::Slash,
@@ -1758,6 +2000,21 @@ mod tests {
         let previous_snapshot_id = ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
+
+        let snap =
+            repository.asset_manager().fetch_snapshot(&previous_snapshot_id).await?;
+        match &snap.get_node(&new_array_path)?.node_data {
+            NodeData::Array(_, manifests) => {
+                assert_eq!(
+                    manifests.first().unwrap().extents,
+                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2])
+                );
+            }
+            NodeData::Group => {
+                panic!("not an array")
+            }
+        }
+
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
             Some(ChunkPayload::Inline("bye".into()))
@@ -1782,7 +2039,20 @@ mod tests {
         )
         .await?;
 
-        let _snapshot_id = ds.commit("commit", None).await?;
+        let snapshot_id = ds.commit("commit", None).await?;
+
+        let snap = repository.asset_manager().fetch_snapshot(&snapshot_id).await?;
+        match &snap.get_node(&new_array_path)?.node_data {
+            NodeData::Array(_, manifests) => {
+                assert_eq!(
+                    manifests.first().unwrap().extents,
+                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 1])
+                );
+            }
+            NodeData::Group => {
+                panic!("not an array")
+            }
+        }
 
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -2100,9 +2370,9 @@ mod tests {
 
         let _snap_id = ds.commit("commit", None).await?;
 
-        // there should be one manifest now
+        // there should be two manifest now, one per array
         assert_eq!(
-            1,
+            2,
             in_mem_storage
                 .all_keys()
                 .await?
@@ -2121,13 +2391,14 @@ mod tests {
             repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
         let initial_size = manifest.len();
 
-        assert_eq!(initial_size, 3);
+        // we wrote two chunks to array 1
+        assert_eq!(initial_size, 2);
 
         let mut ds = repo.writable_session("main").await?;
         ds.delete_array(a2path).await?;
         let _snap_id = ds.commit("array2 deleted", None).await?;
 
-        // there should be two manifests
+        // we should still have two manifests, the same as before because only array deletes happened
         assert_eq!(
             2,
             in_mem_storage
@@ -2148,7 +2419,8 @@ mod tests {
             repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
         let size_after_delete = manifest.len();
 
-        assert!(size_after_delete < initial_size);
+        // it's the same manifest
+        assert!(size_after_delete == initial_size);
 
         // delete a chunk
         let mut ds = repo.writable_session("main").await?;

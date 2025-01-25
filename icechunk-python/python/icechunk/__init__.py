@@ -31,6 +31,8 @@ from icechunk._icechunk_python import (
     __version__,
 )
 from icechunk.credentials import (
+    AnyAzureCredential,
+    AnyAzureStaticCredential,
     AnyCredential,
     AnyGcsCredential,
     AnyGcsStaticCredential,
@@ -58,6 +60,7 @@ from icechunk.storage import (
     local_filesystem_storage,
     s3_storage,
     s3_store,
+    tigris_storage,
 )
 from icechunk.store import IcechunkStore
 
@@ -121,4 +124,5 @@ __all__ = [
     "s3_static_credentials",
     "s3_storage",
     "s3_store",
+    "tigris_storage",
 ]

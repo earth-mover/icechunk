@@ -1,13 +1,13 @@
 # Configuration
 
-When creating and opening Icechunk stores, there are a two different sets of configuration to be aware of:
+When creating and opening Icechunk repositories, there are a two different sets of configuration to be aware of:
 
-- [`StorageConfig`](./reference.md#icechunk.StorageConfig) - for configuring access to the object store or filesystem
+- [`Storage`](./reference.md#icechunk.Storage) - for configuring access to the object store or filesystem
 - [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) - for configuring the behavior of the Icechunk Repository itself
 
-## Storage Config
+## Storage
 
-Icechunk can be confirgured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
+Icechunk can be configured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
 
 ### S3 Storage
 
@@ -16,32 +16,31 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "From environment"
 
     With this option, the credentials for connecting to S3 are detected automatically from your environment.
-    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.StorageConfig.s3_from_env)
+    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.s3_storage)
 
     ```python
-    icechunk.StorageConfig.s3_from_env(
+    icechunk.s3_storage(
         bucket="icechunk-test",
-        prefix="quickstart-demo-1"
+        prefix="quickstart-demo-1",
+        from_env=True
     )
     ```
 
 === "Provide credentials"
 
-    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.StorageConfig.s3_from_config)
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.s3_storage)
 
     ```python
-    icechunk.StorageConfig.s3_from_config(
+    icechunk.s3_storage(
         bucket="icechunk-test",
         prefix="quickstart-demo-1",
         region='us-east-1',
-        credentials=S3Credentials(
-            access_key_id='my-access-key',
-            secret_access_key='my-secret-key',
-            # session token is optional
-            session_token='my-token',
-        ),
-        endpoint_url=None,
-        allow_http=False,
+        access_key_id='my-access-key',
+        secret_access_key='my-secret-key',
+        # session token is optional
+        session_token='my-token',
+        endpoint_url=None,  # if using a custom endpoint
+        allow_http=False,  # allow http connections (default is False)
     )
     ```
 
@@ -51,91 +50,34 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     This is suitable for public data. [See the API](./reference.md#icechunk.StorageConfig.s3_anonymous)
 
     ```python
-    icechunk.StorageConfig.s3_anonymous(
+    icechunk.s3_storage(
         bucket="icechunk-test",
         prefix="quickstart-demo-1",
         region='us-east-1,
+        anonymous=True,
     )
     ```
 
 ### Filesystem Storage
 
-Icechunk can also be used on a [local filesystem](./reference.md#icechunk.StorageConfig.filesystem) by providing a path to the location of the store
+Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_filesystem_storage) by providing a path to the location of the store
 
 === "Local filesystem"
 
     ```python
-    icechunk.StorageConfig.filesystem("/path/to/my/dataset")
+    icechunk.local_filesystem_storage("/path/to/my/dataset")
     ```
 
 ## Repository Config
 
 Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
 
-### Writing chunks inline
-
-Chunks can be written inline alongside the store metadata if the size of a given chunk falls within the configured threshold.
-Inlining allows these small chunks (often used to store small coordinate variables) to be accessed more quickly.
-This is the default behavior for chunks smaller than 512 bytes, but it can be overridden using the `inline_chunk_threshold_bytes` option:
-
-=== "Never write chunks inline"
-
-    ```python
-    RepositoryConfig(
-        inline_chunk_threshold_bytes=0,
-        ...
-    )
-    ```
-
-=== "Write bigger chunks inline"
-
-    ```python
-    RepositoryConfig(
-        inline_chunk_threshold_bytes=1024,
-        ...
-    )
-    ```
-
-### Virtual Reference Storage Config
-
-Icechunk allows for reading "Virtual" data from [existing archival datasets](./virtual.md). This requires creating a distinct `VirtualRefConfig` (similar to `StorageConfig`) giving Icechunk the necessary permissions to access the archival data. This can be configured using the `virtual_ref_config` option:
-
-=== "S3 from environment"
-
-    ```python
-    RepositoryConfig(
-        virtual_ref_config=VirtualRefConfig.s3_from_env(),
-        ...
-    )
-    ```
-
-=== "S3 with credentials"
-
-    ```python
-    RepositoryConfig(
-        virtual_ref_config=VirtualRefConfig.s3_from_config(
-            credential=S3Credentials(
-                access_key_id='my-access-key',
-                secret_access_key='my-secret-key',
-            ),
-            region='us-east-1'
-        ),
-        ...
-    )
-    ```
-
-=== "S3 Anonymous"
-
-    ```python
-    RepositoryConfig(
-        virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
-        ...
-    )
-    ```
+!!! note
+    This section is under construction and coming soon.
 
 ## Creating and Opening Repos
 
-Now we can now create or open an Icechunk store using our config.
+Now we can now create or open an Icechunk repo using our config.
 
 ### Creating a new repo
 
@@ -146,10 +88,39 @@ Now we can now create or open an Icechunk store using our config.
 === "Creating with S3 storage"
 
     ```python
-    storage = icechunk.StorageConfig.s3_from_env(
+    storage = icechunk.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
+        from_env=True,
+    )
+
+    repo = icechunk.Repository.create(
+        storage=storage,
+    )
+    ```
+
+=== "Creating with Google Cloud Storage"
+
+    ```python
+    storage = icechunk.gcs_storage(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        from_env=True,
+    )
+
+    repo = icechunk.Repository.create(
+        storage=storage,
+    )
+    ```
+
+=== "Creating with Azure Blob Storage"
+
+    ```python
+    storage = icechunk.azure_storage(
+        container='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        from_env=True,
     )
 
     repo = icechunk.Repository.create(
@@ -160,13 +131,8 @@ Now we can now create or open an Icechunk store using our config.
 === "Creating with local filesystem"
 
     ```python
-    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.RepositoryConfig(
-        inline_chunk_threshold_bytes=1024,
-    )
-
     repo = icechunk.Repository.create(
-        storage=storage,
+        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
     )
     ```
 
@@ -175,10 +141,39 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 === "Open or creating with S3 storage"
 
     ```python
-    storage = icechunk.StorageConfig.s3_from_env(
+    storage = icechunk.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
+        from_env=True,
+    )
+
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+    )
+    ```
+
+=== "Open or creating with Google Cloud Storage"
+
+    ```python
+    storage = icechunk.gcs_storage(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        from_env=True,
+    )
+
+    repo = icechunk.Repository.open_or_create(
+        storage=storage,
+    )
+    ```
+
+=== "Open or creating with Azure Blob Storage"
+
+    ```python
+    storage = icechunk.azure_storage(
+        container='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        from_env=True,
     )
 
     repo = icechunk.Repository.open_or_create(
@@ -189,13 +184,8 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 === "Open or creating with local filesystem"
 
     ```python
-    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.RepositoryConfig(
-        inline_chunk_threshold_bytes=1024,
-    )
-
     repo = icechunk.Repository.open_or_create(
-        storage=storage,
+        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
     )
     ```
 
@@ -204,32 +194,51 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 === "Opening from S3 Storage"
 
     ```python
-    storage = icechunk.StorageConfig.s3_anonymous(
+    storage = icechunk.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
+        from_env=True,
     )
 
-    config = icechunk.RepositoryConfig(
-        virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
-    )
-
-    repo = icechunk.Repository.open_existing(
+    repo = icechunk.Repository.open(
         storage=storage,
-        config=config,
+    )
+    ```
+
+=== "Opening from Google Cloud Storage"
+
+    ```python
+    storage = icechunk.gcs_storage(
+        bucket='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        from_env=True,
+    )
+
+    repo = icechunk.Repository.open(
+        storage=storage,
+    )
+    ```
+
+=== "Opening from Azure Blob Storage"
+
+    ```python
+    storage = icechunk.azure_storage(
+        container='earthmover-sample-data',
+        prefix='icechunk/oisst.2020-2024/',
+        from_env=True,
+    )
+
+    repo = icechunk.Repository.open(
+        storage=storage,
     )
     ```
 
 === "Opening from local filesystem"
 
     ```python
-    storage = icechunk.StorageConfig.filesystem("/path/to/my/dataset")
-    config = icechunk.RepositoryConfig(
-        inline_chunk_threshold_bytes=1024,
-    )
-
-    store = icechunk.IcechunkStore.open_existing(
+    storage = icechunk.local_filesystem_storage("/path/to/my/dataset")
+    store = icechunk.IcechunkStore.open(
         storage=storage,
-        config=config,
     )
     ```

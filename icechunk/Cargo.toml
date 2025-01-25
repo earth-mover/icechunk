@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.15"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -21,7 +21,7 @@ itertools = "0.14.0"
 object_store = { version = "0.11.2", features = ["aws", "gcp", "azure"] }
 rand = "0.8.5"
 thiserror = "2.0.11"
-serde_json = "1.0.135"
+serde_json = "1.0.137"
 serde = { version = "1.0.217", features = ["derive", "rc"] }
 serde_with = { version = "3.12.0", features = ["hex"] }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros"] }

@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use quick_cache::sync::Cache;
+use quick_cache::{sync::Cache, Weighter};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufReader, Read},
@@ -31,19 +31,19 @@ use crate::{
 pub struct AssetManager {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
-    num_snapshots: u16,
-    num_manifests: u16,
-    num_transactions: u16,
-    num_attributes: u16,
-    num_chunks: u16,
+    num_snapshot_nodes: u64,
+    num_chunk_refs: u64,
+    num_transaction_changes: u64,
+    num_bytes_attributes: u64,
+    num_bytes_chunks: u64,
     #[serde(skip)]
-    snapshot_cache: Cache<SnapshotId, Arc<Snapshot>>,
+    snapshot_cache: Cache<SnapshotId, Arc<Snapshot>, FileWeighter>,
     #[serde(skip)]
-    manifest_cache: Cache<ManifestId, Arc<Manifest>>,
+    manifest_cache: Cache<ManifestId, Arc<Manifest>, FileWeighter>,
     #[serde(skip)]
-    transactions_cache: Cache<SnapshotId, Arc<TransactionLog>>,
+    transactions_cache: Cache<SnapshotId, Arc<TransactionLog>, FileWeighter>,
     #[serde(skip)]
-    chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes>,
+    chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes, FileWeighter>,
 }
 
 impl private::Sealed for AssetManager {}
@@ -52,11 +52,11 @@ impl private::Sealed for AssetManager {}
 struct AssetManagerSerializer {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
-    num_snapshots: u16,
-    num_manifests: u16,
-    num_transactions: u16,
-    num_attributes: u16,
-    num_chunks: u16,
+    num_snapshot_nodes: u64,
+    num_chunk_refs: u64,
+    num_transaction_changes: u64,
+    num_bytes_attributes: u64,
+    num_bytes_chunks: u64,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
@@ -64,11 +64,11 @@ impl From<AssetManagerSerializer> for AssetManager {
         AssetManager::new(
             value.storage,
             value.storage_settings,
-            value.num_snapshots,
-            value.num_manifests,
-            value.num_transactions,
-            value.num_attributes,
-            value.num_chunks,
+            value.num_snapshot_nodes,
+            value.num_chunk_refs,
+            value.num_transaction_changes,
+            value.num_bytes_attributes,
+            value.num_bytes_chunks,
         )
     }
 }
@@ -77,24 +77,28 @@ impl AssetManager {
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
-        num_snapshots: u16,
-        num_manifests: u16,
-        num_transactions: u16,
-        num_attributes: u16,
-        num_chunks: u16,
+        num_snapshot_nodes: u64,
+        num_chunk_refs: u64,
+        num_transaction_changes: u64,
+        num_bytes_attributes: u64,
+        num_bytes_chunks: u64,
     ) -> Self {
         Self {
-            num_snapshots,
-            num_manifests,
-            num_transactions,
-            num_attributes,
-            num_chunks,
+            num_snapshot_nodes,
+            num_chunk_refs,
+            num_transaction_changes,
+            num_bytes_attributes,
+            num_bytes_chunks,
             storage,
             storage_settings,
-            snapshot_cache: Cache::new(num_snapshots as usize),
-            manifest_cache: Cache::new(num_manifests as usize),
-            transactions_cache: Cache::new(num_transactions as usize),
-            chunk_cache: Cache::new(num_chunks as usize),
+            snapshot_cache: Cache::with_weighter(1, num_snapshot_nodes, FileWeighter),
+            manifest_cache: Cache::with_weighter(1, num_chunk_refs, FileWeighter),
+            transactions_cache: Cache::with_weighter(
+                0,
+                num_transaction_changes,
+                FileWeighter,
+            ),
+            chunk_cache: Cache::with_weighter(0, num_bytes_chunks, FileWeighter),
         }
     }
 
@@ -113,11 +117,11 @@ impl AssetManager {
         Self::new(
             storage,
             storage_settings,
-            config.snapshots_cache_size,
-            config.manifests_cache_size,
-            config.transactions_cache_size,
-            config.attributes_cache_size,
-            config.chunks_cache_size,
+            config.num_snapshot_nodes(),
+            config.num_chunk_refs(),
+            config.num_transaction_changes(),
+            config.num_bytes_attributes(),
+            config.num_bytes_chunks(),
         )
     }
 
@@ -125,7 +129,7 @@ impl AssetManager {
         &self,
         manifest: Arc<Manifest>,
         compression_level: u8,
-    ) -> RepositoryResult<Option<(ManifestId, u64)>> {
+    ) -> RepositoryResult<u64> {
         let manifest_c = Arc::clone(&manifest);
         let res = write_new_manifest(
             manifest_c,
@@ -134,9 +138,7 @@ impl AssetManager {
             &self.storage_settings,
         )
         .await?;
-        if let Some((manifest_id, _)) = res.as_ref() {
-            self.manifest_cache.insert(manifest_id.clone(), manifest);
-        }
+        self.manifest_cache.insert(manifest.id.clone(), manifest);
         Ok(res)
     }
 
@@ -350,7 +352,7 @@ async fn write_new_manifest(
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-) -> RepositoryResult<Option<(ManifestId, u64)>> {
+) -> RepositoryResult<u64> {
     use format_constants::*;
     let metadata = vec![
         (
@@ -368,40 +370,31 @@ async fn write_new_manifest(
         ),
     ];
 
-    let new_manifest_info = if new_manifest.len() > 0 {
-        let id = ManifestId::random();
-        // TODO: we should compress only when the manifest reaches a certain size
-        // but then, we would need to include metadata to know if it's compressed or not
-        let buffer = tokio::task::spawn_blocking(move || {
-            let buffer = binary_file_header(
-                SpecVersionBin::current(),
-                FileTypeBin::Manifest,
-                CompressionAlgorithmBin::Zstd,
-            );
-            let mut compressor =
-                zstd::stream::Encoder::new(buffer, compression_level as i32)?;
+    let id = new_manifest.id.clone();
+    // TODO: we should compress only when the manifest reaches a certain size
+    // but then, we would need to include metadata to know if it's compressed or not
+    let buffer = tokio::task::spawn_blocking(move || {
+        let buffer = binary_file_header(
+            SpecVersionBin::current(),
+            FileTypeBin::Manifest,
+            CompressionAlgorithmBin::Zstd,
+        );
+        let mut compressor =
+            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
 
-            serialize_manifest(
-                new_manifest.as_ref(),
-                SpecVersionBin::current(),
-                &mut compressor,
-            )?;
+        serialize_manifest(
+            new_manifest.as_ref(),
+            SpecVersionBin::current(),
+            &mut compressor,
+        )?;
 
-            compressor.finish().map_err(RepositoryError::IOError)
-        })
-        .await??;
+        compressor.finish().map_err(RepositoryError::IOError)
+    })
+    .await??;
 
-        let len = buffer.len() as u64;
-
-        storage
-            .write_manifest(storage_settings, id.clone(), metadata, buffer.into())
-            .await?;
-        Some((id, len))
-    } else {
-        None
-    };
-
-    Ok(new_manifest_info)
+    let len = buffer.len() as u64;
+    storage.write_manifest(storage_settings, id.clone(), metadata, buffer.into()).await?;
+    Ok(len)
 }
 
 async fn fetch_manifest(
@@ -577,6 +570,33 @@ async fn fetch_transaction_log(
     .map(Arc::new)
 }
 
+#[derive(Debug, Clone)]
+struct FileWeighter;
+
+impl Weighter<ManifestId, Arc<Manifest>> for FileWeighter {
+    fn weight(&self, _: &ManifestId, val: &Arc<Manifest>) -> u64 {
+        val.len() as u64
+    }
+}
+
+impl Weighter<SnapshotId, Arc<Snapshot>> for FileWeighter {
+    fn weight(&self, _: &SnapshotId, val: &Arc<Snapshot>) -> u64 {
+        val.len() as u64
+    }
+}
+
+impl Weighter<(ChunkId, Range<ChunkOffset>), Bytes> for FileWeighter {
+    fn weight(&self, _: &(ChunkId, Range<ChunkOffset>), val: &Bytes) -> u64 {
+        val.len() as u64
+    }
+}
+
+impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
+    fn weight(&self, _: &SnapshotId, val: &Arc<TransactionLog>) -> u64 {
+        val.len() as u64
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
@@ -608,10 +628,12 @@ mod test {
             coord: ChunkIndices(vec![]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
-        let pre_exiting_manifest =
-            Arc::new(Manifest::from_iter(vec![ci1].into_iter()).await?);
-        let (pre_existing_id, pre_size) =
-            manager.write_manifest(Arc::clone(&pre_exiting_manifest), 1).await?.unwrap();
+        let pre_existing_manifest =
+            Manifest::from_iter(vec![ci1].into_iter()).await?.unwrap();
+        let pre_existing_manifest = Arc::new(pre_existing_manifest);
+        let pre_existing_id = &pre_existing_manifest.id;
+        let pre_size =
+            manager.write_manifest(Arc::clone(&pre_existing_manifest), 1).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -621,18 +643,20 @@ mod test {
             &CachingConfig::default(),
         );
 
-        let manifest = Arc::new(Manifest::from_iter(vec![ci2].into_iter()).await?);
-        let (id, size) = caching.write_manifest(Arc::clone(&manifest), 1).await?.unwrap();
+        let manifest =
+            Arc::new(Manifest::from_iter(vec![ci2].into_iter()).await?.unwrap());
+        let id = &manifest.id;
+        let size = caching.write_manifest(Arc::clone(&manifest), 1).await?;
 
-        assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
-        assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
+        assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
+        assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
         // when we insert we cache, so no fetches
         assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
         assert_eq!(
-            caching.fetch_manifest(&pre_existing_id, pre_size).await?,
-            pre_exiting_manifest
+            caching.fetch_manifest(pre_existing_id, pre_size).await?,
+            pre_existing_manifest
         );
         assert_eq!(
             logging.fetch_operations(),
@@ -641,8 +665,8 @@ mod test {
 
         // only calls backend once
         assert_eq!(
-            caching.fetch_manifest(&pre_existing_id, pre_size).await?,
-            pre_exiting_manifest
+            caching.fetch_manifest(pre_existing_id, pre_size).await?,
+            pre_existing_manifest
         );
         assert_eq!(
             logging.fetch_operations(),
@@ -650,7 +674,7 @@ mod test {
         );
 
         // other walues still cached
-        assert_eq!(caching.fetch_manifest(&id, size).await?, manifest);
+        assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
@@ -678,36 +702,39 @@ mod test {
         let ci8 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
         let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
-        let manifest1 = Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?);
-        let (id1, size1) =
-            manager.write_manifest(Arc::clone(&manifest1), 1).await?.unwrap();
-        let manifest2 = Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?);
-        let (id2, size2) =
-            manager.write_manifest(Arc::clone(&manifest2), 1).await?.unwrap();
-        let manifest3 = Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?);
-        let (id3, size3) =
-            manager.write_manifest(Arc::clone(&manifest3), 1).await?.unwrap();
+        let manifest1 =
+            Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?.unwrap());
+        let id1 = &manifest1.id;
+        let size1 = manager.write_manifest(Arc::clone(&manifest1), 1).await?;
+        let manifest2 =
+            Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?.unwrap());
+        let id2 = &manifest2.id;
+        let size2 = manager.write_manifest(Arc::clone(&manifest2), 1).await?;
+        let manifest3 =
+            Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?.unwrap());
+        let id3 = &manifest3.id;
+        let size3 = manager.write_manifest(Arc::clone(&manifest3), 1).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let caching = AssetManager::new_with_config(
             logging_c,
             settings,
-            // the cache can only fit 2 manifests.
+            // the cache can only fit 6 refs.
             &CachingConfig {
-                snapshots_cache_size: 0,
-                manifests_cache_size: 2,
-                transactions_cache_size: 0,
-                attributes_cache_size: 0,
-                chunks_cache_size: 0,
+                num_snapshot_nodes: Some(0),
+                num_chunk_refs: Some(6),
+                num_transaction_changes: Some(0),
+                num_bytes_attributes: Some(0),
+                num_bytes_chunks: Some(0),
             },
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
         for _ in 0..20 {
-            assert_eq!(caching.fetch_manifest(&id1, size1).await?, manifest1);
-            assert_eq!(caching.fetch_manifest(&id2, size2).await?, manifest2);
-            assert_eq!(caching.fetch_manifest(&id3, size3).await?, manifest3);
+            assert_eq!(caching.fetch_manifest(id1, size1).await?, manifest1);
+            assert_eq!(caching.fetch_manifest(id2, size2).await?, manifest2);
+            assert_eq!(caching.fetch_manifest(id3, size3).await?, manifest3);
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);
@@ -731,9 +758,10 @@ mod test {
             payload: ChunkPayload::Inline("hello".into()),
         }))
         .await
+        .unwrap()
         .unwrap();
-        let (manifest_id, size) =
-            manager.write_manifest(Arc::new(manifest), 1).await?.unwrap();
+        let manifest_id = manifest.id.clone();
+        let size = manager.write_manifest(Arc::new(manifest), 1).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();

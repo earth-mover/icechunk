@@ -1,21 +1,14 @@
 inline_chunk_threshold_bytes: 12
-unsafe_overwrite_refs: false
-get_partial_values_concurrency: 10
-compression:
-  algorithm: Zstd
-  level: 1
-caching:
-  snapshots_cache_size: 2
-  manifests_cache_size: 2
-  transactions_cache_size: 0
-  attributes_cache_size: 2
-  chunks_cache_size: 0
+unsafe_overwrite_refs: null
+get_partial_values_concurrency: null
+compression: null
+caching: null
 storage: null
 virtual_chunk_containers:
-  az:
-    name: az
-    url_prefix: az
-    store: !Azure {}
+  file:
+    name: file
+    url_prefix: file
+    store: !LocalFileSystem ''
   gcs:
     name: gcs
     url_prefix: gcs
@@ -23,7 +16,11 @@ virtual_chunk_containers:
   tigris:
     name: tigris
     url_prefix: tigris
-    store: !Tigris {}
+    store: !Tigris
+      region: null
+      endpoint_url: https://fly.storage.tigris.dev
+      anonymous: false
+      allow_http: false
   s3:
     name: s3
     url_prefix: s3://
@@ -32,7 +29,7 @@ virtual_chunk_containers:
       endpoint_url: http://localhost:9000
       anonymous: false
       allow_http: true
-  file:
-    name: file
-    url_prefix: file
-    store: !LocalFileSystem ''
+  az:
+    name: az
+    url_prefix: az
+    store: !Azure {}
