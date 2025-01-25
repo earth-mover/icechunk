@@ -1,16 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
-
 use crate::change_set::ChangeSet;
 
 use super::{
-    format_constants,
+    format_constants::SpecVersionBin,
     snapshot::{NodeSnapshot, NodeType},
     ChunkIndices, IcechunkFormatVersion, NodeId,
 };
 
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionLog {
     // FIXME: better, more stable on-disk format
     pub icechunk_transaction_log_format_version: IcechunkFormatVersion,
@@ -66,8 +64,22 @@ impl TransactionLog {
             updated_user_attributes,
             updated_zarr_metadata,
             updated_chunks,
-            icechunk_transaction_log_format_version:
-                format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_FORMAT,
+            icechunk_transaction_log_format_version: SpecVersionBin::current() as u8,
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.new_groups.len()
+            + self.new_arrays.len()
+            + self.deleted_groups.len()
+            + self.deleted_arrays.len()
+            + self.updated_user_attributes.len()
+            + self.updated_zarr_metadata.len()
+            + self.updated_chunks.values().map(|s| s.len()).sum::<usize>()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }

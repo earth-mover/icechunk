@@ -3,13 +3,33 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from icechunk._icechunk_python import PyStore
-from zarr.abc.store import ByteRangeRequest, Store
+from zarr.abc.store import (
+    ByteRequest,
+    OffsetByteRequest,
+    RangeByteRequest,
+    Store,
+    SuffixByteRequest,
+)
 from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
 
 if TYPE_CHECKING:
     from icechunk import Session
+
+
+def _byte_request_to_tuple(
+    byte_request: ByteRequest | None,
+) -> tuple[int | None, int | None]:
+    match byte_request:
+        case None:
+            return (None, None)
+        case RangeByteRequest(start, end):
+            return (start, end)
+        case OffsetByteRequest(offset):
+            return (offset, None)
+        case SuffixByteRequest(suffix):
+            return (None, suffix)
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -93,14 +113,20 @@ class IcechunkStore(Store, SyncMixin):
         self,
         key: str,
         prototype: BufferPrototype,
-        byte_range: tuple[int | None, int | None] | None = None,
+        byte_range: ByteRequest | None = None,
     ) -> Buffer | None:
         """Retrieve the value associated with a given key.
 
         Parameters
         ----------
         key : str
-        byte_range : tuple[int, Optional[int]], optional
+        byte_range : ByteRequest, optional
+
+            ByteRequest may be one of the following. If not provided, all data associated with the key is retrieved.
+
+            - RangeByteRequest(int, int): Request a specific range of bytes in the form (start, end). The end is exclusive. If the given range is zero-length or starts after the end of the object, an error will be returned. Additionally, if the range ends after the end of the object, the entire remainder of the object will be returned. Otherwise, the exact requested range will be returned.
+            - OffsetByteRequest(int): Request all bytes starting from a given byte offset. This is equivalent to bytes={int}- as an HTTP header.
+            - SuffixByteRequest(int): Request the last int bytes. Note that here, int is the size of the request, not the byte offset. This is equivalent to bytes=-{int} as an HTTP header.
 
         Returns
         -------
@@ -108,7 +134,7 @@ class IcechunkStore(Store, SyncMixin):
         """
 
         try:
-            result = await self._store.get(key, byte_range)
+            result = await self._store.get(key, _byte_request_to_tuple(byte_range))
         except KeyError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
@@ -119,7 +145,7 @@ class IcechunkStore(Store, SyncMixin):
     async def get_partial_values(
         self,
         prototype: BufferPrototype,
-        key_ranges: Iterable[tuple[str, ByteRangeRequest]],
+        key_ranges: Iterable[tuple[str, ByteRequest | None]],
     ) -> list[Buffer | None]:
         """Retrieve possibly partial values from given key_ranges.
 
@@ -134,7 +160,8 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 has not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        result = await self._store.get_partial_values(list(key_ranges))
+        ranges = [(k[0], _byte_request_to_tuple(k[1])) for k in key_ranges]
+        result = await self._store.get_partial_values(list(ranges))
         return [prototype.buffer.from_bytes(r) for r in result]
 
     async def exists(self, key: str) -> bool:
@@ -176,34 +203,6 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.set_if_not_exists(key, value.to_bytes())
 
-    async def async_set_virtual_ref(
-        self,
-        key: str,
-        location: str,
-        *,
-        offset: int,
-        length: int,
-        checksum: str | datetime | None = None,
-    ) -> None:
-        """Store a virtual reference to a chunk.
-
-        Parameters
-        ----------
-        key : str
-            The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
-        location : str
-            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
-        offset : int
-            The offset in bytes from the start of the file location in storage the chunk starts at
-        length : int
-            The length of the chunk in bytes, measured from the given offset
-        checksum : str | datetime | None
-            The etag or last_medified_at field of the object
-        """
-        return await self._store.async_set_virtual_ref(
-            key, location, offset, length, checksum
-        )
-
     def set_virtual_ref(
         self,
         key: str,
@@ -212,6 +211,7 @@ class IcechunkStore(Store, SyncMixin):
         offset: int,
         length: int,
         checksum: str | datetime | None = None,
+        validate_container: bool = False,
     ) -> None:
         """Store a virtual reference to a chunk.
 
@@ -227,8 +227,12 @@ class IcechunkStore(Store, SyncMixin):
             The length of the chunk in bytes, measured from the given offset
         checksum : str | datetime | None
             The etag or last_medified_at field of the object
+        validate_container: bool
+            If set to true, fail for locations that don't match any existing virtual chunk container
         """
-        return self._store.set_virtual_ref(key, location, offset, length, checksum)
+        return self._store.set_virtual_ref(
+            key, location, offset, length, checksum, validate_container
+        )
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store
@@ -328,3 +332,6 @@ class IcechunkStore(Store, SyncMixin):
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_dir(prefix)
+
+    async def getsize(self, key: str) -> int:
+        return await self._store.getsize(key)

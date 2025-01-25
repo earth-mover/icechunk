@@ -74,7 +74,7 @@ async def write_a_test_repo() -> None:
     big_chunks = group1.create_array(
         "big_chunks",
         shape=(10, 10),
-        chunk_shape=(5, 5),
+        chunks=(5, 5),
         dtype="float32",
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
@@ -83,15 +83,13 @@ async def write_a_test_repo() -> None:
     # these chunks will be inline
     small_chunks = group1.create_array(
         "small_chunks",
-        shape=(5),
-        chunk_shape=(1),
+        shape=(5,),
+        chunks=(1,),
         dtype="int8",
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
     session.commit("empty structure")
-    session = repo.writable_session("main")
-    store = session.store
 
     session = repo.writable_session("main")
     store = session.store
@@ -105,11 +103,17 @@ async def write_a_test_repo() -> None:
     session = repo.writable_session("main")
     store = session.store
 
+    # We are going to write this chunk to storage as a virtual chunk
+    # We need to know its size
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+    chunk = await store.get("group1/big_chunks/c/0/1", prototype=buffer_prototype)
+    virtual_chunk_data_size = len(chunk.to_bytes())
+
     store.set_virtual_ref(
         "group1/big_chunks/c/0/0",
         "s3://testbucket/can_read_old/chunk-1",
         offset=0,
-        length=5 * 5 * 4,
+        length=virtual_chunk_data_size,
         checksum=datetime(9999, 12, 31, tzinfo=UTC),
     )
     snapshot = session.commit("set virtual chunk")
@@ -124,6 +128,8 @@ async def write_a_test_repo() -> None:
     snap4 = session.commit("delete a chunk")
 
     repo.create_tag("it works!", snapshot_id=snap4)
+    repo.create_tag("deleted", snapshot_id=snap4)
+    repo.delete_tag("deleted")
 
     session = repo.writable_session("my-branch")
     store = session.store
@@ -144,7 +150,7 @@ async def write_a_test_repo() -> None:
     group5.create_array(
         "inner",
         shape=(10, 10),
-        chunk_shape=(5, 5),
+        chunks=(5, 5),
         dtype="float32",
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
@@ -170,23 +176,29 @@ async def test_icechunk_can_read_old_repo() -> None:
         "empty structure",
         "Repository initialized",
     ]
-    assert [p.message for p in repo.ancestry(main_snapshot)] == expected_main_history
+    assert [
+        p.message for p in repo.ancestry(snapshot=main_snapshot)
+    ] == expected_main_history
 
-    my_branch_snapshot = repo.lookup_branch("my-branch")
     expected_branch_history = [
         "some more structure",
         "delete a chunk",
     ] + expected_main_history
 
     assert [
-        p.message for p in repo.ancestry(my_branch_snapshot)
+        p.message for p in repo.ancestry(branch="my-branch")
     ] == expected_branch_history
 
-    tag_snapshot = repo.lookup_tag("it also works!")
-    assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history
+    assert [
+        p.message for p in repo.ancestry(tag="it also works!")
+    ] == expected_branch_history
 
-    tag_snapshot = repo.lookup_tag("it works!")
-    assert [p.message for p in repo.ancestry(tag_snapshot)] == expected_branch_history[1:]
+    assert [p.message for p in repo.ancestry(tag="it works!")] == expected_branch_history[
+        1:
+    ]
+
+    with pytest.raises(ValueError, match="ref not found"):
+        repo.readonly_session(tag="deleted")
 
     session = repo.writable_session("my-branch")
     store = session.store

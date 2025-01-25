@@ -1,5 +1,6 @@
 volumes:
   minio_data:
+  azurite-data:
 
 services:
   minio:
@@ -23,3 +24,38 @@ services:
     ports:
       - '9000:9000'
       - '9001:9001'
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    container_name: azurite
+    hostname: azurite
+    healthcheck:
+      test: nc 127.0.0.1 10000 -z
+      interval: 1s
+      retries: 30
+    command: azurite --silent --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 -l /workspace
+    ports:
+      - "10000:10000" # Blob
+      - "10001:10001" # Queue
+      - "10002:10002" # Table
+    volumes:
+      - azurite-data:/workspace
+
+  azurite-init:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    container_name: azurite_init
+    restart: "no"
+    depends_on:
+      azurite:
+        condition: service_healthy
+        restart: true
+    entrypoint: |
+        /bin/sh -c '
+        apk add --no-cache curl
+        for _ in {1..10}; do
+            if curl --silent --fail -XPUT "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+            break
+            fi
+            sleep 1
+        done
+        '

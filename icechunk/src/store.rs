@@ -94,6 +94,10 @@ pub enum StoreError {
         "uncommitted changes in repository, commit changes or reset repository and try again."
     )]
     UncommittedChanges,
+    #[error(
+        "invalid chunk location, no matching virtual chunk container: `{chunk_location}`"
+    )]
+    InvalidVirtualChunkContainer { chunk_location: String },
     #[error("unknown store error: `{0}`")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -106,7 +110,7 @@ pub struct Store {
 
 impl Store {
     pub async fn from_session(session: Arc<RwLock<Session>>) -> Self {
-        let conc = session.read().await.config().get_partial_values_concurrency;
+        let conc = session.read().await.config().get_partial_values_concurrency();
         Self::from_session_and_config(session, conc)
     }
 
@@ -119,7 +123,7 @@ impl Store {
 
     pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
-        let conc = session.config().get_partial_values_concurrency;
+        let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 
@@ -303,6 +307,7 @@ impl Store {
         &self,
         key: &str,
         reference: VirtualChunkRef,
+        validate_container: bool,
     ) -> StoreResult<()> {
         if self.read_only().await {
             return Err(StoreError::ReadOnly);
@@ -310,9 +315,15 @@ impl Store {
 
         match Key::parse(key)? {
             Key::Chunk { node_path, coords } => {
-                self.session
-                    .write()
-                    .await
+                let mut session = self.session.write().await;
+                if validate_container
+                    && session.matching_container(&reference.location).is_none()
+                {
+                    return Err(StoreError::InvalidVirtualChunkContainer {
+                        chunk_location: reference.location.0,
+                    });
+                }
+                session
                     .set_chunk_ref(
                         node_path,
                         coords,
@@ -554,6 +565,11 @@ impl Store {
         Ok(futures::stream::iter(results.into_iter().map(Ok)))
     }
 
+    pub async fn getsize(&self, key: &str) -> StoreResult<u64> {
+        let repo = self.session.read().await;
+        get_key_size(key, &repo).await
+    }
+
     async fn set_array_meta(
         &self,
         path: Path,
@@ -654,6 +670,12 @@ async fn set_array_meta(
     array_meta: ArrayMetadata,
     repo: &mut Session,
 ) -> StoreResult<()> {
+    // TODO: Consider deleting all this logic?
+    // We try hard to not overwrite existing metadata here.
+    // I don't think this is actually useful because Zarr's
+    // Array/Group API will require that the user set `overwrite=True`
+    // which will delete any existing array metadata. This path is only
+    // applicable when using the explicit `store.set` interface.
     if let Ok(node) = repo.get_array(&path).await {
         // Check if the user attributes are different, if they are update them
         let existing_attrs = match node.user_attributes {
@@ -749,6 +771,28 @@ async fn get_chunk_bytes(
     }))
 }
 
+async fn get_metadata_size(key: &str, path: &Path, repo: &Session) -> StoreResult<u64> {
+    let bytes = get_metadata(key, path, &ByteRange::From(0), repo).await?;
+    Ok(bytes.len() as u64)
+}
+
+async fn get_chunk_size(
+    _key: &str,
+    path: &Path,
+    coords: &ChunkIndices,
+    repo: &Session,
+) -> StoreResult<u64> {
+    let chunk_ref = repo.get_chunk_ref(path, coords).await?;
+    let size = chunk_ref
+        .map(|payload| match payload {
+            ChunkPayload::Inline(bytes) => bytes.len() as u64,
+            ChunkPayload::Virtual(virtual_chunk_ref) => virtual_chunk_ref.length,
+            ChunkPayload::Ref(chunk_ref) => chunk_ref.length,
+        })
+        .unwrap_or(0);
+    Ok(size)
+}
+
 async fn get_key(
     key: &str,
     byte_range: &ByteRange,
@@ -760,6 +804,20 @@ async fn get_key(
         }
         Key::Chunk { node_path, coords } => {
             get_chunk_bytes(key, node_path, coords, byte_range, repo).await
+        }
+        Key::ZarrV2(key) => {
+            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+        }
+    }?;
+
+    Ok(bytes)
+}
+
+async fn get_key_size(key: &str, repo: &Session) -> StoreResult<u64> {
+    let bytes = match Key::parse(key)? {
+        Key::Metadata { node_path } => get_metadata_size(key, &node_path, repo).await,
+        Key::Chunk { node_path, coords } => {
+            get_chunk_size(key, &node_path, &coords, repo).await
         }
         Key::ZarrV2(key) => {
             Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))

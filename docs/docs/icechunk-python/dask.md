@@ -19,10 +19,10 @@ from distributed import Client
 client = Client()
 
 # initialize the icechunk store
-from icechunk import Repository, StorageConfig
+import icechunk
 
-storage_config = StorageConfig.filesystem("./icechunk-xarray")
-icechunk_repo = Repository.create(storage_config)
+storage = icechunk.local_filesystem_storage("./icechunk-xarray")
+icechunk_repo = icechunk.Repository.create(storage_config)
 icechunk_session = icechunk_repo.writable_session("main")
 ```
 
@@ -42,12 +42,12 @@ dask_array = dask.array.random.random(shape, chunks=dask_chunks)
 Now create the Zarr array you will write to.
 ```python
 zarr_chunks = (10, 10)
-group = zarr.group(store=icechunk_sesion.store(), overwrite=True)
+group = zarr.group(store=icechunk_sesion.store, overwrite=True)
 
 zarray = group.create_array(
     "array",
     shape=shape,
-    chunk_shape=zarr_chunks,
+    chunks=zarr_chunks,
     dtype="f8",
     fill_value=float("nan"),
 )
@@ -82,13 +82,11 @@ import icechunk.xarray
 import xarray as xr
 
 # Assuming you have a valid writable Session named icechunk_session
-store = icechunk_session.store()
-
 dataset = xr.tutorial.open_dataset("rasm", chunks={"time": 1}).isel(time=slice(24))
 
-icechunk.xarray.to_icechunk(dataset, store=store))
+icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store))
 
-roundtripped = xr.open_zarr(store, consolidated=False)
+roundtripped = xr.open_zarr(icechunk_session.store, consolidated=False)
 dataset.identical(roundtripped)
 ```
 

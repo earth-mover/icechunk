@@ -8,6 +8,7 @@ from icechunk._icechunk_python import (
     Storage,
 )
 from icechunk.credentials import (
+    azure_credentials,
     gcs_credentials,
     s3_credentials,
 )
@@ -61,8 +62,6 @@ def s3_storage(
     region: str | None = None,
     endpoint_url: str | None = None,
     allow_http: bool = False,
-    max_concurrent_requests_for_object: int | None = None,
-    min_concurrent_request_size: int | None = None,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
     session_token: str | None = None,
@@ -85,10 +84,6 @@ def s3_storage(
         Optional endpoint where the object store serves data, example: http://localhost:9000
     allow_http: bool
         If the object store can be accessed using http protocol instead of https
-    max_concurrent_requests_for_object: int | None
-        Try to use this many concurrent requests to fetch an object from object store
-    min_concurrent_request_size: int | None
-        Try not to use requests smaller than min_concurrent_request_size bytes
     access_key_id: str | None
         S3 credential access key
     secret_access_key: str | None
@@ -119,8 +114,68 @@ def s3_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
-        max_concurrent_requests_for_object=max_concurrent_requests_for_object,
-        min_concurrent_request_size=min_concurrent_request_size,
+    )
+
+
+def tigris_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    region: str | None = None,
+    endpoint_url: str | None = None,
+    allow_http: bool = False,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    anonymous: bool | None = None,
+    from_env: bool | None = None,
+    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in Tigris object store.
+
+    Parameters
+    ----------
+    bucket: str
+        The bucket where the repository will store its data
+    prefix: str | None
+        The prefix within the bucket that is the root directory of the repository
+    region: str | None
+        The region to use in the object store, if `None` a default region will be used
+    endpoint_url: str | None
+        Optional endpoint where the object store serves data, example: http://localhost:9000
+    allow_http: bool
+        If the object store can be accessed using http protocol instead of https
+    access_key_id: str | None
+        S3 credential access key
+    secret_access_key: str | None
+        S3 credential secret access key
+    session_token: str | None
+        Optional S3 credential session token
+    expires_after: datetime | None
+        Optional expiration for the object store credentials
+    anonymous: bool | None
+        If set to True requests to the object store will not be signed
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    get_credentials: Callable[[], S3StaticCredentials] | None
+        Use this function to get and refresh object store credentials
+    """
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        anonymous=anonymous,
+        from_env=from_env,
+        get_credentials=get_credentials,
+    )
+    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    return Storage.new_tigris(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
     )
 
 
@@ -128,8 +183,6 @@ def gcs_storage(
     *,
     bucket: str,
     prefix: str | None,
-    max_concurrent_requests_for_object: int | None = None,
-    min_concurrent_request_size: int | None = None,
     service_account_file: str | None = None,
     service_account_key: str | None = None,
     application_credentials: str | None = None,
@@ -144,10 +197,6 @@ def gcs_storage(
         The bucket where the repository will store its data
     prefix: str | None
         The prefix within the bucket that is the root directory of the repository
-    max_concurrent_requests_for_object: int | None
-        Try to use this many concurrent requests to fetch an object from object store
-    min_concurrent_request_size: int | None
-        Try not to use requests smaller than min_concurrent_request_size bytes
     from_env: bool | None
         Fetch credentials from the operative system environment
     """
@@ -162,6 +211,45 @@ def gcs_storage(
         prefix=prefix,
         credentials=credentials,
         config=config,
-        max_concurrent_requests_for_object=max_concurrent_requests_for_object,
-        min_concurrent_request_size=min_concurrent_request_size,
+    )
+
+
+def azure_storage(
+    *,
+    container: str,
+    prefix: str,
+    access_key: str | None = None,
+    sas_token: str | None = None,
+    bearer_token: str | None = None,
+    from_env: bool | None = None,
+    config: dict[str, str] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in Azure Blob Storage object store.
+
+    Parameters
+    ----------
+    container: str
+        The container where the repository will store its data
+    prefix: str
+        The prefix within the container that is the root directory of the repository
+    access_key: str | None
+        Azure Blob Storage credential access key
+    sas_token: str | None
+        Azure Blob Storage credential SAS token
+    bearer_token: str | None
+        Azure Blob Storage credential bearer token
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    """
+    credentials = azure_credentials(
+        access_key=access_key,
+        sas_token=sas_token,
+        bearer_token=bearer_token,
+        from_env=from_env,
+    )
+    return Storage.new_azure_blob(
+        container=container,
+        prefix=prefix,
+        credentials=credentials,
+        config=config,
     )

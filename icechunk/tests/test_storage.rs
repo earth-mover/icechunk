@@ -3,10 +3,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 use bytes::Bytes;
 use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{
-        manifest::Manifest, snapshot::Snapshot, ByteRange, ChunkId, ManifestId,
-        SnapshotId,
-    },
+    format::{ChunkId, ManifestId, SnapshotId},
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
     },
@@ -14,9 +11,10 @@ use icechunk::{
         new_in_memory_storage, new_s3_storage, object_store::ObjectStorageConfig,
         StorageResult,
     },
-    ObjectStorage, Repository, Storage, StorageError,
+    ObjectStorage, Storage, StorageError,
 };
 use pretty_assertions::{assert_eq, assert_ne};
+use tokio::io::AsyncReadExt;
 
 #[allow(clippy::expect_used)]
 async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
@@ -35,12 +33,10 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
             session_token: None,
             expires_after: None,
         })),
-        None,
-        None,
     )
     .expect("Creating minio storage failed");
 
-    Ok(Repository::add_in_mem_asset_caching(storage))
+    Ok(storage)
 }
 
 #[allow(clippy::expect_used)]
@@ -52,8 +48,6 @@ async fn mk_s3_object_store_storage(
     let config = ObjectStorageConfig {
         url,
         prefix: "".to_string(),
-        max_concurrent_requests_for_object: 12,
-        min_concurrent_request_size: 8_000_000,
         options: vec![
             ("aws_access_key_id".to_string(), "minio123".to_string()),
             ("aws_secret_access_key".to_string(), "minio123".to_string()),
@@ -68,7 +62,20 @@ async fn mk_s3_object_store_storage(
             .expect("Creating minio s3 storage with object_store failed"),
     );
 
-    Ok(Repository::add_in_mem_asset_caching(storage))
+    Ok(storage)
+}
+
+fn mk_azure_blob_storage(prefix: &str) -> StorageResult<ObjectStorage> {
+    let url = format!("azure://testcontainer/{}", prefix);
+    let config = ObjectStorageConfig {
+        url,
+        prefix: "".to_string(),
+        options: vec![
+            ("account_name".to_string(), "devstoreaccount1".to_string()),
+            ("use_emulator".to_string(), true.to_string()),
+        ],
+    };
+    ObjectStorage::from_config(config)
 }
 
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
@@ -81,20 +88,32 @@ where
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().unwrap();
     let s3 = mk_s3_object_store_storage(prefix.as_str()).await?;
+    let s4 = Arc::new(mk_azure_blob_storage(prefix.as_str())?);
     f(s1).await?;
     f(s2).await?;
     f(s3).await?;
+    f(s4).await?;
     Ok(())
 }
 
 #[tokio::test]
 pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        let snapshot = Arc::new(Snapshot::empty());
-        storage.write_snapshot(id.clone(), snapshot.clone()).await?;
-        let back = storage.fetch_snapshot(&id).await?;
-        assert_eq!(snapshot, back);
+        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        storage
+            .write_snapshot(
+                &storage_settings,
+                id.clone(),
+                vec![("foo".to_string(), "bar".to_string())],
+                Bytes::copy_from_slice(&bytes[..]),
+            )
+            .await?;
+        let mut read = storage.fetch_snapshot(&storage_settings, &id).await?;
+        let mut bytes_back = [0; 1024];
+        read.read_exact(&mut bytes_back).await?;
+        assert_eq!(bytes_back, bytes);
         Ok(())
     })
     .await?;
@@ -104,11 +123,29 @@ pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>
 #[tokio::test]
 pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = ManifestId::random();
-        let manifest = Arc::new(Manifest::default());
-        let size = storage.write_manifests(id.clone(), manifest.clone()).await?;
-        let back = storage.fetch_manifests(&id, size).await?;
-        assert_eq!(manifest, back);
+        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        storage
+            .write_manifest(
+                &storage_settings,
+                id.clone(),
+                vec![("foo".to_string(), "bar".to_string())],
+                Bytes::copy_from_slice(&bytes[..]),
+            )
+            .await?;
+        let mut read =
+            storage.fetch_manifest_unknown_size(&storage_settings, &id).await?;
+        let mut bytes_back = [0; 1024];
+        read.read_exact(&mut bytes_back).await?;
+        assert_eq!(bytes_back, bytes);
+
+        let bytes_back = storage
+            .fetch_manifest_known_size(&storage_settings, &id, 1024)
+            .await?
+            .to_bytes(1024)
+            .await?;
+        assert_eq!(bytes_back, Bytes::copy_from_slice(&bytes[..]));
         Ok(())
     })
     .await?;
@@ -118,23 +155,12 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
 #[tokio::test]
 pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = ChunkId::random();
         let bytes = Bytes::from_static(b"hello");
-        storage.write_chunk(id.clone(), bytes.clone()).await?;
-        let back = storage.fetch_chunk(&id, &ByteRange::ALL).await?;
-        assert_eq!(bytes, back);
+        storage.write_chunk(&storage_settings, id.clone(), bytes.clone()).await?;
 
-        let back =
-            storage.fetch_chunk(&id, &ByteRange::from_offset_with_length(1, 2)).await?;
-        assert_eq!(Bytes::from_static(b"el"), back);
-
-        let back = storage.fetch_chunk(&id, &ByteRange::from_offset(1)).await?;
-        assert_eq!(Bytes::from_static(b"ello"), back);
-
-        let back = storage.fetch_chunk(&id, &ByteRange::to_offset(3)).await?;
-        assert_eq!(Bytes::from_static(b"hel"), back); // codespell:ignore
-
-        let back = storage.fetch_chunk(&id, &ByteRange::bounded(1, 4)).await?;
+        let back = storage.fetch_chunk(&storage_settings, &id, &(1..4)).await?;
         assert_eq!(Bytes::from_static(b"ell"), back);
         Ok(())
     })
@@ -145,9 +171,11 @@ pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        create_tag(storage.as_ref(), "mytag", id.clone(), false).await?;
-        let back = fetch_tag(storage.as_ref(), "mytag").await?;
+        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+            .await?;
+        let back = fetch_tag(storage.as_ref(), &storage_settings, "mytag").await?;
         assert_eq!(id, back.snapshot);
         Ok(())
     })
@@ -158,10 +186,13 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        create_tag(storage.as_ref(), "mytag", id.clone(), false).await?;
+        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+            .await?;
 
-        let back = fetch_tag(storage.as_ref(), "non-existing-tag").await;
+        let back =
+            fetch_tag(storage.as_ref(), &storage_settings, "non-existing-tag").await;
         assert!(matches!(back, Err(RefError::RefNotFound(r)) if r == "non-existing-tag"));
         Ok(())
     })
@@ -172,10 +203,14 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 #[tokio::test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        create_tag(storage.as_ref(), "mytag", id.clone(), false).await?;
+        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+            .await?;
 
-        let res = create_tag(storage.as_ref(), "mytag", id.clone(), false).await;
+        let res =
+            create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+                .await;
         assert!(matches!(res, Err(RefError::TagAlreadyExists(r)) if r == "mytag"));
         Ok(())
     })
@@ -186,13 +221,22 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
 #[tokio::test]
 pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
 
-        let res = update_branch(storage.as_ref(), "some-branch", id.clone(), None, false)
-            .await?;
+        let res = update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "some-branch",
+            id.clone(),
+            None,
+            false,
+        )
+        .await?;
         assert_eq!(res.0, 0);
 
-        let res = fetch_branch_tip(storage.as_ref(), "some-branch").await?;
+        let res =
+            fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
         assert_eq!(res.snapshot, id);
 
         Ok(())
@@ -204,10 +248,21 @@ pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Erro
 #[tokio::test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        update_branch(storage.as_ref(), "some-branch", id.clone(), None, false).await?;
+        update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "some-branch",
+            id.clone(),
+            None,
+            false,
+        )
+        .await?;
 
-        let back = fetch_branch_tip(storage.as_ref(), "non-existing-branch").await;
+        let back =
+            fetch_branch_tip(storage.as_ref(), &storage_settings, "non-existing-branch")
+                .await;
         assert!(
             matches!(back, Err(RefError::RefNotFound(r)) if r == "non-existing-branch")
         );
@@ -220,17 +275,25 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 #[tokio::test]
 pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id1 = SnapshotId::random();
         let id2 = SnapshotId::random();
         let id3 = SnapshotId::random();
 
-        let res =
-            update_branch(storage.as_ref(), "some-branch", id1.clone(), None, false)
-                .await?;
+        let res = update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "some-branch",
+            id1.clone(),
+            None,
+            false,
+        )
+        .await?;
         assert_eq!(res.0, 0);
 
         let res = update_branch(
             storage.as_ref(),
+            &storage_settings,
             "some-branch",
             id2.clone(),
             Some(&id1),
@@ -241,6 +304,7 @@ pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
 
         let res = update_branch(
             storage.as_ref(),
+            &storage_settings,
             "some-branch",
             id3.clone(),
             Some(&id2),
@@ -249,7 +313,8 @@ pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
         assert_eq!(res.0, 2);
 
-        let res = fetch_branch_tip(storage.as_ref(), "some-branch").await?;
+        let res =
+            fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
         assert_eq!(res.snapshot, id3);
 
         Ok(())
@@ -261,16 +326,58 @@ pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let id1 = SnapshotId::random();
         let id2 = SnapshotId::random();
-        update_branch(storage.as_ref(), "main", id1.clone(), None, false).await?;
-        update_branch(storage.as_ref(), "main", id2.clone(), Some(&id1), false).await?;
-        update_branch(storage.as_ref(), "foo", id1.clone(), None, false).await?;
-        update_branch(storage.as_ref(), "bar", id1.clone(), None, false).await?;
-        create_tag(storage.as_ref(), "my-tag", id1.clone(), false).await?;
-        create_tag(storage.as_ref(), "my-other-tag", id1.clone(), false).await?;
+        update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "main",
+            id1.clone(),
+            None,
+            false,
+        )
+        .await?;
+        update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "main",
+            id2.clone(),
+            Some(&id1),
+            false,
+        )
+        .await?;
+        update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "foo",
+            id1.clone(),
+            None,
+            false,
+        )
+        .await?;
+        update_branch(
+            storage.as_ref(),
+            &storage_settings,
+            "bar",
+            id1.clone(),
+            None,
+            false,
+        )
+        .await?;
+        create_tag(storage.as_ref(), &storage_settings, "my-tag", id1.clone(), false)
+            .await?;
+        create_tag(
+            storage.as_ref(),
+            &storage_settings,
+            "my-other-tag",
+            id1.clone(),
+            false,
+        )
+        .await?;
 
-        let res: HashSet<_> = HashSet::from_iter(list_refs(storage.as_ref()).await?);
+        let res: HashSet<_> =
+            HashSet::from_iter(list_refs(storage.as_ref(), &storage_settings).await?);
         assert_eq!(
             res,
             HashSet::from_iter([
@@ -290,10 +397,11 @@ pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
-        let etag = storage.update_config(config.clone(), None).await?;
+        let etag = storage.update_config(&storage_settings, config.clone(), None).await?;
         assert_ne!(etag, "");
-        let res = storage.fetch_config().await?;
+        let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
             matches!(res, Some((bytes, actual_etag)) if actual_etag == etag && bytes == config )
         );
@@ -305,11 +413,12 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 #[tokio::test]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
-        let first_etag = storage.update_config(Bytes::copy_from_slice(b"hello"), None).await?;
+        let storage_settings = storage.default_settings();
+        let first_etag = storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), None).await?;
         let config = Bytes::copy_from_slice(b"bye");
-        let second_etag = storage.update_config(config.clone(), Some(first_etag.as_str())).await?;
+        let second_etag = storage.update_config(&storage_settings, config.clone(), Some(first_etag.as_str())).await?;
         assert_ne!(second_etag, first_etag);
-        let res = storage.fetch_config().await?;
+        let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
             matches!(res, Some((bytes, actual_etag)) if actual_etag == second_etag && bytes == config )
         );
@@ -324,8 +433,10 @@ pub async fn test_write_config_fails_on_bad_etag_when_non_existing(
     // FIXME: this test fails in MiniIO but seems to work on S3
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().unwrap();
+    let storage_settings = storage.default_settings();
     let etag = storage
         .update_config(
+            &storage_settings,
             Bytes::copy_from_slice(b"hello"),
             Some("00000000000000000000000000000000"),
         )
@@ -339,17 +450,18 @@ pub async fn test_write_config_fails_on_bad_etag_when_non_existing(
 pub async fn test_write_config_fails_on_bad_etag_when_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
+        let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
-        let etag = storage.update_config(config.clone(), None).await?;
+        let etag = storage.update_config(&storage_settings, config.clone(), None).await?;
         let res = storage
-            .update_config(
+            .update_config(&storage_settings,
                 Bytes::copy_from_slice(b"bye"),
                 Some("00000000000000000000000000000000"),
             )
             .await;
         assert!(matches!(res, Err(StorageError::ConfigUpdateConflict)));
 
-        let res = storage.fetch_config().await?;
+        let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
             matches!(res, Some((bytes, actual_etag)) if actual_etag == etag && bytes == config )
         );

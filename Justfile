@@ -49,3 +49,14 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
 pre-commit-python:
   just format "--check -p icechunk-python"
   just lint "-p icechunk-python"
+
+bench-compare *args:
+  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
+
+create-deepak-env name:
+  mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
+  mamba activate icechunk-{{name}}
+  just coiled-ice-create {{name}}
+
+coiled-ice-create version:
+  pip install coiled arraylake icechunk=='{{version}}' watermark xarray bokeh

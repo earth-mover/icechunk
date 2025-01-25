@@ -1,5 +1,7 @@
 from typing import cast
 
+import pytest
+
 import icechunk as ic
 import zarr
 import zarr.core
@@ -19,7 +21,7 @@ def test_timetravel() -> None:
 
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array(
-        "air_temp", shape=(1000, 1000), chunk_shape=(100, 100), dtype="i4"
+        "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
     )
 
     air_temp[:, :] = 42
@@ -38,14 +40,14 @@ def test_timetravel() -> None:
 
     new_snapshot_id = session.commit("commit 2")
 
-    session = repo.readonly_session(snapshot_id=snapshot_id)
+    session = repo.readonly_session(snapshot=snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
-    session = repo.readonly_session(snapshot_id=new_snapshot_id)
+    session = repo.readonly_session(snapshot=new_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
@@ -86,6 +88,7 @@ def test_timetravel() -> None:
     assert branches == set(["main"])
 
     repo.create_tag("v1.0", feature_snapshot_id)
+    repo.create_branch("feature-not-dead", feature_snapshot_id)
     session = repo.readonly_session(tag="v1.0")
     store = session.store
     assert store._read_only
@@ -95,7 +98,7 @@ def test_timetravel() -> None:
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert air_temp[200, 6] == 90
 
-    parents = list(repo.ancestry(feature_snapshot_id))
+    parents = list(repo.ancestry(snapshot=feature_snapshot_id))
     assert [snap.message for snap in parents] == [
         "commit 3",
         "commit 2",
@@ -104,6 +107,8 @@ def test_timetravel() -> None:
     ]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
+    assert list(repo.ancestry(tag="v1.0")) == parents
+    assert list(repo.ancestry(branch="feature-not-dead")) == parents
 
     tags = repo.list_tags()
     assert tags == set(["v1.0"])
@@ -149,3 +154,20 @@ async def test_branch_reset() -> None:
     assert (
         await store.get("b/zarr.json", zarr.core.buffer.default_buffer_prototype())
     ) is None
+
+
+async def test_tag_delete() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    snap = repo.lookup_branch("main")
+    print(snap)
+    repo.create_tag("tag", snap)
+    repo.delete_tag("tag")
+
+    with pytest.raises(ValueError):
+        repo.delete_tag("tag")
+
+    with pytest.raises(ValueError):
+        repo.create_tag("tag", snap)

@@ -41,9 +41,9 @@ jobs:
             manylinux: 2_28
     steps:
       - uses: actions/checkout@v4
-      - name: Stand up MinIO
+      - name: Stand up docker services
         run: |
-          docker compose up -d minio
+          docker compose up -d
       - name: Wait for MinIO to be ready
         run: |
           for _ in {1..10}; do

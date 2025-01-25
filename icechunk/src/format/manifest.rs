@@ -1,6 +1,11 @@
-use futures::{pin_mut, Stream, TryStreamExt};
+use ::futures::{pin_mut, Stream, TryStreamExt};
 use itertools::Itertools;
-use std::{collections::BTreeMap, ops::Bound, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    convert::Infallible,
+    ops::{Bound, Range},
+    sync::Arc,
+};
 use thiserror::Error;
 
 use bytes::Bytes;
@@ -9,12 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::storage::ETag;
 
 use super::{
-    format_constants, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
+    format_constants::SpecVersionBin, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
     IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestExtents(pub Vec<ChunkIndices>);
+type ManifestExtents = Range<ChunkIndices>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRef {
@@ -41,6 +45,8 @@ pub enum VirtualReferenceError {
     FetchError(Box<dyn std::error::Error + Send + Sync>),
     #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
     ObjectModified(String),
+    #[error("error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})")]
+    InvalidObjectSize { expected: u64, available: u64 },
     #[error("error parsing virtual reference {0}")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -116,59 +122,92 @@ pub struct ChunkInfo {
     pub payload: ChunkPayload,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq)]
 pub struct Manifest {
     pub icechunk_manifest_format_version: IcechunkFormatVersion,
     pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
-    chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
+    pub id: ManifestId,
+    pub(crate) chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
+}
+
+impl Default for Manifest {
+    fn default() -> Self {
+        Self {
+            icechunk_manifest_format_version: Default::default(),
+            icechunk_manifest_format_flags: Default::default(),
+            id: ManifestId::random(),
+            chunks: Default::default(),
+        }
+    }
 }
 
 impl Manifest {
     pub fn get_chunk_payload(
         &self,
         node: &NodeId,
-        coord: ChunkIndices,
+        coord: &ChunkIndices,
     ) -> IcechunkResult<&ChunkPayload> {
-        self.chunks.get(&(node.clone(), coord)).ok_or_else(|| {
-            // FIXME: error
-            IcechunkFormatError::ChunkCoordinatesNotFound { coords: ChunkIndices(vec![]) }
+        self.chunks.get(node).and_then(|m| m.get(coord)).ok_or_else(|| {
+            IcechunkFormatError::ChunkCoordinatesNotFound { coords: coord.clone() }
         })
     }
 
     pub fn iter(
         self: Arc<Self>,
         node: NodeId,
-        ndim: usize,
     ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
-        PayloadIterator { manifest: self, for_node: node, ndim, last_key: None }
+        PayloadIterator { manifest: self, for_node: node, last_key: None }
     }
 
-    pub fn new(chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>) -> Self {
+    pub fn new(chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>) -> Self {
         Self {
             chunks,
-            icechunk_manifest_format_version:
-                format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+            icechunk_manifest_format_version: SpecVersionBin::current() as u8,
             icechunk_manifest_format_flags: Default::default(),
+            id: ManifestId::random(),
         }
     }
 
     pub async fn from_stream<E>(
-        chunks: impl Stream<Item = Result<ChunkInfo, E>>,
-    ) -> Result<Self, E> {
-        let mut chunk_map = BTreeMap::new();
-        pin_mut!(chunks);
-        while let Some(chunk) = chunks.try_next().await? {
-            chunk_map.insert((chunk.node, chunk.coord), chunk.payload);
+        stream: impl Stream<Item = Result<ChunkInfo, E>>,
+    ) -> Result<Option<Self>, E> {
+        pin_mut!(stream);
+        let mut chunk_map: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>> =
+            BTreeMap::new();
+        while let Some(chunk) = stream.try_next().await? {
+            // This could be done with BTreeMap.entry instead, but would require cloning both keys
+            match chunk_map.get_mut(&chunk.node) {
+                Some(m) => {
+                    m.insert(chunk.coord, chunk.payload);
+                }
+                None => {
+                    chunk_map.insert(
+                        chunk.node,
+                        BTreeMap::from([(chunk.coord, chunk.payload)]),
+                    );
+                }
+            };
         }
-        Ok(Self::new(chunk_map))
+        if chunk_map.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Self::new(chunk_map)))
+        }
     }
 
-    pub fn chunks(&self) -> &BTreeMap<(NodeId, ChunkIndices), ChunkPayload> {
-        &self.chunks
+    /// Used for tests
+    pub async fn from_iter<T: IntoIterator<Item = ChunkInfo>>(
+        iter: T,
+    ) -> Result<Option<Self>, Infallible> {
+        Self::from_stream(futures::stream::iter(iter.into_iter().map(Ok))).await
+    }
+
+    pub fn chunk_payloads(&self) -> impl Iterator<Item = &ChunkPayload> {
+        self.chunks.values().flat_map(|m| m.values())
     }
 
     pub fn len(&self) -> usize {
-        self.chunks.len()
+        self.chunks.values().map(|m| m.len()).sum()
     }
 
     #[must_use]
@@ -177,69 +216,45 @@ impl Manifest {
     }
 }
 
-impl FromIterator<ChunkInfo> for Manifest {
-    fn from_iter<T: IntoIterator<Item = ChunkInfo>>(iter: T) -> Self {
-        let chunks = iter
-            .into_iter()
-            .map(|chunk| ((chunk.node, chunk.coord), chunk.payload))
-            .collect();
-        Self::new(chunks)
-    }
-}
-
 struct PayloadIterator {
     manifest: Arc<Manifest>,
     for_node: NodeId,
-    ndim: usize,
-    // last_key maintains state of the iterator
-    last_key: Option<(NodeId, ChunkIndices)>,
+    last_key: Option<ChunkIndices>,
 }
 
 impl Iterator for PayloadIterator {
     type Item = (ChunkIndices, ChunkPayload);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // TODO: tie the MAX to the type in ChunkIndices.
-        let upper_bound =
-            ChunkIndices(itertools::repeat_n(u32::MAX, self.ndim).collect());
-        match &self.last_key {
-            None => {
-                if let Some((k @ (_, coord), payload)) = self
-                    .manifest
-                    .chunks
-                    .range((
-                        Bound::Included((self.for_node.clone(), ChunkIndices(vec![]))),
-                        Bound::Included((self.for_node.clone(), upper_bound)),
-                    ))
-                    .next()
-                {
-                    self.last_key = Some(k.clone());
-                    Some((coord.clone(), payload.clone()))
-                } else {
-                    None
+        if let Some(map) = self.manifest.chunks.get(&self.for_node) {
+            match &self.last_key {
+                None => {
+                    if let Some((coord, payload)) = map.iter().next() {
+                        self.last_key = Some(coord.clone());
+                        Some((coord.clone(), payload.clone()))
+                    } else {
+                        None
+                    }
+                }
+                Some(last_key) => {
+                    if let Some((coord, payload)) =
+                        map.range((Bound::Excluded(last_key), Bound::Unbounded)).next()
+                    {
+                        self.last_key = Some(coord.clone());
+                        Some((coord.clone(), payload.clone()))
+                    } else {
+                        None
+                    }
                 }
             }
-            Some(last_key) => {
-                if let Some((k @ (_, coord), payload)) = self
-                    .manifest
-                    .chunks
-                    .range((
-                        Bound::Excluded(last_key.clone()),
-                        Bound::Included((self.for_node.clone(), upper_bound)),
-                    ))
-                    .next()
-                {
-                    self.last_key = Some(k.clone());
-                    Some((coord.clone(), payload.clone()))
-                } else {
-                    None
-                }
-            }
+        } else {
+            None
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
 
     use std::error::Error;
@@ -282,8 +297,8 @@ mod tests {
                 length: 4,
             }),
         };
-        let manifest: Arc<Manifest> = Arc::new(vec![chunk1].into_iter().collect());
-        let chunks = manifest.iter(array_ids[0].clone(), 3).collect::<Vec<_>>();
+        let manifest = Manifest::from_iter(vec![chunk1]).await?.unwrap();
+        let chunks = Arc::new(manifest).iter(array_ids[0].clone()).collect::<Vec<_>>();
         assert_eq!(chunks, vec![]);
 
         Ok(())

@@ -1,7 +1,12 @@
 # module
 
 from icechunk._icechunk_python import (
+    AzureCredentials,
+    AzureStaticCredentials,
     BasicConflictSolver,
+    CachingConfig,
+    CompressionAlgorithm,
+    CompressionConfig,
     Conflict,
     ConflictDetector,
     ConflictErrorData,
@@ -19,15 +24,22 @@ from icechunk._icechunk_python import (
     S3StaticCredentials,
     SnapshotMetadata,
     Storage,
+    StorageConcurrencySettings,
+    StorageSettings,
     VersionSelection,
     VirtualChunkContainer,
     __version__,
 )
 from icechunk.credentials import (
+    AnyAzureCredential,
+    AnyAzureStaticCredential,
     AnyCredential,
     AnyGcsCredential,
     AnyGcsStaticCredential,
     AnyS3Credential,
+    azure_credentials,
+    azure_from_env_credentials,
+    azure_static_credentials,
     containers_credentials,
     gcs_credentials,
     gcs_from_env_credentials,
@@ -42,21 +54,30 @@ from icechunk.repository import Repository
 from icechunk.session import ConflictError, RebaseFailedError, Session
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    azure_storage,
     gcs_storage,
     in_memory_storage,
     local_filesystem_storage,
     s3_storage,
     s3_store,
+    tigris_storage,
 )
 from icechunk.store import IcechunkStore
 
 __all__ = [
+    "AnyAzureCredential",
+    "AnyAzureStaticCredential",
     "AnyCredential",
     "AnyGcsCredential",
     "AnyGcsStaticCredential",
     "AnyObjectStoreConfig",
     "AnyS3Credential",
+    "AzureCredentials",
+    "AzureStaticCredentials",
     "BasicConflictSolver",
+    "CachingConfig",
+    "CompressionAlgorithm",
+    "CompressionConfig",
     "Conflict",
     "ConflictDetector",
     "ConflictError",
@@ -79,9 +100,15 @@ __all__ = [
     "Session",
     "SnapshotMetadata",
     "Storage",
+    "StorageConcurrencySettings",
+    "StorageSettings",
     "VersionSelection",
     "VirtualChunkContainer",
     "__version__",
+    "azure_credentials",
+    "azure_from_env_credentials",
+    "azure_static_credentials",
+    "azure_storage",
     "containers_credentials",
     "gcs_credentials",
     "gcs_from_env_credentials",
@@ -97,4 +124,5 @@ __all__ = [
     "s3_static_credentials",
     "s3_storage",
     "s3_store",
+    "tigris_storage",
 ]

@@ -55,7 +55,7 @@ def v3_group_metadata(draw):
 
 
 @st.composite
-def v3_array_metadata(draw):
+def v3_array_metadata(draw: st.DrawFn) -> bytes:
     from zarr.codecs.bytes import BytesCodec
     from zarr.core.chunk_grids import RegularChunkGrid
     from zarr.core.chunk_key_encodings import DefaultChunkKeyEncoding
@@ -127,11 +127,20 @@ class Model:
         Branches: {tuple(self.branches.keys())!r}
         Tags: {tuple(self.tags.keys())!r}""").strip("\n")
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: Buffer) -> None:
+        # Icechunk doesn't overwrite docs with the same value
+        # and we need to keep `changes_made` in sync.
+        # Icechunk checks after decoding the metadata to rust Structs so we must do the same.
+        # Different byte strings can decode to the same json dict (order of user attributes may be different)
+        if key in self.store and json.loads(self.store[key].to_bytes()) == json.loads(
+            value.to_bytes()
+        ):
+            note(f"skipping setting {key!r}, value is unchanged")
+            return
         self.changes_made = True
         self.store[key] = value
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Buffer:
         return self.store[key]
 
     @property
@@ -249,7 +258,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=commits)
     def checkout_commit(self, ref):
         note(f"Checking out commit {ref}")
-        self.session = self.repo.readonly_session(snapshot_id=ref)
+        self.session = self.repo.readonly_session(snapshot=ref)
         assert self.session.read_only
         self.model.checkout_commit(ref)
 
@@ -336,16 +345,21 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.session = self.repo.writable_session(branch)
             self.model.checkout_branch(branch)
 
-    # @rule(branch=consumes(branches))
-    # def delete_branch(self, branch):
-    #     note(f"Deleting branch {branch!r}")
-    #     if branch in self.model.branches:
-    #         self.repo.delete_branch(branch)
-    #         self.model.delete_branch(branch)
-    #     else:
-    #         note("Expecting error.")
-    #         with pytest.raises(ValueError):
-    #             self.repo.delete_branch(branch)
+    #     @rule(branch=consumes(branches))
+    #     def delete_branch(self, branch):
+    #         note(f"Deleting branch {branch!r}")
+    #         if branch in self.model.branches:
+    #             if branch == "main":
+    #                 note("Expecting error.")
+    #                 with pytest.raises(IcechunkError):
+    #                     self.repo.delete_branch(branch)
+    #             else:
+    #                 self.repo.delete_branch(branch)
+    #                 self.model.delete_branch(branch)
+    #         else:
+    #             note("Expecting error.")
+    #             with pytest.raises(IcechunkError):
+    #                 self.repo.delete_branch(branch)
 
     @invariant()
     def check_list_prefix_from_root(self):

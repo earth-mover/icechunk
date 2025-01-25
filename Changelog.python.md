@@ -1,5 +1,113 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0a15
+
+### Fixes
+
+- Add a constructor to `RepositoryConfig`
+
+## Python Icechunk Library 0.1.0a14
+
+### Features
+
+- Now each array has its own chunk manifest, speeding up reads for large repositories
+- The snapshot now keeps track of the chunk space bounding box for each manifest
+- Configuration settings can now be overridden in a field-by-field basis
+  Example:
+  ```python
+   config = icechunk.RepositoryConfig(inline_chunk_threshold_byte=0)
+   storage = ...
+
+   repo = icechunk.Repository.open(
+       storage=storage,
+       config=config,
+   )
+  ```
+  will use 0 for `inline_chunk_threshold_byte` but all other configuration fields will come from
+  the repository persistent config. If persistent config is not set, configuration defaults will
+  take its place.
+- In preparation for on-disk format stability, all metadata files include extensive format information;
+  including a set of magic bytes, file type, spec version, compression format, etc.
+
+### Performance
+
+- Zarr's `getsize` got orders of magnitude faster because it's implemented natively and with
+  no need of any I/O
+- We added several performance benchmarks to the repository
+- Better configuration for metadata asset caches, now based on their sizes instead of their number
+
+### Fixes
+
+- `from icechunk import *` no longer fails
+
+## Python Icechunk Library 0.1.0a12
+
+### Features
+
+- New `Repository.reopen` function to ope a repo again, overwriting its configuration and/or virtual chunk container credentials
+- Configuration classes are now mutable and easier to use:
+
+  ```python
+   storage = ...
+   config = icechunk.RepositoryConfig.default()
+   config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
+
+   repo = icechunk.Repository.open(
+       storage=storage,
+       config=config,
+   )
+- `ancestry` function can now receive a branch/tag name or a snapshot id
+- `set_virtual_ref` can now validate the virtual chunk container exists
+
+  ```
+
+### Performance
+
+- Better concurrent download of big chunks, both native and virtual
+
+### Fixes
+
+- We no longer allow `main` branch to be deleted
+
+## Python Icechunk Library 0.1.0a11
+
+### Features
+
+- Adds support for Azure Blob Storage
+
+### Performance
+
+- Manifests now load faster, due to an improved serialization format
+
+### Fixes
+
+- The store now releases the GIL appropriately in multithreaded contexts
+
+## Python Icechunk Library 0.1.0a10
+
+### Features
+
+- Large chunks are fetched concurrently
+- `IcechunkStore.list_dir` is now significantly faster
+- Support for Zarr 3.0 and xarray 2025.1.1
+- Transaction logs and snapshot files are compressed
+
+## Python Icechunk Library 0.1.0a9
+
+### Features
+
+- Manifests compression using Zstd
+- Large manifests are fetched using multiple parallel requests
+- Functions to fetch and store repository config
+
+### Performance
+
+- Faster `list_dir` and `delete_dir` implementations in the Zarr store
+
+### Fixes
+
+- Credentials from environment in GCS
+
 ## Python Icechunk Library 0.1.0a8
 
 ### Features

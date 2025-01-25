@@ -56,7 +56,9 @@ async def test_write_minio_virtual_refs() -> None:
     session = repo.writable_session("main")
     store = session.store
 
-    array = zarr.Array.create(store, shape=(5, 1, 3), chunk_shape=(1, 1, 1), dtype="i4")
+    array = zarr.create_array(
+        store, shape=(5, 1, 3), chunks=(1, 1, 1), dtype="i4", compressors=None
+    )
 
     # We add the virtual chunk refs without checksum, with the right etag, and with the wrong wrong etag and datetime.
     # This way we can check retrieval operations that should fail
@@ -132,11 +134,21 @@ async def test_write_minio_virtual_refs() -> None:
         "c/0/0/2", f"s3://testbucket/{prefix}/non-existing", offset=1, length=4
     )
 
+    # can validate virtual chunk containers
+    with pytest.raises(IcechunkError, match="invalid chunk location"):
+        store.set_virtual_ref(
+            "c/0/0/2",
+            f"bad://testbucket/{prefix}/non-existing",
+            offset=1,
+            length=4,
+            validate_container=True,
+        )
+
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
     assert first is not None
-    assert first.to_bytes() == b"firs"
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
     assert await store.get("c/1/0/0", prototype=buffer_prototype) == first
     assert await store.get("c/4/0/0", prototype=buffer_prototype) == first
 
@@ -198,7 +210,7 @@ async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
     year = root.require_array(
-        name="year", shape=((72,)), chunk_shape=((72,)), dtype="float32"
+        name="year", shape=((72,)), chunks=((72,)), dtype="float32", compressors=None
     )
 
     store.set_virtual_ref(

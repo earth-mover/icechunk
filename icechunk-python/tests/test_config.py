@@ -24,16 +24,46 @@ def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     yield store, repo_path
 
 
+def test_config_fetch() -> None:
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
+    storage = icechunk.in_memory_storage()
+    repo = icechunk.Repository.create(
+        storage=storage,
+        config=config,
+    )
+
+    assert repo.config == config
+    assert icechunk.Repository.fetch_config(storage) == config
+
+
+def test_config_save() -> None:
+    config = icechunk.RepositoryConfig.default()
+    storage = icechunk.in_memory_storage()
+    repo = icechunk.Repository.create(
+        storage=storage,
+    )
+
+    config.inline_chunk_threshold_bytes = 5
+    repo = icechunk.Repository.open(
+        storage=storage,
+        config=config,
+    )
+
+    assert icechunk.Repository.fetch_config(storage) != config
+    repo.save_config()
+    assert icechunk.Repository.fetch_config(storage) == config
+
+
 def test_no_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]
-    array = zarr.open_array(
+    array = zarr.create_array(
         store=store,
-        mode="a",
         shape=(10),
         dtype="int64",
         zarr_format=3,
-        chunk_shape=(1),
+        chunks=(1,),
         fill_value=-1,
     )
     array[:] = 42
@@ -48,15 +78,15 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     store = tmp_store[0]
     store_path = tmp_store[1]
 
-    inline_array = zarr.open_array(
+    inline_array = zarr.create_array(
         store=store,
-        mode="a",
-        path="inline",
+        name="inline",
         shape=(10),
         dtype="int32",
         zarr_format=3,
-        chunk_shape=(1),
+        chunks=(1,),
         fill_value=-1,
+        compressors=None,
     )
 
     inline_array[:] = 9
@@ -65,15 +95,15 @@ def test_inline_chunks(tmp_store: tuple[icechunk.IcechunkStore, str]) -> None:
     # inline_chunk_threshold is 40, we should have no chunks directory
     assert not os.path.isdir(f"{store_path}/chunks")
 
-    written_array = zarr.open_array(
+    written_array = zarr.create_array(
         store=store,
-        mode="a",
-        path="not_inline",
+        name="not_inline",
         shape=(10),
         dtype="int64",
         zarr_format=3,
-        chunk_shape=(1),
+        chunks=(1,),
         fill_value=-1,
+        compressors=None,
     )
 
     written_array[:] = 3
@@ -95,6 +125,10 @@ def test_virtual_chunk_containers() -> None:
     )
     container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
     config.set_virtual_chunk_container(container)
+    assert (
+        repr(config)
+        == r"RepositoryConfig(inline_chunk_threshold_bytes=None, unsafe_overwrite_refs=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None)"
+    )
     assert len(config.virtual_chunk_containers) > 1
     found_cont = [
         cont
@@ -113,3 +147,39 @@ def test_virtual_chunk_containers() -> None:
         if name == "custom"
     ]
     assert found_cont == [container]
+
+
+def test_can_change_deep_config_values() -> None:
+    storage = icechunk.in_memory_storage()
+    repo = icechunk.Repository.create(
+        storage=storage,
+    )
+    config = icechunk.RepositoryConfig(
+        inline_chunk_threshold_bytes=11,
+        unsafe_overwrite_refs=False,
+        compression=icechunk.CompressionConfig(level=0),
+    )
+    config.inline_chunk_threshold_bytes = 5
+    config.unsafe_overwrite_refs = True
+    config.get_partial_values_concurrency = 42
+    config.compression = icechunk.CompressionConfig(level=8)
+    config.compression.level = 2
+    config.caching = icechunk.CachingConfig(num_chunk_refs=8)
+    config.storage = storage.default_settings()
+    config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
+
+    assert (
+        repr(config)
+        == r"RepositoryConfig(inline_chunk_threshold_bytes=5, unsafe_overwrite_refs=True, get_partial_values_concurrency=42, compression=CompressionConfig(algorithm=None, level=2), caching=CachingConfig(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None), storage=StorageSettings(concurrency=StorageConcurrencySettings(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000)))"
+    )
+    repo = icechunk.Repository.open(
+        storage=storage,
+        config=config,
+    )
+    repo.save_config()
+
+    stored_config = icechunk.Repository.fetch_config(storage)
+    assert stored_config.inline_chunk_threshold_bytes == 5
+    assert stored_config.compression.level == 2
+    assert stored_config.caching.num_chunk_refs == 8
+    assert stored_config.storage.concurrency.ideal_concurrent_request_size == 1_000_000

@@ -51,41 +51,134 @@ class VirtualChunkContainer:
 
     def __init__(self, name: str, url_prefix: str, store: AnyObjectStoreConfig): ...
 
-class RepositoryConfig:
-    """Configuration for an Icechunk repository"""
+class CompressionAlgorithm(Enum):
+    """Enum for selecting the compression algorithm used by Icechunk to write its metadata files"""
+
+    Zstd = 0
+
+    def __init__(self) -> None: ...
+    @staticmethod
+    def default() -> CompressionAlgorithm: ...
+
+class CompressionConfig:
+    """Configuration for how Icechunk compresses its metadata files"""
+
+    def __init__(
+        self, algorithm: CompressionAlgorithm | None, level: int | None
+    ) -> None: ...
+    @property
+    def algorithm(self) -> CompressionAlgorithm | None: ...
+    @algorithm.setter
+    def algorithm(self, value: CompressionAlgorithm | None) -> None: ...
+    @property
+    def level(self) -> int | None: ...
+    @level.setter
+    def level(self, value: int | None) -> None: ...
+    @staticmethod
+    def default() -> CompressionConfig: ...
+
+class CachingConfig:
+    """Configuration for how Icechunk caches its metadata files"""
+
     def __init__(
         self,
-        *,
-        inline_chunk_threshold_bytes: int = 512,
-        unsafe_overwrite_refs: bool = False,
-    ) -> None:
-        """
-        Create a RepositoryConfig object with the given configuration options
+        num_snapshot_nodes: int | None,
+        num_chunk_refs: int | None,
+        num_transaction_changes: int | None,
+        num_bytes_attributes: int | None,
+        num_bytes_chunks: int | None,
+    ) -> None: ...
+    @property
+    def num_snapshot_nodes(self) -> int | None: ...
+    @num_snapshot_nodes.setter
+    def num_snapshot_nodes(self, value: int | None) -> None: ...
+    @property
+    def num_chunk_refs(self) -> int | None: ...
+    @num_chunk_refs.setter
+    def num_chunk_refs(self, value: int | None) -> None: ...
+    @property
+    def num_transaction_changes(self) -> int | None: ...
+    @num_transaction_changes.setter
+    def num_transaction_changes(self, value: int | None) -> None: ...
+    @property
+    def num_bytes_attributes(self) -> int | None: ...
+    @num_bytes_attributes.setter
+    def num_bytes_attributes(self, value: int | None) -> None: ...
+    @property
+    def num_bytes_chunks(self) -> int | None: ...
+    @num_bytes_chunks.setter
+    def num_bytes_chunks(self, value: int | None) -> None: ...
+    @staticmethod
+    def default() -> CachingConfig: ...
 
-        Parameters
-        ----------
-        inline_chunk_threshold_bytes: int
-            The threshold in bytes for when to inline chunks instead of storing them as references
-        unsafe_overwrite_refs: bool
-        """
-        ...
+class StorageConcurrencySettings:
+    """Configuration for how Icechunk uses its Storage instance"""
 
+    def __init__(
+        self,
+        max_concurrent_requests_for_object: int | None,
+        ideal_concurrent_request_size: int | None,
+    ) -> None: ...
+    @property
+    def max_concurrent_requests_for_object(self) -> int | None: ...
+    @max_concurrent_requests_for_object.setter
+    def max_concurrent_requests_for_object(self, value: int | None) -> None: ...
+    @property
+    def ideal_concurrent_request_size(self) -> int | None: ...
+    @ideal_concurrent_request_size.setter
+    def ideal_concurrent_request_size(self, value: int | None) -> None: ...
+
+class StorageSettings:
+    """Configuration for how Icechunk uses its Storage instance"""
+
+    def __init__(self, concurrency: StorageConcurrencySettings | None) -> None: ...
+    @property
+    def concurrency(self) -> StorageConcurrencySettings | None: ...
+    @concurrency.setter
+    def concurrency(self, value: StorageConcurrencySettings | None) -> None: ...
+
+class RepositoryConfig:
+    """Configuration for an Icechunk repository"""
+
+    def __init__(
+        self,
+        inline_chunk_threshold_bytes: int | None,
+        unsafe_overwrite_refs: bool | None,
+        get_partial_values_concurrency: int | None,
+        compression: CompressionConfig | None,
+        caching: CachingConfig | None,
+        storage: StorageSettings | None,
+        virtual_chunk_containers: dict[str, VirtualChunkContainer] | None,
+    ) -> None: ...
     @staticmethod
     def default() -> RepositoryConfig: ...
     @property
-    def inline_chunk_threshold_bytes(self) -> int: ...
+    def inline_chunk_threshold_bytes(self) -> int | None: ...
     @inline_chunk_threshold_bytes.setter
-    def inline_chunk_threshold_bytes(self, value: int) -> None: ...
+    def inline_chunk_threshold_bytes(self, value: int | None) -> None: ...
     @property
-    def unsafe_overwrite_refs(self) -> bool: ...
+    def unsafe_overwrite_refs(self) -> bool | None: ...
     @unsafe_overwrite_refs.setter
-    def unsafe_overwrite_refs(self, value: bool) -> None: ...
+    def unsafe_overwrite_refs(self, value: bool | None) -> None: ...
     @property
-    def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer]: ...
-    @virtual_chunk_containers.setter
-    def virtual_chunk_containers(
-        self, value: dict[str, VirtualChunkContainer]
-    ) -> None: ...
+    def get_partial_values_concurrency(self) -> int | None: ...
+    @get_partial_values_concurrency.setter
+    def get_partial_values_concurrency(self, value: int | None) -> None: ...
+    @property
+    def compression(self) -> CompressionConfig | None: ...
+    @compression.setter
+    def compression(self, value: CompressionConfig | None) -> None: ...
+    @property
+    def caching(self) -> CachingConfig | None: ...
+    @caching.setter
+    def caching(self, value: CachingConfig | None) -> None: ...
+    @property
+    def storage(self) -> Storage | None: ...
+    @storage.setter
+    def storage(self, value: Storage | None) -> None: ...
+    @property
+    def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer] | None: ...
+    def get_virtual_chunk_container(self, name: str) -> VirtualChunkContainer | None: ...
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
     def clear_virtual_chunk_containers(self) -> None: ...
 
@@ -116,12 +209,23 @@ class PyRepository:
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...
-    def ancestry(self, snapshot_id: str) -> list[SnapshotMetadata]: ...
+    @staticmethod
+    def fetch_config(storage: Storage) -> RepositoryConfig | None: ...
+    def save_config(self) -> None: ...
+    def config(self) -> RepositoryConfig: ...
+    def ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> list[SnapshotMetadata]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
     def lookup_branch(self, branch: str) -> str: ...
     def reset_branch(self, branch: str, snapshot_id: str) -> None: ...
     def delete_branch(self, branch: str) -> None: ...
+    def delete_tag(self, tag: str) -> None: ...
     def create_tag(self, tag: str, snapshot_id: str) -> None: ...
     def list_tags(self) -> set[str]: ...
     def lookup_tag(self, tag: str) -> str: ...
@@ -130,7 +234,7 @@ class PyRepository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot_id: str | None = None,
+        snapshot: str | None = None,
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
 
@@ -187,14 +291,7 @@ class PyStore:
         offset: int,
         length: int,
         checksum: str | datetime.datetime | None = None,
-    ) -> None: ...
-    async def async_set_virtual_ref(
-        self,
-        key: str,
-        location: str,
-        offset: int,
-        length: int,
-        checksum: str | datetime.datetime | None = None,
+        validate_container: bool = False,
     ) -> None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
@@ -208,6 +305,7 @@ class PyStore:
     def list(self) -> PyAsyncStringGenerator: ...
     def list_prefix(self, prefix: str) -> PyAsyncStringGenerator: ...
     def list_dir(self, prefix: str) -> PyAsyncStringGenerator: ...
+    async def getsize(self, key: str) -> int: ...
 
 class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
@@ -297,6 +395,31 @@ class GcsCredentials:
 
 AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
 
+class AzureStaticCredentials:
+    class AccessKey:
+        def __init__(self, key: str) -> None: ...
+
+    class SasToken:
+        def __init__(self, token: str) -> None: ...
+
+    class BearerToken:
+        def __init__(self, token: str) -> None: ...
+
+AnyAzureStaticCredential = (
+    AzureStaticCredentials.AccessKey
+    | AzureStaticCredentials.SasToken
+    | AzureStaticCredentials.BearerToken
+)
+
+class AzureCredentials:
+    class FromEnv:
+        def __init__(self) -> None: ...
+
+    class Static:
+        def __init__(self, credentials: AnyAzureStaticCredential) -> None: ...
+
+AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+
 class Credentials:
     class S3:
         def __init__(self, credentials: AnyS3Credential) -> None: ...
@@ -304,21 +427,24 @@ class Credentials:
     class Gcs:
         def __init__(self, credentials: GcsCredentials) -> None: ...
 
-AnyCredential = Credentials.S3 | Credentials.Gcs
+    class Azure:
+        def __init__(self, credentials: AzureCredentials) -> None: ...
+
+AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 class Storage:
     """Storage configuration for an IcechunkStore
 
-    Currently supports memory, filesystem, and S3 storage backends.
+    Currently supports memory, filesystem S3, azure blob, and google cloud storage backends.
     Use the class methods to create a StorageConfig object with the desired backend.
 
     Ex:
     ```
-    storage_config = StorageConfig.memory("prefix")
-    storage_config = StorageConfig.filesystem("/path/to/root")
-    storage_config = StorageConfig.object_store("s3://bucket/prefix", vec!["my", "options"])
-    storage_config = StorageConfig.s3_from_env("bucket", "prefix")
-    storage_config = StorageConfig.s3_from_config("bucket", "prefix", ...)
+    storage = icechunk.in_memory_storage("prefix")
+    storage = icechunk.local_filesystem_storage("/path/to/root")
+    storage = icechunk.s3_storage("bucket", "prefix", ...)
+    storage = icechunk.gcs_storage("bucket", "prefix", ...)
+    storage = icechunk.azure_storage("container", "prefix", ...)
     ```
     """
 
@@ -329,8 +455,14 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: AnyS3Credential | None = None,
-        max_concurrent_requests_for_object: int | None = None,
-        min_concurrent_request_size: int | None = None,
+    ) -> Storage: ...
+    @classmethod
+    def new_tigris(
+        cls,
+        config: S3Options,
+        bucket: str,
+        prefix: str | None,
+        credentials: AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -344,8 +476,15 @@ class Storage:
         credentials: AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
-        max_concurrent_requests_for_object: int | None = None,
-        min_concurrent_request_size: int | None = None,
+    ) -> Storage: ...
+    @classmethod
+    def new_azure_blob(
+        cls,
+        container: str,
+        prefix: str,
+        credentials: AnyAzureCredential | None = None,
+        *,
+        config: dict[str, str] | None = None,
     ) -> Storage: ...
 
 class VersionSelection(Enum):

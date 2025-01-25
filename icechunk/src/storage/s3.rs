@@ -1,6 +1,5 @@
 use std::{
     future::ready,
-    num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path, PathBuf},
     sync::{
@@ -9,6 +8,11 @@ use std::{
     },
 };
 
+use crate::{
+    config::{CredentialsFetcher, S3Credentials, S3Options},
+    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
+    private, Storage, StorageError,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use aws_config::{
@@ -24,26 +28,16 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 use futures::{
-    stream::{self, BoxStream, FuturesOrdered},
+    stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::OnceCell;
-
-use crate::{
-    config::{CredentialsFetcher, S3Credentials, S3Options},
-    format::{
-        attributes::AttributesTable, format_constants, manifest::Manifest,
-        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
-    },
-    private, Storage, StorageError,
-};
+use tokio::{io::AsyncRead, sync::OnceCell};
 
 use super::{
-    split_in_multiple_requests, ETag, ListInfo, StorageResult, CHUNK_PREFIX, CONFIG_PATH,
+    ETag, ListInfo, Reader, Settings, StorageResult, CHUNK_PREFIX, CONFIG_PATH,
     MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
@@ -54,8 +48,6 @@ pub struct S3Storage {
     credentials: S3Credentials,
     bucket: String,
     prefix: String,
-    max_concurrent_requests_for_object: u16,
-    min_concurrent_request_size: u64,
 
     #[serde(skip)]
     /// We need to use OnceCell to allow async initialization, because serde
@@ -118,8 +110,6 @@ impl S3Storage {
         bucket: String,
         prefix: Option<String>,
         credentials: S3Credentials,
-        max_concurrent_requests_for_object: Option<NonZeroU16>,
-        min_concurrent_request_size: Option<NonZeroU64>,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
         Ok(S3Storage {
@@ -128,16 +118,6 @@ impl S3Storage {
             bucket,
             prefix: prefix.unwrap_or_default(),
             credentials,
-            // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
-            // 8-16 MB requests
-            // 85-90 MB/s per request
-            // these numbers would saturate a 12.5 Gbps network
-            max_concurrent_requests_for_object: max_concurrent_requests_for_object
-                .map(|n| n.get())
-                .unwrap_or(18),
-            min_concurrent_request_size: min_concurrent_request_size
-                .map(|n| n.get())
-                .unwrap_or(12 * 1024 * 1024),
         })
     }
 
@@ -191,55 +171,14 @@ impl S3Storage {
         path.into_os_string().into_string().map_err(StorageError::BadPrefix)
     }
 
-    async fn get_object(&self, key: &str) -> StorageResult<Bytes> {
-        Ok(self
-            .get_client()
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await?
-            .body
-            .collect()
-            .await?
-            .into_bytes())
-    }
-
-    async fn get_object_range(
+    async fn get_object_reader(
         &self,
+        _settings: &Settings,
         key: &str,
-        range: &ByteRange,
-    ) -> StorageResult<Bytes> {
-        get_object_range(self.get_client().await, self.bucket.clone(), key, range).await
-    }
-
-    async fn get_object_concurrently(
-        &self,
-        key: &str,
-        size: u64,
-    ) -> StorageResult<Bytes> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client().await;
-        let mut results = split_in_multiple_requests(
-            size,
-            self.min_concurrent_request_size,
-            self.max_concurrent_requests_for_object,
-        )
-        .map(|(req_offset, req_size)| async move {
-            let range = ByteRange::from_offset_with_length(req_offset, req_size);
-            let key = key.to_string();
-            let client = Arc::clone(client);
-            let bucket = self.bucket.clone();
-            get_object_range(client.as_ref(), bucket, &key, &range).await
-        })
-        .collect::<FuturesOrdered<_>>();
-
-        let mut res = BytesMut::with_capacity(size as usize);
-        while let Some(bytes) = results.try_next().await? {
-            res.extend_from_slice(bytes.as_ref());
-        }
-
-        Ok(res.into())
+        let b = client.get_object().bucket(self.bucket.as_str()).key(key);
+        Ok(Box::new(b.send().await?.body.into_async_read()))
     }
 
     async fn put_object<
@@ -299,15 +238,8 @@ impl S3Storage {
     }
 }
 
-pub fn range_to_header(range: &ByteRange) -> Option<String> {
-    match range {
-        ByteRange::Bounded(Range { start, end }) => {
-            Some(format!("bytes={}-{}", start, end - 1))
-        }
-        ByteRange::From(offset) if *offset == 0 => None,
-        ByteRange::From(offset) => Some(format!("bytes={}-", offset)),
-        ByteRange::Last(n) => Some(format!("bytes={}-", n)),
-    }
+pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
+    format!("bytes={}-{}", range.start, range.end - 1)
 }
 
 impl private::Sealed for S3Storage {}
@@ -315,7 +247,10 @@ impl private::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
-    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+    async fn fetch_config(
+        &self,
+        _settings: &Settings,
+    ) -> StorageResult<Option<(Bytes, ETag)>> {
         let key = self.get_config_path()?;
         let res = self
             .get_client()
@@ -340,6 +275,7 @@ impl Storage for S3Storage {
 
     async fn update_config(
         &self,
+        _settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
     ) -> StorageResult<ETag> {
@@ -392,122 +328,92 @@ impl Storage for S3Storage {
         }
     }
 
-    async fn fetch_snapshot(&self, id: &SnapshotId) -> StorageResult<Arc<Snapshot>> {
+    async fn fetch_snapshot(
+        &self,
+        settings: &Settings,
+        id: &SnapshotId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let key = self.get_snapshot_path(id)?;
-        let bytes = self.get_object(key.as_str()).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        self.get_object_reader(settings, key.as_str()).await
     }
 
-    async fn fetch_attributes(
+    async fn fetch_manifest_known_size(
         &self,
-        _id: &AttributesId,
-    ) -> StorageResult<Arc<AttributesTable>> {
-        todo!()
-    }
-
-    async fn fetch_manifests(
-        &self,
+        settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> StorageResult<Arc<Manifest>> {
+    ) -> StorageResult<Reader> {
         let key = self.get_manifest_path(id)?;
-        let bytes = self.get_object_concurrently(key.as_str(), size).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        self.get_object_concurrently(settings, key.as_str(), &(0..size)).await
+    }
+
+    async fn fetch_manifest_unknown_size(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let key = self.get_manifest_path(id)?;
+        self.get_object_reader(settings, key.as_str()).await
     }
 
     async fn fetch_transaction_log(
         &self,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let key = self.get_transaction_path(id)?;
-        let bytes = self.get_object(key.as_str()).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        self.get_object_reader(settings, key.as_str()).await
     }
 
-    async fn fetch_chunk(&self, id: &ChunkId, range: &ByteRange) -> StorageResult<Bytes> {
+    async fn fetch_chunk(
+        &self,
+        settings: &Settings,
+        id: &ChunkId,
+        range: &Range<ChunkOffset>,
+    ) -> StorageResult<Bytes> {
         let key = self.get_chunk_path(id)?;
-        let bytes = self.get_object_range(key.as_str(), range).await?;
-        Ok(bytes)
+        self.get_object_concurrently(settings, key.as_str(), range)
+            .await?
+            .to_bytes((range.end - range.start) as usize)
+            .await
     }
 
     async fn write_snapshot(
         &self,
+        _settings: &Settings,
         id: SnapshotId,
-        snapshot: Arc<Snapshot>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_snapshot_path(&id)?;
-        let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
-        let metadata = [(
-            format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
-            snapshot.icechunk_snapshot_format_version.to_string(),
-        )];
-        self.put_object(
-            key.as_str(),
-            Some(format_constants::LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE),
-            metadata,
-            bytes,
-        )
-        .await
+        self.put_object(key.as_str(), None::<String>, metadata, bytes).await
     }
 
-    async fn write_attributes(
+    async fn write_manifest(
         &self,
-        _id: AttributesId,
-        _table: Arc<AttributesTable>,
-    ) -> StorageResult<()> {
-        todo!()
-    }
-
-    async fn write_manifests(
-        &self,
+        _settings: &Settings,
         id: ManifestId,
-        manifest: Arc<Manifest>,
-    ) -> Result<u64, StorageError> {
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
         let key = self.get_manifest_path(&id)?;
-        let bytes = rmp_serde::to_vec(manifest.as_ref())?;
-        let metadata = [(
-            format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
-            manifest.icechunk_manifest_format_version.to_string(),
-        )];
-        let len = bytes.len() as u64;
-        self.put_object(
-            key.as_str(),
-            Some(format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE),
-            metadata,
-            bytes,
-        )
-        .await?;
-        Ok(len)
+        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
     }
 
     async fn write_transaction_log(
         &self,
+        _settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_transaction_path(&id)?;
-        let bytes = rmp_serde::to_vec(log.as_ref())?;
-        let metadata = [(
-            format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
-            log.icechunk_transaction_log_format_version.to_string(),
-        )];
-        self.put_object(
-            key.as_str(),
-            Some(format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE),
-            metadata,
-            bytes,
-        )
-        .await
+        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
     }
 
     async fn write_chunk(
         &self,
+        _settings: &Settings,
         id: ChunkId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
@@ -517,7 +423,7 @@ impl Storage for S3Storage {
         self.put_object(key.as_str(), None::<String>, metadata, bytes).await
     }
 
-    async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
+    async fn get_ref(&self, _settings: &Settings, ref_key: &str) -> StorageResult<Bytes> {
         let key = self.ref_key(ref_key)?;
         let res = self
             .get_client()
@@ -542,7 +448,7 @@ impl Storage for S3Storage {
         }
     }
 
-    async fn ref_names(&self) -> StorageResult<Vec<String>> {
+    async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
         let mut paginator = self
             .get_client()
@@ -574,6 +480,7 @@ impl Storage for S3Storage {
 
     async fn ref_versions(
         &self,
+        _settings: &Settings,
         ref_name: &str,
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let prefix = self.ref_key(ref_name)?;
@@ -601,6 +508,7 @@ impl Storage for S3Storage {
 
     async fn write_ref(
         &self,
+        _settings: &Settings,
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
@@ -636,6 +544,7 @@ impl Storage for S3Storage {
 
     async fn list_objects<'a>(
         &'a self,
+        _settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
@@ -663,6 +572,7 @@ impl Storage for S3Storage {
 
     async fn delete_objects(
         &self,
+        _settings: &Settings,
         prefix: &str,
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
@@ -679,6 +589,31 @@ impl Storage for S3Storage {
             })
             .await;
         Ok(deleted.into_inner())
+    }
+
+    async fn get_object_range_buf(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
+        let b = self
+            .get_client()
+            .await
+            .get_object()
+            .bucket(self.bucket.as_str())
+            .key(key)
+            .range(range_to_header(range));
+        Ok(Box::new(b.send().await?.body.collect().await?))
+    }
+
+    async fn get_object_range_read(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let client = self.get_client().await;
+        let bucket = self.bucket.clone();
+        Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range).await?))
     }
 }
 
@@ -724,15 +659,10 @@ async fn get_object_range(
     client: &Client,
     bucket: String,
     key: &str,
-    range: &ByteRange,
-) -> StorageResult<Bytes> {
-    let mut b = client.get_object().bucket(bucket).key(key);
-
-    if let Some(header) = range_to_header(range) {
-        b = b.range(header)
-    };
-
-    Ok(b.send().await?.body.collect().await?.into_bytes())
+    range: &Range<ChunkOffset>,
+) -> StorageResult<impl AsyncRead> {
+    let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
+    Ok(b.send().await?.body.into_async_read())
 }
 
 #[cfg(test)]
@@ -761,8 +691,6 @@ mod tests {
             "bucket".to_string(),
             Some("prefix".to_string()),
             credentials,
-            Some(NonZeroU16::new(20).unwrap()),
-            Some(NonZeroU64::new(1).unwrap()),
         )
         .unwrap();
 
@@ -770,7 +698,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","max_concurrent_requests_for_object":20,"min_concurrent_request_size":1}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix"}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

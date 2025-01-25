@@ -16,11 +16,11 @@ classifiers = [
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0b3"]
+dependencies = ["zarr>=3"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.12"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
 readme = "../README.md"
@@ -39,10 +39,18 @@ test = [
   "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
-  "xarray>=2024.11.0, <2025",
+  "xarray>=2025.01.1",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
+]
+benchmark = [
+  "pytest-benchmark[histogram]",
+  "pytest-xdist",
+  "s3fs",
+  "h5netcdf",
+  "pooch",
+  "tqdm",
 ]
 
 [tool.maturin]
@@ -63,6 +71,11 @@ filterwarnings = [
   "error",
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
   "ignore:Port 8787 is already in use:UserWarning:",
+  # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
+  "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
+  "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
+  "ignore::ResourceWarning",
+  "ignore:Unused async fixture loop scope:pytest.PytestWarning",
 ]
 
 [tool.pyright]

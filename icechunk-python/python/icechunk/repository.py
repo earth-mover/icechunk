@@ -25,13 +25,23 @@ class Repository:
         config: RepositoryConfig | None = None,
         virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> Self:
-        """Create a new Icechunk repository.
-
+        """
+        Create a new Icechunk repository.
         If one already exists at the given store location, an error will be raised.
 
-        Args:
-            storage: The storage configuration for the repository.
-            config: The repository configuration. If not provided, a default configuration will be used.
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+        config : RepositoryConfig, optional
+            The repository configuration. If not provided, a default configuration will be used.
+        virtual_chunk_credentials : dict[str, AnyCredential], optional
+            Credentials for virtual chunks.
+
+        Returns
+        -------
+        Self
+            An instance of the Repository class.
         """
         return cls(
             PyRepository.create(
@@ -48,14 +58,25 @@ class Repository:
         config: RepositoryConfig | None = None,
         virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> Self:
-        """Open an existing Icechunk repository.
+        """
+        Open an existing Icechunk repository.
 
         If no repository exists at the given storage location, an error will be raised.
 
-        Args:
-            storage: The storage configuration for the repository.
-            config: The repository settings. If not provided, a default configuration will be
-            loaded from the repository
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+        config : RepositoryConfig, optional
+            The repository settings. If not provided, a default configuration will be
+            loaded from the repository.
+        virtual_chunk_credentials : dict[str, AnyCredential], optional
+            Credentials for virtual chunks.
+
+        Returns
+        -------
+        Self
+            An instance of the Repository class.
         """
         return cls(
             PyRepository.open(
@@ -72,12 +93,23 @@ class Repository:
         config: RepositoryConfig | None = None,
         virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
     ) -> Self:
-        """Open an existing Icechunk repository or create a new one if it does not exist.
+        """
+        Open an existing Icechunk repository or create a new one if it does not exist.
 
-        Args:
-            storage: The storage configuration for the repository.
-            config: The repository settings. If not provided, a default configuration will be
-            loaded from the repository
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+        config : RepositoryConfig, optional
+            The repository settings. If not provided, a default configuration will be
+            loaded from the repository.
+        virtual_chunk_credentials : dict[str, AnyCredential], optional
+            Credentials for virtual chunks.
+
+        Returns
+        -------
+        Self
+            An instance of the Repository class.
         """
         return cls(
             PyRepository.open_or_create(
@@ -89,89 +121,225 @@ class Repository:
 
     @staticmethod
     def exists(storage: Storage) -> bool:
-        """Check if a repository exists at the given storage location.
+        """
+        Check if a repository exists at the given storage location.
 
-        Args:
-            storage: The storage configuration for the repository.
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+
+        Returns
+        -------
+        bool
+            True if the repository exists, False otherwise.
         """
         return PyRepository.exists(storage)
 
-    def ancestry(self, snapshot_id: str) -> list[SnapshotMetadata]:
-        """Get the ancestry of a snapshot.
-
-        Args:
-            snapshot_id: The snapshot ID to get the ancestry of.
-
-        Returns:
-            list[SnapshotMetadata]: The ancestry of the snapshot, listing out the snapshots and their metadata
+    @staticmethod
+    def fetch_config(storage: Storage) -> RepositoryConfig | None:
         """
-        return self._repository.ancestry(snapshot_id)
+        Fetch the configuration for the repository saved in storage.
+
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+
+        Returns
+        -------
+        RepositoryConfig | None
+            The repository configuration if it exists, None otherwise.
+        """
+        return PyRepository.fetch_config(storage)
+
+    def save_config(self) -> None:
+        """
+        Save the repository configuration to storage, this configuration will be used in future calls to Repository.open.
+
+        Returns
+        -------
+        None
+        """
+        return self._repository.save_config()
+
+    @property
+    def config(self) -> RepositoryConfig:
+        """
+        Get a copy of this repository's config.
+
+        Returns
+        -------
+        RepositoryConfig
+            The repository configuration.
+        """
+        return self._repository.config()
+
+    def ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> list[SnapshotMetadata]:
+        """
+        Get the ancestry of a snapshot.
+
+        Parameters
+        ----------
+        branch : str, optional
+            The branch to get the ancestry of.
+        tag : str, optional
+            The tag to get the ancestry of.
+        snapshot : str, optional
+            The snapshot ID to get the ancestry of.
+
+        Returns
+        -------
+        list[SnapshotMetadata]
+            The ancestry of the snapshot, listing out the snapshots and their metadata.
+
+        Notes
+        -----
+        Only one of the arguments can be specified.
+        """
+        return self._repository.ancestry(branch=branch, tag=tag, snapshot=snapshot)
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
-        """Create a new branch at the given snapshot.
+        """
+        Create a new branch at the given snapshot.
 
-        Args:
-            branch: The name of the branch to create.
-            snapshot_id: The snapshot ID to create the branch at.
+        Parameters
+        ----------
+        branch : str
+            The name of the branch to create.
+        snapshot_id : str
+            The snapshot ID to create the branch at.
+
+        Returns
+        -------
+        None
         """
         self._repository.create_branch(branch, snapshot_id)
 
     def list_branches(self) -> set[str]:
-        """List the branches in the repository."""
+        """
+        List the branches in the repository.
+
+        Returns
+        -------
+        set[str]
+            A set of branch names.
+        """
         return self._repository.list_branches()
 
     def lookup_branch(self, branch: str) -> str:
-        """Get the tip snapshot ID of a branch.
+        """
+        Get the tip snapshot ID of a branch.
 
-        Args:
-            branch: The branch to get the tip of.
+        Parameters
+        ----------
+        branch : str
+            The branch to get the tip of.
 
-        Returns:
-            str: The snapshot ID of the tip of the branch
+        Returns
+        -------
+        str
+            The snapshot ID of the tip of the branch.
         """
         return self._repository.lookup_branch(branch)
 
     def reset_branch(self, branch: str, snapshot_id: str) -> None:
-        """Reset a branch to a specific snapshot.
+        """
+        Reset a branch to a specific snapshot.
 
         This will permanently alter the history of the branch such that the tip of
         the branch is the specified snapshot.
 
-        Args:
-            branch: The branch to reset.
-            snapshot_id: The snapshot ID to reset the branch to.
+        Parameters
+        ----------
+        branch : str
+            The branch to reset.
+        snapshot_id : str
+            The snapshot ID to reset the branch to.
+
+        Returns
+        -------
+        None
         """
         self._repository.reset_branch(branch, snapshot_id)
 
     def delete_branch(self, branch: str) -> None:
-        """Delete a branch.
+        """
+        Delete a branch.
 
-        Args:
-            branch: The branch to delete.
+        Parameters
+        ----------
+        branch : str
+            The branch to delete.
+
+        Returns
+        -------
+        None
         """
         self._repository.delete_branch(branch)
 
-    def create_tag(self, tag: str, snapshot_id: str) -> None:
-        """Create a new tag at the given snapshot.
+    def delete_tag(self, branch: str) -> None:
+        """
+        Delete a tag.
 
-        Args:
-            tag: The name of the tag to create.
-            snapshot_id: The snapshot ID to create the tag at.
+        Parameters
+        ----------
+        tag : str
+            The tag to delete.
+
+        Returns
+        -------
+        None
+        """
+        self._repository.delete_tag(branch)
+
+    def create_tag(self, tag: str, snapshot_id: str) -> None:
+        """
+        Create a new tag at the given snapshot.
+
+        Parameters
+        ----------
+        tag : str
+            The name of the tag to create.
+        snapshot_id : str
+            The snapshot ID to create the tag at.
+
+        Returns
+        -------
+        None
         """
         self._repository.create_tag(tag, snapshot_id)
 
     def list_tags(self) -> set[str]:
-        """List the tags in the repository."""
+        """
+        List the tags in the repository.
+
+        Returns
+        -------
+        set[str]
+            A set of tag names.
+        """
         return self._repository.list_tags()
 
     def lookup_tag(self, tag: str) -> str:
-        """Get the snapshot ID of a tag.
+        """
+        Get the snapshot ID of a tag.
 
-        Args:
-            tag: The tag to get the snapshot ID of.
+        Parameters
+        ----------
+        tag : str
+            The tag to get the snapshot ID of.
 
-        Returns:
-            str: The snapshot ID of the tag.
+        Returns
+        -------
+        str
+            The snapshot ID of the tag.
         """
         return self._repository.lookup_tag(tag)
 
@@ -180,41 +348,54 @@ class Repository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot_id: str | None = None,
+        snapshot: str | None = None,
     ) -> Session:
-        """Create a read-only session.
+        """
+        Create a read-only session.
 
         This can be thought of as a read-only checkout of the repository at a given snapshot.
         When branch or tag are provided, the session will be based on the tip of the branch or
         the snapshot ID of the tag.
 
-        Args:
-            branch: If provided, the branch to create the session on.
-            tag: If provided, the tag to create the session on.
-            snapshot_id: If provided, the snapshot ID to create the session on.
+        Parameters
+        ----------
+        branch : str, optional
+            If provided, the branch to create the session on.
+        tag : str, optional
+            If provided, the tag to create the session on.
+        snapshot : str, optional
+            If provided, the snapshot ID to create the session on.
 
-        Returns:
-            Session: The read-only session, pointing to the specified snapshot, tag, or branch.
+        Returns
+        -------
+        Session
+            The read-only session, pointing to the specified snapshot, tag, or branch.
+
+        Notes
+        -----
+        Only one of the arguments can be specified.
         """
         return Session(
-            self._repository.readonly_session(
-                branch=branch, tag=tag, snapshot_id=snapshot_id
-            )
+            self._repository.readonly_session(branch=branch, tag=tag, snapshot=snapshot)
         )
 
     def writable_session(self, branch: str) -> Session:
-        """Create a writable session on a branch
+        """
+        Create a writable session on a branch.
 
         Like the read-only session, this can be thought of as a checkout of the repository at the
         tip of the branch. However, this session is writable and can be used to make changes to the
         repository. When ready, the changes can be committed to the branch, after which the session will
         become a read-only session on the new snapshot.
 
-        Args:
-            branch: The branch to create the session on.
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
 
-        Returns:
-            Session: The writable session on the branch.
-
+        Returns
+        -------
+        Session
+            The writable session on the branch.
         """
         return Session(self._repository.writable_session(branch))

@@ -17,6 +17,7 @@
 //!     - a caching wrapper implementation
 //! - The datastructures are represented by concrete types in the [`mod@format`] modules.
 //!   These datastructures use Arrow RecordBatches for representation.
+pub mod asset_manager;
 pub mod change_set;
 pub mod config;
 pub mod conflicts;
@@ -35,8 +36,8 @@ pub mod virtual_chunks;
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
 pub use storage::{
-    new_in_memory_storage, new_local_filesystem_storage, new_s3_storage,
-    MemCachingStorage, ObjectStorage, Storage, StorageError,
+    new_in_memory_storage, new_local_filesystem_storage, new_s3_storage, ObjectStorage,
+    Storage, StorageError,
 };
 pub use store::Store;
 

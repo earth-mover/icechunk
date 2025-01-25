@@ -1,26 +1,23 @@
 use crate::{
-    format::{
-        attributes::AttributesTable, format_constants, manifest::Manifest,
-        snapshot::Snapshot, transaction_log::TransactionLog, AttributesId, ByteRange,
-        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
-    },
+    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 use futures::{
-    stream::{self, BoxStream, FuturesOrdered},
+    stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
 use object_store::{
     local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath, Attribute,
-    AttributeValue, Attributes, GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode,
-    PutOptions, PutPayload, UpdateVersion,
+    AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
+    PutPayload, UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     fs::create_dir_all,
     future::ready,
+    num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::Path as StdPath,
     sync::{
@@ -28,34 +25,20 @@ use std::{
         Arc,
     },
 };
+use tokio::io::AsyncRead;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
 use super::{
-    split_in_multiple_requests, ETag, ListInfo, Storage, StorageError, StorageResult,
-    CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
-    TRANSACTION_PREFIX,
+    ConcurrencySettings, ETag, ListInfo, Reader, Settings, Storage, StorageError,
+    StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
+    SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
-
-// Get Range is object_store specific, keep it with this module
-impl From<&ByteRange> for Option<GetRange> {
-    fn from(value: &ByteRange) -> Self {
-        match value {
-            ByteRange::Bounded(Range { start, end }) => {
-                Some(GetRange::Bounded(*start as usize..*end as usize))
-            }
-            ByteRange::From(start) if *start == 0u64 => None,
-            ByteRange::From(start) => Some(GetRange::Offset(*start as usize)),
-            ByteRange::Last(n) => Some(GetRange::Suffix(*n as usize)),
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ObjectStorageConfig {
     pub url: String,
     pub prefix: String,
-    pub max_concurrent_requests_for_object: u16,
-    pub min_concurrent_request_size: u64,
     pub options: Vec<(String, String)>,
 }
 
@@ -73,13 +56,7 @@ impl ObjectStorage {
     /// This implementation should not be used in production code.
     pub fn new_in_memory() -> Result<ObjectStorage, StorageError> {
         let url = "memory:/".to_string();
-        let config = ObjectStorageConfig {
-            url,
-            prefix: "".to_string(),
-            max_concurrent_requests_for_object: 1,
-            min_concurrent_request_size: 1,
-            options: vec![],
-        };
+        let config = ObjectStorageConfig { url, prefix: "".to_string(), options: vec![] };
         Self::from_config(config)
     }
 
@@ -94,13 +71,7 @@ impl ObjectStorage {
         let prefix =
             prefix.into_os_string().into_string().map_err(StorageError::BadPrefix)?;
         let url = format!("file://{prefix}");
-        let config = ObjectStorageConfig {
-            url,
-            prefix,
-            max_concurrent_requests_for_object: 3,
-            min_concurrent_request_size: 1,
-            options: vec![],
-        };
+        let config = ObjectStorageConfig { url, prefix, options: vec![] };
         Self::from_config(config)
     }
 
@@ -119,9 +90,6 @@ impl ObjectStorage {
                     url: url.to_string(),
                     prefix: "".to_string(),
                     options: config.options,
-                    max_concurrent_requests_for_object: config
-                        .max_concurrent_requests_for_object,
-                    min_concurrent_request_size: config.min_concurrent_request_size,
                 },
             });
         }
@@ -135,9 +103,6 @@ impl ObjectStorage {
                 url: url.to_string(),
                 prefix: path.to_string(),
                 options: config.options,
-                max_concurrent_requests_for_object: config
-                    .max_concurrent_requests_for_object,
-                min_concurrent_request_size: config.min_concurrent_request_size,
             },
         })
     }
@@ -241,33 +206,32 @@ impl ObjectStorage {
         Ok(results.filter(|res| ready(res.is_ok())).count().await)
     }
 
-    async fn get_object_concurrently(
+    async fn get_object_reader(
         &self,
+        _settings: &Settings,
         path: &ObjectPath,
-        size: u64,
-    ) -> StorageResult<Bytes> {
-        let mut results = split_in_multiple_requests(
-            size,
-            self.config.min_concurrent_request_size,
-            self.config.max_concurrent_requests_for_object,
-        )
-        .map(|(req_offset, req_size)| async move {
-            let store = Arc::clone(&self.store);
-            let range = Some(GetRange::from(
-                req_offset as usize..req_offset as usize + req_size as usize,
-            ));
-            let opts = GetOptions { range, ..Default::default() };
-            let path = path.clone();
-            store.get_opts(&path, opts).await
-        })
-        .collect::<FuturesOrdered<_>>();
+    ) -> StorageResult<impl AsyncRead> {
+        Ok(self
+            .store
+            .get(path)
+            .await?
+            .into_stream()
+            .err_into()
+            .into_async_read()
+            .compat())
+    }
 
-        let mut res = BytesMut::with_capacity(size as usize);
-        while let Some(result) = results.try_next().await? {
-            res.extend_from_slice(result.bytes().await?.as_ref());
+    fn metadata_to_attributes(&self, metadata: Vec<(String, String)>) -> Attributes {
+        if self.supports_metadata() {
+            Attributes::from_iter(metadata.into_iter().map(|(key, val)| {
+                (
+                    Attribute::Metadata(std::borrow::Cow::Owned(key)),
+                    AttributeValue::from(val),
+                )
+            }))
+        } else {
+            Attributes::new()
         }
-
-        Ok(res.into())
     }
 }
 
@@ -286,7 +250,41 @@ impl<'de> serde::Deserialize<'de> for ObjectStorage {
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
-    async fn fetch_config(&self) -> StorageResult<Option<(Bytes, ETag)>> {
+    fn default_settings(&self) -> Settings {
+        let base = Settings::default();
+        let url = Url::parse(self.config.url.as_str());
+        let scheme = url.as_ref().map(|url| url.scheme()).unwrap_or("s3");
+        match scheme {
+            "file" => Settings {
+                concurrency: Some(ConcurrencySettings {
+                    max_concurrent_requests_for_object: Some(
+                        NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
+                    ),
+                    ideal_concurrent_request_size: Some(
+                        NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
+                    ),
+                }),
+            },
+            "memory" => Settings {
+                concurrency: Some(ConcurrencySettings {
+                    // we do != 1 because we use this store for tests
+                    max_concurrent_requests_for_object: Some(
+                        NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
+                    ),
+                    ideal_concurrent_request_size: Some(
+                        NonZeroU64::new(1).unwrap_or(NonZeroU64::MIN),
+                    ),
+                }),
+            },
+
+            _ => base,
+        }
+    }
+
+    async fn fetch_config(
+        &self,
+        _settings: &Settings,
+    ) -> StorageResult<Option<(Bytes, ETag)>> {
         let path = self.get_config_path();
         let response = self.store.get(&path).await;
 
@@ -301,6 +299,7 @@ impl Storage for ObjectStorage {
     }
     async fn update_config(
         &self,
+        _settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
     ) -> StorageResult<ETag> {
@@ -341,147 +340,80 @@ impl Storage for ObjectStorage {
 
     async fn fetch_snapshot(
         &self,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> Result<Arc<Snapshot>, StorageError> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_snapshot_path(id);
-        let bytes = self.store.get(&path).await?.bytes().await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
-    async fn fetch_attributes(
+    async fn fetch_manifest_known_size(
         &self,
-        _id: &AttributesId,
-    ) -> Result<Arc<AttributesTable>, StorageError> {
-        todo!();
-    }
-
-    async fn fetch_manifests(
-        &self,
+        settings: &Settings,
         id: &ManifestId,
         size: u64,
-    ) -> Result<Arc<Manifest>, StorageError> {
+    ) -> StorageResult<Reader> {
         let path = self.get_manifest_path(id);
-        let bytes = self.get_object_concurrently(&path, size).await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        self.get_object_concurrently(settings, path.as_ref(), &(0..size)).await
+    }
+
+    async fn fetch_manifest_unknown_size(
+        &self,
+        settings: &Settings,
+        id: &ManifestId,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let path = self.get_manifest_path(id);
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
     async fn fetch_transaction_log(
         &self,
+        settings: &Settings,
         id: &SnapshotId,
-    ) -> StorageResult<Arc<TransactionLog>> {
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_transaction_path(id);
-        let bytes = self.store.get(&path).await?.bytes().await?;
-        // TODO: optimize using from_read
-        let res = rmp_serde::from_slice(bytes.as_ref())?;
-        Ok(Arc::new(res))
+        Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
     async fn write_snapshot(
         &self,
+        _settings: &Settings,
         id: SnapshotId,
-        snapshot: Arc<Snapshot>,
-    ) -> Result<(), StorageError> {
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
         let path = self.get_snapshot_path(&id);
-        let bytes = rmp_serde::to_vec(snapshot.as_ref())?;
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY,
-                    )),
-                    AttributeValue::from(
-                        snapshot.icechunk_snapshot_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
-    async fn write_attributes(
+    async fn write_manifest(
         &self,
-        _id: AttributesId,
-        _table: Arc<AttributesTable>,
-    ) -> Result<(), StorageError> {
-        todo!()
-    }
-
-    async fn write_manifests(
-        &self,
+        _settings: &Settings,
         id: ManifestId,
-        manifest: Arc<Manifest>,
-    ) -> Result<u64, StorageError> {
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
         let path = self.get_manifest_path(&id);
-        let bytes = rmp_serde::to_vec(manifest.as_ref())?;
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY,
-                    )),
-                    AttributeValue::from(
-                        manifest.icechunk_manifest_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
-        let len = bytes.len() as u64;
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
-        Ok(len)
+        Ok(())
     }
 
     async fn write_transaction_log(
         &self,
+        _settings: &Settings,
         id: SnapshotId,
-        log: Arc<TransactionLog>,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_transaction_path(&id);
-        let bytes = rmp_serde::to_vec(log.as_ref())?;
-        let attributes = if self.supports_metadata() {
-            Attributes::from_iter(vec![
-                (
-                    Attribute::ContentType,
-                    AttributeValue::from(
-                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE,
-                    ),
-                ),
-                (
-                    Attribute::Metadata(std::borrow::Cow::Borrowed(
-                        format_constants::LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY,
-                    )),
-                    AttributeValue::from(
-                        log.icechunk_transaction_log_format_version.to_string(),
-                    ),
-                ),
-            ])
-        } else {
-            Attributes::new()
-        };
+        let attributes = self.metadata_to_attributes(metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.store.put_opts(&path, bytes.into(), options).await?;
@@ -490,20 +422,20 @@ impl Storage for ObjectStorage {
 
     async fn fetch_chunk(
         &self,
+        settings: &Settings,
         id: &ChunkId,
-        range: &ByteRange,
+        range: &Range<ChunkOffset>,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_chunk_path(id);
-        // TODO: shall we split `range` into multiple ranges and use get_ranges?
-        // I can't tell that `get_range` does splitting
-        let options =
-            GetOptions { range: Option::<GetRange>::from(range), ..Default::default() };
-        let chunk = self.store.get_opts(&path, options).await?.bytes().await?;
-        Ok(chunk)
+        self.get_object_concurrently(settings, path.as_ref(), range)
+            .await?
+            .to_bytes((range.end - range.start + 16) as usize)
+            .await
     }
 
     async fn write_chunk(
         &self,
+        _settings: &Settings,
         id: ChunkId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
@@ -516,7 +448,7 @@ impl Storage for ObjectStorage {
         Ok(())
     }
 
-    async fn get_ref(&self, ref_key: &str) -> StorageResult<Bytes> {
+    async fn get_ref(&self, _settings: &Settings, ref_key: &str) -> StorageResult<Bytes> {
         let key = self.ref_key(ref_key);
         match self.store.get(&key).await {
             Ok(res) => Ok(res.bytes().await?),
@@ -527,7 +459,7 @@ impl Storage for ObjectStorage {
         }
     }
 
-    async fn ref_names(&self) -> StorageResult<Vec<String>> {
+    async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
         // FIXME: i don't think object_store's implementation of list_with_delimiter is any good
         // we need to test if it even works beyond 1k refs
         let prefix = self.ref_key("");
@@ -546,6 +478,7 @@ impl Storage for ObjectStorage {
 
     async fn ref_versions(
         &self,
+        _settings: &Settings,
         ref_name: &str,
     ) -> StorageResult<BoxStream<StorageResult<String>>> {
         let res = self.do_ref_versions(ref_name).await;
@@ -565,6 +498,7 @@ impl Storage for ObjectStorage {
 
     async fn write_ref(
         &self,
+        _settings: &Settings,
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
@@ -587,6 +521,7 @@ impl Storage for ObjectStorage {
 
     async fn list_objects<'a>(
         &'a self,
+        _settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix =
@@ -602,6 +537,7 @@ impl Storage for ObjectStorage {
 
     async fn delete_objects(
         &self,
+        _settings: &Settings,
         prefix: &str,
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
@@ -618,6 +554,39 @@ impl Storage for ObjectStorage {
             })
             .await;
         Ok(deleted.into_inner())
+    }
+
+    async fn get_object_range_buf(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
+        let path = ObjectPath::from(key);
+        let usize_range = range.start as usize..range.end as usize;
+        let range = Some(usize_range.into());
+        let opts = GetOptions { range, ..Default::default() };
+        Ok(Box::new(self.store.get_opts(&path, opts).await?.bytes().await?))
+    }
+
+    async fn get_object_range_read(
+        &self,
+        key: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let path = ObjectPath::from(key);
+        let usize_range = range.start as usize..range.end as usize;
+        let range = Some(usize_range.into());
+        let opts = GetOptions { range, ..Default::default() };
+        let res: Box<dyn AsyncRead + Unpin + Send> = Box::new(
+            self.store
+                .get_opts(&path, opts)
+                .await?
+                .into_stream()
+                .err_into()
+                .into_async_read()
+                .compat(),
+        );
+        Ok(res)
     }
 }
 
@@ -646,7 +615,7 @@ mod tests {
         assert_eq!(
             serialized,
             format!(
-                r#"{{"url":"file://{}","prefix":"","max_concurrent_requests_for_object":3,"min_concurrent_request_size":1,"options":[]}}"#,
+                r#"{{"url":"file://{}","prefix":"","options":[]}}"#,
                 std::fs::canonicalize(tmp_dir.path()).unwrap().to_str().unwrap()
             )
         );

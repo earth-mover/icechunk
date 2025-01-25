@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::ops::Range;
 
 use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
 use crate::format::snapshot::ZarrArrayMetadata;
-use crate::format::Path;
+use crate::format::{ChunkIndices, Path};
 use crate::metadata::{
     ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DimensionNames, FillValue,
     StorageTransformer,
@@ -30,7 +31,7 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = new_in_memory_storage().unwrap();
+    let storage = new_in_memory_storage().expect("Cannot create in memory storage");
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
@@ -48,7 +49,7 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = new_in_memory_storage().unwrap();
+    let storage = new_in_memory_storage().expect("Cannot create in memory storage");
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
@@ -128,4 +129,11 @@ prop_compose! {
             dimension_names: shape_and_dim.dimension_names,
         }
     }
+}
+
+prop_compose! {
+    pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in proptest::collection::vec(values_in, dim..(dim+1))) -> ChunkIndices {
+        ChunkIndices(v)
+    }
+
 }

@@ -10,7 +10,7 @@ import pytest
 
 from icechunk import IcechunkStore
 from tests.conftest import parse_repo
-from zarr import Array, Group
+from zarr import Group, create_array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import ZarrFormat
 from zarr.errors import ContainsArrayError, ContainsGroupError
@@ -27,12 +27,12 @@ def store(request: pytest.FixtureRequest, tmpdir: Path) -> IcechunkStore:
 
 @pytest.mark.parametrize("store", ["memory"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
-@pytest.mark.parametrize("exists_ok", [True, False])
+@pytest.mark.parametrize("overwrite", [True, False])
 @pytest.mark.parametrize("extant_node", ["array", "group"])
 def test_array_creation_existing_node(
     store: IcechunkStore,
     zarr_format: ZarrFormat,
-    exists_ok: bool,
+    overwrite: bool,
     extant_node: Literal["array", "group"],
 ) -> None:
     """
@@ -53,25 +53,24 @@ def test_array_creation_existing_node(
     new_shape = (2, 2)
     new_dtype = "float32"
 
-    if exists_ok:
+    if overwrite:
         # This is currently not supported by IcechunkStore
-        pytest.xfail("IcechunkStore does not support exists_ok=True")
-        # arr_new = Array.create(
-        #     spath / "extant",
-        #     shape=new_shape,
-        #     dtype=new_dtype,
-        #     exists_ok=exists_ok,
-        #     zarr_format=zarr_format,
-        # )
-        # assert arr_new.shape == new_shape
-        # assert arr_new.dtype == new_dtype
+        arr_new = create_array(
+            spath / "extant",
+            shape=new_shape,
+            dtype=new_dtype,
+            overwrite=overwrite,
+            zarr_format=zarr_format,
+        )
+        assert arr_new.shape == new_shape
+        assert arr_new.dtype == new_dtype
     else:
         with pytest.raises(expected_exception):
-            Array.create(
+            create_array(
                 spath / "extant",
                 shape=new_shape,
                 dtype=new_dtype,
-                exists_ok=exists_ok,
+                overwrite=overwrite,
                 zarr_format=zarr_format,
             )
 
@@ -80,7 +79,7 @@ def test_array_creation_existing_node(
 @pytest.mark.parametrize("store", ["local"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
 def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
-    expected = Array.create(
+    expected = create_array(
         store=store, shape=(100,), chunks=(10,), zarr_format=zarr_format, dtype="i4"
     )
     expected[:] = list(range(100))
@@ -104,12 +103,12 @@ def test_array_v3_fill_value(
     store: IcechunkStore, fill_value: int, dtype_str: str
 ) -> None:
     shape = (10,)
-    arr = Array.create(
+    arr = create_array(
         store=store,
         shape=shape,
         dtype=dtype_str,
         zarr_format=3,
-        chunk_shape=shape,
+        chunks=shape,
         fill_value=fill_value,
     )
 
@@ -120,12 +119,12 @@ def test_array_v3_fill_value(
 @pytest.mark.parametrize("store", ["memory"], indirect=True)
 async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:
     shape = (10,)
-    arr = Array.create(
+    arr = create_array(
         store=store,
         shape=shape,
         dtype=np.float64,
         zarr_format=3,
-        chunk_shape=shape,
+        chunks=shape,
         fill_value=np.nan,
     )
     arr[:] = np.nan
@@ -151,7 +150,7 @@ async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:
 async def test_special_complex_fill_values_roundtrip(
     store: IcechunkStore, fill_value: Any, expected: list[Any]
 ) -> None:
-    Array.create(store=store, shape=(1,), dtype=np.complex64, fill_value=fill_value)
+    create_array(store=store, shape=(1,), dtype=np.complex64, fill_value=fill_value)
     content = await store.get("zarr.json", prototype=default_buffer_prototype())
     assert content is not None
     actual = json.loads(content.to_bytes())

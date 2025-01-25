@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    convert::Infallible,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -7,9 +8,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use format_constants::FileTypeBin;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
@@ -18,6 +20,7 @@ use crate::{metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
+pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;
 
@@ -29,8 +32,11 @@ pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 pub trait FileTypeTag: private::Sealed {}
 
 /// The id of a file in object store
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(pub [u8; SIZE], PhantomData<T>);
+#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(
+    #[serde(with = "serde_bytes")] pub [u8; SIZE],
+    PhantomData<T>,
+);
 
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotTag;
@@ -115,25 +121,25 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     }
 }
 
+impl<const SIZE: usize, T: FileTypeTag> TryInto<String> for ObjectId<SIZE, T> {
+    type Error = Infallible;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.to_string())
+    }
+}
+
+impl<const SIZE: usize, T: FileTypeTag> TryInto<ObjectId<SIZE, T>> for String {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<ObjectId<SIZE, T>, Self::Error> {
+        self.as_str().try_into()
+    }
+}
+
 impl<const SIZE: usize, T: FileTypeTag> Display for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", String::from(self))
-    }
-}
-
-impl<const SIZE: usize, T: FileTypeTag> Serialize for ObjectId<SIZE, T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Just use the string representation
-        serializer.serialize_str(&String::from(self))
-    }
-}
-
-impl<'de, const SIZE: usize, T: FileTypeTag> Deserialize<'de> for ObjectId<SIZE, T> {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        // Because we implement TryFrom<&str> for ObjectId, we can use it here instead of
-        // having to implement a custom deserializer
-        let s = String::deserialize(d)?;
-        ObjectId::try_from(s.as_str()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -150,8 +156,10 @@ pub enum ByteRange {
     Bounded(Range<ChunkOffset>),
     /// All bytes from the given offset (included) to the end of the object
     From(ChunkOffset),
-    /// Last n bytes in the object
+    /// The last n bytes in the object
     Last(ChunkLength),
+    /// All bytes up to the last n bytes in the object
+    Until(ChunkOffset),
 }
 
 impl From<Range<ChunkOffset>> for ByteRange {
@@ -185,7 +193,8 @@ impl ByteRange {
                 bytes.slice(range.start as usize..range.end as usize)
             }
             ByteRange::From(from) => bytes.slice(*from as usize..),
-            ByteRange::Last(n) => bytes.slice(bytes.len() - *n as usize..bytes.len()),
+            ByteRange::Last(n) => bytes.slice(bytes.len() - *n as usize..),
+            ByteRange::Until(n) => bytes.slice(0usize..bytes.len() - *n as usize),
         }
     }
 }
@@ -195,7 +204,8 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
         match (start, end) {
             (Some(start), Some(end)) => Self::Bounded(start..end),
             (Some(start), None) => Self::From(start),
-            (None, Some(end)) => Self::Bounded(0..end),
+            // NOTE: This is relied upon by zarr python
+            (None, Some(end)) => Self::Until(end),
             (None, None) => Self::ALL,
         }
     }
@@ -216,27 +226,115 @@ pub enum IcechunkFormatError {
     ChunkCoordinatesNotFound { coords: ChunkIndices },
     #[error("manifest information cannot be found in snapshot `{manifest_id}`")]
     ManifestInfoNotFound { manifest_id: ManifestId },
+    #[error("invalid magic numbers in file")]
+    InvalidMagicNumbers, // TODO: add more info
+    #[error("Icechunk cannot read from repository written with a more modern version")]
+    InvalidSpecVersion, // TODO: add more info
+    #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
+    InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
+    #[error("Icechunk cannot read file, invalid compression algorithm")]
+    InvalidCompressionAlgorithm, // TODO: add more info
 }
+
+pub type IcechunkFormatVersion = u8;
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
-pub type IcechunkFormatVersion = u16;
-
 pub mod format_constants {
-    use super::IcechunkFormatVersion;
+    use std::sync::LazyLock;
 
-    pub const LATEST_ICECHUNK_MANIFEST_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_MANIFEST_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_MANIFEST_VERSION_METADATA_KEY: &str = "ic-man-fmt-ver";
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FileTypeBin {
+        Snapshot = 1u8,
+        Manifest = 2,
+        Attributes = 3,
+        TransactionLog = 4,
+        Chunk = 5,
+    }
 
-    pub const LATEST_ICECHUNK_SNAPSHOT_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_SNAPSHOT_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_SNAPSHOT_VERSION_METADATA_KEY: &str = "ic-sna-fmt-ver";
+    impl TryFrom<u8> for FileTypeBin {
+        type Error = String;
 
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_FORMAT: IcechunkFormatVersion = 0;
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_CONTENT_TYPE: &str = "application/msgpack";
-    pub const LATEST_ICECHUNK_TRANSACTION_LOG_VERSION_METADATA_KEY: &str =
-        "ic-tx-fmt-ver";
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                n if n == FileTypeBin::Snapshot as u8 => Ok(FileTypeBin::Snapshot),
+                n if n == FileTypeBin::Manifest as u8 => Ok(FileTypeBin::Manifest),
+                n if n == FileTypeBin::Attributes as u8 => Ok(FileTypeBin::Attributes),
+                n if n == FileTypeBin::TransactionLog as u8 => {
+                    Ok(FileTypeBin::TransactionLog)
+                }
+                n if n == FileTypeBin::Chunk as u8 => Ok(FileTypeBin::Chunk),
+                n => Err(format!("Bad file type code: {}", n)),
+            }
+        }
+    }
+
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SpecVersionBin {
+        V0_1_0Alpha12 = 1u8,
+    }
+
+    impl TryFrom<u8> for SpecVersionBin {
+        type Error = String;
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                n if n == SpecVersionBin::V0_1_0Alpha12 as u8 => {
+                    Ok(SpecVersionBin::V0_1_0Alpha12)
+                }
+                n => Err(format!("Bad spec version code: {}", n)),
+            }
+        }
+    }
+
+    impl SpecVersionBin {
+        pub fn current() -> Self {
+            Self::V0_1_0Alpha12
+        }
+    }
+
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CompressionAlgorithmBin {
+        None = 0u8,
+        Zstd = 1u8,
+    }
+
+    impl TryFrom<u8> for CompressionAlgorithmBin {
+        type Error = String;
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                n if n == CompressionAlgorithmBin::None as u8 => {
+                    Ok(CompressionAlgorithmBin::None)
+                }
+                n if n == CompressionAlgorithmBin::Zstd as u8 => {
+                    Ok(CompressionAlgorithmBin::Zstd)
+                }
+                n => Err(format!("Bad cmpression algorithm code: {}", n)),
+            }
+        }
+    }
+
+    pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
+
+    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic_spec_ver";
+
+    pub const ICECHUNK_LIB_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    pub static ICECHUNK_CLIENT_NAME: LazyLock<String> =
+        LazyLock::new(|| "ic-".to_string() + ICECHUNK_LIB_VERSION);
+    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic_client";
+
+    pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
+    pub const ICECHUNK_FILE_TYPE_MANIFEST: &str = "manifest";
+    pub const ICECHUNK_FILE_TYPE_TRANSACTION_LOG: &str = "transaction-log";
+    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic_file_type";
+
+    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
+    pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 }
 
 impl Display for Path {
@@ -313,7 +411,10 @@ mod tests {
     #[test]
     fn test_object_id_serialization() {
         let sid = SnapshotId::new([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        assert_eq!(serde_json::to_string(&sid).unwrap(), r#""000G40R40M30E209185G""#);
+        assert_eq!(
+            serde_json::to_string(&sid).unwrap(),
+            r#"[[0,1,2,3,4,5,6,7,8,9,10,11],null]"#
+        );
         assert_eq!(String::from(&sid), "000G40R40M30E209185G");
         assert_eq!(sid, SnapshotId::try_from("000G40R40M30E209185G").unwrap());
         let sid = SnapshotId::random();
