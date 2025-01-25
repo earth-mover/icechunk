@@ -435,11 +435,11 @@ class Storage:
     """Storage configuration for an IcechunkStore
 
     Currently supports memory, filesystem S3, azure blob, and google cloud storage backends.
-    Use the class methods to create a StorageConfig object with the desired backend.
+    Use the following methods to create a Storage object with the desired backend.
 
     Ex:
     ```
-    storage = icechunk.in_memory_storage("prefix")
+    storage = icechunk.in_memory_storage()
     storage = icechunk.local_filesystem_storage("/path/to/root")
     storage = icechunk.s3_storage("bucket", "prefix", ...)
     storage = icechunk.gcs_storage("bucket", "prefix", ...)
