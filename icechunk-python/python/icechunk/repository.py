@@ -284,6 +284,21 @@ class Repository:
         """
         self._repository.delete_branch(branch)
 
+    def delete_tag(self, branch: str) -> None:
+        """
+        Delete a tag.
+
+        Parameters
+        ----------
+        tag : str
+            The tag to delete.
+
+        Returns
+        -------
+        None
+        """
+        self._repository.delete_tag(branch)
+
     def create_tag(self, tag: str, snapshot_id: str) -> None:
         """
         Create a new tag at the given snapshot.

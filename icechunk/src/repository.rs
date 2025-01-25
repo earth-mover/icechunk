@@ -19,8 +19,8 @@ use crate::{
         IcechunkFormatError, NodeId, SnapshotId,
     },
     refs::{
-        create_tag, delete_branch, fetch_branch_tip, fetch_tag, list_branches, list_tags,
-        update_branch, BranchVersion, Ref, RefError,
+        create_tag, delete_branch, delete_tag, fetch_branch_tip, fetch_tag,
+        list_branches, list_tags, update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
     storage::{self, ETag},
@@ -423,6 +423,19 @@ impl Repository {
         } else {
             Err(RepositoryError::CannotDeleteMain)
         }
+    }
+
+    /// Delete a tag from the repository.
+    /// This will remove the tag reference. It will not remove the
+    /// chunks or snapshots associated with the tag.
+    pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
+        Ok(delete_tag(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            tag,
+            self.config().unsafe_overwrite_refs(),
+        )
+        .await?)
     }
 
     /// Create a new tag in the repository at the given snapshot id

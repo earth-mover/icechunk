@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, future::Future, pin::Pin};
 
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{stream::FuturesOrdered, FutureExt, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -119,6 +119,7 @@ pub struct RefData {
 }
 
 const TAG_KEY_NAME: &str = "ref.json";
+const TAG_DELETE_MARKER_KEY_NAME: &str = "ref.json.deleted";
 
 fn tag_key(tag_name: &str) -> RefResult<String> {
     if tag_name.contains('/') {
@@ -126,6 +127,14 @@ fn tag_key(tag_name: &str) -> RefResult<String> {
     }
 
     Ok(format!("tag.{}/{}", tag_name, TAG_KEY_NAME))
+}
+
+fn tag_delete_marker_key(tag_name: &str) -> RefResult<String> {
+    if tag_name.contains('/') {
+        return Err(RefError::InvalidRefName(tag_name.to_string()));
+    }
+
+    Ok(format!("tag.{}/{}", tag_name, TAG_DELETE_MARKER_KEY_NAME))
 }
 
 fn branch_root(branch_name: &str) -> RefResult<String> {
@@ -308,18 +317,78 @@ pub async fn delete_branch(
     Ok(())
 }
 
+pub async fn delete_tag(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    tag: &str,
+    overwrite_refs: bool,
+) -> RefResult<()> {
+    // we make sure the tag exists
+    _ = fetch_tag(storage, storage_settings, tag).await?;
+
+    // no race condition: delete_tag ^ 2 = delete_tag
+
+    let key = tag_delete_marker_key(tag)?;
+    storage
+        .write_ref(
+            storage_settings,
+            key.as_str(),
+            overwrite_refs,
+            Bytes::from_static(&[]),
+        )
+        .await
+        .map_err(|e| match e {
+            StorageError::RefAlreadyExists(_) => RefError::RefNotFound(tag.to_string()),
+            err => err.into(),
+        })?;
+    Ok(())
+}
+
 pub async fn fetch_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,
 ) -> RefResult<RefData> {
-    let path = tag_key(name)?;
-    match storage.get_ref(storage_settings, path.as_str()).await {
-        Ok(data) => Ok(serde_json::from_slice(data.as_ref())?),
-        Err(StorageError::RefNotFound(..)) => {
-            Err(RefError::RefNotFound(name.to_string()))
+    let ref_path = tag_key(name)?;
+    let delete_marker_path = tag_delete_marker_key(name)?;
+
+    let fut1: Pin<Box<dyn Future<Output = RefResult<Bytes>>>> = async move {
+        match storage.get_ref(storage_settings, ref_path.as_str()).await {
+            Ok(data) => Ok(data),
+            Err(StorageError::RefNotFound(..)) => {
+                Err(RefError::RefNotFound(name.to_string()))
+            }
+            Err(err) => Err(err.into()),
         }
-        Err(err) => Err(err.into()),
+    }
+    .boxed();
+    let fut2 = async move {
+        match storage.get_ref(storage_settings, delete_marker_path.as_str()).await {
+            Ok(_) => Ok(Bytes::new()),
+            Err(StorageError::RefNotFound(..)) => {
+                Err(RefError::RefNotFound(name.to_string()))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+    .boxed();
+
+    if let Some((content, is_deleted)) = FuturesOrdered::from_iter([fut1, fut2])
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .next_tuple()
+    {
+        match is_deleted {
+            Ok(_) => Err(RefError::RefNotFound(name.to_string())),
+            Err(RefError::RefNotFound(_)) => {
+                let data = serde_json::from_slice(content?.as_ref())?;
+                Ok(data)
+            }
+            Err(err) => Err(err),
+        }
+    } else {
+        Err(RefError::RefNotFound(name.to_string()))
     }
 }
 
@@ -587,6 +656,57 @@ mod tests {
 
             Ok(())
         }).await;
+        res1?;
+        res2?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tag_delete() -> Result<(), Box<dyn std::error::Error>> {
+        let ((_, res1), (_, res2, _)) = with_test_storages::<
+            Result<(), Box<dyn std::error::Error>>,
+            _,
+            _,
+        >(|storage| async move {
+            let storage_settings = storage.default_settings();
+            let s1 = SnapshotId::random();
+            let s2 = SnapshotId::random();
+            create_tag(storage.as_ref(), &storage_settings, "tag1", s1, false).await?;
+
+            // we can delete tags
+            delete_tag(storage.as_ref(), &storage_settings, "tag1", false).await?;
+
+            // cannot delete twice
+            assert!(delete_tag(storage.as_ref(), &storage_settings, "tag1", false)
+                .await
+                .is_err());
+
+            // we cannot delete non-existent tag
+            assert!(delete_tag(
+                storage.as_ref(),
+                &storage_settings,
+                "doesnt_exist",
+                false
+            )
+            .await
+            .is_err());
+
+            // cannot recreate same tag
+            matches!(create_tag(
+                storage.as_ref(),
+                &storage_settings,
+                "tag1",
+                s2.clone(),
+                false
+            )
+            .await, Err(RefError::TagAlreadyExists(name)) if name == "tag1");
+
+            // can create different tag
+            create_tag(storage.as_ref(), &storage_settings, "tag2", s2, false).await?;
+
+            Ok(())
+        })
+        .await;
         res1?;
         res2?;
         Ok(())
