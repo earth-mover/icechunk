@@ -1,16 +1,22 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
-    format::{ByteRange, ChunkIndices, Path},
-    repository::{
-        get_chunk, ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue,
-        StorageTransformer, ZarrArrayMetadata,
+    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path},
+    metadata::{
+        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
     },
-    ObjectStorage, Repository, Storage,
+    session::{get_chunk, Session},
+    storage::new_in_memory_storage,
+    Repository, Storage,
 };
 use pretty_assertions::assert_eq;
 use rand::{thread_rng, Rng};
-use std::{collections::HashSet, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU64,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     sync::{Barrier, RwLock},
     task::{self, JoinSet},
@@ -29,9 +35,9 @@ const N: usize = 20;
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
 async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(ObjectStorage::new_in_memory_store(Some("prefix".into())));
-    let mut ds = Repository::init(Arc::clone(&storage), false).await?.build();
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+    let repo = Repository::create(None, storage, HashMap::new()).await?;
+    let mut ds = repo.writable_session("main").await?;
 
     ds.add_group(Path::root()).await?;
     let zarr_meta = ZarrArrayMetadata {
@@ -83,7 +89,7 @@ async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn write_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32) {
+async fn write_task(ds: Arc<RwLock<Session>>, x: u32, y: u32) {
     let value = x as f64 * y as f64;
     let bytes = Bytes::copy_from_slice(&value.to_be_bytes());
 
@@ -110,7 +116,7 @@ async fn write_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32) {
         .expect("Failed to write chunk ref");
 }
 
-async fn read_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32, barrier: Arc<Barrier>) {
+async fn read_task(ds: Arc<RwLock<Session>>, x: u32, y: u32, barrier: Arc<Barrier>) {
     let value = x as f64 * y as f64;
     let expected_bytes = Bytes::copy_from_slice(&value.to_be_bytes());
     barrier.wait().await;
@@ -128,14 +134,10 @@ async fn read_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32, barrier: Arc<Bar
         let actual_bytes =
             get_chunk(chunk_reader).await.expect("Failed to getch chunk payload");
 
-        //dbg!(&actual_bytes);
-        match &actual_bytes {
-            Some(bytes) => {
-                if bytes == &expected_bytes {
-                    break;
-                }
+        if let Some(bytes) = &actual_bytes {
+            if bytes == &expected_bytes {
+                break;
             }
-            None => {}
         }
         let random_sleep = {
             let mut rng = thread_rng();
@@ -145,7 +147,7 @@ async fn read_task(ds: Arc<RwLock<Repository>>, x: u32, y: u32, barrier: Arc<Bar
     }
 }
 
-async fn list_task(ds: Arc<RwLock<Repository>>, barrier: Arc<Barrier>) {
+async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
     let mut expected_indices = HashSet::new();
     for x in 0..(N as u32) {
         for y in 0..(N as u32) {

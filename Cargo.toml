@@ -7,3 +7,11 @@ resolver = "2"
 expect_used = "warn"
 unwrap_used = "warn"
 panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+[workspace.metadata.release]
+allow-branch = ["main"]
+sign-commit = true
+sign-tag = true
+push = false

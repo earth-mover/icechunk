@@ -14,9 +14,10 @@ use crate::metadata::{
 };
 
 use super::{
-    format_constants, manifest::ManifestRef, AttributesId, IcechunkFormatError,
-    IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId, ObjectId, Path,
-    SnapshotId, TableOffset,
+    format_constants::SpecVersionBin,
+    manifest::{Manifest, ManifestRef},
+    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatVersion,
+    IcechunkResult, ManifestId, NodeId, ObjectId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +48,54 @@ pub struct ZarrArrayMetadata {
     pub codecs: Vec<Codec>,
     pub storage_transformers: Option<Vec<StorageTransformer>>,
     pub dimension_names: Option<DimensionNames>,
+}
+
+impl ZarrArrayMetadata {
+    /// Returns an iterator over the maximum permitted chunk indices for the array.
+    ///
+    /// This function calculates the maximum chunk indices based on the shape of the array
+    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
+    /// this will always result in proper indices at the boundaries.
+    ///
+    /// # Returns
+    ///
+    /// A ChunkIndices type containing the max chunk index for each dimension.
+    fn max_chunk_indices_permitted(&self) -> ChunkIndices {
+        debug_assert_eq!(self.shape.len(), self.chunk_shape.0.len());
+
+        ChunkIndices(
+            self.shape
+                .iter()
+                .zip(self.chunk_shape.0.iter())
+                .map(|(s, cs)| if *s == 0 { 0 } else { ((s - 1) / cs.get()) as u32 })
+                .collect(),
+        )
+    }
+
+    /// Validates the provided chunk coordinates for the array.
+    ///
+    /// This function checks if the provided chunk indices are valid for the array.
+    ///
+    /// # Arguments
+    ///
+    /// * `coord` - The chunk indices to validate.
+    ///
+    /// # Returns
+    ///
+    /// An bool indicating whether the chunk coordinates are valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns false if the chunk coordinates are invalid.
+    pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> bool {
+        debug_assert_eq!(self.shape.len(), coord.0.len());
+
+        coord
+            .0
+            .iter()
+            .zip(self.max_chunk_indices_permitted().0)
+            .all(|(index, index_permitted)| *index <= index_permitted)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,10 +130,23 @@ pub struct SnapshotMetadata {
 
 pub type SnapshotProperties = HashMap<String, Value>;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
     pub format_version: IcechunkFormatVersion,
+    pub size_bytes: u64,
+    pub num_rows: u32,
+}
+
+impl ManifestFileInfo {
+    pub fn new(manifest: &Manifest, size_bytes: u64) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            format_version: SpecVersionBin::current() as u8,
+            num_rows: manifest.len() as u32,
+            size_bytes,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -93,12 +155,9 @@ pub struct AttributeFileInfo {
     pub format_version: IcechunkFormatVersion,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq)]
 pub struct Snapshot {
-    pub icechunk_snapshot_format_version: IcechunkFormatVersion,
-    pub icechunk_snapshot_format_flags: BTreeMap<String, rmpv::Value>,
-
-    pub manifest_files: Vec<ManifestFileInfo>,
+    pub manifest_files: HashMap<ManifestId, ManifestFileInfo>,
     pub attribute_files: Vec<AttributeFileInfo>,
 
     pub total_parents: u32,
@@ -109,7 +168,7 @@ pub struct Snapshot {
     pub metadata: SnapshotMetadata,
     pub started_at: DateTime<Utc>,
     pub properties: SnapshotProperties,
-    nodes: BTreeMap<Path, NodeSnapshot>,
+    pub(crate) nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
 impl Default for SnapshotMetadata {
@@ -144,10 +203,10 @@ impl Snapshot {
         let started_at = Utc::now();
         let properties = properties.unwrap_or_default();
         Self {
-            icechunk_snapshot_format_version:
-                format_constants::LATEST_ICECHUNK_SNAPSHOT_FORMAT,
-            icechunk_snapshot_format_flags: Default::default(),
-            manifest_files,
+            manifest_files: manifest_files
+                .into_iter()
+                .map(|fi| (fi.id.clone(), fi))
+                .collect(),
             attribute_files,
             total_parents,
             short_term_parents,
@@ -207,6 +266,19 @@ impl Snapshot {
         (0..self.short_term_history.len())
             .map(move |ix| self.short_term_history[ix].clone())
     }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn manifest_info(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
+        self.manifest_files.get(id)
+    }
 }
 
 // We need this complex dance because Rust makes it really hard to put together an object and a
@@ -249,7 +321,7 @@ impl Iterator for NodeIterator {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::format::{manifest::ManifestExtents, IcechunkFormatError};
+    use crate::format::{format_constants::SpecVersionBin, IcechunkFormatError};
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -303,36 +375,37 @@ mod tests {
             ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ManifestExtents(vec![]),
+            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ManifestExtents(vec![]),
+            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
         };
 
         let oid = ObjectId::random();
+        let node_ids = iter::repeat_with(NodeId::random).take(7).collect::<Vec<_>>();
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
-                id: 1,
+                id: node_ids[0].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/a".try_into().unwrap(),
-                id: 2,
+                id: node_ids[1].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/b".try_into().unwrap(),
-                id: 3,
+                id: node_ids[2].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
-                id: 4,
+                id: node_ids[3].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
@@ -340,7 +413,7 @@ mod tests {
             },
             NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
-                id: 5,
+                id: node_ids[4].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid.clone(),
                     location: 42,
@@ -352,13 +425,13 @@ mod tests {
             },
             NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
-                id: 6,
+                id: node_ids[5].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             },
             NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
-                id: 7,
+                id: node_ids[6].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
@@ -367,11 +440,15 @@ mod tests {
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
-                format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                format_version: SpecVersionBin::current() as u8,
+                size_bytes: 1_000_000,
+                num_rows: 100_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
-                format_version: format_constants::LATEST_ICECHUNK_MANIFEST_FORMAT,
+                format_version: SpecVersionBin::current() as u8,
+                size_bytes: 1_000_000,
+                num_rows: 100_000,
             },
         ];
         let st = Snapshot::from_iter(&initial, None, manifests, vec![], nodes);
@@ -388,7 +465,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
-                id: 4,
+                id: node_ids[3].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
@@ -400,7 +477,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: Path::root(),
-                id: 1,
+                id: node_ids[0].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
             }),
@@ -410,7 +487,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
-                id: 5,
+                id: node_ids[4].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
                     object_id: oid,
                     location: 42,
@@ -423,7 +500,7 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
-                id: 6,
+                id: node_ids[5].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
             }),
@@ -433,11 +510,55 @@ mod tests {
             node,
             Ok(&NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
-                id: 7,
+                id: node_ids[6].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             }),
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_valid_chunk_coord() {
+        let zarr_meta1 = ZarrArrayMetadata {
+            shape: vec![10000, 10001, 9999],
+            data_type: DataType::Float32,
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+            ]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Float32(0f32),
+
+            codecs: vec![Codec {
+                name: "mycodec".to_string(),
+                configuration: Some(HashMap::from_iter(iter::once((
+                    "foo".to_string(),
+                    serde_json::Value::from(42),
+                )))),
+            }],
+            storage_transformers: None,
+            dimension_names: None,
+        };
+
+        let zarr_meta2 = ZarrArrayMetadata {
+            shape: vec![0, 0, 0],
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+                NonZeroU64::new(1000).unwrap(),
+            ]),
+            ..zarr_meta1.clone()
+        };
+
+        let coord1 = ChunkIndices(vec![9, 10, 9]);
+        let coord2 = ChunkIndices(vec![10, 11, 10]);
+        let coord3 = ChunkIndices(vec![0, 0, 0]);
+
+        assert!(zarr_meta1.valid_chunk_coord(&coord1));
+        assert!(!zarr_meta1.valid_chunk_coord(&coord2));
+
+        assert!(zarr_meta2.valid_chunk_coord(&coord3));
     }
 }

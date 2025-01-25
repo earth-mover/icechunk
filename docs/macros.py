@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import logging
 
+
 def define_env(env):
     # TODO: is there a better way of including these files and dirs? Symlinking seems error prone...
     # Potentially use: https://github.com/backstage/mkdocs-monorepo-plugin
@@ -11,14 +12,17 @@ def define_env(env):
         """
         try:
             # Resolve paths for docs and monorepo root
-            docs_dir = Path('./docs').resolve()
+            docs_dir = Path("./docs").resolve()
             monorepo_root = docs_dir.parent.parent
 
             # Symlinked paths
             external_sources = {
-                monorepo_root / 'icechunk-python' / 'notebooks' : docs_dir / 'icechunk-python' / 'notebooks',
-                monorepo_root / 'icechunk-python' / 'examples' : docs_dir / 'icechunk-python' / 'examples',
-                monorepo_root / 'spec' / 'icechunk-spec.md' : docs_dir / 'spec.md',
+                monorepo_root / "icechunk-python" / "notebooks": docs_dir
+                / "icechunk-python"
+                / "notebooks",
+                monorepo_root / "icechunk-python" / "examples": docs_dir
+                / "icechunk-python"
+                / "examples",
             }
 
             for src, target in external_sources.items():
@@ -32,8 +36,12 @@ def define_env(env):
                 # Remove existing symlink or directory if it exists
                 if target.is_symlink() or target.exists():
                     if target.is_dir() and not target.is_symlink():
-                        logging.error(f"Directory {target} already exists and is not a symlink.")
-                        raise Exception(f"Directory {target} already exists and is not a symlink.")
+                        logging.error(
+                            f"Directory {target} already exists and is not a symlink."
+                        )
+                        raise Exception(
+                            f"Directory {target} already exists and is not a symlink."
+                        )
                     target.unlink()
                     logging.info(f"Removed existing symlink or directory at: {target}")
 
@@ -43,7 +51,8 @@ def define_env(env):
 
         except Exception as e:
             logging.error(f"Error creating symlinks: {e}")
-            raise e
+            # Don't raise an error here for now
+            # raise e
 
     # Execute the symlink creation
     symlink_external_dirs()

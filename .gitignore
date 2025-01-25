@@ -5,3 +5,10 @@
 
 # Docs build
 .docs
+
+# hypothesis
+.hypothesis
+
+/devel
+
+.ipynb_checkpoints

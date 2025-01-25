@@ -3,17 +3,13 @@
 #
 #    maturin generate-ci github --pytest
 #
-name: Python CI
+name: Python CI and library release
 
 on:
-  push:
-    branches:
-      - main
-      - master
-    tags:
-      - '*'
-  pull_request:
   workflow_dispatch:
+  schedule:
+    # run every day at 4am
+    - cron: '0 4 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,24 +30,23 @@ jobs:
         platform:
           - runner: ubuntu-latest
             target: x86_64
+            manylinux: auto
           # - runner: ubuntu-latest
           #   target: x86
-          # - runner: ubuntu-latest
-          #   target: aarch64
-          # - runner: ubuntu-latest
-          #   target: armv7
-          # - runner: ubuntu-latest
-          #   target: s390x
-          # - runner: ubuntu-latest
-          #   target: ppc64le
+          - runner: ubuntu-latest
+            target: aarch64
+            manylinux: 2_28
+          - runner: ubuntu-latest
+            target: armv7
+            manylinux: 2_28
     steps:
       - uses: actions/checkout@v4
-      - name: Stand up MinIO
+      - name: Stand up docker services
         run: |
-          docker compose up -d minio
+          docker compose up -d
       - name: Wait for MinIO to be ready
         run: |
-          for i in {1..10}; do
+          for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
               break
               fi
@@ -68,189 +63,99 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
-          manylinux: auto
-      # - name: Upload wheels
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     working-directory: icechunk-python
-      #     name: wheels-linux-${{ matrix.platform.target }}
-      #     path: icechunk-python/dist
-      - name: mypy
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          mypy python
-      - name: ruff
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          ruff check
-      - name: pytest
-        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
-          pytest
-      - name: pytest
-        if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
-        uses: uraimo/run-on-arch-action@v2
+          manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: icechunk-python/dist
+
+  musllinux:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+            target: x86_64
+          - runner: ubuntu-latest
+            target: x86
+          - runner: ubuntu-latest
+            target: aarch64
+          - runner: ubuntu-latest
+            target: armv7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
-          arch: ${{ matrix.platform.target }}
-          distro: ubuntu22.04
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y --no-install-recommends python3 python3-pip
-            pip3 install -U pip pytest
-          run: |
-            set -e
-            pip3 install icechunk['test'] --find-links dist --force-reinstall
-            pytest
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: musllinux_1_2
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-musllinux-${{ matrix.platform.target }}
+          path: icechunk-python/dist
 
-  # musllinux:
-  #   runs-on: ${{ matrix.platform.runner }}
-  #   strategy:
-  #     matrix:
-  #       platform:
-  #         - runner: ubuntu-latest
-  #           target: x86_64
-  #         - runner: ubuntu-latest
-  #           target: x86
-  #         - runner: ubuntu-latest
-  #           target: aarch64
-  #         - runner: ubuntu-latest
-  #           target: armv7
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: 3.x
-  #     - name: Build wheels
-  #       uses: PyO3/maturin-action@v1
-  #       with:
-  #         target: ${{ matrix.platform.target }}
-  #         args: --release --out dist --find-interpreter
-  #         sccache: 'true'
-  #         manylinux: musllinux_1_2
-  #     - name: Upload wheels
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-musllinux-${{ matrix.platform.target }}
-  #         path: dist
-  #     - name: pytest
-  #       if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-  #       uses: addnab/docker-run-action@v3
-  #       with:
-  #         image: alpine:latest
-  #         options: -v ${{ github.workspace }}:/io -w /io
-  #         run: |
-  #           set -e
-  #           apk add py3-pip py3-virtualenv
-  #           python3 -m virtualenv .venv
-  #           source .venv/bin/activate
-  #           pip install icechunk --no-index --find-links dist --force-reinstall
-  #           pip install pytest
-  #           pytest
-  #     - name: pytest
-  #       if: ${{ !startsWith(matrix.platform.target, 'x86') }}
-  #       uses: uraimo/run-on-arch-action@v2
-  #       with:
-  #         arch: ${{ matrix.platform.target }}
-  #         distro: alpine_latest
-  #         githubToken: ${{ github.token }}
-  #         install: |
-  #           apk add py3-virtualenv
-  #         run: |
-  #           set -e
-  #           python3 -m virtualenv .venv
-  #           source .venv/bin/activate
-  #           pip install pytest
-  #           pip install icechunk --find-links dist --force-reinstall
-  #           pytest
+  windows:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x64
+          - runner: windows-latest
+            target: x86
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+          architecture: ${{ matrix.platform.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.platform.target }}
+          path: icechunk-python/dist
 
-  # windows:
-  #   runs-on: ${{ matrix.platform.runner }}
-  #   strategy:
-  #     matrix:
-  #       platform:
-  #         - runner: windows-latest
-  #           target: x64
-  #         - runner: windows-latest
-  #           target: x86
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: 3.x
-  #         architecture: ${{ matrix.platform.target }}
-  #     - name: Build wheels
-  #       uses: PyO3/maturin-action@v1
-  #       with:
-  #         target: ${{ matrix.platform.target }}
-  #         args: --release --out dist --find-interpreter
-  #         sccache: 'true'
-  #     - name: Upload wheels
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-windows-${{ matrix.platform.target }}
-  #         path: dist
-  #     - name: pytest
-  #       if: ${{ !startsWith(matrix.platform.target, 'aarch64') }}
-  #       shell: bash
-  #       run: |
-  #         set -e
-  #         python3 -m venv .venv
-  #         source .venv/Scripts/activate
-  #         pip install icechunk --find-links dist --force-reinstall
-  #         pip install pytest
-  #         pytest
-
-  # macos:
-  #   runs-on: ${{ matrix.platform.runner }}
-  #   strategy:
-  #     matrix:
-  #       platform:
-  #         - runner: macos-12
-  #           target: x86_64
-  #         - runner: macos-14
-  #           target: aarch64
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: 3.x
-  #     - name: Build wheels
-  #       uses: PyO3/maturin-action@v1
-  #       with:
-  #         target: ${{ matrix.platform.target }}
-  #         args: --release --out dist --find-interpreter
-  #         sccache: 'true'
-  #     - name: Upload wheels
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-macos-${{ matrix.platform.target }}
-  #         path: dist
-  #     - name: pytest
-  #       run: |
-  #         set -e
-  #         python3 -m venv .venv
-  #         source .venv/bin/activate
-  #         pip install icechunk --find-links dist --force-reinstall
-  #         pip install pytest
-  #         pytest
+  macos:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-13
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: icechunk-python/dist
 
   sdist:
     runs-on: ubuntu-latest
@@ -265,21 +170,20 @@ jobs:
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          working-directory: icechunk-python
           name: wheels-sdist
           path: icechunk-python/dist
 
-  # release:
-  #   name: Release
-  #   runs-on: ubuntu-latest
-  #   if: "startsWith(github.ref, 'refs/tags/')"
-  #   needs: [linux, musllinux, windows, macos, sdist]
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #     - name: Publish to PyPI
-  #       uses: PyO3/maturin-action@v1
-  #       env:
-  #         MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-  #       with:
-  #         command: upload
-  #         args: --non-interactive --skip-existing wheels-*/*
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: [linux, musllinux, windows, macos, sdist]
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Publish to PyPI
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing wheels-*/*

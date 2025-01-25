@@ -1,25 +1,38 @@
-from typing import Literal
+# Port of tests from Zarr-Python that are useful for icechunk
+import json
+import math
+import pickle
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import pytest
-import zarr
-import zarr.api
-import zarr.api.asynchronous
+
 from icechunk import IcechunkStore
-from zarr import Array, AsyncGroup, Group
+from tests.conftest import parse_repo
+from zarr import Group, create_array
+from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import ZarrFormat
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.storage import StorePath
 
 
+# @pytest.fixture(params=["local"])
+@pytest.fixture
+def store(request: pytest.FixtureRequest, tmpdir: Path) -> IcechunkStore:
+    repo = parse_repo("local", str(tmpdir))
+    session = repo.writable_session("main")
+    return session.store
+
+
 @pytest.mark.parametrize("store", ["memory"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
-@pytest.mark.parametrize("exists_ok", [True, False])
+@pytest.mark.parametrize("overwrite", [True, False])
 @pytest.mark.parametrize("extant_node", ["array", "group"])
 def test_array_creation_existing_node(
     store: IcechunkStore,
     zarr_format: ZarrFormat,
-    exists_ok: bool,
+    overwrite: bool,
     extant_node: Literal["array", "group"],
 ) -> None:
     """
@@ -40,131 +53,47 @@ def test_array_creation_existing_node(
     new_shape = (2, 2)
     new_dtype = "float32"
 
-    if exists_ok:
+    if overwrite:
         # This is currently not supported by IcechunkStore
-        pytest.xfail("IcechunkStore does not support exists_ok=True")
-        arr_new = Array.create(
+        arr_new = create_array(
             spath / "extant",
             shape=new_shape,
             dtype=new_dtype,
-            exists_ok=exists_ok,
+            overwrite=overwrite,
             zarr_format=zarr_format,
         )
         assert arr_new.shape == new_shape
         assert arr_new.dtype == new_dtype
     else:
         with pytest.raises(expected_exception):
-            arr_new = Array.create(
+            create_array(
                 spath / "extant",
                 shape=new_shape,
                 dtype=new_dtype,
-                exists_ok=exists_ok,
+                overwrite=overwrite,
                 zarr_format=zarr_format,
             )
 
 
-@pytest.mark.parametrize("store", ["memory"], indirect=["store"])
+### We should test serializability in many ways
+@pytest.mark.parametrize("store", ["local"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
-async def test_create_creates_parents(
-    store: IcechunkStore, zarr_format: ZarrFormat
-) -> None:
-    # prepare a root node, with some data set
-    await zarr.api.asynchronous.open_group(
-        store=store, path="a", zarr_format=zarr_format, attributes={"key": "value"}
-    )
-
-    # create a child node with a couple intermediates
-    await zarr.api.asynchronous.create(
-        shape=(2, 2), store=store, path="a/b/c/d", zarr_format=zarr_format
-    )
-    parts = ["a", "a/b", "a/b/c"]
-
-    if zarr_format == 2:
-        files = [".zattrs", ".zgroup"]
-    else:
-        files = ["zarr.json"]
-
-    expected = [f"{part}/{file}" for file in files for part in parts]
-
-    if zarr_format == 2:
-        expected.extend([".zattrs", ".zgroup", "a/b/c/d/.zarray", "a/b/c/d/.zattrs"])
-    else:
-        expected.extend(["zarr.json", "a/b/c/d/zarr.json"])
-
-    expected = sorted(expected)
-
-    result = sorted([x async for x in store.list_prefix("")])
-
-    assert result == expected
-
-    paths = ["a", "a/b", "a/b/c"]
-    for path in paths:
-        g = await zarr.api.asynchronous.open_group(store=store, path=path)
-        assert isinstance(g, AsyncGroup)
-
-
-@pytest.mark.parametrize("store", ["memory"], indirect=["store"])
-@pytest.mark.parametrize("zarr_format", [3])
-def test_array_name_properties_no_group(
-    store: IcechunkStore, zarr_format: ZarrFormat
-) -> None:
-    arr = Array.create(
+def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
+    expected = create_array(
         store=store, shape=(100,), chunks=(10,), zarr_format=zarr_format, dtype="i4"
     )
-    assert arr.path == ""
-    assert arr.name is None
-    assert arr.basename is None
+    expected[:] = list(range(100))
+
+    p = pickle.dumps(expected)
+    actual = pickle.loads(p)
+
+    # pickled stores dont point to the same session instance, so they are not equal
+    assert actual != expected
+    np.testing.assert_array_equal(actual[:], expected[:])
 
 
-@pytest.mark.parametrize("store", ["memory"], indirect=["store"])
-@pytest.mark.parametrize("zarr_format", [3])
-def test_array_name_properties_with_group(
-    store: IcechunkStore, zarr_format: ZarrFormat
-) -> None:
-    root = Group.from_store(store=store, zarr_format=zarr_format)
-    foo = root.create_array("foo", shape=(100,), chunks=(10,), dtype="i4")
-    assert foo.path == "foo"
-    assert foo.name == "/foo"
-    assert foo.basename == "foo"
-
-    bar = root.create_group("bar")
-    spam = bar.create_array("spam", shape=(100,), chunks=(10,), dtype="i4")
-
-    assert spam.path == "bar/spam"
-    assert spam.name == "/bar/spam"
-    assert spam.basename == "spam"
-
-
-@pytest.mark.parametrize("store", ["memory"], indirect=True)
-@pytest.mark.parametrize("specifiy_fill_value", [True, False])
-@pytest.mark.parametrize("dtype_str", ["bool", "uint8", "complex64"])
-def test_array_v3_fill_value_default(
-    store: IcechunkStore, specifiy_fill_value: bool, dtype_str: str
-) -> None:
-    """
-    Test that creating an array with the fill_value parameter set to None, or unspecified,
-    results in the expected fill_value attribute of the array, i.e. 0 cast to the array's dtype.
-    """
-    shape = (10,)
-    default_fill_value = 0
-    if specifiy_fill_value:
-        arr = Array.create(
-            store=store,
-            shape=shape,
-            dtype=dtype_str,
-            zarr_format=3,
-            chunk_shape=shape,
-            fill_value=None,
-        )
-    else:
-        arr = Array.create(
-            store=store, shape=shape, dtype=dtype_str, zarr_format=3, chunk_shape=shape
-        )
-
-    assert arr.fill_value == np.dtype(dtype_str).type(default_fill_value)
-    assert arr.fill_value.dtype == arr.dtype
-
-
+### We should definitely test our fill_value handling since that uses custom
+### serialization logic
 @pytest.mark.parametrize("store", ["memory"], indirect=True)
 @pytest.mark.parametrize(
     ("dtype_str", "fill_value"),
@@ -174,14 +103,57 @@ def test_array_v3_fill_value(
     store: IcechunkStore, fill_value: int, dtype_str: str
 ) -> None:
     shape = (10,)
-    arr = Array.create(
+    arr = create_array(
         store=store,
         shape=shape,
         dtype=dtype_str,
         zarr_format=3,
-        chunk_shape=shape,
+        chunks=shape,
         fill_value=fill_value,
     )
 
     assert arr.fill_value == np.dtype(dtype_str).type(fill_value)
     assert arr.fill_value.dtype == arr.dtype
+
+
+@pytest.mark.parametrize("store", ["memory"], indirect=True)
+async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:
+    shape = (10,)
+    arr = create_array(
+        store=store,
+        shape=shape,
+        dtype=np.float64,
+        zarr_format=3,
+        chunks=shape,
+        fill_value=np.nan,
+    )
+    arr[:] = np.nan
+
+    assert np.isnan(arr.fill_value)
+    assert arr.fill_value.dtype == arr.dtype
+    # # all fill value chunk is an empty chunk, and should not be written
+    # assert len([a async for a in store.list_prefix("/")]) == 0
+
+
+@pytest.mark.parametrize(
+    ("fill_value", "expected"),
+    [
+        (np.nan * 1j, ["NaN", "NaN"]),
+        (np.nan, ["NaN", 0.0]),
+        (np.inf, ["Infinity", 0.0]),
+        (np.inf * 1j, ["NaN", "Infinity"]),
+        (-np.inf, ["-Infinity", 0.0]),
+        (math.inf, ["Infinity", 0.0]),
+    ],
+)
+@pytest.mark.parametrize("store", ["memory"], indirect=True)
+async def test_special_complex_fill_values_roundtrip(
+    store: IcechunkStore, fill_value: Any, expected: list[Any]
+) -> None:
+    create_array(store=store, shape=(1,), dtype=np.complex64, fill_value=fill_value)
+    content = await store.get("zarr.json", prototype=default_buffer_prototype())
+    assert content is not None
+    actual = json.loads(content.to_bytes())
+    assert actual
+    pytest.xfail("IcechunkStore does not support complex fill types")
+    # assert actual["fill_value"] == expected

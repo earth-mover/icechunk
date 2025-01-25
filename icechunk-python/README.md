@@ -34,22 +34,25 @@ pip install -e icechunk@.
 Now you can create or open an icechunk store for use with `zarr-python`:
 
 ```python
-from icechunk import IcechunkStore, StorageConfig
+from icechunk import Repository, IcechunkStore, StorageConfig
 from zarr import Array, Group
 
 storage = StorageConfig.memory("test")
-store = await IcechunkStore.open(storage=storage, mode='r+')
+repo = Repository.open_or_create(storage=storage)
 
-root = Group.from_store(store=store, zarr_format=zarr_format)
+# create a session for writing to the store
+session = repo.writable_session(branch="main")
+
+root = Group.from_store(store=session.store(), zarr_format=zarr_format)
 foo = root.create_array("foo", shape=(100,), chunks=(10,), dtype="i4")
 ```
 
 You can then commit your changes to save progress or share with others:
 
 ```python
-store.commit("Create foo array")
+snapshot_id = session.commit("Create foo array")
 
-async for parent in store.ancestry():
+async for parent in repo.ancestry(snapshot_id):
     print(parent.message)
 ```
 

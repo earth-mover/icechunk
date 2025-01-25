@@ -9,47 +9,74 @@ classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
+license = { text = "Apache-2.0" }
 dynamic = ["version"]
 
-dependencies = ["zarr==3.0.0a7"]
+dependencies = ["zarr>=3"]
 
 [tool.poetry]
 name = "icechunk"
-version = "0.1.0"
+version = "0.1.0-alpha.12"
 description = "Icechunk Python"
 authors = ["Earthmover <info@earthmover.io>"]
-readme = "README.md"
-packages = [
-    { include = "icechunk", from = "python" }
-]
+readme = "../README.md"
+packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
 test = [
+  "boto3",
   "coverage",
   "mypy",
   "object-store-python",
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
+  "pytest-xdist",
   "ruff",
-  "dask",
-  "distributed",
+  "dask>=2024.11.0",
+  "distributed>=2024.11.0",
+  "xarray>=2025.01.1",
+  "hypothesis",
+  "pandas-stubs",
+  "boto3-stubs[s3]",
+]
+benchmark = [
+  "pytest-benchmark[histogram]",
+  "pytest-xdist",
+  "s3fs",
+  "h5netcdf",
+  "pooch",
+  "tqdm",
 ]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
+exclude = ["README.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
 testpaths = ["tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
+  "ignore:Port 8787 is already in use:UserWarning:",
+  # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
+  "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
+  "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
+  "ignore::ResourceWarning",
+  "ignore:Unused async fixture loop scope:pytest.PytestWarning",
+]
 
 [tool.pyright]
 venvPath = "."
@@ -61,12 +88,51 @@ strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = ["toolz.*"]
+
 [tool.ruff]
 line-length = 90
+extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
 [tool.ruff.lint]
 extend-select = [
-  "B",  # flake8-bugbear
-  "I",  # isort
-  "UP", # pypupgrade
+  "F",    # Pyflakes
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "I",    # isort
+  "UP",   # pyupgrade
+  "B",    # flake8-bugbear
+  "C4",   # flake8-comprehensions
+  "PIE",  # flake8-pie
+  "TID",  # flake8-tidy-imports (absolute imports)
+  "PGH",  # pygrep-hooks
+  "PERF", # Perflint
+  "RUF",
 ]
+extend-safe-fixes = [
+  "TID252", # absolute imports
+]
+ignore = [
+  "E402",    # module level import not at top of file
+  "E501",    # line too long - let the formatter worry about that
+  "E731",    # do not assign a lambda expression, use a def
+  "UP007",   # use X | Y for type annotations
+  "C40",     # unnecessary generator, comprehension, or literal
+  "PGH003",  # type:ignore without code
+  "PIE790",  # unnecessary pass statement
+  "PERF203", # try-except within a loop incurs performance overhead
+  "RUF001",  # string contains ambiguous unicode character
+  "RUF002",  # docstring contains ambiguous acute accent unicode character
+  "RUF003",  # comment contains ambiguous no-break space unicode character
+  "RUF005",  # consider unpacking operator instead of concatenation
+  "RUF012",  # mutable class attributes
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dask", "distributed", "icechunk", "xarray", "zarr"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Disallow all relative imports.
+ban-relative-imports = "all"

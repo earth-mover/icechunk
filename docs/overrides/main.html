@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 
-{% block announce %}
-  <div class="banner">Icechunk released!</div>
+{% block site_meta %}
+{{ super() }}
+<meta name="readthedocs-addons-api-version" content="1" />
 {% endblock %}

@@ -19,7 +19,7 @@ build-release *args='':
 
 # run clippy
 lint *args='':
-  cargo clippy -p icechunk -p icechunk-python --all-features {{args}}
+  cargo clippy --all-features {{args}}
 
 # reformat all rust files
 format *args='':
@@ -41,7 +41,22 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just compile-tests "--locked"
   just build
   just format "--check"
-  just lint
+  just lint "-p icechunk -p icechunk-python"
   just test
   just run-all-examples
   just check-deps
+
+pre-commit-python:
+  just format "--check -p icechunk-python"
+  just lint "-p icechunk-python"
+
+bench-compare *args:
+  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
+
+create-deepak-env name:
+  mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
+  mamba activate icechunk-{{name}}
+  just coiled-ice-create {{name}}
+
+coiled-ice-create version:
+  pip install coiled arraylake icechunk=='{{version}}' watermark xarray bokeh

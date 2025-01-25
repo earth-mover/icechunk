@@ -2,12 +2,14 @@
 use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
 
 use icechunk::{
-    repository::{
-        ChunkIndices, ChunkKeyEncoding, ChunkPayload, ChunkShape, Codec, DataType,
-        FillValue, Path, StorageTransformer, UserAttributes, ZarrArrayMetadata,
+    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
+    metadata::{
+        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+        UserAttributes,
     },
-    storage::{MemCachingStorage, ObjectStorage},
-    zarr::StoreError,
+    repository::VersionInfo,
+    session::{Session, SessionError},
+    storage::new_in_memory_storage,
     Repository, Storage,
 };
 use itertools::Itertools;
@@ -27,14 +29,9 @@ let mut ds = Repository::create(Arc::clone(&storage));
 "#,
     );
 
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(ObjectStorage::new_in_memory_store(None));
-    let mut ds = Repository::init(
-        Arc::new(MemCachingStorage::new(Arc::clone(&storage), 2, 2, 0, 0)),
-        false,
-    )
-    .await?
-    .build();
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+    let mut ds = repo.writable_session("main").await?;
 
     println!();
     println!();
@@ -84,7 +81,7 @@ let zarr_meta1 = ZarrArrayMetadata {{
     chunk_key_encoding: ChunkKeyEncoding::Slash,
     fill_value: FillValue::Int32(0),
     codecs: Codecs("codec".to_string()),
-    storage_transformers: Some(StorageTransformers("tranformers".to_string())),
+    storage_transformers: Some(StorageTransformers("transformers".to_string())),
     dimension_names: Some(vec![
         Some("x".to_string()),
         Some("y".to_string()),
@@ -152,11 +149,11 @@ ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?
     print_nodes(&ds).await?;
 
     println!("## Committing");
-    let v1_id = ds.flush("some message", Default::default()).await?;
+    let v1_id = ds.commit("some message", Default::default()).await?;
     println!(
         r#"
 ```
-ds.flush("some message", Default::default()).await?;
+ds.commit("some message", Default::default()).await?;
 => {v1_id:?}
 ```
  "#
@@ -166,6 +163,7 @@ ds.flush("some message", Default::default()).await?;
     println!();
     println!();
     println!("## Adding an inline chunk");
+    let mut ds = repo.writable_session("main").await?;
     ds.set_chunk_ref(
         array1_path.clone(),
         ChunkIndices(vec![0]),
@@ -197,7 +195,7 @@ let chunk = ds.get_chunk_ref(&array1_path, &ChunkIndices(vec![0])).await.unwrap(
 
     println!();
     println!("## Committing");
-    let v2_id = ds.flush("a message", Default::default()).await?;
+    let v2_id = ds.commit("a message", Default::default()).await?;
     println!(
         r#"
 ```
@@ -209,7 +207,7 @@ ds.flush("a message", Default::default()).await?;
 
     println!("## Creating a new Repository instance @ latest version");
 
-    let mut ds = Repository::update(Arc::clone(&storage), v2_id.clone()).build();
+    let mut ds = repo.writable_session("main").await?;
 
     println!(
         r#"
@@ -250,7 +248,7 @@ ds.set_chunk(
 
     println!();
     println!("## Committing");
-    let v3_id = ds.flush("commit", Default::default()).await?;
+    let v3_id = ds.commit("commit", Default::default()).await?;
     println!(
         r#"
 ```
@@ -261,7 +259,8 @@ ds.flush("commit", Default::default()).await?;
     );
 
     println!("Creating a new Repository instance, on the previous version");
-    let ds = Repository::update(Arc::clone(&storage), v2_id.clone()).build();
+
+    let ds = repo.readonly_session(&VersionInfo::SnapshotId(v2_id.clone())).await?;
 
     println!(
         r#"
@@ -282,7 +281,7 @@ let ds = Repository::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
     Ok(())
 }
 
-async fn print_nodes(ds: &Repository) -> Result<(), StoreError> {
+async fn print_nodes(ds: &Session) -> Result<(), SessionError> {
     println!("### List of nodes");
     let rows = ds
         .list_nodes()

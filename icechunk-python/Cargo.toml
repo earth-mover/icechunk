@@ -1,16 +1,16 @@
 [package]
 name = "icechunk-python"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.15"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
 homepage = "https://github.com/earth-mover/icechunk"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 keywords = ["zarr", "xarray", "database"]
 categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
 edition = "2021"
-publish = false
+publish = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -18,20 +18,24 @@ name = "_icechunk_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-bytes = "1.7.2"
-chrono = { version = "0.4.38" }
-futures = "0.3.30"
-icechunk = { path = "../icechunk", version = "0.1.0-alpha.1" }
-pyo3 = { version = "0.21", features = [
+bytes = "1.9.0"
+chrono = { version = "0.4.39" }
+futures = "0.3.31"
+icechunk = { path = "../icechunk", version = "0.1.0-alpha.15" }
+pyo3 = { version = "0.23", features = [
   "chrono",
-  "extension-module",
+  #  do we really need this one?
+  #  "extension-module",
   "experimental-async",
 ] }
-pyo3-asyncio-0-21 = { version = "0.21.0", features = ["tokio-runtime"] }
-async-stream = "0.3.5"
-thiserror = "1.0.64"
-tokio = "1.40"
-serde_json = "1.0.128"
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+async-stream = "0.3.6"
+thiserror = "2.0.11"
+tokio = "1.43"
+serde_json = "1.0.137"
+async-trait = "0.1.85"
+typetag = "0.2.19"
+serde = { version = "1.0.217", features = ["derive", "rc"] }
 
 [lints]
 workspace = true
