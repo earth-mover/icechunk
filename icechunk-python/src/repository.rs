@@ -335,6 +335,19 @@ impl PyRepository {
         })
     }
 
+    pub fn delete_tag(&self, py: Python<'_>, tag: &str) -> PyResult<()> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                self.0
+                    .delete_tag(tag)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(())
+            })
+        })
+    }
+
     pub fn create_tag(
         &self,
         py: Python<'_>,
