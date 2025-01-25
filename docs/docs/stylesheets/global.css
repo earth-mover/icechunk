@@ -17,3 +17,16 @@ TODO: find a way to show all pages in left sidebar
 .md-consent__overlay {
   display:none;
 }
+
+/* Adjust readthedocs flyout menu */
+:root {
+  /* Reduce Read the Docs' flyout font a little bit */
+  --readthedocs-flyout-font-size: 0.7rem;
+
+  /* Reduce Read the Docs' notification font a little bit */
+  --readthedocs-notification-font-size: 0.8rem;
+
+  /* This customization is not yet perfect because we can't change the `line-height` yet. */
+  /* See https://github.com/readthedocs/addons/issues/197 */
+  --readthedocs-search-font-size: 0.7rem;
+}
