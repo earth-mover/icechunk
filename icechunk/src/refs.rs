@@ -1,8 +1,15 @@
-use std::{collections::HashSet, future::Future, pin::Pin};
+use std::{
+    collections::BTreeSet,
+    future::{ready, Future},
+    pin::Pin,
+};
 
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use futures::{stream::FuturesOrdered, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{
+    stream::{FuturesOrdered, FuturesUnordered},
+    FutureExt, Stream, StreamExt, TryStreamExt,
+};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -51,7 +58,7 @@ pub enum RefError {
 
 pub type RefResult<A> = Result<A, RefError>;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum Ref {
     Tag(String),
     Branch(String),
@@ -67,6 +74,20 @@ impl Ref {
                 Some(name) => Ok(Ref::Branch(name.to_string())),
                 None => Err(RefError::InvalidRefType(path.to_string())),
             },
+        }
+    }
+
+    pub fn is_tag(&self) -> bool {
+        match &self {
+            Ref::Branch(_) => false,
+            Ref::Tag(_) => true,
+        }
+    }
+
+    pub fn is_branch(&self) -> bool {
+        match &self {
+            Ref::Branch(_) => true,
+            Ref::Tag(_) => false,
         }
     }
 
@@ -237,15 +258,36 @@ pub async fn update_branch(
 pub async fn list_refs(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-) -> RefResult<HashSet<Ref>> {
+) -> RefResult<BTreeSet<Ref>> {
     let all = storage.ref_names(storage_settings).await?;
-    all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()
+    let candidate_refs: BTreeSet<_> =
+        all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()?;
+    // we have all the candidate refs, but we need to filter out deleted tags
+    // we try to resolve all tags in parallel, and filter out the ones that don't resolve
+    // TODO: this can probably be optimized by smarter `ref_names`
+    let futs: FuturesUnordered<_> = candidate_refs
+        .iter()
+        .filter_map(|r| match r {
+            Ref::Tag(name) => Some(async {
+                (name.clone(), fetch_tag(storage, storage_settings, name.as_str()).await)
+            }),
+            Ref::Branch(_) => None,
+        })
+        .collect();
+    let deleted_tags: BTreeSet<_> = futs
+        .filter_map(|(tag_name, result)| {
+            ready(if result.is_err() { Some(Ref::Tag(tag_name)) } else { None })
+        })
+        .collect()
+        .await;
+
+    Ok(candidate_refs.difference(&deleted_tags).cloned().collect())
 }
 
 pub async fn list_tags(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-) -> RefResult<HashSet<String>> {
+) -> RefResult<BTreeSet<String>> {
     let tags = list_refs(storage, storage_settings)
         .await?
         .into_iter()
@@ -253,7 +295,7 @@ pub async fn list_tags(
             Ref::Tag(name) => Some(name),
             _ => None,
         })
-        .collect::<HashSet<_>>();
+        .collect();
 
     Ok(tags)
 }
@@ -261,7 +303,7 @@ pub async fn list_tags(
 pub async fn list_branches(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-) -> RefResult<HashSet<String>> {
+) -> RefResult<BTreeSet<String>> {
     let branches = list_refs(storage, storage_settings)
         .await?
         .into_iter()
@@ -269,7 +311,7 @@ pub async fn list_branches(
             Ref::Branch(name) => Some(name),
             _ => None,
         })
-        .collect::<HashSet<_>>();
+        .collect();
 
     Ok(branches)
 }
@@ -327,7 +369,6 @@ pub async fn delete_tag(
     _ = fetch_tag(storage, storage_settings, tag).await?;
 
     // no race condition: delete_tag ^ 2 = delete_tag
-
     let key = tag_delete_marker_key(tag)?;
     storage
         .write_ref(
@@ -501,7 +542,7 @@ mod tests {
 
             let res = fetch_tag(storage.as_ref(), &storage_settings, "tag1").await;
             assert!(matches!(res, Err(RefError::RefNotFound(name)) if name == *"tag1"));
-            assert_eq!(list_refs(storage.as_ref(), &storage_settings).await?, HashSet::new());
+            assert_eq!(list_refs(storage.as_ref(), &storage_settings).await?, BTreeSet::new());
 
             create_tag(storage.as_ref(), &storage_settings, "tag1", s1.clone(), false).await?;
             create_tag(storage.as_ref(), &storage_settings, "tag2", s2.clone(), false).await?;
@@ -524,7 +565,7 @@ mod tests {
 
             assert_eq!(
                 list_refs(storage.as_ref(), &storage_settings).await?,
-                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
+                BTreeSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // attempts to recreate a tag fail
@@ -534,7 +575,7 @@ mod tests {
             ));
             assert_eq!(
                 list_refs(storage.as_ref(), &storage_settings).await?,
-                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
+                BTreeSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // attempting to create a branch that doesn't exist, with a fake parent
@@ -544,7 +585,7 @@ mod tests {
             assert!(res.is_err());
             assert_eq!(
                 list_refs(storage.as_ref(), &storage_settings).await?,
-                HashSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
+                BTreeSet::from([Ref::Tag("tag1".to_string()), Ref::Tag("tag2".to_string())])
             );
 
             // create a branch successfully
@@ -572,7 +613,7 @@ mod tests {
 
             assert_eq!(
                 list_refs(storage.as_ref(), &storage_settings).await?,
-                HashSet::from([
+                BTreeSet::from([
                     Ref::Branch("branch1".to_string()),
                     Ref::Tag("tag1".to_string()),
                     Ref::Tag("tag2".to_string())
@@ -701,8 +742,16 @@ mod tests {
             )
             .await, Err(RefError::TagAlreadyExists(name)) if name == "tag1");
 
+            assert!(list_tags(storage.as_ref(), &storage_settings).await?.is_empty());
+
             // can create different tag
             create_tag(storage.as_ref(), &storage_settings, "tag2", s2, false).await?;
+
+            // listing doesn't include deleted tags
+            assert_eq!(
+                list_tags(storage.as_ref(), &storage_settings).await?,
+                ["tag2".to_string()].into(),
+            );
 
             Ok(())
         })

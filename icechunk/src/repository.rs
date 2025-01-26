@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -114,17 +114,17 @@ impl Repository {
             let asset_manager = AssetManager::new_no_cache(
                 Arc::clone(&storage_c),
                 storage_settings.clone(),
+                compression,
             );
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial());
-            let new_snapshot_id =
-                asset_manager.write_snapshot(new_snapshot, compression).await?;
+            asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
             update_branch(
                 storage_c.as_ref(),
                 &storage_settings,
                 Ref::DEFAULT_BRANCH,
-                new_snapshot_id.clone(),
+                new_snapshot.id().clone(),
                 None,
                 overwrite_refs,
             )
@@ -217,6 +217,7 @@ impl Repository {
             Arc::clone(&storage),
             storage_settings.clone(),
             config.caching(),
+            config.compression().level(),
         ));
         Ok(Self {
             config,
@@ -357,7 +358,7 @@ impl Repository {
     }
 
     /// List all branches in the repository.
-    pub async fn list_branches(&self) -> RepositoryResult<HashSet<String>> {
+    pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
         let branches =
             list_branches(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(branches)
@@ -442,7 +443,7 @@ impl Repository {
     }
 
     /// List all tags in the repository.
-    pub async fn list_tags(&self) -> RepositoryResult<HashSet<String>> {
+    pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
@@ -548,11 +549,7 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        error::Error,
-        sync::Arc,
-    };
+    use std::{collections::HashMap, error::Error, sync::Arc};
 
     use crate::{
         config::{CachingConfig, RepositoryConfig},
@@ -655,10 +652,10 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         let initial_branches = repo.list_branches().await?;
-        assert_eq!(initial_branches, HashSet::from(["main".into()]));
+        assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
 
         let initial_tags = repo.list_tags().await?;
-        assert_eq!(initial_tags, HashSet::new());
+        assert_eq!(initial_tags, BTreeSet::new());
 
         // Create some branches
         let initial_snapshot = repo.lookup_branch("main").await?;
@@ -668,7 +665,7 @@ mod tests {
         let branches = repo.list_branches().await?;
         assert_eq!(
             branches,
-            HashSet::from([
+            BTreeSet::from([
                 "main".to_string(),
                 "branch1".to_string(),
                 "branch2".to_string()
@@ -685,13 +682,13 @@ mod tests {
         repo.delete_branch("branch1").await?;
 
         let branches = repo.list_branches().await?;
-        assert_eq!(branches, HashSet::from(["main".to_string(), "branch2".to_string()]));
+        assert_eq!(branches, BTreeSet::from(["main".to_string(), "branch2".to_string()]));
 
         // Create some tags
         repo.create_tag("tag1", &initial_snapshot).await?;
 
         let tags = repo.list_tags().await?;
-        assert_eq!(tags, HashSet::from(["tag1".to_string()]));
+        assert_eq!(tags, BTreeSet::from(["tag1".to_string()]));
 
         // get the snapshot id of the tag
         let tag_snapshot = repo.lookup_tag("tag1").await?;
