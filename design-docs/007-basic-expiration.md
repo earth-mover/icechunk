@@ -4,7 +4,7 @@
 
 Icechunk keeps exhaustive track of history. Currently every snapshot ever written is available
 in object store and never deleted. Many times, that is not what users want. Our experience with
-Arraylake has taught us that 
+Arraylake has taught us that
 users usually want to keep "some history" but not all of it. The reason is:
 wasted storage. If they never go back to check previous versions, why would they want to pay
 for the extra storage?
@@ -63,7 +63,7 @@ stateDiagram-v2
     A --> X
     X --> B
     B --> REST
-    
+
   }
 
   Original --> Skip

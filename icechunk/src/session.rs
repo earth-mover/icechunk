@@ -643,7 +643,6 @@ impl Session {
                     &self.change_set,
                     message,
                     properties,
-                    self.config().compression().level(),
                 )
                 .await
             }
@@ -666,7 +665,6 @@ impl Session {
                         &self.change_set,
                         message,
                         properties,
-                        self.config().compression().level(),
                     )
                     .await
                 }
@@ -1147,7 +1145,6 @@ struct FlushProcess<'a> {
     asset_manager: &'a AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
-    compression_level: u8,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1157,13 +1154,11 @@ impl<'a> FlushProcess<'a> {
         asset_manager: &'a AssetManager,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
-        compression_level: u8,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
-            compression_level,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -1187,10 +1182,8 @@ impl<'a> FlushProcess<'a> {
 
         if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
             let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size = self
-                .asset_manager
-                .write_manifest(Arc::clone(&new_manifest), self.compression_level)
-                .await?;
+            let new_manifest_size =
+                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
             let file_info =
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
@@ -1229,10 +1222,8 @@ impl<'a> FlushProcess<'a> {
 
         if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
             let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size = self
-                .asset_manager
-                .write_manifest(Arc::clone(&new_manifest), self.compression_level)
-                .await?;
+            let new_manifest_size =
+                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
             let file_info =
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
@@ -1350,17 +1341,10 @@ async fn flush(
         new_snapshot.iter(),
     );
     let new_snapshot_id = new_snapshot.id();
+    flush_data.asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
     flush_data
         .asset_manager
-        .write_snapshot(Arc::clone(&new_snapshot), flush_data.compression_level)
-        .await?;
-    flush_data
-        .asset_manager
-        .write_transaction_log(
-            new_snapshot_id.clone(),
-            Arc::new(tx_log),
-            flush_data.compression_level,
-        )
+        .write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log))
         .await?;
 
     Ok(new_snapshot_id.clone())
@@ -1377,12 +1361,10 @@ async fn do_commit(
     change_set: &ChangeSet,
     message: &str,
     properties: Option<SnapshotProperties>,
-    compression_level: u8,
 ) -> SessionResult<SnapshotId> {
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data =
-        FlushProcess::new(asset_manager, change_set, snapshot_id, compression_level);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     let id = match update_branch(
@@ -1646,7 +1628,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let storage_settings = storage.default_settings();
         let asset_manager =
-            AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone());
+            AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {
@@ -1669,8 +1651,7 @@ mod tests {
             Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
         let manifest = Arc::new(manifest);
         let manifest_id = &manifest.id;
-        let manifest_size =
-            asset_manager.write_manifest(Arc::clone(&manifest), 1).await?;
+        let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -1726,12 +1707,12 @@ mod tests {
             vec![],
             nodes.iter().cloned(),
         ));
-        let snapshot_id = asset_manager.write_snapshot(snapshot, 1).await?;
+        asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
         update_branch(
             storage.as_ref(),
             &storage_settings,
             "main",
-            snapshot_id.clone(),
+            snapshot.id().clone(),
             None,
             true,
         )
