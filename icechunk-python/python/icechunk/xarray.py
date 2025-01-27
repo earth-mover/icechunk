@@ -301,6 +301,7 @@ def to_icechunk(
 
 @overload
 def make_dataset(obj: DataArray) -> Dataset: ...
+@overload
 def make_dataset(obj: Dataset) -> Dataset: ...
 def make_dataset(obj) -> Dataset:
     """Copied from DataArray.to_zarr"""
