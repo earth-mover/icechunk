@@ -121,6 +121,7 @@ class XarrayDatasetWriter:
             consolidate_on_close=False,
             zarr_version=None,
         )
+        self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
 
     def write_metadata(self, encoding: Mapping[Any, Any] | None = None) -> None:
         """
