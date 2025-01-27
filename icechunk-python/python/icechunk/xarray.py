@@ -80,8 +80,6 @@ class XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
-    # TODO: uncomment when Zarr has support
-    # write_empty_chunks: bool = field(kw_only=True, default=True)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -114,8 +112,6 @@ class XarrayDatasetWriter:
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
-            # TODO: uncomment when Zarr has support
-            # write_empty=self.write_empty_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
@@ -199,8 +195,6 @@ def to_icechunk(
     *,
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
-    # TODO: uncomment when Zarr has support
-    # write_empty_chunks: bool | None = None,
     safe_chunks: bool = True,
     append_dim: Hashable | None = None,
     region: Region = None,
