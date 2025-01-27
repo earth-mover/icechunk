@@ -15,6 +15,7 @@ from icechunk import (
     local_filesystem_storage,
     s3_storage,
 )
+from tests.xarray_test_compat import TestZarrRegionAuto
 from xarray.tests.test_backends import (
     ZarrBase,
     default_zarr_format,  # noqa: F401; needed otherwise not discovered
@@ -87,5 +88,15 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
                 secret_access_key="minio123",
             )
         )
+        session = repo.writable_session("main")
+        yield session.store
+
+
+class TestIcechunkRegionAuto(TestZarrRegionAuto):
+    @contextlib.contextmanager
+    def create_zarr_target(self) -> Generator[IcechunkStore]:
+        if zarr.config.config["default_zarr_format"] == 2:
+            pytest.skip("v2 not supported")
+        repo = Repository.create(in_memory_storage())
         session = repo.writable_session("main")
         yield session.store
