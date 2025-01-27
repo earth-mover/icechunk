@@ -201,7 +201,6 @@ def to_icechunk(
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,
-    **kwargs: Any,
 ) -> None:
     """
     Write an Xarray object to a group of an icechunk store.
