@@ -15,6 +15,7 @@ from icechunk import (
     local_filesystem_storage,
     s3_storage,
 )
+from icechunk.xarray import to_icechunk
 from tests.xarray_test_compat import TestZarrRegionAuto
 from xarray.tests.test_backends import (
     ZarrBase,
@@ -100,3 +101,6 @@ class TestIcechunkRegionAuto(TestZarrRegionAuto):
         repo = Repository.create(in_memory_storage())
         session = repo.writable_session("main")
         yield session.store
+
+    def save(self, target, ds, **kwargs):
+        to_icechunk(ds, target, **kwargs)
