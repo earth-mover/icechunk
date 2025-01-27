@@ -197,6 +197,7 @@ class ZarrRegionAutoTests:
             with pytest.raises(ValueError):
                 # If the first chunk is smaller than the border size then raise an error
                 self.save(
+                    store,
                     da.isel(x=slice(7, 11)).chunk(x=(2, 2)),
                     append_dim="x",
                     safe_chunks=True,

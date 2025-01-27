@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 import importlib
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import numpy as np
 from packaging.version import Version
@@ -13,7 +12,7 @@ from icechunk import IcechunkStore
 from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
-from xarray import Dataset
+from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
@@ -194,7 +193,7 @@ class XarrayDatasetWriter:
 
 
 def to_icechunk(
-    dataset: Dataset,
+    obj: DataArray | Dataset,
     store: IcechunkStore,
     *,
     group: str | None = None,
@@ -210,10 +209,12 @@ def to_icechunk(
     **kwargs: Any,
 ) -> None:
     """
-    Write an Xarray Dataset to a group of an icechunk store.
+    Write an Xarray object to a group of an icechunk store.
 
     Parameters
     ----------
+    obj: DataArray or Dataset
+        Xarray object to write
     store : MutableMapping, str or path-like, optional
         Store or path to directory in local or remote file system.
     mode : {"w", "w-", "a", "a-", r+", None}, optional
@@ -289,7 +290,9 @@ def to_icechunk(
         ``append_dim`` at the same time. To create empty arrays to fill
         in with ``region``, use the `XarrayDatasetWriter` directly.
     """
-    writer = XarrayDatasetWriter(dataset, store=store)
+
+    as_dataset = make_dataset(obj)
+    writer = XarrayDatasetWriter(as_dataset, store=store)
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -299,3 +302,29 @@ def to_icechunk(
     writer.write_eager()
     # eagerly write dask arrays
     writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+
+
+@overload
+def make_dataset(obj: DataArray) -> Dataset: ...
+def make_dataset(obj: Dataset) -> Dataset: ...
+def make_dataset(obj) -> Dataset:
+    """Copied from DataArray.to_zarr"""
+    from xarray.backends.api import DATAARRAY_NAME, DATAARRAY_VARIABLE
+
+    if isinstance(obj, Dataset):
+        return obj
+
+    assert isinstance(obj, DataArray)
+
+    if obj.name is None:
+        # If no name is set then use a generic xarray name
+        dataset = obj.to_dataset(name=DATAARRAY_VARIABLE)
+    elif obj.name in obj.coords or obj.name in obj.dims:
+        # The name is the same as one of the coords names, which the netCDF data model
+        # does not support, so rename it but keep track of the old name
+        dataset = obj.to_dataset(name=DATAARRAY_VARIABLE)
+        dataset.attrs[DATAARRAY_NAME] = obj.name
+    else:
+        # No problems with the name - so we're fine!
+        dataset = obj.to_dataset()
+    return dataset
