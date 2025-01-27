@@ -93,6 +93,7 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         yield session.store
 
 
+@pytest.mark.filterwarnings("ignore:Failed to open:RuntimeWarning")
 class TestIcechunkRegionAuto(ZarrRegionAutoTests):
     @contextlib.contextmanager
     def create_zarr_target(self) -> Generator[IcechunkStore]:
