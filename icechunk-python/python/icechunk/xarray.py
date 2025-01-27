@@ -287,7 +287,7 @@ def to_icechunk(
     """
 
     as_dataset = make_dataset(obj)
-    writer = XarrayDatasetWriter(as_dataset, store=store)
+    writer = XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
