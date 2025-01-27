@@ -305,7 +305,8 @@ def make_dataset(obj: DataArray) -> Dataset: ...
 def make_dataset(obj: Dataset) -> Dataset: ...
 def make_dataset(obj: DataArray | Dataset) -> Dataset:
     """Copied from DataArray.to_zarr"""
-    from xarray.backends.api import DATAARRAY_NAME, DATAARRAY_VARIABLE
+    DATAARRAY_NAME = "__xarray_dataarray_name__"
+    DATAARRAY_VARIABLE = "__xarray_dataarray_variable__"
 
     if isinstance(obj, Dataset):
         return obj
