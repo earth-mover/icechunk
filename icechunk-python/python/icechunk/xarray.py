@@ -303,7 +303,7 @@ def to_icechunk(
 def make_dataset(obj: DataArray) -> Dataset: ...
 @overload
 def make_dataset(obj: Dataset) -> Dataset: ...
-def make_dataset(obj) -> Dataset:
+def make_dataset(obj: DataArray | Dataset) -> Dataset:
     """Copied from DataArray.to_zarr"""
     from xarray.backends.api import DATAARRAY_NAME, DATAARRAY_VARIABLE
 
