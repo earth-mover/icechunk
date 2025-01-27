@@ -3,14 +3,12 @@ use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
     future::{ready, Future},
-    iter,
     ops::Range,
     pin::Pin,
     sync::Arc,
 };
 
 use bytes::Bytes;
-use chrono::Utc;
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -768,10 +766,18 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
-            let ancestry = current_snapshot.local_ancestry().map(|meta| meta.id);
-            let new_commits = iter::once(ref_data.snapshot.clone())
-                .chain(ancestry.take_while(|snap_id| snap_id != &self.snapshot_id))
-                .collect::<Vec<_>>();
+            let ancestry = self
+                .asset_manager
+                .snapshot_ancestry(current_snapshot.id())
+                .await?
+                .map_ok(|meta| meta.id);
+            let new_commits =
+                stream::once(ready(Ok(ref_data.snapshot.clone())))
+                    .chain(ancestry.try_take_while(|snap_id| {
+                        ready(Ok(snap_id != &self.snapshot_id))
+                    }))
+                    .try_collect::<Vec<_>>()
+                    .await?;
 
             // TODO: this clone is expensive
             // we currently need it to be able to process commits one by one without modifying the
@@ -1251,8 +1257,7 @@ impl<'a> FlushProcess<'a> {
                     // manifest file info
                     #[allow(clippy::expect_used)]
                     old_snapshot
-                        .manifest_files
-                        .get(&mr.object_id)
+                        .get_manifest_file(&mr.object_id)
                         .expect(
                             "Bug in flush function, no manifest file found in snapshot",
                         )
@@ -1328,15 +1333,14 @@ async fn flush(
         }
     });
 
-    let mut new_snapshot = Snapshot::from_iter(
-        old_snapshot.as_ref(),
+    let new_snapshot = Snapshot::from_iter(
+        old_snapshot.id().clone(),
+        message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
         vec![],
         all_nodes,
     );
-    new_snapshot.metadata.message = message.to_string();
-    new_snapshot.metadata.written_at = Utc::now();
 
     let new_snapshot = Arc::new(new_snapshot);
     // FIXME: this should execute in a non-blocking context
@@ -1345,7 +1349,7 @@ async fn flush(
         old_snapshot.iter(),
         new_snapshot.iter(),
     );
-    let new_snapshot_id = &new_snapshot.metadata.id;
+    let new_snapshot_id = new_snapshot.id();
     flush_data
         .asset_manager
         .write_snapshot(Arc::clone(&new_snapshot), flush_data.compression_level)
@@ -1712,10 +1716,11 @@ mod tests {
             },
         ];
 
-        let initial = Snapshot::empty();
+        let initial = Snapshot::initial();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
-            &initial,
+            initial.id().clone(),
+            "message".to_string(),
             None,
             manifests,
             vec![],
@@ -2538,7 +2543,7 @@ mod tests {
         assert_eq!(parents[1].message, "first commit");
         assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
         itertools::assert_equal(
-            parents.iter().sorted_by_key(|m| m.written_at).rev(),
+            parents.iter().sorted_by_key(|m| m.flushed_at).rev(),
             parents.iter(),
         );
 

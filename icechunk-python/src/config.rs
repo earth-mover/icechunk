@@ -106,7 +106,7 @@ fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     }
 }
 
-fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
+pub(crate) fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => format!(r#""{}""#, s.as_ref()),
