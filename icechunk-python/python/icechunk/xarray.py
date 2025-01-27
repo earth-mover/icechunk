@@ -114,8 +114,7 @@ class XarrayDatasetWriter:
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
-            # TODO: uncomment when Zarr has support
-            # write_empty=self.write_empty_chunks,
+            write_empty=self.write_empty_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
