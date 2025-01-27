@@ -16,7 +16,7 @@ from icechunk import (
     s3_storage,
 )
 from icechunk.xarray import to_icechunk
-from tests.xarray_test_compat import TestZarrRegionAuto
+from tests.xarray_test_compat import ZarrRegionAutoTests
 from xarray.tests.test_backends import (
     ZarrBase,
     default_zarr_format,  # noqa: F401; needed otherwise not discovered
@@ -93,7 +93,7 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         yield session.store
 
 
-class TestIcechunkRegionAuto(TestZarrRegionAuto):
+class TestIcechunkRegionAuto(ZarrRegionAutoTests):
     @contextlib.contextmanager
     def create_zarr_target(self) -> Generator[IcechunkStore]:
         if zarr.config.config["default_zarr_format"] == 2:

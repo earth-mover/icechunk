@@ -12,7 +12,7 @@ from xarray.backends.zarr import ZarrStore
 from xarray.testing import assert_identical
 
 
-class TestZarrRegionAuto:
+class ZarrRegionAutoTests:
     """These are separated out since we should not need to test this logic with every store."""
 
     @contextlib.contextmanager
