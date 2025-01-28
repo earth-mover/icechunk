@@ -1,4 +1,4 @@
-use std::{collections::HashSet, future::ready, iter};
+use std::{collections::HashSet, future::ready};
 
 use chrono::{DateTime, Utc};
 use futures::{stream, Stream, StreamExt, TryStreamExt};
@@ -171,11 +171,11 @@ pub async fn garbage_collect(
         }
 
         if config.deletes_manifests() {
-            keep_manifests.extend(snap.manifest_files.keys().cloned());
+            keep_manifests.extend(snap.manifest_files().keys().cloned());
         }
 
         if config.deletes_chunks() {
-            for manifest_id in snap.manifest_files.keys() {
+            for manifest_id in snap.manifest_files().keys() {
                 let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
                     IcechunkFormatError::ManifestInfoNotFound {
                         manifest_id: manifest_id.clone(),
@@ -239,10 +239,12 @@ async fn pointed_snapshots<'a>(
     Ok(roots
         .and_then(move |snap_id| async move {
             let snap = asset_manager.fetch_snapshot(&snap_id).await?;
-            // FIXME: this should be global ancestry, not local
-            let parents = snap.local_ancestry().map(|parent| parent.id);
-            Ok(stream::iter(iter::once(snap_id).chain(parents))
-                .map(Ok::<SnapshotId, GCError>))
+            let parents = asset_manager
+                .snapshot_ancestry(snap.id())
+                .await?
+                .map_ok(|parent| parent.id)
+                .err_into();
+            Ok(stream::once(ready(Ok(snap_id))).chain(parents))
         })
         .try_flatten())
 }

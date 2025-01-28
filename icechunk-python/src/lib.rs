@@ -22,7 +22,7 @@ use errors::{
     PyRebaseFailedError,
 };
 use pyo3::prelude::*;
-use repository::{PyRepository, PySnapshotMetadata};
+use repository::{PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::PyStore;
 
@@ -34,7 +34,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRepositoryConfig>()?;
     m.add_class::<PySession>()?;
     m.add_class::<PyStore>()?;
-    m.add_class::<PySnapshotMetadata>()?;
+    m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PyConflictSolver>()?;
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_class::<PyConflictDetector>()?;

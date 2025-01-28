@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use icechunk::{
     config::Credentials,
-    format::{snapshot::SnapshotMetadata, SnapshotId},
+    format::{snapshot::SnapshotInfo, SnapshotId},
     repository::{RepositoryError, VersionInfo},
     Repository,
 };
@@ -16,40 +16,45 @@ use tokio::sync::RwLock;
 
 use crate::{
     config::{
-        datetime_repr, PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings,
+        datetime_repr, format_option_string, PyCredentials, PyRepositoryConfig,
+        PyStorage, PyStorageSettings,
     },
     errors::PyIcechunkStoreError,
     session::PySession,
 };
 
-#[pyclass(name = "SnapshotMetadata", eq)]
+#[pyclass(name = "SnapshotInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PySnapshotMetadata {
+pub struct PySnapshotInfo {
     #[pyo3(get)]
     id: String,
+    #[pyo3(get)]
+    parent_id: Option<String>,
     #[pyo3(get)]
     written_at: DateTime<Utc>,
     #[pyo3(get)]
     message: String,
 }
 
-impl From<SnapshotMetadata> for PySnapshotMetadata {
-    fn from(val: SnapshotMetadata) -> Self {
-        PySnapshotMetadata {
+impl From<SnapshotInfo> for PySnapshotInfo {
+    fn from(val: SnapshotInfo) -> Self {
+        PySnapshotInfo {
             id: val.id.to_string(),
-            written_at: val.written_at,
+            parent_id: val.parent_id.map(|id| id.to_string()),
+            written_at: val.flushed_at,
             message: val.message,
         }
     }
 }
 
 #[pymethods]
-impl PySnapshotMetadata {
+impl PySnapshotInfo {
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"SnapshotMetadata(id="{id}",written_at={at},message="{message}")"#,
+            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
+            parent = format_option_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
@@ -225,7 +230,7 @@ impl PyRepository {
         branch: Option<String>,
         tag: Option<String>,
         snapshot: Option<String>,
-    ) -> PyResult<Vec<PySnapshotMetadata>> {
+    ) -> PyResult<Vec<PySnapshotInfo>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let version = args_to_version_info(branch, tag, snapshot)?;
@@ -237,7 +242,7 @@ impl PyRepository {
                     .ancestry(&version)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?
-                    .map_ok(Into::<PySnapshotMetadata>::into)
+                    .map_ok(Into::<PySnapshotInfo>::into)
                     .try_collect::<Vec<_>>()
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;

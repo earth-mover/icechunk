@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -6,71 +6,62 @@ use serde::{Deserialize, Serialize};
 use crate::format::{
     manifest::{ChunkPayload, Manifest},
     snapshot::{
-        AttributeFileInfo, ManifestFileInfo, NodeSnapshot, Snapshot, SnapshotMetadata,
-        SnapshotProperties,
+        AttributeFileInfo, ManifestFileInfo, NodeSnapshot, Snapshot, SnapshotProperties,
     },
     transaction_log::TransactionLog,
-    ChunkIndices, IcechunkFormatVersion, ManifestId, NodeId, Path,
+    ChunkIndices, IcechunkFormatVersion, ManifestId, NodeId, Path, SnapshotId,
 };
 
 #[derive(Debug, Deserialize)]
 pub struct SnapshotDeserializer {
+    id: SnapshotId,
+    parent_id: Option<SnapshotId>,
+    flushed_at: DateTime<Utc>,
+    message: String,
+    metadata: SnapshotProperties,
     manifest_files: Vec<ManifestFileInfo>,
     attribute_files: Vec<AttributeFileInfo>,
-    total_parents: u32,
-    short_term_parents: u16,
-    short_term_history: VecDeque<SnapshotMetadata>,
-    metadata: SnapshotMetadata,
-    started_at: DateTime<Utc>,
-    properties: SnapshotProperties,
     nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SnapshotSerializer<'a> {
+    id: &'a SnapshotId,
+    parent_id: &'a Option<SnapshotId>,
+    flushed_at: &'a DateTime<Utc>,
+    message: &'a String,
+    metadata: &'a SnapshotProperties,
     manifest_files: Vec<ManifestFileInfo>,
     attribute_files: &'a Vec<AttributeFileInfo>,
-    total_parents: u32,
-    short_term_parents: u16,
-    short_term_history: &'a VecDeque<SnapshotMetadata>,
-    metadata: &'a SnapshotMetadata,
-    started_at: &'a DateTime<Utc>,
-    properties: &'a SnapshotProperties,
     nodes: &'a BTreeMap<Path, NodeSnapshot>,
 }
 
 impl From<SnapshotDeserializer> for Snapshot {
     fn from(value: SnapshotDeserializer) -> Self {
-        Self {
-            manifest_files: value
-                .manifest_files
-                .into_iter()
-                .map(|fi| (fi.id.clone(), fi))
-                .collect(),
-            nodes: value.nodes,
-            attribute_files: value.attribute_files,
-            total_parents: value.total_parents,
-            short_term_parents: value.short_term_parents,
-            short_term_history: value.short_term_history,
-            metadata: value.metadata,
-            started_at: value.started_at,
-            properties: value.properties,
-        }
+        Self::from_fields(
+            value.id,
+            value.parent_id,
+            value.flushed_at,
+            value.message,
+            value.metadata,
+            value.manifest_files.into_iter().map(|fi| (fi.id.clone(), fi)).collect(),
+            value.attribute_files,
+            value.nodes,
+        )
     }
 }
 
 impl<'a> From<&'a Snapshot> for SnapshotSerializer<'a> {
     fn from(value: &'a Snapshot) -> Self {
         Self {
-            manifest_files: value.manifest_files.values().cloned().collect(),
-            attribute_files: &value.attribute_files,
-            nodes: &value.nodes,
-            total_parents: value.total_parents,
-            short_term_parents: value.short_term_parents,
-            short_term_history: &value.short_term_history,
-            metadata: &value.metadata,
-            started_at: &value.started_at,
-            properties: &value.properties,
+            id: value.id(),
+            parent_id: value.parent_id(),
+            flushed_at: value.flushed_at(),
+            message: value.message(),
+            metadata: value.metadata(),
+            manifest_files: value.manifest_files().values().cloned().collect(),
+            attribute_files: value.attribute_files(),
+            nodes: value.nodes(),
         }
     }
 }

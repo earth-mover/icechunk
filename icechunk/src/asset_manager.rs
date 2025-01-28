@@ -1,4 +1,6 @@
+use async_stream::try_stream;
 use bytes::Bytes;
+use futures::Stream;
 use quick_cache::{sync::Cache, Weighter};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,7 +18,7 @@ use crate::{
             deserialize_manifest, deserialize_snapshot, deserialize_transaction_log,
             serialize_manifest, serialize_snapshot, serialize_transaction_log,
         },
-        snapshot::Snapshot,
+        snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
         ChunkId, ChunkOffset, IcechunkFormatError, ManifestId, SnapshotId,
     },
@@ -272,6 +274,24 @@ impl AssetManager {
             }
         }
     }
+
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    pub async fn snapshot_ancestry(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
+        let mut this = self.fetch_snapshot(snapshot_id).await?;
+        let stream = try_stream! {
+            yield this.as_ref().into();
+            while let Some(parent) = this.parent_id() {
+                let snap = self.fetch_snapshot(parent).await?;
+                let info: SnapshotInfo = snap.as_ref().into();
+                yield info;
+                this = snap;
+            }
+        };
+        Ok(stream)
+    }
 }
 
 fn binary_file_header(
@@ -459,7 +479,7 @@ async fn write_new_snapshot(
         ),
     ];
 
-    let id = new_snapshot.metadata.id.clone();
+    let id = new_snapshot.id().clone();
     let buffer = tokio::task::spawn_blocking(move || {
         let buffer = binary_file_header(
             SpecVersionBin::current(),

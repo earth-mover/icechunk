@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap},
     ops::Bound,
     sync::Arc,
 };
@@ -17,7 +17,7 @@ use super::{
     format_constants::SpecVersionBin,
     manifest::{Manifest, ManifestRef},
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatVersion,
-    IcechunkResult, ManifestId, NodeId, ObjectId, Path, SnapshotId, TableOffset,
+    IcechunkResult, ManifestId, NodeId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,13 +121,6 @@ impl NodeSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SnapshotMetadata {
-    pub id: SnapshotId,
-    pub written_at: DateTime<Utc>,
-    pub message: String,
-}
-
 pub type SnapshotProperties = HashMap<String, Value>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
@@ -157,33 +150,34 @@ pub struct AttributeFileInfo {
 
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
-    pub manifest_files: HashMap<ManifestId, ManifestFileInfo>,
-    pub attribute_files: Vec<AttributeFileInfo>,
-
-    pub total_parents: u32,
-    // we denormalize this field to have it easily available in the serialized file
-    pub short_term_parents: u16,
-    pub short_term_history: VecDeque<SnapshotMetadata>,
-
-    pub metadata: SnapshotMetadata,
-    pub started_at: DateTime<Utc>,
-    pub properties: SnapshotProperties,
-    pub(crate) nodes: BTreeMap<Path, NodeSnapshot>,
+    id: SnapshotId,
+    parent_id: Option<SnapshotId>,
+    flushed_at: DateTime<Utc>,
+    message: String,
+    metadata: SnapshotProperties,
+    manifest_files: HashMap<ManifestId, ManifestFileInfo>,
+    attribute_files: Vec<AttributeFileInfo>,
+    nodes: BTreeMap<Path, NodeSnapshot>,
 }
 
-impl Default for SnapshotMetadata {
-    fn default() -> Self {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotInfo {
+    pub id: SnapshotId,
+    pub parent_id: Option<SnapshotId>,
+    pub flushed_at: DateTime<chrono::Utc>,
+    pub message: String,
+    pub metadata: SnapshotProperties,
+}
+
+impl From<&Snapshot> for SnapshotInfo {
+    fn from(value: &Snapshot) -> Self {
         Self {
-            id: ObjectId::random(),
-            written_at: Utc::now(),
-            message: Default::default(),
+            id: value.id().clone(),
+            parent_id: value.parent_id().clone(),
+            flushed_at: *value.flushed_at(),
+            message: value.message().to_string(),
+            metadata: value.metadata().clone(),
         }
-    }
-}
-
-impl SnapshotMetadata {
-    fn with_message(msg: String) -> Self {
-        Self { message: msg, ..Self::default() }
     }
 }
 
@@ -191,47 +185,66 @@ impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
     fn new(
-        short_term_history: VecDeque<SnapshotMetadata>,
-        total_parents: u32,
-        properties: Option<SnapshotProperties>,
+        parent_id: Option<SnapshotId>,
+        message: String,
+        metadata: Option<SnapshotProperties>,
         nodes: BTreeMap<Path, NodeSnapshot>,
         manifest_files: Vec<ManifestFileInfo>,
         attribute_files: Vec<AttributeFileInfo>,
     ) -> Self {
-        let metadata = SnapshotMetadata::default();
-        let short_term_parents = short_term_history.len() as u16;
-        let started_at = Utc::now();
-        let properties = properties.unwrap_or_default();
+        let metadata = metadata.unwrap_or_default();
+        let flushed_at = Utc::now();
         Self {
+            id: SnapshotId::random(),
+            parent_id,
+            flushed_at,
+            message,
             manifest_files: manifest_files
                 .into_iter()
                 .map(|fi| (fi.id.clone(), fi))
                 .collect(),
             attribute_files,
-            total_parents,
-            short_term_parents,
-            short_term_history,
             metadata,
-            started_at,
-            properties,
+            nodes,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_fields(
+        id: SnapshotId,
+        parent_id: Option<SnapshotId>,
+        flushed_at: DateTime<Utc>,
+        message: String,
+        metadata: SnapshotProperties,
+        manifest_files: HashMap<ManifestId, ManifestFileInfo>,
+        attribute_files: Vec<AttributeFileInfo>,
+        nodes: BTreeMap<Path, NodeSnapshot>,
+    ) -> Self {
+        Self {
+            id,
+            parent_id,
+            flushed_at,
+            message,
+            metadata,
+            manifest_files,
+            attribute_files,
             nodes,
         }
     }
 
     pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        parent: &Snapshot,
+        parent_id: SnapshotId,
+        message: String,
         properties: Option<SnapshotProperties>,
         manifest_files: Vec<ManifestFileInfo>,
         attribute_files: Vec<AttributeFileInfo>,
         iter: T,
     ) -> Self {
         let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
-        let mut history = parent.short_term_history.clone();
-        history.push_front(parent.metadata.clone());
 
         Self::new(
-            history,
-            parent.total_parents + 1,
+            Some(parent_id),
+            message,
             properties,
             nodes,
             manifest_files,
@@ -239,13 +252,51 @@ impl Snapshot {
         )
     }
 
-    pub fn empty() -> Self {
-        let metadata =
-            SnapshotMetadata::with_message(Self::INITIAL_COMMIT_MESSAGE.to_string());
-        Self {
-            metadata,
-            ..Self::new(VecDeque::new(), 0, None, Default::default(), vec![], vec![])
-        }
+    pub fn initial() -> Self {
+        let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
+        Self::new(
+            None,
+            Self::INITIAL_COMMIT_MESSAGE.to_string(),
+            Some(properties),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
+    }
+
+    pub fn id(&self) -> &SnapshotId {
+        &self.id
+    }
+
+    pub fn parent_id(&self) -> &Option<SnapshotId> {
+        &self.parent_id
+    }
+
+    pub fn metadata(&self) -> &SnapshotProperties {
+        &self.metadata
+    }
+
+    pub fn flushed_at(&self) -> &DateTime<Utc> {
+        &self.flushed_at
+    }
+
+    pub fn message(&self) -> &String {
+        &self.message
+    }
+
+    pub fn nodes(&self) -> &BTreeMap<Path, NodeSnapshot> {
+        &self.nodes
+    }
+
+    pub fn get_manifest_file(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
+        self.manifest_files.get(id)
+    }
+
+    pub fn manifest_files(&self) -> &HashMap<ManifestId, ManifestFileInfo> {
+        &self.manifest_files
+    }
+    pub fn attribute_files(&self) -> &Vec<AttributeFileInfo> {
+        &self.attribute_files
     }
 
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
@@ -260,11 +311,6 @@ impl Snapshot {
 
     pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeSnapshot> {
         NodeIterator { table: self, last_key: None }
-    }
-
-    pub fn local_ancestry(self: Arc<Self>) -> impl Iterator<Item = SnapshotMetadata> {
-        (0..self.short_term_history.len())
-            .map(move |ix| self.short_term_history[ix].clone())
     }
 
     pub fn len(&self) -> usize {
@@ -321,7 +367,9 @@ impl Iterator for NodeIterator {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::format::{format_constants::SpecVersionBin, IcechunkFormatError};
+    use crate::format::{
+        format_constants::SpecVersionBin, IcechunkFormatError, ObjectId,
+    };
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -436,7 +484,7 @@ mod tests {
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
             },
         ];
-        let initial = Snapshot::empty();
+        let initial = Snapshot::initial();
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
@@ -451,7 +499,14 @@ mod tests {
                 num_rows: 100_000,
             },
         ];
-        let st = Snapshot::from_iter(&initial, None, manifests, vec![], nodes);
+        let st = Snapshot::from_iter(
+            initial.id.clone(),
+            String::default(),
+            Default::default(),
+            manifests,
+            vec![],
+            nodes,
+        );
 
         assert_eq!(
             st.get_node(&"/nonexistent".try_into().unwrap()),

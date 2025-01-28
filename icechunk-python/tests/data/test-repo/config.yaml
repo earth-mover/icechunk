@@ -5,10 +5,6 @@ compression: null
 caching: null
 storage: null
 virtual_chunk_containers:
-  file:
-    name: file
-    url_prefix: file
-    store: !LocalFileSystem ''
   gcs:
     name: gcs
     url_prefix: gcs
@@ -21,6 +17,14 @@ virtual_chunk_containers:
       endpoint_url: https://fly.storage.tigris.dev
       anonymous: false
       allow_http: false
+  az:
+    name: az
+    url_prefix: az
+    store: !Azure {}
+  file:
+    name: file
+    url_prefix: file
+    store: !LocalFileSystem ''
   s3:
     name: s3
     url_prefix: s3://
@@ -29,7 +33,3 @@ virtual_chunk_containers:
       endpoint_url: http://localhost:9000
       anonymous: false
       allow_http: true
-  az:
-    name: az
-    url_prefix: az
-    store: !Azure {}

@@ -3,7 +3,7 @@ from typing import Self
 from icechunk._icechunk_python import (
     PyRepository,
     RepositoryConfig,
-    SnapshotMetadata,
+    SnapshotInfo,
     Storage,
 )
 from icechunk.credentials import AnyCredential
@@ -181,7 +181,7 @@ class Repository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot: str | None = None,
-    ) -> list[SnapshotMetadata]:
+    ) -> list[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
 
@@ -196,7 +196,7 @@ class Repository:
 
         Returns
         -------
-        list[SnapshotMetadata]
+        list[SnapshotInfo]
             The ancestry of the snapshot, listing out the snapshots and their metadata.
 
         Notes

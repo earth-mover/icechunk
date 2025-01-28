@@ -1,12 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    iter,
     sync::Arc,
 };
 
 use bytes::Bytes;
 use futures::Stream;
-use itertools::Either;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -15,7 +13,7 @@ use crate::{
     asset_manager::AssetManager,
     config::{Credentials, RepositoryConfig},
     format::{
-        snapshot::{Snapshot, SnapshotMetadata},
+        snapshot::{Snapshot, SnapshotInfo},
         IcechunkFormatError, NodeId, SnapshotId,
     },
     refs::{
@@ -118,7 +116,7 @@ impl Repository {
                 storage_settings.clone(),
             );
             // On create we need to create the default branch
-            let new_snapshot = Arc::new(Snapshot::empty());
+            let new_snapshot = Arc::new(Snapshot::initial());
             let new_snapshot_id =
                 asset_manager.write_snapshot(new_snapshot, compression).await?;
 
@@ -315,30 +313,18 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    async fn snapshot_ancestry(
+    pub async fn snapshot_ancestry(
         &self,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
-        let parent = self.asset_manager.fetch_snapshot(snapshot_id).await?;
-        let last = parent.metadata.clone();
-        let it = if parent.short_term_history.len() < parent.total_parents as usize {
-            // FIXME: implement splitting of snapshot history
-            #[allow(clippy::unimplemented)]
-            Either::Left(
-                parent.local_ancestry().chain(iter::once_with(|| unimplemented!())),
-            )
-        } else {
-            Either::Right(parent.local_ancestry())
-        };
-
-        Ok(futures::stream::iter(iter::once(Ok(last)).chain(it.map(Ok))))
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
+        self.asset_manager.snapshot_ancestry(snapshot_id).await
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
     pub async fn ancestry(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_ancestry(&snapshot_id).await
     }
