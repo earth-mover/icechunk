@@ -1269,6 +1269,13 @@ impl<'a> FlushProcess<'a> {
                         )
                         .clone()
                 }));
+                for mr in array_refs.iter() {
+                    let new_ref = mr.clone();
+                    self.manifest_refs
+                        .entry(node.id.clone())
+                        .and_modify(|v| v.push(new_ref.clone()))
+                        .or_insert_with(|| vec![new_ref]);
+                }
             }
             NodeData::Group => {}
         }
@@ -1322,17 +1329,13 @@ async fn flush(
     .map(|node| {
         let id = &node.id;
         // TODO: many clones
-        if let NodeData::Array(meta, original_manifests) = node.node_data {
-            if let Some(manifests) = flush_data.manifest_refs.get(id) {
-                NodeSnapshot {
-                    node_data: NodeData::Array(meta.clone(), manifests.clone()),
-                    ..node
-                }
-            } else {
-                NodeSnapshot {
-                    node_data: NodeData::Array(meta, original_manifests),
-                    ..node
-                }
+        if let NodeData::Array(meta, _) = node.node_data {
+            NodeSnapshot {
+                node_data: NodeData::Array(
+                    meta.clone(),
+                    flush_data.manifest_refs.get(id).cloned().unwrap_or_default(),
+                ),
+                ..node
             }
         } else {
             node
@@ -2487,6 +2490,38 @@ mod tests {
             repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
+
+        // delete the second chunk, now there are no chunks, so there should be no manifests either
+        let mut ds = repo.writable_session("main").await?;
+        ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 1]), None).await?;
+        let _snap_id = ds.commit("chunk deleted", None).await?;
+
+        let manifests = match ds.get_array(&a1path).await?.node_data {
+            NodeData::Array(_, manifests) => manifests,
+            NodeData::Group => panic!("must be an array"),
+        };
+        assert!(manifests.is_empty());
+
+        // there should be three manifests (unchanged)
+        assert_eq!(
+            3,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count()
+        );
+        // there should be six snapshots
+        assert_eq!(
+            6,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("snapshot"))
+                .count(),
+        );
 
         Ok(())
     }

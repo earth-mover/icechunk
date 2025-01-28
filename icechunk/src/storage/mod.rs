@@ -329,6 +329,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         Ok(translate_list_infos(self.list_objects(settings, SNAPSHOT_PREFIX).await?))
     }
 
+    async fn list_transaction_logs(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
+        Ok(translate_list_infos(self.list_objects(settings, TRANSACTION_PREFIX).await?))
+    }
+
     async fn delete_chunks(
         &self,
         settings: &Settings,
@@ -345,12 +352,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_manifests(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, ManifestId>,
+        manifests: BoxStream<'_, ManifestId>,
     ) -> StorageResult<usize> {
         self.delete_objects(
             settings,
             MANIFEST_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            manifests.map(|id| id.to_string()).boxed(),
         )
         .await
     }
@@ -358,12 +365,25 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_snapshots(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, SnapshotId>,
+        snapshots: BoxStream<'_, SnapshotId>,
     ) -> StorageResult<usize> {
         self.delete_objects(
             settings,
             SNAPSHOT_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            snapshots.map(|id| id.to_string()).boxed(),
+        )
+        .await
+    }
+
+    async fn delete_transaction_logs(
+        &self,
+        settings: &Settings,
+        transaction_logs: BoxStream<'_, SnapshotId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(
+            settings,
+            TRANSACTION_PREFIX,
+            transaction_logs.map(|id| id.to_string()).boxed(),
         )
         .await
     }
