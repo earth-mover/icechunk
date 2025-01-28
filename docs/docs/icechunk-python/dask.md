@@ -84,7 +84,7 @@ import xarray as xr
 # Assuming you have a valid writable Session named icechunk_session
 dataset = xr.tutorial.open_dataset("rasm", chunks={"time": 1}).isel(time=slice(24))
 
-icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store))
+icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store)
 
 roundtripped = xr.open_zarr(icechunk_session.store, consolidated=False)
 dataset.identical(roundtripped)

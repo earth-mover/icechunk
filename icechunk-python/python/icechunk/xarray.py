@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 import importlib
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import numpy as np
 from packaging.version import Version
@@ -13,7 +12,7 @@ from icechunk import IcechunkStore
 from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
-from xarray import Dataset
+from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
@@ -81,8 +80,6 @@ class XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
-    # TODO: uncomment when Zarr has support
-    # write_empty_chunks: bool = field(kw_only=True, default=True)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -115,13 +112,12 @@ class XarrayDatasetWriter:
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
-            # TODO: uncomment when Zarr has support
-            # write_empty=self.write_empty_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
             zarr_version=None,
         )
+        self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
 
     def write_metadata(self, encoding: Mapping[Any, Any] | None = None) -> None:
         """
@@ -194,26 +190,25 @@ class XarrayDatasetWriter:
 
 
 def to_icechunk(
-    dataset: Dataset,
+    obj: DataArray | Dataset,
     store: IcechunkStore,
     *,
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
-    # TODO: uncomment when Zarr has support
-    # write_empty_chunks: bool | None = None,
     safe_chunks: bool = True,
     append_dim: Hashable | None = None,
     region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,
-    **kwargs: Any,
 ) -> None:
     """
-    Write an Xarray Dataset to a group of an icechunk store.
+    Write an Xarray object to a group of an icechunk store.
 
     Parameters
     ----------
+    obj: DataArray or Dataset
+        Xarray object to write
     store : MutableMapping, str or path-like, optional
         Store or path to directory in local or remote file system.
     mode : {"w", "w-", "a", "a-", r+", None}, optional
@@ -289,7 +284,9 @@ def to_icechunk(
         ``append_dim`` at the same time. To create empty arrays to fill
         in with ``region``, use the `XarrayDatasetWriter` directly.
     """
-    writer = XarrayDatasetWriter(dataset, store=store)
+
+    as_dataset = make_dataset(obj)
+    writer = XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -299,3 +296,31 @@ def to_icechunk(
     writer.write_eager()
     # eagerly write dask arrays
     writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+
+
+@overload
+def make_dataset(obj: DataArray) -> Dataset: ...
+@overload
+def make_dataset(obj: Dataset) -> Dataset: ...
+def make_dataset(obj: DataArray | Dataset) -> Dataset:
+    """Copied from DataArray.to_zarr"""
+    DATAARRAY_NAME = "__xarray_dataarray_name__"
+    DATAARRAY_VARIABLE = "__xarray_dataarray_variable__"
+
+    if isinstance(obj, Dataset):
+        return obj
+
+    assert isinstance(obj, DataArray)
+
+    if obj.name is None:
+        # If no name is set then use a generic xarray name
+        dataset = obj.to_dataset(name=DATAARRAY_VARIABLE)
+    elif obj.name in obj.coords or obj.name in obj.dims:
+        # The name is the same as one of the coords names, which the netCDF data model
+        # does not support, so rename it but keep track of the old name
+        dataset = obj.to_dataset(name=DATAARRAY_VARIABLE)
+        dataset.attrs[DATAARRAY_NAME] = obj.name
+    else:
+        # No problems with the name - so we're fine!
+        dataset = obj.to_dataset()
+    return dataset
