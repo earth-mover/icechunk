@@ -183,6 +183,7 @@ nav:
     - icechunk-python/configuration.md
     - icechunk-python/xarray.md
     - icechunk-python/dask.md
+    - icechunk-python/distributed.md
     - icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md
