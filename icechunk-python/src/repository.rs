@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -275,7 +275,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_branches(&self, py: Python<'_>) -> PyResult<HashSet<String>> {
+    pub fn list_branches(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -377,7 +377,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_tags(&self, py: Python<'_>) -> PyResult<HashSet<String>> {
+    pub fn list_tags(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {

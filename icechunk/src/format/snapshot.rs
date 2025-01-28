@@ -299,6 +299,20 @@ impl Snapshot {
         &self.attribute_files
     }
 
+    /// Cretase a new `Snapshot` with all the same data as `self` but a different parent
+    pub fn adopt(&self, parent: &Snapshot) -> Self {
+        Self {
+            id: self.id.clone(),
+            parent_id: Some(parent.id().clone()),
+            flushed_at: *self.flushed_at(),
+            message: self.message().clone(),
+            metadata: self.metadata().clone(),
+            manifest_files: self.manifest_files().clone(),
+            attribute_files: self.attribute_files().clone(),
+            nodes: self.nodes.clone(),
+        }
+    }
+
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
         self.nodes
             .get(path)

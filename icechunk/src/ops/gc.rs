@@ -1,4 +1,4 @@
-use std::{collections::HashSet, future::ready};
+use std::{collections::HashSet, future::ready, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use futures::{stream, Stream, StreamExt, TryStreamExt};
@@ -9,7 +9,7 @@ use crate::{
     format::{
         manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
     },
-    refs::{list_refs, RefError},
+    refs::{list_refs, Ref, RefError},
     repository::RepositoryError,
     storage::{self, ListInfo},
     Storage, StorageError,
@@ -320,4 +320,125 @@ async fn gc_snapshots(
         })
         .boxed();
     Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
+}
+
+/// Expire snapshots older than a threshold.
+///
+/// This only processes snapshots found by navigating `reference`
+/// ancestry. Any other snapshots are not touched.
+///
+/// The operation will edit in place the oldest non-expired snapshot,
+/// changing its parent to be the root of the repo.
+///
+/// For this reasons, it's recommended to invalidate any snapshot
+/// caches before traversing history againg. The cache in the
+/// passed `asset_manager` is invalidated here, but other caches
+/// may exist, for example, in [`Repository`] instances.
+///
+/// Returns the ids of all snapshots considered expired and skipped
+/// from history. Notice that this snapshot are not necessarily
+/// available for garbage collection, they could still be pointed by
+/// ether refs.
+///
+/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+pub async fn expire_ref(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    asset_manager: &AssetManager,
+    reference: &Ref,
+    older_than: DateTime<Utc>,
+) -> GCResult<HashSet<SnapshotId>> {
+    let snap_id = reference
+        .fetch(storage, storage_settings)
+        .await
+        .map(|ref_data| ref_data.snapshot)?;
+
+    // the algorithm works by finding the oldest non expired snap and the root of the repo
+    // we do that in a single pass through the ancestry
+    // we keep two "pointer" the last editable_snap and the root, and we keep
+    // updating them as we navigate the ancestry
+    let mut editable_snap = snap_id.clone();
+    let mut root = snap_id.clone();
+
+    // here we'll populate the results of every expired snapshot
+    let mut released = HashSet::new();
+    let ancestry = asset_manager.snapshot_ancestry(&snap_id).await?.peekable();
+
+    pin!(ancestry);
+
+    // If we point to an expired snapshot already, there is nothing to do
+    if let Some(Ok(info)) = ancestry.as_mut().peek().await {
+        if info.flushed_at < older_than {
+            return Ok(HashSet::new());
+        }
+    }
+
+    while let Some(parent) = ancestry.try_next().await? {
+        if parent.flushed_at >= older_than {
+            // we are navigating non-expired snaps, last will be kept in editable_snap
+            editable_snap = parent.id;
+        } else {
+            released.insert(parent.id.clone());
+            root = parent.id;
+        }
+    }
+
+    // we counted the root as released, but it's not
+    released.remove(&root);
+
+    let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
+    let parent_id = editable_snap.parent_id();
+    if editable_snap.id() == &root || Some(&root) == parent_id.as_ref() {
+        // Either the reference is the root, or it is pointing to the root as first parent
+        // Nothing to do
+        return Ok(released);
+    }
+
+    let root = asset_manager.fetch_snapshot(&root).await?;
+    // TODO: add properties to the snapshot that tell us it was history edited
+    let new_snapshot = Arc::new(editable_snap.adopt(root.as_ref()));
+    asset_manager.write_snapshot(new_snapshot).await?;
+
+    Ok(released)
+}
+
+/// Expire all snapshots older than a threshold.
+///
+/// This processes snapshots found by navigating all references in
+/// the repo, tags first, branches leter, both in lexicographical order.
+///
+/// The operation will edit in place the oldest non-expired snapshot,
+/// in every ancestry, changing its parent to be the root of the repo.
+///
+/// For this reasons, it's recommended to invalidate any snapshot
+/// caches before traversing history againg. The cache in the
+/// passed `asset_manager` is invalidated here, but other caches
+/// may exist, for example, in [`Repository`] instances.
+///
+/// Returns the ids of all snapshots considered expired and skipped
+/// from history. Notice that this snapshot are not necessarily
+/// available for garbage collection, they could still be pointed by
+/// ether refs.
+///
+/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+pub async fn expire(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    asset_manager: &AssetManager,
+    older_than: DateTime<Utc>,
+) -> GCResult<HashSet<SnapshotId>> {
+    let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
+
+    all_refs
+        .then(move |r| async move {
+            let released_snaps =
+                expire_ref(storage, storage_settings, asset_manager, &r, older_than)
+                    .await?;
+            Ok::<HashSet<SnapshotId>, GCError>(released_snaps)
+        })
+        .try_fold(HashSet::new(), |mut accum, new_set| async move {
+            accum.extend(new_set);
+            Ok(accum)
+        })
+        .await
 }
