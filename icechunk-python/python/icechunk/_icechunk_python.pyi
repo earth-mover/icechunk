@@ -64,7 +64,7 @@ class CompressionConfig:
     """Configuration for how Icechunk compresses its metadata files"""
 
     def __init__(
-        self, algorithm: CompressionAlgorithm | None, level: int | None
+        self, algorithm: CompressionAlgorithm | None = None, level: int | None = None
     ) -> None: ...
     @property
     def algorithm(self) -> CompressionAlgorithm | None: ...
@@ -82,11 +82,11 @@ class CachingConfig:
 
     def __init__(
         self,
-        num_snapshot_nodes: int | None,
-        num_chunk_refs: int | None,
-        num_transaction_changes: int | None,
-        num_bytes_attributes: int | None,
-        num_bytes_chunks: int | None,
+        num_snapshot_nodes: int | None = None,
+        num_chunk_refs: int | None = None,
+        num_transaction_changes: int | None = None,
+        num_bytes_attributes: int | None = None,
+        num_bytes_chunks: int | None = None,
     ) -> None: ...
     @property
     def num_snapshot_nodes(self) -> int | None: ...
@@ -116,8 +116,8 @@ class StorageConcurrencySettings:
 
     def __init__(
         self,
-        max_concurrent_requests_for_object: int | None,
-        ideal_concurrent_request_size: int | None,
+        max_concurrent_requests_for_object: int | None = None,
+        ideal_concurrent_request_size: int | None = None,
     ) -> None: ...
     @property
     def max_concurrent_requests_for_object(self) -> int | None: ...
@@ -131,7 +131,7 @@ class StorageConcurrencySettings:
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
-    def __init__(self, concurrency: StorageConcurrencySettings | None) -> None: ...
+    def __init__(self, concurrency: StorageConcurrencySettings | None = None) -> None: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None: ...
     @concurrency.setter
@@ -142,13 +142,13 @@ class RepositoryConfig:
 
     def __init__(
         self,
-        inline_chunk_threshold_bytes: int | None,
-        unsafe_overwrite_refs: bool | None,
-        get_partial_values_concurrency: int | None,
-        compression: CompressionConfig | None,
-        caching: CachingConfig | None,
-        storage: StorageSettings | None,
-        virtual_chunk_containers: dict[str, VirtualChunkContainer] | None,
+        inline_chunk_threshold_bytes: int | None = None,
+        unsafe_overwrite_refs: bool | None = None,
+        get_partial_values_concurrency: int | None = None,
+        compression: CompressionConfig | None = None,
+        caching: CachingConfig | None = None,
+        storage: StorageSettings | None = None,
+        virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
     ) -> None: ...
     @staticmethod
     def default() -> RepositoryConfig: ...
@@ -182,6 +182,18 @@ class RepositoryConfig:
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
     def clear_virtual_chunk_containers(self) -> None: ...
 
+class GCSummary:
+    @property
+    def chunks_deleted(self) -> int: ...
+    @property
+    def manifests_deleted(self) -> int: ...
+    @property
+    def snapshots_deleted(self) -> int: ...
+    @property
+    def attributes_deleted(self) -> int: ...
+    @property
+    def transaction_logs_deleted(self) -> int: ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -213,6 +225,7 @@ class PyRepository:
     def fetch_config(storage: Storage) -> RepositoryConfig | None: ...
     def save_config(self) -> None: ...
     def config(self) -> RepositoryConfig: ...
+    def storage(self) -> Storage: ...
     def ancestry(
         self,
         *,
@@ -237,6 +250,10 @@ class PyRepository:
         snapshot: str | None = None,
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
+    def expire_snapshots(self, older_than: datetime.datetime) -> set[str]: ...
+    def garbage_collect(
+        self, delete_object_older_than: datetime.datetime
+    ) -> GCSummary: ...
 
 class PySession:
     @classmethod

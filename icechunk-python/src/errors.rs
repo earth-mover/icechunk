@@ -1,8 +1,8 @@
 use std::convert::Infallible;
 
 use icechunk::{
-    format::IcechunkFormatError, repository::RepositoryError, session::SessionError,
-    store::StoreError, StorageError,
+    format::IcechunkFormatError, ops::gc::GCError, repository::RepositoryError,
+    session::SessionError, store::StoreError, StorageError,
 };
 use pyo3::{
     create_exception,
@@ -33,6 +33,8 @@ pub(crate) enum PyIcechunkStoreError {
     SessionError(SessionError),
     #[error("icechunk format error: {0}")]
     IcechunkFormatError(#[from] IcechunkFormatError),
+    #[error("Expiration or garbage collection error: {0}")]
+    GCError(#[from] GCError),
     #[error("{0}")]
     PyKeyError(String),
     #[error("{0}")]

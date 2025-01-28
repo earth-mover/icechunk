@@ -22,7 +22,7 @@ use errors::{
     PyRebaseFailedError,
 };
 use pyo3::prelude::*;
-use repository::{PyRepository, PySnapshotInfo};
+use repository::{PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::PyStore;
 
@@ -56,6 +56,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCachingConfig>()?;
     m.add_class::<PyStorageConcurrencySettings>()?;
     m.add_class::<PyStorageSettings>()?;
+    m.add_class::<PyGCSummary>()?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
@@ -65,5 +66,6 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConflictType>()?;
     m.add_class::<PyConflict>()?;
     m.add_class::<PyRebaseFailedData>()?;
+
     Ok(())
 }

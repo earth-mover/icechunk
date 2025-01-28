@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -8,6 +8,7 @@ use futures::TryStreamExt;
 use icechunk::{
     config::Credentials,
     format::{snapshot::SnapshotInfo, SnapshotId},
+    ops::gc::{expire, garbage_collect, GCConfig, GCSummary},
     repository::{RepositoryError, VersionInfo},
     Repository,
 };
@@ -58,6 +59,33 @@ impl PySnapshotInfo {
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
+    }
+}
+
+#[pyclass(name = "GCSummary", eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
+pub struct PyGCSummary {
+    #[pyo3(get)]
+    pub chunks_deleted: usize,
+    #[pyo3(get)]
+    pub manifests_deleted: usize,
+    #[pyo3(get)]
+    pub snapshots_deleted: usize,
+    #[pyo3(get)]
+    pub attributes_deleted: usize,
+    #[pyo3(get)]
+    pub transaction_logs_deleted: usize,
+}
+
+impl From<GCSummary> for PyGCSummary {
+    fn from(value: GCSummary) -> Self {
+        Self {
+            chunks_deleted: value.chunks_deleted,
+            manifests_deleted: value.manifests_deleted,
+            snapshots_deleted: value.snapshots_deleted,
+            attributes_deleted: value.attributes_deleted,
+            transaction_logs_deleted: value.transaction_logs_deleted,
+        }
     }
 }
 
@@ -221,6 +249,10 @@ impl PyRepository {
 
     pub fn storage_settings(&self) -> PyStorageSettings {
         self.0.storage_settings().clone().into()
+    }
+
+    pub fn storage(&self) -> PyStorage {
+        PyStorage(Arc::clone(self.0.storage()))
     }
 
     #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
@@ -440,6 +472,61 @@ impl PyRepository {
                 })?;
 
             Ok(PySession(Arc::new(RwLock::new(session))))
+        })
+    }
+
+    pub fn expire_snapshots(
+        &self,
+        py: Python<'_>,
+        older_than: DateTime<Utc>,
+    ) -> PyResult<HashSet<String>> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let result =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let result = expire(
+                        self.0.storage().as_ref(),
+                        self.0.storage_settings(),
+                        self.0.asset_manager(),
+                        older_than,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::GCError)?;
+                    Ok::<_, PyIcechunkStoreError>(
+                        result.iter().map(|id| id.to_string()).collect(),
+                    )
+                })?;
+
+            Ok(result)
+        })
+    }
+
+    pub fn garbage_collect(
+        &self,
+        py: Python<'_>,
+        delete_object_older_than: DateTime<Utc>,
+    ) -> PyResult<PyGCSummary> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let result =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let gc_config = GCConfig::clean_all(
+                        delete_object_older_than,
+                        delete_object_older_than,
+                        Default::default(),
+                    );
+                    let result = garbage_collect(
+                        self.0.storage().as_ref(),
+                        self.0.storage_settings(),
+                        self.0.asset_manager(),
+                        &gc_config,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::GCError)?;
+                    Ok::<_, PyIcechunkStoreError>(result.into())
+                })?;
+
+            Ok(result)
         })
     }
 }
