@@ -9,9 +9,11 @@ use std::{
 };
 
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::task::JoinError;
 
 use crate::{
     asset_manager::AssetManager,
@@ -63,8 +65,21 @@ pub enum SessionError {
     AlreadyExists { node: NodeSnapshot, message: String },
     #[error("cannot commit, no changes made to the session")]
     NoChangesToCommit,
+    #[error(
+        "invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` "
+    )]
+    InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
+    #[error(
+        "snapshot timestamp is invalid: timestamp: `{snapshot_time}`, object store clock: `{object_store_time}` "
+    )]
+    InvalidSnapshotTimestamp {
+        object_store_time: DateTime<Utc>,
+        snapshot_time: DateTime<Utc>,
+    },
     #[error("unknown flush error")]
     OtherFlushError,
+    #[error("a concurrent task failed {0}")]
+    ConcurrencyError(#[from] JoinError),
     #[error("ref error: `{0}`")]
     Ref(#[from] RefError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
@@ -636,7 +651,7 @@ impl Session {
                 do_commit(
                     &self.config,
                     self.storage.as_ref(),
-                    &self.asset_manager,
+                    Arc::clone(&self.asset_manager),
                     self.storage_settings.as_ref(),
                     branch_name,
                     &self.snapshot_id,
@@ -658,7 +673,7 @@ impl Session {
                     do_commit(
                         &self.config,
                         self.storage.as_ref(),
-                        &self.asset_manager,
+                        Arc::clone(&self.asset_manager),
                         self.storage_settings.as_ref(),
                         branch_name,
                         &self.snapshot_id,
@@ -1142,7 +1157,7 @@ pub fn construct_valid_byte_range(
 }
 
 struct FlushProcess<'a> {
-    asset_manager: &'a AssetManager,
+    asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
@@ -1151,7 +1166,7 @@ struct FlushProcess<'a> {
 
 impl<'a> FlushProcess<'a> {
     fn new(
-        asset_manager: &'a AssetManager,
+        asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
     ) -> Self {
@@ -1208,7 +1223,7 @@ impl<'a> FlushProcess<'a> {
         node: &NodeSnapshot,
     ) -> SessionResult<()> {
         let updated_chunks = updated_node_chunks_iterator(
-            self.asset_manager,
+            self.asset_manager.as_ref(),
             self.change_set,
             self.parent_id,
             node.clone(),
@@ -1299,7 +1314,7 @@ async fn flush(
     }
 
     let all_nodes = updated_nodes(
-        flush_data.asset_manager,
+        flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
     )
@@ -1333,7 +1348,21 @@ async fn flush(
         all_nodes,
     );
 
+    if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+        return Err(SessionError::InvalidSnapshotTimestampOrdering {
+            parent: *old_snapshot.flushed_at(),
+            child: *new_snapshot.flushed_at(),
+        });
+    }
+
     let new_snapshot = Arc::new(new_snapshot);
+    let new_snapshot_c = Arc::clone(&new_snapshot);
+    let asset_manager = Arc::clone(&flush_data.asset_manager);
+    let snapshot_timestamp = tokio::spawn(async move {
+        asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
+        asset_manager.get_snapshot_last_modified(new_snapshot_c.id()).await
+    });
+
     // FIXME: this should execute in a non-blocking context
     let tx_log = TransactionLog::new(
         flush_data.change_set,
@@ -1341,11 +1370,25 @@ async fn flush(
         new_snapshot.iter(),
     );
     let new_snapshot_id = new_snapshot.id();
-    flush_data.asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
+
     flush_data
         .asset_manager
         .write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log))
         .await?;
+
+    let snapshot_timestamp = snapshot_timestamp
+        .await
+        .map_err(SessionError::ConcurrencyError)?
+        .map_err(SessionError::RepositoryError)?;
+
+    // Fail if there is too much clock difference with the object store
+    // This is to prevent issues with snapshot ordering and expiration
+    if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+        return Err(SessionError::InvalidSnapshotTimestamp {
+            object_store_time: snapshot_timestamp,
+            snapshot_time: *new_snapshot.flushed_at(),
+        });
+    }
 
     Ok(new_snapshot_id.clone())
 }
@@ -1354,7 +1397,7 @@ async fn flush(
 async fn do_commit(
     config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
-    asset_manager: &AssetManager,
+    asset_manager: Arc<AssetManager>,
     storage_settings: &storage::Settings,
     branch_name: &str,
     snapshot_id: &SnapshotId,

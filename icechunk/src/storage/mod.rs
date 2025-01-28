@@ -7,7 +7,8 @@ use aws_sdk_s3::{
     error::SdkError,
     operation::{
         delete_objects::DeleteObjectsError, get_object::GetObjectError,
-        list_objects_v2::ListObjectsV2Error, put_object::PutObjectError,
+        head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
+        put_object::PutObjectError,
     },
     primitives::ByteStreamError,
 };
@@ -66,6 +67,8 @@ pub enum StorageError {
     S3GetObjectError(#[from] SdkError<GetObjectError, HttpResponse>),
     #[error("error writing object to object store {0}")]
     S3PutObjectError(#[from] SdkError<PutObjectError, HttpResponse>),
+    #[error("error getting object metadata from object store {0}")]
+    S3HeadObjectError(#[from] SdkError<HeadObjectError, HttpResponse>),
     #[error("error listing objects in object store {0}")]
     S3ListObjectError(#[from] SdkError<ListObjectsV2Error, HttpResponse>),
     #[error("error deleting objects in object store {0}")]
@@ -298,6 +301,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         prefix: &str,
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize>;
+
+    async fn get_snapshot_last_modified(
+        &self,
+        settings: &Settings,
+        snapshot: &SnapshotId,
+    ) -> StorageResult<DateTime<Utc>>;
 
     async fn list_chunks(
         &self,
