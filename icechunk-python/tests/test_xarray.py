@@ -50,20 +50,12 @@ def create_test_data(
 
 
 @contextlib.contextmanager
-def roundtrip(
-    data: xr.Dataset, compute: bool = True
-) -> Generator[xr.Dataset, None, None]:
-    """Since this roundtrips and returns a Dataset‚the compute kwarg only controls what is passed to to_icechunk.
-    If False, we eagerly compute here prior to loading data"""
+def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(local_filesystem_storage(tmpdir))
         session = repo.writable_session("main")
-        ret = to_icechunk(data, store=session.store, mode="w", compute=compute)
-        if not compute:
-            import dask
+        to_icechunk(data, store=session.store, mode="w")
 
-            (new_session,) = dask.compute(ret)
-            session.merge(new_session)
         # if allow_distributed_write:
         #     with session.allow_distributed_write():
         #       to_icechunk(data, store=session.store, mode="w")
