@@ -10,7 +10,7 @@ use std::{
 use bytes::Bytes;
 use format_constants::FileTypeBin;
 use itertools::Itertools;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
@@ -78,7 +78,7 @@ pub type NodeId = ObjectId<8, NodeTag>;
 impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub fn random() -> Self {
         let mut buf = [0u8; SIZE];
-        thread_rng().fill(&mut buf[..]);
+        rng().fill(&mut buf[..]);
         Self(buf, PhantomData)
     }
 
