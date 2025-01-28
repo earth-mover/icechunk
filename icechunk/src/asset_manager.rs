@@ -1,5 +1,6 @@
 use async_stream::try_stream;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use quick_cache::{sync::Cache, Weighter};
 use serde::{Deserialize, Serialize};
@@ -293,6 +294,13 @@ impl AssetManager {
             }
         };
         Ok(stream)
+    }
+
+    pub async fn get_snapshot_last_modified(
+        &self,
+        snap: &SnapshotId,
+    ) -> RepositoryResult<DateTime<Utc>> {
+        Ok(self.storage.get_snapshot_last_modified(&self.storage_settings, snap).await?)
     }
 }
 

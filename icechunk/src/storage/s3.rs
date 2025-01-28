@@ -29,6 +29,7 @@ use aws_sdk_s3::{
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
+use chrono::{DateTime, Utc};
 use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
@@ -589,6 +590,31 @@ impl Storage for S3Storage {
             })
             .await;
         Ok(deleted.into_inner())
+    }
+
+    async fn get_snapshot_last_modified(
+        &self,
+        _settings: &Settings,
+        snapshot: &SnapshotId,
+    ) -> StorageResult<DateTime<Utc>> {
+        let key = self.get_snapshot_path(snapshot)?;
+        let res = self
+            .get_client()
+            .await
+            .head_object()
+            .bucket(self.bucket.as_str())
+            .key(key)
+            .send()
+            .await?;
+
+        let res = res.last_modified.ok_or(StorageError::Other(
+            "Object has no last_modified field".to_string(),
+        ))?;
+        let res = res
+            .to_chrono_utc()
+            .map_err(|_| StorageError::Other("Invalid metadata timestamp".to_string()))?;
+
+        Ok(res)
     }
 
     async fn get_object_range_buf(
