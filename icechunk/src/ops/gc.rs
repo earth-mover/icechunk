@@ -117,6 +117,13 @@ impl GCConfig {
             _ => false,
         }
     }
+
+    fn must_delete_transaction_log(&self, tx_log: &ListInfo<SnapshotId>) -> bool {
+        match self.dangling_transaction_logs {
+            Action::DeleteIfCreatedBefore(before) => tx_log.created_at < before,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
@@ -158,7 +165,6 @@ pub async fn garbage_collect(
             .await?;
 
     // FIXME: add attribute files
-    // FIXME: add transaction log files
     let mut keep_chunks = HashSet::new();
     let mut keep_manifests = HashSet::new();
     let mut keep_snapshots = HashSet::new();
@@ -198,15 +204,20 @@ pub async fn garbage_collect(
 
     if config.deletes_snapshots() {
         summary.snapshots_deleted =
-            gc_snapshots(storage, storage_settings, config, keep_snapshots).await?;
+            gc_snapshots(storage, storage_settings, config, &keep_snapshots).await?;
+    }
+    if config.deletes_transaction_logs() {
+        summary.transaction_logs_deleted =
+            gc_transaction_logs(storage, storage_settings, config, &keep_snapshots)
+                .await?;
     }
     if config.deletes_manifests() {
         summary.manifests_deleted =
-            gc_manifests(storage, storage_settings, config, keep_manifests).await?;
+            gc_manifests(storage, storage_settings, config, &keep_manifests).await?;
     }
     if config.deletes_chunks() {
         summary.chunks_deleted =
-            gc_chunks(storage, storage_settings, config, keep_chunks).await?;
+            gc_chunks(storage, storage_settings, config, &keep_chunks).await?;
     }
 
     Ok(summary)
@@ -253,7 +264,7 @@ async fn gc_chunks(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
-    keep_ids: HashSet<ChunkId>,
+    keep_ids: &HashSet<ChunkId>,
 ) -> GCResult<usize> {
     let to_delete = storage
         .list_chunks(storage_settings)
@@ -276,7 +287,7 @@ async fn gc_manifests(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
-    keep_ids: HashSet<ManifestId>,
+    keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<usize> {
     let to_delete = storage
         .list_manifests(storage_settings)
@@ -301,7 +312,7 @@ async fn gc_snapshots(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
-    keep_ids: HashSet<SnapshotId>,
+    keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<usize> {
     let to_delete = storage
         .list_snapshots(storage_settings)
@@ -320,6 +331,29 @@ async fn gc_snapshots(
         })
         .boxed();
     Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
+}
+
+async fn gc_transaction_logs(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    config: &GCConfig,
+    keep_ids: &HashSet<SnapshotId>,
+) -> GCResult<usize> {
+    let to_delete = storage
+        .list_transaction_logs(storage_settings)
+        .await?
+        // TODO: don't skip over errors
+        .filter_map(move |tx| {
+            ready(tx.ok().and_then(|tx| {
+                if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
+                    Some(tx.id.clone())
+                } else {
+                    None
+                }
+            }))
+        })
+        .boxed();
+    Ok(storage.delete_transaction_logs(storage_settings, to_delete).await?)
 }
 
 /// Expire snapshots older than a threshold.
