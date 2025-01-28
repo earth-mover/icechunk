@@ -2462,6 +2462,38 @@ mod tests {
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 
+        // delete the second chunk, now there are no chunks, so there should be no manifests either
+        let mut ds = repo.writable_session("main").await?;
+        ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 1]), None).await?;
+        let _snap_id = ds.commit("chunk deleted", None).await?;
+
+        let manifests = match ds.get_array(&a1path).await?.node_data {
+            NodeData::Array(_, manifests) => manifests,
+            NodeData::Group => panic!("must be an array"),
+        };
+        assert!(manifests.is_empty());
+
+        // there should be three manifests (unchanged)
+        assert_eq!(
+            3,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count()
+        );
+        // there should be six snapshots
+        assert_eq!(
+            6,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("snapshot"))
+                .count(),
+        );
+
         Ok(())
     }
 
