@@ -104,4 +104,6 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
         yield session.store
 
     def save(self, target, ds, **kwargs):
+        # not really important here
+        kwargs.pop("compute")
         to_icechunk(ds, target, **kwargs)
