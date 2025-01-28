@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 
 from icechunk import IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
-from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteRequest
+from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
@@ -20,6 +20,8 @@ ARRAY_METADATA = (
     b'"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,'
     b'"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}'
 )
+
+S = TypeVar("S", bound=Store)
 
 
 class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
@@ -152,9 +154,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     def test_store_supports_partial_writes(self, store: IcechunkStore) -> None:
         assert not store.supports_partial_writes
 
-    async def test_list_prefix(self, store: IcechunkStore) -> None:
-        assert True
-
     async def test_clear(self, store: IcechunkStore) -> None:
         await self.set(
             store,
@@ -186,6 +185,27 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         )
         keys = [k async for k in store.list()]
         assert keys == ["foo/zarr.json"], keys
+
+    async def test_list_prefix(self, store: S) -> None:
+        """
+        Test that the `list_prefix` method works as intended. Given a prefix, it should return
+        all the keys in storage that start with this prefix.
+        """
+        prefixes = ("", "a/", "a/b/", "a/b/c/")
+        data = self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
+        fname = "zarr.json"
+        store_dict = {p + fname: data for p in prefixes}
+
+        await store._set_many(store_dict.items())
+
+        for prefix in prefixes:
+            observed = tuple(sorted([_ async for _ in store.list_prefix(prefix)]))
+            expected: tuple[str, ...] = ()
+            for key in store_dict:
+                if key.startswith(prefix):
+                    expected += (key,)
+            expected = tuple(sorted(expected))
+            assert observed == expected
 
     async def test_list_dir(self, store: IcechunkStore) -> None:
         out = [k async for k in store.list_dir("")]

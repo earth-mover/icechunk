@@ -1258,6 +1258,13 @@ impl<'a> FlushProcess<'a> {
                         )
                         .clone()
                 }));
+                for mr in array_refs.iter() {
+                    let new_ref = mr.clone();
+                    self.manifest_refs
+                        .entry(node.id.clone())
+                        .and_modify(|v| v.push(new_ref.clone()))
+                        .or_insert_with(|| vec![new_ref]);
+                }
             }
             NodeData::Group => {}
         }
@@ -1311,17 +1318,13 @@ async fn flush(
     .map(|node| {
         let id = &node.id;
         // TODO: many clones
-        if let NodeData::Array(meta, original_manifests) = node.node_data {
-            if let Some(manifests) = flush_data.manifest_refs.get(id) {
-                NodeSnapshot {
-                    node_data: NodeData::Array(meta.clone(), manifests.clone()),
-                    ..node
-                }
-            } else {
-                NodeSnapshot {
-                    node_data: NodeData::Array(meta, original_manifests),
-                    ..node
-                }
+        if let NodeData::Array(meta, _) = node.node_data {
+            NodeSnapshot {
+                node_data: NodeData::Array(
+                    meta.clone(),
+                    flush_data.manifest_refs.get(id).cloned().unwrap_or_default(),
+                ),
+                ..node
             }
         } else {
             node
