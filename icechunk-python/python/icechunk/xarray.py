@@ -168,6 +168,8 @@ class XarrayDatasetWriter:
         if not self.writer.sources:
             return
 
+        import dask
+
         # TODO: this is all pretty dask specific at the moment
         chunkmanager_store_kwargs = chunkmanager_store_kwargs or {}
         chunkmanager_store_kwargs["load_stored"] = False
@@ -179,10 +181,6 @@ class XarrayDatasetWriter:
             compute=False, chunkmanager_store_kwargs=chunkmanager_store_kwargs
         )  # type: ignore[no-untyped-call]
 
-        if not compute:
-            # do not execute the write in this case
-            return
-
         # Now we tree-reduce all changesets
         merged_session = stateful_store_reduce(
             stored_arrays,
@@ -190,10 +188,14 @@ class XarrayDatasetWriter:
             chunk=extract_session,
             aggregate=merge_sessions,
             split_every=split_every,
-            compute=True,
+            compute=False,
             **chunkmanager_store_kwargs,
         )
-        self.store.session.merge(merged_session)
+        if compute:
+            (new_session,) = dask.compute(merged_session)
+            self.store.session.merge(new_session)
+        else:
+            return merged_session
 
 
 def to_icechunk(
@@ -209,7 +211,7 @@ def to_icechunk(
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,
     compute: bool = True,
-) -> None:
+) -> Any:
     """
     Write an Xarray object to a group of an icechunk store.
 
@@ -281,7 +283,21 @@ def to_icechunk(
 
     Returns
     -------
-    None
+    None if `compute` is `True`, `dask.Delayed` otherwise.
+
+    Examples
+    --------
+
+    When `compute` is False, this functions returns a `dask.Delayed` object. Call `dask.compute`
+    on this object to execute the write and receive a Session object with the changes.
+    With distributed writes, you are responsible for merging these changes with your
+    `session` so that a commit can be properly executed
+
+    >>> session = repo.writable_session("main")
+    >>> future = to_icechunk(dataset, session.store, ..., compute=False)
+    >>> (new_session,) = dask.compute(future)  # execute the write
+    >>> session.merge(new_session)  # merge in the (possibly) remote changes with the local session
+    >>> session.commit("wrote some data!")
 
     Notes
     -----
@@ -292,9 +308,6 @@ def to_icechunk(
         should be written in a separate single call to ``to_zarr()``.
       - Dimensions cannot be included in both ``region`` and
         ``append_dim`` at the same time.
-
-    Unlike Xarray's `to_zarr`, this function does *not* return a dask Delayed object
-    if `compute=False`.
     """
 
     as_dataset = make_dataset(obj)
@@ -307,7 +320,7 @@ def to_icechunk(
     # write in-memory arrays
     writer.write_eager()
     # eagerly write dask arrays
-    writer.write_lazy(
+    return writer.write_lazy(
         compute=compute, chunkmanager_store_kwargs=chunkmanager_store_kwargs
     )
 
