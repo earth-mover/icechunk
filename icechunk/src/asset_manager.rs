@@ -559,7 +559,7 @@ async fn write_new_tx_log(
 
     let buffer = tokio::task::spawn_blocking(move || {
         let buffer = binary_file_header(
-            SpecVersionBin::V0_1_0Alpha12,
+            SpecVersionBin::current(),
             FileTypeBin::TransactionLog,
             CompressionAlgorithmBin::Zstd,
         );
