@@ -152,7 +152,7 @@ pub type GCResult<A> = Result<A, GCError>;
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-    asset_manager: &AssetManager,
+    asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
     // TODO: this function could have much more parallelism
@@ -160,9 +160,13 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
 
-    let all_snaps =
-        pointed_snapshots(storage, storage_settings, asset_manager, &config.extra_roots)
-            .await?;
+    let all_snaps = pointed_snapshots(
+        storage,
+        storage_settings,
+        Arc::clone(&asset_manager),
+        &config.extra_roots,
+    )
+    .await?;
 
     // FIXME: add attribute files
     let mut keep_chunks = HashSet::new();
@@ -243,19 +247,22 @@ async fn all_roots<'a>(
 async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,
-    asset_manager: &'a AssetManager,
+    asset_manager: Arc<AssetManager>,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
     let roots = all_roots(storage, storage_settings, extra_roots).await?;
     Ok(roots
-        .and_then(move |snap_id| async move {
-            let snap = asset_manager.fetch_snapshot(&snap_id).await?;
-            let parents = asset_manager
-                .snapshot_ancestry(snap.id())
-                .await?
-                .map_ok(|parent| parent.id)
-                .err_into();
-            Ok(stream::once(ready(Ok(snap_id))).chain(parents))
+        .and_then(move |snap_id| {
+            let asset_manager = Arc::clone(&asset_manager.clone());
+            async move {
+                let snap = asset_manager.fetch_snapshot(&snap_id).await?;
+                let parents = Arc::clone(&asset_manager)
+                    .snapshot_ancestry(snap.id())
+                    .await?
+                    .map_ok(|parent| parent.id)
+                    .err_into();
+                Ok(stream::once(ready(Ok(snap_id))).chain(parents))
+            }
         })
         .try_flatten())
 }
@@ -378,7 +385,7 @@ async fn gc_transaction_logs(
 pub async fn expire_ref(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-    asset_manager: &AssetManager,
+    asset_manager: Arc<AssetManager>,
     reference: &Ref,
     older_than: DateTime<Utc>,
 ) -> GCResult<HashSet<SnapshotId>> {
@@ -396,7 +403,8 @@ pub async fn expire_ref(
 
     // here we'll populate the results of every expired snapshot
     let mut released = HashSet::new();
-    let ancestry = asset_manager.snapshot_ancestry(&snap_id).await?.peekable();
+    let ancestry =
+        Arc::clone(&asset_manager).snapshot_ancestry(&snap_id).await?.peekable();
 
     pin!(ancestry);
 
@@ -458,17 +466,21 @@ pub async fn expire_ref(
 pub async fn expire(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-    asset_manager: &AssetManager,
+    asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
 ) -> GCResult<HashSet<SnapshotId>> {
     let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
+    let asset_manager = Arc::clone(&asset_manager.clone());
 
     all_refs
-        .then(move |r| async move {
-            let released_snaps =
-                expire_ref(storage, storage_settings, asset_manager, &r, older_than)
-                    .await?;
-            Ok::<HashSet<SnapshotId>, GCError>(released_snaps)
+        .then(move |r| {
+            let asset_manager = asset_manager.clone();
+            async move {
+                let released_snaps =
+                    expire_ref(storage, storage_settings, asset_manager, &r, older_than)
+                        .await?;
+                Ok::<HashSet<SnapshotId>, GCError>(released_snaps)
+            }
         })
         .try_fold(HashSet::new(), |mut accum, new_set| async move {
             accum.extend(new_set);

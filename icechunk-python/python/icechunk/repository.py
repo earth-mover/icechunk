@@ -1,4 +1,5 @@
 import datetime
+from collections.abc import AsyncIterator
 from typing import Self
 
 from icechunk._icechunk_python import (
@@ -218,6 +219,36 @@ class Repository:
         Only one of the arguments can be specified.
         """
         return self._repository.ancestry(branch=branch, tag=tag, snapshot=snapshot)
+
+    def async_ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> AsyncIterator[SnapshotInfo]:
+        """
+        Get the ancestry of a snapshot.
+
+        Parameters
+        ----------
+        branch : str, optional
+            The branch to get the ancestry of.
+        tag : str, optional
+            The tag to get the ancestry of.
+        snapshot : str, optional
+            The snapshot ID to get the ancestry of.
+
+        Returns
+        -------
+        list[SnapshotInfo]
+            The ancestry of the snapshot, listing out the snapshots and their metadata.
+
+        Notes
+        -----
+        Only one of the arguments can be specified.
+        """
+        return self._repository.async_ancestry(branch=branch, tag=tag, snapshot=snapshot)
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """

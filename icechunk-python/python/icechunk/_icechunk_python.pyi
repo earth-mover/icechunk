@@ -1,7 +1,8 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from enum import Enum
+from typing import Any
 
 class S3Options:
     def __init__(
@@ -233,6 +234,13 @@ class PyRepository:
         tag: str | None = None,
         snapshot: str | None = None,
     ) -> list[SnapshotInfo]: ...
+    def async_ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> AsyncIterator[SnapshotInfo]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
     def lookup_branch(self, branch: str) -> str: ...
@@ -273,7 +281,7 @@ class PySession:
     @property
     def store(self) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
-    def commit(self, message: str) -> str: ...
+    def commit(self, message: str, metadata: dict[str, Any] | None = None) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
@@ -348,6 +356,12 @@ class SnapshotInfo:
     def message(self) -> str:
         """
         The commit message of the snapshot
+        """
+        ...
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """
+        The metadata of the snapshot
         """
         ...
 

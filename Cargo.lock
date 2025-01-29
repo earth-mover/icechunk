@@ -1379,6 +1379,7 @@ dependencies = [
  "chrono",
  "futures",
  "icechunk",
+ "itertools 0.14.0",
  "pyo3",
  "pyo3-async-runtimes",
  "serde",

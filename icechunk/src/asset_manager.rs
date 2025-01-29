@@ -280,9 +280,9 @@ impl AssetManager {
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     pub async fn snapshot_ancestry(
-        &self,
+        self: Arc<Self>,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
         let mut this = self.fetch_snapshot(snapshot_id).await?;
         let stream = try_stream! {
             yield this.as_ref().into();
