@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 import icechunk as ic
 import zarr
 
@@ -31,3 +33,21 @@ def test_property_types() -> None:
     assert info.parent_id == parent_id
     assert info.metadata == props
     assert (datetime.now(UTC) - info.written_at).seconds < 60
+
+
+class NoJson:
+    pass
+
+
+def test_invalid_property_types() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    zarr.group(store=store, overwrite=True)
+    props = {"foo": NoJson()}
+
+    with pytest.raises(TypeError, match="object cannot be converted"):
+        session.commit("some commit", props)
