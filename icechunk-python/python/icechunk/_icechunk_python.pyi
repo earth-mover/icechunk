@@ -1,6 +1,6 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from enum import Enum
 
 class S3Options:
@@ -233,6 +233,13 @@ class PyRepository:
         tag: str | None = None,
         snapshot: str | None = None,
     ) -> list[SnapshotInfo]: ...
+    def async_ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> AsyncIterator[SnapshotInfo]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
     def lookup_branch(self, branch: str) -> str: ...

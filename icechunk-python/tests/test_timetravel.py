@@ -1,3 +1,4 @@
+import asyncio
 from typing import cast
 
 import pytest
@@ -7,6 +8,10 @@ import zarr
 import zarr.core
 import zarr.core.array
 import zarr.core.buffer
+
+
+async def async_ancestry(repo: ic.Repository, **kwargs) -> list[ic.SnapshotInfo]:
+    return [parent async for parent in repo.async_ancestry(**kwargs)]
 
 
 def test_timetravel() -> None:
@@ -109,6 +114,17 @@ def test_timetravel() -> None:
     assert len(set([snap.id for snap in parents])) == 4
     assert list(repo.ancestry(tag="v1.0")) == parents
     assert list(repo.ancestry(branch="feature-not-dead")) == parents
+
+    # check async ancestry works
+    assert list(repo.ancestry(snapshot=feature_snapshot_id)) == asyncio.run(
+        async_ancestry(repo, snapshot=feature_snapshot_id)
+    )
+    assert list(repo.ancestry(tag="v1.0")) == asyncio.run(
+        async_ancestry(repo, tag="v1.0")
+    )
+    assert list(repo.ancestry(branch="feature-not-dead")) == asyncio.run(
+        async_ancestry(repo, branch="feature-not-dead")
+    )
 
     tags = repo.list_tags()
     assert tags == set(["v1.0"])

@@ -47,8 +47,11 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
         new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
             .expect("Creating minio storage failed");
     let storage_settings = storage.default_settings();
-    let asset_manager =
-        AssetManager::new_no_cache(storage.clone(), storage_settings.clone(), 1);
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
 
     let repo = Repository::create(
         Some(RepositoryConfig {
@@ -103,9 +106,13 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     // verify doing gc without dangling objects doesn't change the repo
     let now = Utc::now();
     let gc_config = GCConfig::clean_all(now, now, None);
-    let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
-            .await?;
+    let summary = garbage_collect(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &gc_config,
+    )
+    .await?;
     assert_eq!(summary, GCSummary::default());
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
     for idx in 0..10 {
@@ -132,9 +139,13 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     // we still have all the chunks
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
 
-    let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
-            .await?;
+    let summary = garbage_collect(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &gc_config,
+    )
+    .await?;
     assert_eq!(summary.chunks_deleted, 10);
     assert_eq!(summary.manifests_deleted, 1);
     assert_eq!(summary.snapshots_deleted, 1);
@@ -271,13 +282,16 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
-    let asset_manager =
-        AssetManager::new_no_cache(storage.clone(), storage_settings.clone(), 1);
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
 
     let expired_snaps = expire_ref(
         storage.as_ref(),
         &storage_settings,
-        &asset_manager,
+        asset_manager.clone(),
         &Ref::Branch("main".to_string()),
         expire_older_than,
     )
@@ -307,7 +321,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     let expired_snaps = expire_ref(
         storage.as_ref(),
         &storage_settings,
-        &asset_manager,
+        asset_manager.clone(),
         &Ref::Branch("develop".to_string()),
         expire_older_than,
     )
@@ -337,7 +351,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     let expired_snaps = expire_ref(
         storage.as_ref(),
         &storage_settings,
-        &asset_manager,
+        asset_manager.clone(),
         &Ref::Branch("test".to_string()),
         expire_older_than,
     )
@@ -367,7 +381,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     let expired_snaps = expire_ref(
         storage.as_ref(),
         &storage_settings,
-        &asset_manager,
+        asset_manager.clone(),
         &Ref::Branch("qa".to_string()),
         expire_older_than,
     )
@@ -409,12 +423,19 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
-    let asset_manager =
-        AssetManager::new_no_cache(storage.clone(), storage_settings.clone(), 1);
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
 
-    let expired_snaps =
-        expire(storage.as_ref(), &storage_settings, &asset_manager, expire_older_than)
-            .await?;
+    let expired_snaps = expire(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        expire_older_than,
+    )
+    .await?;
 
     assert_eq!(expired_snaps.len(), 7);
 
@@ -447,12 +468,19 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
 
     let now = Utc::now();
     let gc_config = GCConfig::clean_all(now, now, None);
-    let asset_manager =
-        AssetManager::new_no_cache(storage.clone(), storage_settings.clone(), 1);
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
 
-    let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
-            .await?;
+    let summary = garbage_collect(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &gc_config,
+    )
+    .await?;
     // other expired snapshots are pointed by tags
     assert_eq!(summary.snapshots_deleted, 2);
 
@@ -461,9 +489,13 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
 
     repo.delete_tag("tag1").await?;
 
-    let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
-            .await?;
+    let summary = garbage_collect(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &gc_config,
+    )
+    .await?;
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
@@ -472,9 +504,13 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
 
     repo.delete_tag("tag2").await?;
 
-    let summary =
-        garbage_collect(storage.as_ref(), &storage_settings, &asset_manager, &gc_config)
-            .await?;
+    let summary = garbage_collect(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &gc_config,
+    )
+    .await?;
     // tag2 snapshosts are released now
     assert_eq!(summary.snapshots_deleted, 4);
 

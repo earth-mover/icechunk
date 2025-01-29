@@ -318,7 +318,14 @@ impl Repository {
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
-        self.asset_manager.snapshot_ancestry(snapshot_id).await
+        Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
+    }
+
+    pub async fn snapshot_ancestry_arc(
+        self: Arc<Self>,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+        Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
@@ -328,6 +335,14 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_ancestry(&snapshot_id).await
+    }
+
+    pub async fn ancestry_arc(
+        self: Arc<Self>,
+        version: &VersionInfo,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+        let snapshot_id = self.resolve_version(version).await?;
+        self.snapshot_ancestry_arc(&snapshot_id).await
     }
 
     /// Create a new branch in the repository at the given snapshot id

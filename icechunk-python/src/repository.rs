@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     config::Credentials,
     format::{snapshot::SnapshotInfo, SnapshotId},
@@ -13,7 +13,7 @@ use icechunk::{
     Repository,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
@@ -22,6 +22,7 @@ use crate::{
     },
     errors::PyIcechunkStoreError,
     session::PySession,
+    streams::PyAsyncGenerator,
 };
 
 #[pyclass(name = "SnapshotInfo", eq)]
@@ -90,7 +91,7 @@ impl From<GCSummary> for PyGCSummary {
 }
 
 #[pyclass]
-pub struct PyRepository(Repository);
+pub struct PyRepository(Arc<Repository>);
 
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `allow_threads` so other
@@ -118,7 +119,7 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
 
-            Ok(Self(repository))
+            Ok(Self(Arc::new(repository)))
         })
     }
 
@@ -144,7 +145,7 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
 
-            Ok(Self(repository))
+            Ok(Self(Arc::new(repository)))
         })
     }
 
@@ -172,7 +173,7 @@ impl PyRepository {
                     )
                 })?;
 
-            Ok(Self(repository))
+            Ok(Self(Arc::new(repository)))
         })
     }
 
@@ -202,14 +203,14 @@ impl PyRepository {
         virtual_chunk_credentials: Option<Option<HashMap<String, PyCredentials>>>,
     ) -> PyResult<Self> {
         py.allow_threads(move || {
-            Ok(Self(
+            Ok(Self(Arc::new(
                 self.0
                     .reopen(
                         config.map(|c| c.into()),
                         virtual_chunk_credentials.map(map_credentials),
                     )
                     .map_err(PyIcechunkStoreError::RepositoryError)?,
-            ))
+            )))
         })
     }
 
@@ -280,6 +281,35 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(ancestry)
             })
+        })
+    }
+
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
+    pub fn async_ancestry(
+        &self,
+        py: Python<'_>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot: Option<String>,
+    ) -> PyResult<PyAsyncGenerator> {
+        let repo = Arc::clone(&self.0);
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let version = args_to_version_info(branch, tag, snapshot)?;
+            let ancestry = pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move { repo.ancestry_arc(&version).await })
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map_err(PyIcechunkStoreError::RepositoryError);
+
+            let parents = ancestry.and_then(|info| async move {
+                Python::with_gil(|py| {
+                    let info = PySnapshotInfo::from(info);
+                    Ok(Bound::new(py, info)?.into_any().unbind())
+                })
+            });
+
+            let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
+            Ok(PyAsyncGenerator::new(prepared_list))
         })
     }
 
@@ -487,7 +517,7 @@ impl PyRepository {
                     let result = expire(
                         self.0.storage().as_ref(),
                         self.0.storage_settings(),
-                        self.0.asset_manager(),
+                        self.0.asset_manager().clone(),
                         older_than,
                     )
                     .await
@@ -518,7 +548,7 @@ impl PyRepository {
                     let result = garbage_collect(
                         self.0.storage().as_ref(),
                         self.0.storage_settings(),
-                        self.0.asset_manager(),
+                        self.0.asset_manager().clone(),
                         &gc_config,
                     )
                     .await

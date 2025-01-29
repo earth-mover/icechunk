@@ -779,8 +779,7 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
-            let ancestry = self
-                .asset_manager
+            let ancestry = Arc::clone(&self.asset_manager)
                 .snapshot_ancestry(current_snapshot.id())
                 .await?
                 .map_ok(|meta| meta.id);
