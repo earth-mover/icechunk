@@ -178,7 +178,6 @@ async def test_tag_delete() -> None:
     )
 
     snap = repo.lookup_branch("main")
-    print(snap)
     repo.create_tag("tag", snap)
     repo.delete_tag("tag")
 

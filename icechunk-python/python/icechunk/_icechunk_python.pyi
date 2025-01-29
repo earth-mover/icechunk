@@ -2,6 +2,7 @@ import abc
 import datetime
 from collections.abc import AsyncGenerator, AsyncIterator
 from enum import Enum
+from typing import Any
 
 class S3Options:
     def __init__(
@@ -280,7 +281,7 @@ class PySession:
     @property
     def store(self) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
-    def commit(self, message: str) -> str: ...
+    def commit(self, message: str, metadata: dict[str, Any] | None = None) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
@@ -355,6 +356,12 @@ class SnapshotInfo:
     def message(self) -> str:
         """
         The commit message of the snapshot
+        """
+        ...
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """
+        The metadata of the snapshot
         """
         ...
 
