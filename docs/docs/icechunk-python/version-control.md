@@ -89,7 +89,6 @@ for snapshot in repo.ancestry(branch="main"):
 
 Visually, this looks like below, where the arrows represent the parent-child relationship between snapshots.
 
-
 ```mermaid
 gitGraph
     commit id: "A840RMN5" type: NORMAL
@@ -205,7 +204,7 @@ repo = icechunk.Repository.create(icechunk.in_memory_storage())
 session = repo.writable_session(branch="main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "bar"
-root.create_dataset("data", shape=(10, 10), dtype=np.int32)
+root.create_dataset("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
 session.commit(message="Add foo attribute and data array")
 
 # 'BG0W943WSNFMMVD1FXJ0'
@@ -250,13 +249,13 @@ session2.commit(message="Update foo attribute on root group")
 # ConflictError: Failed to commit, expected parent: Some("BG0W943WSNFMMVD1FXJ0"), actual parent: Some("AE9XS2ZWXT861KD2JGHG")
 ```
 
-The first session was able to commit succesfully, but the second session failed with a [`ConflictError`](../reference/#icechunk.ConflictError). When the second session was created, the changes made were relative to the tip of the `main` branch, but the tip of the `main` branch had been modified by the first session.
+The first session was able to commit successfully, but the second session failed with a [`ConflictError`](../reference/#icechunk.ConflictError). When the second session was created, the changes made were relative to the tip of the `main` branch, but the tip of the `main` branch had been modified by the first session.
 
 To resolve this conflict, we can use the [`rebase`](../reference/#icechunk.Session.rebase) functionality.
 
 ### Rebasing
 
-To update the second session so it is based off the tip of the `main` branch, we can use the [`rebase`](../reference/#icechunk.Session.rebase) method. 
+To update the second session so it is based off the tip of the `main` branch, we can use the [`rebase`](../reference/#icechunk.Session.rebase) method.
 
 First, we can try to rebase, without merging any conflicting changes:
 
@@ -311,7 +310,7 @@ root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
 
 root1["data"][0,0] = 1
-root2["data"][0,0] = 2
+root2["data"][0,:] = 2
 ```
 
 We have now created a conflict, because the first session modified the first element of the `data` array, and the second session modified the first row of the `data` array. Let's commit the changes from the second session first, then see what conflicts are reported when we try to commit the changes from the first session.
@@ -365,9 +364,9 @@ session = repo.readonly_session(branch="main")
 root = zarr.open_group(session.store, mode="r")
 root["data"][0,:]
 
-# array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=int32)
+# array([1, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=int32)
 ```
 
-#### Limitations 
+#### Limitations
 
 At the moment, the rebase functionality is limited to resolving conflicts with attributes on arrays and groups, and conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.
