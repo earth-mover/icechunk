@@ -1,20 +1,22 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
+    ops::RangeBounds,
     sync::Arc,
 };
 
 use bytes::Bytes;
-use futures::Stream;
+use futures::{stream::FuturesUnordered, Stream, StreamExt};
+use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
 
 use crate::{
     asset_manager::AssetManager,
-    config::{Credentials, RepositoryConfig},
+    config::{Credentials, ManifestPreloadCondition, RepositoryConfig},
     format::{
-        snapshot::{Snapshot, SnapshotInfo},
-        IcechunkFormatError, NodeId, SnapshotId,
+        snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
+        IcechunkFormatError, ManifestId, NodeId, Path, SnapshotId,
     },
     refs::{
         create_tag, delete_branch, delete_tag, fetch_branch_tip, fetch_tag,
@@ -511,8 +513,10 @@ impl Repository {
             self.storage.clone(),
             Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
-            snapshot_id,
+            snapshot_id.clone(),
         );
+
+        self.preload_manifests(snapshot_id);
 
         Ok(session)
     }
@@ -528,10 +532,99 @@ impl Repository {
             Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
             branch.to_string(),
-            ref_data.snapshot,
+            ref_data.snapshot.clone(),
         );
 
+        self.preload_manifests(ref_data.snapshot);
+
         Ok(session)
+    }
+
+    fn preload_manifests(&self, snapshot_id: SnapshotId) {
+        let asset_manager = Arc::clone(self.asset_manager());
+        let preload_config = self.config().manifest().preload().clone();
+        if preload_config.max_total_refs() == 0
+            || matches!(preload_config.preload_if(), ManifestPreloadCondition::False)
+        {
+            return;
+        }
+        tokio::spawn(async move {
+            let mut loaded_manifests: HashSet<ManifestId> = HashSet::new();
+            let mut loaded_refs: u32 = 0;
+            let futures = FuturesUnordered::new();
+            // TODO: unnest this code
+            if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
+                let snap_c = Arc::clone(&snap);
+                for node in snap.iter_arc() {
+                    match node.node_data {
+                        NodeData::Group => {}
+                        NodeData::Array(_, manifests) => {
+                            for manifest in manifests {
+                                if !loaded_manifests.contains(&manifest.object_id) {
+                                    let manifest_id = manifest.object_id;
+                                    if let Some(manifest_info) =
+                                        snap_c.manifest_info(&manifest_id)
+                                    {
+                                        if loaded_refs + manifest_info.num_rows
+                                            <= preload_config.max_total_refs()
+                                            && preload_config
+                                                .preload_if()
+                                                .matches(&node.path, manifest_info)
+                                        {
+                                            let size_bytes = manifest_info.size_bytes;
+                                            let asset_manager =
+                                                Arc::clone(&asset_manager);
+                                            let manifest_id_c = manifest_id.clone();
+                                            futures.push(async move {
+                                                let _ = asset_manager
+                                                    .fetch_manifest(
+                                                        &manifest_id_c,
+                                                        size_bytes,
+                                                    )
+                                                    .await;
+                                            });
+                                            loaded_manifests.insert(manifest_id);
+                                            loaded_refs += manifest_info.num_rows;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            futures.collect::<()>().await;
+        });
+    }
+}
+
+impl ManifestPreloadCondition {
+    pub fn matches(&self, path: &Path, info: &ManifestFileInfo) -> bool {
+        match self {
+            ManifestPreloadCondition::Or(vec) => {
+                vec.iter().any(|c| c.matches(path, info))
+            }
+            ManifestPreloadCondition::And(vec) => {
+                vec.iter().all(|c| c.matches(path, info))
+            }
+            // TODO: precompile the regex
+            ManifestPreloadCondition::PathMatches { regex } => Regex::new(regex)
+                .map(|regex| regex.is_match(path.to_string().as_bytes()))
+                .unwrap_or(false),
+            // TODO: precompile the regex
+            ManifestPreloadCondition::NameMatches { regex } => Regex::new(regex)
+                .map(|regex| {
+                    path.name()
+                        .map(|name| regex.is_match(name.as_bytes()))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+            ManifestPreloadCondition::NumRefs { from, to } => {
+                (*from, *to).contains(&info.num_rows)
+            }
+            ManifestPreloadCondition::True => true,
+            ManifestPreloadCondition::False => false,
+        }
     }
 }
 
@@ -564,17 +657,24 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, sync::Arc};
+    use std::{collections::HashMap, error::Error, num::NonZeroU64, sync::Arc};
+
+    use storage::logging::LoggingStorage;
 
     use crate::{
-        config::{CachingConfig, RepositoryConfig},
+        config::{
+            CachingConfig, ManifestConfig, ManifestPreloadConfig, RepositoryConfig,
+        },
+        format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices},
+        metadata::{
+            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
+        },
         storage::new_in_memory_storage,
         Repository, Storage,
     };
 
     use super::*;
 
-    // TODO: Add Tests
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
@@ -708,6 +808,145 @@ mod tests {
         // get the snapshot id of the tag
         let tag_snapshot = repo.lookup_tag("tag1").await?;
         assert_eq!(tag_snapshot, initial_snapshot);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Writes four arrays to a repo arrays, checks preloading of the manifests
+    ///
+    /// Three of the arrays have a preload name. But on of them (time) is larger
+    /// than what we allow for preload (via config).
+    ///
+    /// We verify only the correct two arrays are preloaded
+    async fn test_manifest_preload_known_manifests() -> Result<(), Box<dyn Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage = Arc::clone(&backend);
+
+        let repository = Repository::create(None, storage, HashMap::new()).await?;
+
+        let mut session = repository.writable_session("main").await?;
+
+        session.add_group(Path::root()).await?;
+
+        let zarr_meta = ZarrArrayMetadata {
+            shape: vec![1_000, 1, 1],
+            data_type: DataType::Float16,
+            chunk_shape: ChunkShape(vec![
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+                NonZeroU64::new(1).unwrap(),
+            ]),
+            chunk_key_encoding: ChunkKeyEncoding::Slash,
+            fill_value: FillValue::Float16(f32::NEG_INFINITY),
+            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
+            storage_transformers: Some(vec![StorageTransformer {
+                name: "mytransformer".to_string(),
+                configuration: None,
+            }]),
+            dimension_names: Some(vec![Some("t".to_string())]),
+        };
+
+        let time_path: Path = "/time".try_into().unwrap();
+        let temp_path: Path = "/temperature".try_into().unwrap();
+        let lat_path: Path = "/latitude".try_into().unwrap();
+        let lon_path: Path = "/longitude".try_into().unwrap();
+        session.add_array(time_path.clone(), zarr_meta.clone()).await?;
+        session.add_array(temp_path.clone(), zarr_meta.clone()).await?;
+        session.add_array(lat_path.clone(), zarr_meta.clone()).await?;
+        session.add_array(lon_path.clone(), zarr_meta.clone()).await?;
+
+        session
+            .set_chunk_ref(
+                time_path.clone(),
+                ChunkIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+
+        session
+            .set_chunk_ref(
+                time_path.clone(),
+                ChunkIndices(vec![1, 0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+
+        session
+            .set_chunk_ref(
+                time_path.clone(),
+                ChunkIndices(vec![2, 0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+
+        session
+            .set_chunk_ref(
+                lat_path.clone(),
+                ChunkIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        session
+            .set_chunk_ref(
+                lon_path.clone(),
+                ChunkIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        session
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(vec![0, 0, 0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+
+        session.commit("create arrays", None).await?;
+
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging_c);
+
+        let man_config = ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: Some(2),
+                preload_if: None,
+            }),
+        };
+        let config = RepositoryConfig {
+            manifest: Some(man_config),
+            ..RepositoryConfig::default()
+        };
+        let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
+
+        let ops = logging.fetch_operations();
+        assert!(ops.is_empty());
+
+        let session = repository
+            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?;
+
+        // give some time for manifests to load
+        let mut retries = 0;
+        while retries < 50 && logging.fetch_operations().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_secs_f32(0.1)).await;
+            retries += 1
+        }
+        let ops = logging.fetch_operations();
+
+        let lat_manifest_id = match session.get_node(&lat_path).await?.node_data {
+            NodeData::Array(_, vec) => vec[0].object_id.to_string(),
+            NodeData::Group => panic!(),
+        };
+        let lon_manifest_id = match session.get_node(&lon_path).await?.node_data {
+            NodeData::Array(_, vec) => vec[0].object_id.to_string(),
+            NodeData::Group => panic!(),
+        };
+        assert_eq!(ops[0].0, "fetch_snapshot");
+        // nodes sorted lexicographically
+        assert_eq!(ops[1], ("fetch_manifest_splitting".to_string(), lat_manifest_id));
+        assert_eq!(ops[2], ("fetch_manifest_splitting".to_string(), lon_manifest_id));
 
         Ok(())
     }

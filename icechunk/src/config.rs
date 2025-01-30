@@ -1,6 +1,7 @@
 use core::fmt;
 use std::{
     collections::HashMap,
+    ops::Bound,
     path::PathBuf,
     sync::{Arc, OnceLock},
 };
@@ -103,6 +104,99 @@ impl CachingConfig {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub enum ManifestPreloadCondition {
+    Or(Vec<ManifestPreloadCondition>),
+    And(Vec<ManifestPreloadCondition>),
+    PathMatches { regex: String },
+    NameMatches { regex: String },
+    NumRefs { from: Bound<u32>, to: Bound<u32> },
+    True,
+    False,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct ManifestPreloadConfig {
+    pub max_total_refs: Option<u32>,
+    pub preload_if: Option<ManifestPreloadCondition>,
+}
+
+impl ManifestPreloadConfig {
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            max_total_refs: other.max_total_refs.or(self.max_total_refs),
+            preload_if: other.preload_if.or(self.preload_if.clone()),
+        }
+    }
+
+    pub fn max_total_refs(&self) -> u32 {
+        self.max_total_refs.unwrap_or(10_000)
+    }
+
+    pub fn preload_if(&self) -> &ManifestPreloadCondition {
+        self.preload_if.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_PRELOAD_CONDITION.get_or_init(|| {
+                ManifestPreloadCondition::And(vec![
+                    ManifestPreloadCondition::Or(vec![
+                        // regexes taken from https://github.com/xarray-contrib/cf-xarray/blob/1591ff5ea7664a6bdef24055ef75e242cd5bfc8b/cf_xarray/criteria.py#L149-L160
+                        ManifestPreloadCondition::NameMatches {
+                            // time
+                            regex: r#"\bt\b|(time|min|hour|day|week|month|year)[0-9]*"#.to_string(), // codespell:ignore
+                        },
+                        ManifestPreloadCondition::NameMatches {
+                            // Z
+                            regex: r#"(z|nav_lev|gdep|lv_|[o]*lev|bottom_top|sigma|h(ei)?ght|altitude|depth|isobaric|pres|isotherm)[a-z_]*[0-9]*"#.to_string(), // codespell:ignore
+
+                        },
+                        ManifestPreloadCondition::NameMatches {
+                            // Y
+                            regex: r#"y|j|nlat|rlat|nj"#.to_string(), // codespell:ignore
+                        },
+                        ManifestPreloadCondition::NameMatches {
+                            // latitude
+                            regex: r#"y?(nav_lat|lat|gphi)[a-z0-9]*"#.to_string(), // codespell:ignore
+                        },
+                        ManifestPreloadCondition::NameMatches {
+                            // longitude
+                            regex: r#"x?(nav_lon|lon|glam)[a-z0-9]*"#.to_string(), // codespell:ignore
+                        },
+                        ManifestPreloadCondition::NameMatches {
+                            // X
+                            regex: r#"x|i|nlon|rlon|ni"#.to_string(), // codespell:ignore
+                        },
+                    ]),
+                    ManifestPreloadCondition::NumRefs {
+                        from: Bound::Unbounded,
+                        to: Bound::Included(1000),
+                    },
+                ])
+            })
+        })
+    }
+}
+
+static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
+    OnceLock::new();
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct ManifestConfig {
+    pub preload: Option<ManifestPreloadConfig>,
+}
+
+static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
+
+impl ManifestConfig {
+    pub fn merge(&self, other: Self) -> Self {
+        Self { preload: other.preload.or(self.preload.clone()) }
+    }
+
+    pub fn preload(&self) -> &ManifestPreloadConfig {
+        self.preload.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_PRELOAD_CONFIG.get_or_init(ManifestPreloadConfig::default)
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifst
@@ -123,6 +217,8 @@ pub struct RepositoryConfig {
     pub storage: Option<storage::Settings>,
 
     pub virtual_chunk_containers: Option<HashMap<ContainerName, VirtualChunkContainer>>,
+
+    pub manifest: Option<ManifestConfig>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
@@ -130,6 +226,7 @@ static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
 static DEFAULT_VIRTUAL_CHUNK_CONTAINERS: OnceLock<
     HashMap<ContainerName, VirtualChunkContainer>,
 > = OnceLock::new();
+static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
@@ -154,6 +251,12 @@ impl RepositoryConfig {
     }
     pub fn storage(&self) -> Option<&storage::Settings> {
         self.storage.as_ref()
+    }
+
+    pub fn manifest(&self) -> &ManifestConfig {
+        self.manifest.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_CONFIG.get_or_init(ManifestConfig::default)
+        })
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -197,6 +300,12 @@ impl RepositoryConfig {
                     merged.extend(theirs);
                     Some(merged)
                 }
+            },
+            manifest: match (&self.manifest, other.manifest) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
         }
     }

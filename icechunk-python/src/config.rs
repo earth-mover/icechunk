@@ -741,6 +741,8 @@ impl From<&PyRepositoryConfig> for RepositoryConfig {
             virtual_chunk_containers: value.virtual_chunk_containers.as_ref().map(|c| {
                 c.iter().map(|(name, cont)| (name.clone(), cont.into())).collect()
             }),
+            // FIXME: implement manifest preloading configuration in python
+            manifest: None,
         })
     }
 }
