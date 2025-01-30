@@ -9,7 +9,7 @@ use crate::format::{
         AttributeFileInfo, ManifestFileInfo, NodeSnapshot, Snapshot, SnapshotProperties,
     },
     transaction_log::TransactionLog,
-    ChunkIndices, IcechunkFormatVersion, ManifestId, NodeId, Path, SnapshotId,
+    ChunkIndices, ManifestId, NodeId, Path, SnapshotId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -68,45 +68,30 @@ impl<'a> From<&'a Snapshot> for SnapshotSerializer<'a> {
 
 #[derive(Debug, Deserialize)]
 pub struct ManifestDeserializer {
-    icechunk_manifest_format_version: IcechunkFormatVersion,
-    icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
     id: ManifestId,
     chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ManifestSerializer<'a> {
-    icechunk_manifest_format_version: &'a IcechunkFormatVersion,
-    icechunk_manifest_format_flags: &'a BTreeMap<String, rmpv::Value>,
     id: &'a ManifestId,
     chunks: &'a BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
 impl From<ManifestDeserializer> for Manifest {
     fn from(value: ManifestDeserializer) -> Self {
-        Self {
-            icechunk_manifest_format_version: value.icechunk_manifest_format_version,
-            icechunk_manifest_format_flags: value.icechunk_manifest_format_flags,
-            id: value.id,
-            chunks: value.chunks,
-        }
+        Self { id: value.id, chunks: value.chunks }
     }
 }
 
 impl<'a> From<&'a Manifest> for ManifestSerializer<'a> {
     fn from(value: &'a Manifest) -> Self {
-        Self {
-            icechunk_manifest_format_version: &value.icechunk_manifest_format_version,
-            icechunk_manifest_format_flags: &value.icechunk_manifest_format_flags,
-            id: &value.id,
-            chunks: &value.chunks,
-        }
+        Self { id: &value.id, chunks: &value.chunks }
     }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TransactionLogDeserializer {
-    icechunk_transaction_log_format_version: IcechunkFormatVersion,
     new_groups: HashSet<NodeId>,
     new_arrays: HashSet<NodeId>,
     deleted_groups: HashSet<NodeId>,
@@ -118,7 +103,6 @@ pub struct TransactionLogDeserializer {
 
 #[derive(Debug, Serialize)]
 pub struct TransactionLogSerializer<'a> {
-    icechunk_transaction_log_format_version: &'a IcechunkFormatVersion,
     new_groups: &'a HashSet<NodeId>,
     new_arrays: &'a HashSet<NodeId>,
     deleted_groups: &'a HashSet<NodeId>,
@@ -131,8 +115,6 @@ pub struct TransactionLogSerializer<'a> {
 impl From<TransactionLogDeserializer> for TransactionLog {
     fn from(value: TransactionLogDeserializer) -> Self {
         Self {
-            icechunk_transaction_log_format_version: value
-                .icechunk_transaction_log_format_version,
             new_groups: value.new_groups,
             new_arrays: value.new_arrays,
             deleted_groups: value.deleted_groups,
@@ -147,8 +129,6 @@ impl From<TransactionLogDeserializer> for TransactionLog {
 impl<'a> From<&'a TransactionLog> for TransactionLogSerializer<'a> {
     fn from(value: &'a TransactionLog) -> Self {
         Self {
-            icechunk_transaction_log_format_version: &value
-                .icechunk_transaction_log_format_version,
             new_groups: &value.new_groups,
             new_arrays: &value.new_arrays,
             deleted_groups: &value.deleted_groups,

@@ -14,10 +14,9 @@ use crate::metadata::{
 };
 
 use super::{
-    format_constants::SpecVersionBin,
     manifest::{Manifest, ManifestRef},
-    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatVersion,
-    IcechunkResult, ManifestId, NodeId, Path, SnapshotId, TableOffset,
+    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkResult, ManifestId, NodeId,
+    Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,26 +125,19 @@ pub type SnapshotProperties = HashMap<String, Value>;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
-    pub format_version: IcechunkFormatVersion,
     pub size_bytes: u64,
     pub num_rows: u32,
 }
 
 impl ManifestFileInfo {
     pub fn new(manifest: &Manifest, size_bytes: u64) -> Self {
-        Self {
-            id: manifest.id.clone(),
-            format_version: SpecVersionBin::current() as u8,
-            num_rows: manifest.len() as u32,
-            size_bytes,
-        }
+        Self { id: manifest.id.clone(), num_rows: manifest.len() as u32, size_bytes }
     }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct AttributeFileInfo {
     pub id: AttributesId,
-    pub format_version: IcechunkFormatVersion,
 }
 
 #[derive(Debug, PartialEq)]
@@ -381,9 +373,7 @@ impl Iterator for NodeIterator {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::format::{
-        format_constants::SpecVersionBin, IcechunkFormatError, ObjectId,
-    };
+    use crate::format::{IcechunkFormatError, ObjectId};
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -502,13 +492,11 @@ mod tests {
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
-                format_version: SpecVersionBin::current() as u8,
                 size_bytes: 1_000_000,
                 num_rows: 100_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
-                format_version: SpecVersionBin::current() as u8,
                 size_bytes: 1_000_000,
                 num_rows: 100_000,
             },
