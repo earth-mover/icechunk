@@ -61,7 +61,7 @@ session.commit(message="Add foo attribute to root group")
 # 'J1ZJHS4EEQW3ATKMV9TG'
 ```
 
-Success! We've created a new snapshot with a new attribute on the root group. 
+Success! We've created a new snapshot with a new attribute on the root group.
 
 Once we've committed the snapshot, the `Session` will become read-only, and we can no longer modify the data using our existing `Session`. If we want to modify the data again, we need to create a new writable `Session` from the branch. Notice that we don't have to refresh the `Repository` to get the updates from the `main` branch. Instead, the `Repository` will automatically fetch the latest snapshot from the branch when we create a new writable `Session` from it.
 
@@ -184,9 +184,9 @@ gitGraph
 
 ## Conflict Resolution
 
-Icechunk is a serverless distributed system, and as such, it is possible to have multiple users or processes modifying the same data at the same time. Icechunk relies on the consistency guarantees of the underlying storage backends to ensure that the data is always consistent. In situations where two users or processes attempt to modify the same data at the same time, Icechunk will detect the conflict and raise an exception at commit time. This can be illustrated with the following example. 
+Icechunk is a serverless distributed system, and as such, it is possible to have multiple users or processes modifying the same data at the same time. Icechunk relies on the consistency guarantees of the underlying storage backends to ensure that the data is always consistent. In situations where two users or processes attempt to modify the same data at the same time, Icechunk will detect the conflict and raise an exception at commit time. This can be illustrated with the following example.
 
-Let's create a fresh repository, add some attributes to the root group and create an array named `data`. 
+Let's create a fresh repository, add some attributes to the root group and create an array named `data`.
 
 ```python
 import icechunk
@@ -243,4 +243,3 @@ session2.commit(message="Update foo attribute on root group")
 This raised an exception because the two sessions are trying to modify the same data at the same time. We can use the [`rebase`](../reference/#icechunk.Session.rebase) functionality to handle this conflict.
 
 ### Rebasing
-
