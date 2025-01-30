@@ -182,5 +182,65 @@ gitGraph
     commit id: "BZ9YP38" type: NORMAL
 ```
 
-## Rebasing and Conflict Resolution
+## Conflict Resolution
+
+Icechunk is a serverless distributed system, and as such, it is possible to have multiple users or processes modifying the same data at the same time. Icechunk relies on the consistency guarantees of the underlying storage backends to ensure that the data is always consistent. In situations where two users or processes attempt to modify the same data at the same time, Icechunk will detect the conflict and raise an exception at commit time. This can be illustrated with the following example. 
+
+Let's create a fresh repository, add some attributes to the root group and create an array named `data`. 
+
+```python
+import icechunk
+import numpy as np
+import zarr
+
+repo = icechunk.Repository.create(icechunk.in_memory_storage())
+session = repo.writable_session(branch="main")
+root = zarr.group(session.store)
+root.attrs["foo"] = "bar"
+root.create_dataset("data", shape=(10, 10), dtype=np.int32)
+session.commit(message="Add foo attribute and data array")
+# 'BG0W943WSNFMMVD1FXJ0'
+```
+
+Lets try to modify the `data` array in two different sessions, created from the `main` branch.
+
+```python
+session1 = repo.writable_session(branch="main")
+session2 = repo.writable_session(branch="main")
+
+root1 = zarr.group(session1.store)
+root2 = zarr.group(session2.store)
+```
+
+First, we'll modify the attributes of the root group from both sessions.
+
+```python
+root1.attrs["foo"] = "bar"
+root2.attrs["foo"] = "baz"
+```
+
+and then try to commit the changes.
+
+```python
+session1.commit(message="Update foo attribute on root group")
+session2.commit(message="Update foo attribute on root group")
+# AE9XS2ZWXT861KD2JGHG
+# ---------------------------------------------------------------------------
+# ConflictError                             Traceback (most recent call last)
+# Cell In[7], line 11
+#      8 root2.attrs["foo"] = "baz"
+#      10 print(session1.commit(message="Update foo attribute on root group"))
+# ---> 11 print(session2.commit(message="Update foo attribute on root group"))
+
+# File ~/Developer/icechunk/icechunk-python/python/icechunk/session.py:224, in Session.commit(self, message, metadata)
+#     222     return self._session.commit(message, metadata)
+#     223 except PyConflictError as e:
+# --> 224     raise ConflictError(e) from None
+
+# ConflictError: Failed to commit, expected parent: Some("BG0W943WSNFMMVD1FXJ0"), actual parent: Some("AE9XS2ZWXT861KD2JGHG")
+```
+
+This raised an exception because the two sessions are trying to modify the same data at the same time. We can use the [`rebase`](../reference/#icechunk.Session.rebase) functionality to handle this conflict.
+
+### Rebasing
 
