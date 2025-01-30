@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any, Self
 
 from icechunk import (
@@ -183,6 +184,20 @@ class Session:
             The location URLs of all virtual chunks.
         """
         return self._session.all_virtual_chunk_locations()
+
+    def chunk_coordinates(
+        self, array_path: str, batch_size: int = 1000
+    ) -> AsyncIterator[list[list[int]]]:
+        """
+        Return an async iterator to all initialized chunks for the array at array_path
+
+        The result is batched into lists of size batch_size for performance.
+
+        Returns
+        -------
+        an iterator to lists of chunk coordinates
+        """
+        return self._session.chunk_coordinates(array_path, batch_size)
 
     def merge(self, other: Self) -> None:
         """

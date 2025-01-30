@@ -70,6 +70,11 @@ async def test_concurrency() -> None:
                     write_to_store(array, x, y, barrier), name=f"write {x},{y}"
                 )
 
+    all_coords = set()
+    async for coords in session.chunk_coordinates("/array"):
+        all_coords.update(tuple(c) for c in coords)
+    assert all_coords == {(x, y) for x in range(N) for y in range(N)}
+
     _res = session.commit("commit")
 
     assert isinstance(group["array"], zarr.Array)
