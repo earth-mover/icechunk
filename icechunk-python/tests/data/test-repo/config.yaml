@@ -8,7 +8,7 @@ virtual_chunk_containers:
   s3:
     name: s3
     url_prefix: s3://
-    store: !S3Compatible
+    store: !s3_compatible
       region: us-east-1
       endpoint_url: http://localhost:9000
       anonymous: false
@@ -16,11 +16,11 @@ virtual_chunk_containers:
   az:
     name: az
     url_prefix: az
-    store: !Azure {}
+    store: !azure {}
   tigris:
     name: tigris
     url_prefix: tigris
-    store: !Tigris
+    store: !tigris
       region: null
       endpoint_url: https://fly.storage.tigris.dev
       anonymous: false
@@ -28,8 +28,8 @@ virtual_chunk_containers:
   gcs:
     name: gcs
     url_prefix: gcs
-    store: !Gcs {}
+    store: !gcs {}
   file:
     name: file
     url_prefix: file
-    store: !LocalFileSystem ''
+    store: !local_file_system ''

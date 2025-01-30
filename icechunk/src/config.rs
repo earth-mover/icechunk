@@ -24,6 +24,7 @@ pub struct S3Options {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ObjectStoreConfig {
     InMemory,
     LocalFileSystem(PathBuf),
@@ -35,6 +36,7 @@ pub enum ObjectStoreConfig {
 }
 
 #[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
 pub enum CompressionAlgorithm {
     #[default]
     Zstd,
@@ -105,6 +107,7 @@ impl CachingConfig {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
 pub enum ManifestPreloadCondition {
     Or(Vec<ManifestPreloadCondition>),
     And(Vec<ManifestPreloadCondition>),
@@ -369,19 +372,17 @@ pub trait CredentialsFetcher: fmt::Debug + Sync + Send {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
 pub enum S3Credentials {
     #[default]
-    #[serde(rename = "from_env")]
     FromEnv,
-    #[serde(rename = "none")]
     Anonymous,
-    #[serde(rename = "static")]
     Static(S3StaticCredentials),
-    #[serde(rename = "refreshable")]
     Refreshable(Arc<dyn CredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
     ServiceAccountKey(String),
@@ -389,14 +390,14 @@ pub enum GcsStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum GcsCredentials {
-    #[serde(rename = "from_env")]
     FromEnv,
-    #[serde(rename = "static")]
     Static(GcsStaticCredentials),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AzureStaticCredentials {
     AccessKey(String),
     SASToken(String),
@@ -404,15 +405,15 @@ pub enum AzureStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AzureCredentials {
-    #[serde(rename = "from_env")]
     FromEnv,
-    #[serde(rename = "static")]
     Static(AzureStaticCredentials),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
 pub enum Credentials {
     S3(S3Credentials),
     Gcs(GcsCredentials),
