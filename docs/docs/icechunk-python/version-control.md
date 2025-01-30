@@ -24,18 +24,18 @@ import icechunk
 repo = icechunk.Repository.create(icechunk.in_memory_storage())
 ```
 
-On creating a new [`Repository`](./reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
+On creating a new [`Repository`](../reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
 
 ```python
 repo.ancestry(branch="main")
-# [SnapshotInfo(id="1ACH5YCG2BM4Z0NPTEJG", parent_id=None, written_at=datetime.datetime(2025,1,30,19,52,41,592998, tzinfo=datetime.timezone.utc), message="Repository...")]
+# [SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,19,52,41,592998, tzinfo=datetime.timezone.utc), message="Repository...")]
 ```
 
 !!! note
 
     The [`ancestry`](./reference/#icechunk.Repository.ancestry) method can be used to inspect the ancestry of any branch, snapshot, or tag.
 
-We get back a list of [`SnapshotInfo`](./reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
+We get back a list of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
 
 
 ## Creating a snapshot
@@ -58,7 +58,7 @@ import zarr
 root = zarr.group(session.store)
 root.attrs["foo"] = "bar"
 session.commit(message="Add foo attribute to root group")
-# 'BSHY7B1AGAPWQC14Q18G'
+# 'J1ZJHS4EEQW3ATKMV9TG'
 ```
 
 Success! We've created a new snapshot with a new attribute on the root group. 
@@ -70,7 +70,27 @@ session = repo.writable_session(branch="main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "baz"
 session.commit(message="Update foo attribute on root group")
-# 'BSHY7B1AGAPWQC14Q18G'
+# 'BZ9YP38SWPW2E784VAB0'
+```
+
+With a few snapshots committed, we can take a look at the ancestry of the `main` branch:
+
+```python
+for snapshot in repo.ancestry(branch="main"):
+    print(snapshot)
+# SnapshotInfo(id="BZ9YP38SWPW2E784VAB0", parent_id="J1ZJHS4EEQW3ATKMV9TG", written_at=datetime.datetime(2025,1,30,20,26,51,115330, tzinfo=datetime.timezone.utc), message="Update foo...")
+# SnapshotInfo(id="J1ZJHS4EEQW3ATKMV9TG", parent_id="A840RMN5CF807CM66RY0", written_at=datetime.datetime(2025,1,30,20,26,50,9616, tzinfo=datetime.timezone.utc), message="Add foo at...")
+# SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,20,26,47,66157, tzinfo=datetime.timezone.utc), message="Repository...")
+```
+
+Visually, this looks like below, where the arrows represent the parent-child relationship between snapshots.
+
+
+```mermaid
+gitGraph
+    commit id: "A840RMN5" type: NORMAL
+    commit id: "J1ZJHS4" type: NORMAL
+    commit id: "BZ9YP38" type: NORMAL
 ```
 
 ## Time Travel
@@ -90,7 +110,7 @@ root.attrs["foo"]
 
 ## Branches
 
-If we want to modify the data from a previous snapshot, we can create a new branch from that snapshot with [`create_branch`](./reference/#icechunk.Repository.create_branch).
+If we want to modify the data from a previous snapshot, we can create a new branch from that snapshot with [`create_branch`](../reference/#icechunk.Repository.create_branch).
 
 ```python
 repo.create_branch("dev", snapshot_id=main_branch_snapshot_id)
@@ -103,6 +123,7 @@ session = repo.writable_session(branch="dev")
 root = zarr.group(session.store)
 root.attrs["foo"] = "balogna"
 session.commit(message="Update foo attribute on root group")
+# 'H1M3R93ZW19MYKCYASH0'
 ```
 
 We can also create a new branch from the tip of the `main` branch if we want to modify our current working branch without modifying the `main` branch.
@@ -110,14 +131,38 @@ We can also create a new branch from the tip of the `main` branch if we want to 
 ```python
 main_branch_snapshot_id = repo.lookup_branch("main")
 repo.create_branch("feature", snapshot_id=main_branch_snapshot_id)
+
+session = repo.writable_session(branch="feature")
+root = zarr.group(session.store)
+root.attrs["foo"] = "cherry"
+session.commit(message="Update foo attribute on root group")
+# 'S3QY2RDQQTRYFGJDTB6G'
+```
+
+With these branches created, the hierarchy of the repository now looks like below.
+
+```mermaid
+gitGraph
+    commit id: "A840RMN5" type: NORMAL
+    commit id: "J1ZJHS4" type: NORMAL
+    branch dev
+    checkout dev
+    commit id: "H1M3R93" type: NORMAL
+
+    checkout main
+    commit id: "BZ9YP38" type: NORMAL
+
+    checkout main
+    branch feature
+    commit id: "S3QY2RD" type: NORMAL
 ```
 
 ## Tags
 
-Tags are immutable references to a snapshot. They are created with [`create_tag`](./reference/#icechunk.Repository.create_tag).
+Tags are immutable references to a snapshot. They are created with [`create_tag`](../reference/#icechunk.Repository.create_tag).
 
 ```python
-repo.create_tag("v1.0.0", snapshot_id="BSHY7B1AGAPWQC14Q18G")
+repo.create_tag("v1.0.0", snapshot_id="J1ZJHS4EEQW3ATKMV9TG")
 ```
 
 Because tags are immutable, we need to use a readonly `Session` to access the data referenced by a tag.
@@ -128,3 +173,14 @@ root = zarr.open_group(session.store, mode="r")
 root.attrs["foo"]
 # 'bar'
 ```
+
+```mermaid
+gitGraph
+    commit id: "A840RMN5" type: NORMAL
+    commit id: "J1ZJHS4" type: NORMAL
+    commit tag: "v1.0.0"
+    commit id: "BZ9YP38" type: NORMAL
+```
+
+## Rebasing and Conflict Resolution
+
