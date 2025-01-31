@@ -74,7 +74,7 @@ xr.testing.assert_identical(ds, ondisk)
 
 ## Distributed writes
 
-Any task execution framework (e.g. `ProcessPoolExecutor`, joblib, lithops, dask, ray, etc.)
+Any task execution framework (e.g. `ProcessPoolExecutor`, Joblib, Lithops, Dask Distributed, Ray, etc.)
 can be used instead of the `ThreadPoolExecutor`. However such workloads should account for
 Icehunk being a "stateful" store that records changes executed in a write session.
 
