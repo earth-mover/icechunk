@@ -2,7 +2,7 @@
 
 Icechunk was designed to work seamlessly with Xarray. Xarray users can read and
 write data to Icechunk using [`xarray.open_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.open_zarr.html#xarray.open_zarr)
-and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr).
+and `icechunk.xarray.to_icechunk` methods.
 
 !!! warning
 
@@ -11,6 +11,22 @@ and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarra
     ```shell
     pip install "xarray>=2025.1.1"
     ```
+
+!!!note "`to_icechunk` vs `to_zarr`"
+
+    [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr)
+    and [`to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
+
+    In a distributed context, e.g.
+    writes orchestrated with `multiprocesssing` or a `dask.distributed.Client` and `dask.array`, you *must* use `to_icechunk`.
+    This will ensure that you can execute a commit that successfully records all remote writes.
+    See [these docs on orchestrating parallel writes](./parallel.md) and [these docs on dask.array with distributed](./dask.md#icechunk-dask-xarray)
+    for more.
+
+    If using `to_zarr`, remember to set `zarr_format=3, consolidated=False`. Consolidated metadata
+    is unnecessary (and unsupported) in Icechunk. Icechunk already organizes the dataset metadata
+    in a way that makes it very fast to fetch from storage.
+
 
 In this example, we'll explain how to create a new Icechunk repo, write some sample data
 to it, and append data a second block of data using Icechunk's version control features.
@@ -72,19 +88,13 @@ Create a new writable session on the `main` branch to get the `IcechunkStore`:
 session = repo.writable_session("main")
 ```
 
-Writing Xarray data to Icechunk is as easy as calling `Dataset.to_zarr`:
+Writing Xarray data to Icechunk is as easy as calling `to_icechunk`:
 
 ```python
-ds1.to_zarr(session.store, zarr_format=3, consolidated=False)
+from icechunk.xarray import to_icechunk
+
+to_icechunk(ds, session)
 ```
-
-!!! note
-
-    1. [Consolidated metadata](https://docs.xarray.dev/en/latest/user-guide/io.html#consolidated-metadata)
-    is unnecessary (and unsupported) in Icechunk.
-    Icechunk already organizes the dataset metadata in a way that makes it very
-    fast to fetch from storage.
-    2. `zarr_format=3` is required until the default Zarr format changes in Xarray.
 
 After writing, we commit the changes using the session:
 
@@ -101,7 +111,7 @@ this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='tim
 ```python
 # we have to get a new session after committing
 session = repo.writable_session("main")
-ds2.to_zarr(session.store, append_dim='time')
+to_icechunk(ds2, session, append_dim='time')
 ```
 
 And then we'll commit the changes:

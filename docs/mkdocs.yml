@@ -181,7 +181,9 @@ nav:
   - Icechunk Python:
     - Quickstart: icechunk-python/quickstart.md
     - Configuration: icechunk-python/configuration.md
+    - FAQ: icechunk-python/faq.md
     - Xarray: icechunk-python/xarray.md
+    - Parallel Writes: icechunk-python/parallel.md
     - Dask: icechunk-python/dask.md
     - Version Control: icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md

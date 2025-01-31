@@ -68,13 +68,46 @@ Finally commit your changes!
 icechunk_session.commit("wrote a dask array!")
 ```
 
-## Icechunk + Dask + Xarray
 
-### Simple
+## Distributed
+
+In distributed contexts where the Session, and Zarr Array objects are sent across the network,
+you must opt-in to successful pickling of a writable store.
+
+[`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) takes care of the hard bit of
+merging Sessions but it is required that you opt-in to pickling prior to creating the target Zarr array objects.
+
+Here is an example:
+```python
+import icechunk.dask
+
+zarr_chunks = (10, 10)
+with icechunk_session.allow_pickling():
+    group = zarr.group(store=icechunk_sesion.store, overwrite=True)
+
+    zarray = group.create_array(
+        "array",
+        shape=shape,
+        chunks=zarr_chunks,
+        dtype="f8",
+        fill_value=float("nan"),
+    )
+    icechunk.dask.store_dask(icechunk_session, sources=[dask_array], targets=[zarray])
+icechunk_session.commit("wrote a dask array!")
+```
+
+## Icechunk + Dask + Xarray
 
 The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported.
+
+!!! warning
+
+    When using Xarray, Icechunk in a Dask Distributed context, you *must* use `to_icechunk` so that the Session has a record
+    of the writes that are executed remotely. Using `to_zarr` in such cases, will result in the local Session having no
+    record of remote writes, and a meaningless commit.
+
 
 Now roundtrip an xarray dataset
 ```python
@@ -84,7 +117,7 @@ import xarray as xr
 # Assuming you have a valid writable Session named icechunk_session
 dataset = xr.tutorial.open_dataset("rasm", chunks={"time": 1}).isel(time=slice(24))
 
-icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store))
+icechunk.xarray.to_icechunk(dataset, session)
 
 roundtripped = xr.open_zarr(icechunk_session.store, consolidated=False)
 dataset.identical(roundtripped)
