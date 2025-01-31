@@ -101,13 +101,12 @@ class Session:
 
     def __getstate__(self) -> object:
         if not self._allow_pickling and not self.read_only:
-            print(self._allow_pickling, self.read_only)
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
                 "using the `Session.allow_pickling` context manager. "
                 # link to docs
-                "If you are using xarray's `Dataset.to_zarr` method, please use "
-                "`icechunk.xarray.to_icechunk` instead."
+                "If you are using xarray's `Dataset.to_zarr` method with dask arrays, "
+                "plese consider `icechunk.xarray.to_icechunk` instead."
             )
         state = {
             "_session": self._session.as_bytes(),
