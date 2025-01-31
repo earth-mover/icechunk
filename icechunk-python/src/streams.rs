@@ -1,12 +1,10 @@
 use std::{pin::Pin, sync::Arc};
 
 use futures::{Stream, StreamExt};
-use icechunk::store::StoreError;
 use pyo3::{exceptions::PyStopAsyncIteration, prelude::*};
 use tokio::sync::Mutex;
 
-type PyObjectStream =
-    Arc<Mutex<Pin<Box<dyn Stream<Item = Result<Py<PyAny>, StoreError>> + Send>>>>;
+type PyObjectStream = Arc<Mutex<Pin<Box<dyn Stream<Item = PyResult<Py<PyAny>>> + Send>>>>;
 
 /// An async generator that yields strings from a rust stream of strings
 ///
@@ -14,7 +12,7 @@ type PyObjectStream =
 ///
 /// Inspired by https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c
 #[pyclass]
-pub(crate) struct PyAsyncGenerator {
+pub struct PyAsyncGenerator {
     stream: PyObjectStream,
 }
 
@@ -55,7 +53,7 @@ impl PyAsyncGenerator {
 
             match next {
                 Some(Ok(val)) => Ok(Some(val)),
-                Some(Err(_e)) => Ok(None),
+                Some(Err(err)) => Err(err),
                 None => Err(PyStopAsyncIteration::new_err("The iterator is exhausted")),
             }
         };

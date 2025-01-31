@@ -3,6 +3,10 @@ title: Sample Datasets
 ---
 # Sample Datasets
 
+!!! warning
+    This page is under construction. The listed datasets are outdated and will not work until the icechunk format is more stable.
+
+
 ## Native Datasets
 
 ## Virtual Datasets

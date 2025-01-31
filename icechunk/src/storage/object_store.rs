@@ -4,6 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use chrono::{DateTime, Utc};
 use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
@@ -554,6 +555,16 @@ impl Storage for ObjectStorage {
             })
             .await;
         Ok(deleted.into_inner())
+    }
+
+    async fn get_snapshot_last_modified(
+        &self,
+        _settings: &Settings,
+        snapshot: &SnapshotId,
+    ) -> StorageResult<DateTime<Utc>> {
+        let path = self.get_snapshot_path(snapshot);
+        let res = self.store.head(&path).await?;
+        Ok(res.last_modified)
     }
 
     async fn get_object_range_buf(

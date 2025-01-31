@@ -1,9 +1,12 @@
+import datetime
+from collections.abc import AsyncIterator
 from typing import Self
 
 from icechunk._icechunk_python import (
+    GCSummary,
     PyRepository,
     RepositoryConfig,
-    SnapshotMetadata,
+    SnapshotInfo,
     Storage,
 )
 from icechunk.credentials import AnyCredential
@@ -175,13 +178,25 @@ class Repository:
         """
         return self._repository.config()
 
+    @property
+    def storage(self) -> Storage:
+        """
+        Get a copy of this repository's Storage instance.
+
+        Returns
+        -------
+        Storage
+            The repository storage instance.
+        """
+        return self._repository.storage()
+
     def ancestry(
         self,
         *,
         branch: str | None = None,
         tag: str | None = None,
         snapshot: str | None = None,
-    ) -> list[SnapshotMetadata]:
+    ) -> list[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
 
@@ -196,7 +211,7 @@ class Repository:
 
         Returns
         -------
-        list[SnapshotMetadata]
+        list[SnapshotInfo]
             The ancestry of the snapshot, listing out the snapshots and their metadata.
 
         Notes
@@ -204,6 +219,36 @@ class Repository:
         Only one of the arguments can be specified.
         """
         return self._repository.ancestry(branch=branch, tag=tag, snapshot=snapshot)
+
+    def async_ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> AsyncIterator[SnapshotInfo]:
+        """
+        Get the ancestry of a snapshot.
+
+        Parameters
+        ----------
+        branch : str, optional
+            The branch to get the ancestry of.
+        tag : str, optional
+            The tag to get the ancestry of.
+        snapshot : str, optional
+            The snapshot ID to get the ancestry of.
+
+        Returns
+        -------
+        list[SnapshotInfo]
+            The ancestry of the snapshot, listing out the snapshots and their metadata.
+
+        Notes
+        -----
+        Only one of the arguments can be specified.
+        """
+        return self._repository.async_ancestry(branch=branch, tag=tag, snapshot=snapshot)
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -399,3 +444,33 @@ class Repository:
             The writable session on the branch.
         """
         return Session(self._repository.writable_session(branch))
+
+    def expire_snapshots(self, older_than: datetime.datetime) -> set[str]:
+        """Expire all snapshots older than a threshold.
+
+        This processes snapshots found by navigating all references in
+        the repo, tags first, branches leter, both in lexicographical order.
+
+        Returns the ids of all snapshots considered expired and skipped
+        from history. Notice that this snapshot are not necessarily
+        available for garbage collection, they could still be pointed by
+        ether refs.
+
+        Warning: this is an administrative operation, it should be run
+        carefully. The repository can still operate concurrently while
+        `expire_snapshots` runs, but other readers can get inconsistent
+        views of the repository history.
+        """
+
+        return self._repository.expire_snapshots(older_than)
+
+    def garbage_collect(self, delete_object_older_than: datetime.datetime) -> GCSummary:
+        """Delete any objects no longer accessible from any branches or tags.
+
+        Warning: this is an administrative operation, it should be run
+        carefully. The repository can still operate concurrently while
+        `garbage_collect` runs, but other reades can get inconsistent
+        views if they are trying to access the expired snapshots.
+        """
+
+        return self._repository.garbage_collect(delete_object_older_than)

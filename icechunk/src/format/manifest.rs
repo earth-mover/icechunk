@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::storage::ETag;
 
 use super::{
-    format_constants::SpecVersionBin, ChunkId, ChunkIndices, ChunkLength, ChunkOffset,
-    IcechunkFormatError, IcechunkFormatVersion, IcechunkResult, ManifestId, NodeId,
+    ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkFormatError, IcechunkResult,
+    ManifestId, NodeId,
 };
 
 type ManifestExtents = Range<ChunkIndices>;
@@ -124,20 +124,13 @@ pub struct ChunkInfo {
 
 #[derive(Debug, PartialEq)]
 pub struct Manifest {
-    pub icechunk_manifest_format_version: IcechunkFormatVersion,
-    pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
     pub id: ManifestId,
     pub(crate) chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
 impl Default for Manifest {
     fn default() -> Self {
-        Self {
-            icechunk_manifest_format_version: Default::default(),
-            icechunk_manifest_format_flags: Default::default(),
-            id: ManifestId::random(),
-            chunks: Default::default(),
-        }
+        Self { id: ManifestId::random(), chunks: Default::default() }
     }
 }
 
@@ -160,12 +153,7 @@ impl Manifest {
     }
 
     pub fn new(chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>) -> Self {
-        Self {
-            chunks,
-            icechunk_manifest_format_version: SpecVersionBin::current() as u8,
-            icechunk_manifest_format_flags: Default::default(),
-            id: ManifestId::random(),
-        }
+        Self { chunks, id: ManifestId::random() }
     }
 
     pub async fn from_stream<E>(
