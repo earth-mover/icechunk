@@ -5,6 +5,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
@@ -199,6 +200,14 @@ impl Storage for LoggingStorage {
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize> {
         self.backend.delete_objects(settings, prefix, ids).await
+    }
+
+    async fn get_snapshot_last_modified(
+        &self,
+        settings: &Settings,
+        snapshot: &SnapshotId,
+    ) -> StorageResult<DateTime<Utc>> {
+        self.backend.get_snapshot_last_modified(settings, snapshot).await
     }
 
     async fn get_object_range_buf(

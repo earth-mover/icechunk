@@ -3,15 +3,13 @@ use std::collections::{HashMap, HashSet};
 use crate::change_set::ChangeSet;
 
 use super::{
-    format_constants::SpecVersionBin,
     snapshot::{NodeSnapshot, NodeType},
-    ChunkIndices, IcechunkFormatVersion, NodeId,
+    ChunkIndices, NodeId,
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionLog {
     // FIXME: better, more stable on-disk format
-    pub icechunk_transaction_log_format_version: IcechunkFormatVersion,
     pub new_groups: HashSet<NodeId>,
     pub new_arrays: HashSet<NodeId>,
     pub deleted_groups: HashSet<NodeId>,
@@ -64,7 +62,6 @@ impl TransactionLog {
             updated_user_attributes,
             updated_zarr_metadata,
             updated_chunks,
-            icechunk_transaction_log_format_version: SpecVersionBin::current() as u8,
         }
     }
 

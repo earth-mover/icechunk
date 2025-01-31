@@ -10,7 +10,7 @@ use icechunk::{
     Repository, Storage,
 };
 use pretty_assertions::assert_eq;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroU64,
@@ -94,8 +94,8 @@ async fn write_task(ds: Arc<RwLock<Session>>, x: u32, y: u32) {
     let bytes = Bytes::copy_from_slice(&value.to_be_bytes());
 
     let random_sleep = {
-        let mut rng = thread_rng();
-        rng.gen_range(0..200)
+        let mut rng = rng();
+        rng.random_range(0..200)
     };
     sleep(Duration::from_millis(random_sleep)).await;
 
@@ -140,8 +140,8 @@ async fn read_task(ds: Arc<RwLock<Session>>, x: u32, y: u32, barrier: Arc<Barrie
             }
         }
         let random_sleep = {
-            let mut rng = thread_rng();
-            rng.gen_range(0..20)
+            let mut rng = rng();
+            rng.random_range(0..20)
         };
         sleep(Duration::from_millis(random_sleep)).await;
     }

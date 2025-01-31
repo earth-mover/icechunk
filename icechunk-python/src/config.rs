@@ -13,7 +13,8 @@ use icechunk::{
     config::{
         AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
         CompressionConfig, Credentials, CredentialsFetcher, GcsCredentials,
-        GcsStaticCredentials, S3Credentials, S3Options, S3StaticCredentials,
+        GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition,
+        ManifestPreloadConfig, S3Credentials, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -106,7 +107,7 @@ fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     }
 }
 
-fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
+pub(crate) fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => format!(r#""{}""#, s.as_ref()),
@@ -702,6 +703,209 @@ impl PyStorageSettings {
     }
 }
 
+#[pyclass(name = "ManifestPreloadCondition", eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PyManifestPreloadCondition {
+    Or(Vec<PyManifestPreloadCondition>),
+    And(Vec<PyManifestPreloadCondition>),
+    PathMatches { regex: String },
+    NameMatches { regex: String },
+    NumRefs { from: Option<u32>, to: Option<u32> },
+    True(),
+    False(),
+}
+
+#[pymethods]
+impl PyManifestPreloadCondition {
+    #[staticmethod]
+    pub fn or_conditions(conditions: Vec<PyManifestPreloadCondition>) -> Self {
+        Self::Or(conditions)
+    }
+    #[staticmethod]
+    pub fn and_conditions(conditions: Vec<PyManifestPreloadCondition>) -> Self {
+        Self::And(conditions)
+    }
+    #[staticmethod]
+    pub fn path_matches(regex: String) -> Self {
+        Self::PathMatches { regex }
+    }
+    #[staticmethod]
+    pub fn name_matches(regex: String) -> Self {
+        Self::NameMatches { regex }
+    }
+    #[staticmethod]
+    #[pyo3(signature = (from, to))]
+    pub fn num_refs(from: Option<u32>, to: Option<u32>) -> Self {
+        Self::NumRefs { from, to }
+    }
+    #[staticmethod]
+    pub fn r#true() -> Self {
+        Self::True()
+    }
+    #[staticmethod]
+    pub fn r#false() -> Self {
+        Self::False()
+    }
+}
+
+impl From<&PyManifestPreloadCondition> for ManifestPreloadCondition {
+    fn from(value: &PyManifestPreloadCondition) -> Self {
+        use PyManifestPreloadCondition::*;
+        match value {
+            Or(vec) => Self::Or(vec.iter().map(|c| c.into()).collect()),
+            And(vec) => Self::And(vec.iter().map(|c| c.into()).collect()),
+            PathMatches { regex } => Self::PathMatches { regex: regex.clone() },
+            NameMatches { regex } => Self::NameMatches { regex: regex.clone() },
+            NumRefs { from, to } => Self::NumRefs {
+                from: from
+                    .map(std::ops::Bound::Included)
+                    .unwrap_or(std::ops::Bound::Unbounded),
+                to: to
+                    .map(std::ops::Bound::Excluded)
+                    .unwrap_or(std::ops::Bound::Unbounded),
+            },
+            True() => Self::True,
+            False() => Self::False,
+        }
+    }
+}
+
+impl From<ManifestPreloadCondition> for PyManifestPreloadCondition {
+    fn from(value: ManifestPreloadCondition) -> Self {
+        fn bound_from(from: std::ops::Bound<u32>) -> Option<u32> {
+            match from {
+                std::ops::Bound::Included(n) => Some(n),
+                std::ops::Bound::Excluded(n) => Some(n + 1),
+                std::ops::Bound::Unbounded => None,
+            }
+        }
+
+        fn bound_to(to: std::ops::Bound<u32>) -> Option<u32> {
+            match to {
+                std::ops::Bound::Included(n) => Some(n + 1),
+                std::ops::Bound::Excluded(n) => Some(n),
+                std::ops::Bound::Unbounded => None,
+            }
+        }
+
+        use ManifestPreloadCondition::*;
+        match value {
+            Or(vec) => Self::Or(vec.into_iter().map(|c| c.into()).collect()),
+            And(vec) => Self::And(vec.into_iter().map(|c| c.into()).collect()),
+            PathMatches { regex } => Self::PathMatches { regex },
+            NameMatches { regex } => Self::NameMatches { regex },
+            NumRefs { from, to } => {
+                Self::NumRefs { from: bound_from(from), to: bound_to(to) }
+            }
+            True => Self::True(),
+            False => Self::False(),
+        }
+    }
+}
+
+#[pyclass(name = "ManifestPreloadConfig", eq)]
+#[derive(Debug)]
+pub struct PyManifestPreloadConfig {
+    #[pyo3(get, set)]
+    pub max_total_refs: Option<u32>,
+    #[pyo3(get, set)]
+    pub preload_if: Option<Py<PyManifestPreloadCondition>>,
+}
+
+#[pymethods]
+impl PyManifestPreloadConfig {
+    #[new]
+    #[pyo3(signature = (max_total_refs=None, preload_if=None))]
+    fn new(
+        max_total_refs: Option<u32>,
+        preload_if: Option<Py<PyManifestPreloadCondition>>,
+    ) -> Self {
+        Self { max_total_refs, preload_if }
+    }
+}
+
+impl PartialEq for PyManifestPreloadConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let x: ManifestPreloadConfig = self.into();
+        let y: ManifestPreloadConfig = other.into();
+        x == y
+    }
+}
+
+impl From<&PyManifestPreloadConfig> for ManifestPreloadConfig {
+    fn from(value: &PyManifestPreloadConfig) -> Self {
+        Python::with_gil(|py| Self {
+            max_total_refs: value.max_total_refs,
+            preload_if: value.preload_if.as_ref().map(|c| (&*c.borrow(py)).into()),
+        })
+    }
+}
+
+impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
+    fn from(value: ManifestPreloadConfig) -> Self {
+        #[allow(clippy::expect_used)]
+        Python::with_gil(|py| Self {
+            max_total_refs: value.max_total_refs,
+            preload_if: value.preload_if.map(|c| {
+                Py::new(py, Into::<PyManifestPreloadCondition>::into(c))
+                    .expect("Cannot create instance of ManifestPreloadCondition")
+            }),
+        })
+    }
+}
+
+#[pyclass(name = "ManifestConfig", eq)]
+#[derive(Debug, Default)]
+pub struct PyManifestConfig {
+    #[pyo3(get, set)]
+    pub preload: Option<Py<PyManifestPreloadConfig>>,
+}
+
+#[pymethods]
+impl PyManifestConfig {
+    #[new]
+    #[pyo3(signature = (preload=None))]
+    fn new(preload: Option<Py<PyManifestPreloadConfig>>) -> Self {
+        Self { preload }
+    }
+
+    pub fn __repr__(&self) -> String {
+        // TODO: improve repr
+        format!(
+            r#"ManifestConfig(preload={pre})"#,
+            pre = format_option_to_string(self.preload.as_ref().map(|l| l.to_string())),
+        )
+    }
+}
+
+impl PartialEq for PyManifestConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let x: ManifestConfig = self.into();
+        let y: ManifestConfig = other.into();
+        x == y
+    }
+}
+
+impl From<&PyManifestConfig> for ManifestConfig {
+    fn from(value: &PyManifestConfig) -> Self {
+        Python::with_gil(|py| Self {
+            preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
+        })
+    }
+}
+
+impl From<ManifestConfig> for PyManifestConfig {
+    fn from(value: ManifestConfig) -> Self {
+        #[allow(clippy::expect_used)]
+        Python::with_gil(|py| Self {
+            preload: value.preload.map(|c| {
+                Py::new(py, Into::<PyManifestPreloadConfig>::into(c))
+                    .expect("Cannot create instance of ManifestPreloadConfig")
+            }),
+        })
+    }
+}
+
 #[pyclass(name = "RepositoryConfig", eq)]
 #[derive(Debug)]
 pub struct PyRepositoryConfig {
@@ -719,6 +923,8 @@ pub struct PyRepositoryConfig {
     pub storage: Option<Py<PyStorageSettings>>,
     #[pyo3(get)]
     pub virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
+    #[pyo3(get, set)]
+    pub manifest: Option<Py<PyManifestConfig>>,
 }
 
 impl PartialEq for PyRepositoryConfig {
@@ -741,6 +947,7 @@ impl From<&PyRepositoryConfig> for RepositoryConfig {
             virtual_chunk_containers: value.virtual_chunk_containers.as_ref().map(|c| {
                 c.iter().map(|(name, cont)| (name.clone(), cont.into())).collect()
             }),
+            manifest: value.manifest.as_ref().map(|c| (&*c.borrow(py)).into()),
         })
     }
 }
@@ -767,6 +974,11 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
             virtual_chunk_containers: value
                 .virtual_chunk_containers
                 .map(|c| c.into_iter().map(|(name, cont)| (name, cont.into())).collect()),
+
+            manifest: value.manifest.map(|c| {
+                Py::new(py, Into::<PyManifestConfig>::into(c))
+                    .expect("Cannot create instance of ManifestConfig")
+            }),
         })
     }
 }
@@ -780,7 +992,8 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, unsafe_overwrite_refs = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, unsafe_overwrite_refs = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
         unsafe_overwrite_refs: Option<bool>,
@@ -789,6 +1002,7 @@ impl PyRepositoryConfig {
         caching: Option<Py<PyCachingConfig>>,
         storage: Option<Py<PyStorageSettings>>,
         virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
+        manifest: Option<Py<PyManifestConfig>>,
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,
@@ -798,6 +1012,7 @@ impl PyRepositoryConfig {
             caching,
             storage,
             virtual_chunk_containers,
+            manifest,
         }
     }
 
@@ -849,15 +1064,22 @@ impl PyRepositoryConfig {
                     .extract::<String>(py)
                     .expect("Cannot call __repr__")
             }));
+            let manifest: String = format_option(self.manifest.as_ref().map(|c| {
+                c.call_method0(py, "__repr__")
+                    .expect("Cannot call __repr__")
+                    .extract::<String>(py)
+                    .expect("Cannot call __repr__")
+            }));
             // TODO: virtual chunk containers
             format!(
-                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, unsafe_overwrite_refs={uns}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage})"#,
+                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, unsafe_overwrite_refs={uns}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest})"#,
                 inl = format_option_to_string(self.inline_chunk_threshold_bytes),
                 uns = format_option(self.unsafe_overwrite_refs.map(format_bool)),
                 partial = format_option_to_string(self.get_partial_values_concurrency),
                 comp = comp,
                 caching = caching,
-                storage = storage
+                storage = storage,
+                manifest = manifest,
             )
         })
     }

@@ -179,18 +179,20 @@ nav:
   - Overview: overview.md
   - FAQ: faq.md
   - Icechunk Python:
-    - icechunk-python/quickstart.md
-    - icechunk-python/configuration.md
-    - icechunk-python/xarray.md
-    - icechunk-python/dask.md
-    - icechunk-python/version-control.md
+    - Quickstart: icechunk-python/quickstart.md
+    - Configuration: icechunk-python/configuration.md
+    - Xarray: icechunk-python/xarray.md
+    - Dask: icechunk-python/dask.md
+    - Version Control: icechunk-python/version-control.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md
+    - Cheatsheets:
+      - Icechunk for Git Users: icechunk-python/cheatsheets/git-users.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
 #    - Notebooks:
 #      - ... | flat | icechunk-python/notebooks/*.ipynb
   - Icechunk Rust: icechunk-rust.md
-  - contributing.md
+  - Contributing: contributing.md
   - Sample Datasets: sample-datasets.md
   - Spec: spec.md

@@ -7,7 +7,8 @@ use aws_sdk_s3::{
     error::SdkError,
     operation::{
         delete_objects::DeleteObjectsError, get_object::GetObjectError,
-        list_objects_v2::ListObjectsV2Error, put_object::PutObjectError,
+        head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
+        put_object::PutObjectError,
     },
     primitives::ByteStreamError,
 };
@@ -66,6 +67,8 @@ pub enum StorageError {
     S3GetObjectError(#[from] SdkError<GetObjectError, HttpResponse>),
     #[error("error writing object to object store {0}")]
     S3PutObjectError(#[from] SdkError<PutObjectError, HttpResponse>),
+    #[error("error getting object metadata from object store {0}")]
+    S3HeadObjectError(#[from] SdkError<HeadObjectError, HttpResponse>),
     #[error("error listing objects in object store {0}")]
     S3ListObjectError(#[from] SdkError<ListObjectsV2Error, HttpResponse>),
     #[error("error deleting objects in object store {0}")]
@@ -299,6 +302,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         ids: BoxStream<'_, String>,
     ) -> StorageResult<usize>;
 
+    async fn get_snapshot_last_modified(
+        &self,
+        settings: &Settings,
+        snapshot: &SnapshotId,
+    ) -> StorageResult<DateTime<Utc>>;
+
     async fn list_chunks(
         &self,
         settings: &Settings,
@@ -320,6 +329,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         Ok(translate_list_infos(self.list_objects(settings, SNAPSHOT_PREFIX).await?))
     }
 
+    async fn list_transaction_logs(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
+        Ok(translate_list_infos(self.list_objects(settings, TRANSACTION_PREFIX).await?))
+    }
+
     async fn delete_chunks(
         &self,
         settings: &Settings,
@@ -336,12 +352,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_manifests(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, ManifestId>,
+        manifests: BoxStream<'_, ManifestId>,
     ) -> StorageResult<usize> {
         self.delete_objects(
             settings,
             MANIFEST_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            manifests.map(|id| id.to_string()).boxed(),
         )
         .await
     }
@@ -349,12 +365,25 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_snapshots(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, SnapshotId>,
+        snapshots: BoxStream<'_, SnapshotId>,
     ) -> StorageResult<usize> {
         self.delete_objects(
             settings,
             SNAPSHOT_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            snapshots.map(|id| id.to_string()).boxed(),
+        )
+        .await
+    }
+
+    async fn delete_transaction_logs(
+        &self,
+        settings: &Settings,
+        transaction_logs: BoxStream<'_, SnapshotId>,
+    ) -> StorageResult<usize> {
+        self.delete_objects(
+            settings,
+            TRANSACTION_PREFIX,
+            transaction_logs.map(|id| id.to_string()).boxed(),
         )
         .await
     }

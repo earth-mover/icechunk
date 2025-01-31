@@ -1,4 +1,5 @@
 import os
+import re
 from collections.abc import Generator
 from pathlib import Path
 
@@ -125,10 +126,11 @@ def test_virtual_chunk_containers() -> None:
     )
     container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
     config.set_virtual_chunk_container(container)
-    assert (
-        repr(config)
-        == r"RepositoryConfig(inline_chunk_threshold_bytes=None, unsafe_overwrite_refs=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None)"
+    assert re.match(
+        r"RepositoryConfig\(inline_chunk_threshold_bytes=None, unsafe_overwrite_refs=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None, manifest=.*\)",
+        repr(config),
     )
+    assert config.virtual_chunk_containers
     assert len(config.virtual_chunk_containers) > 1
     found_cont = [
         cont
@@ -166,11 +168,20 @@ def test_can_change_deep_config_values() -> None:
     config.compression.level = 2
     config.caching = icechunk.CachingConfig(num_chunk_refs=8)
     config.storage = storage.default_settings()
+    assert config.storage.concurrency
     config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
+    config.manifest = icechunk.ManifestConfig()
+    config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
+    config.manifest.preload.preload_if = icechunk.ManifestPreloadCondition.and_conditions(
+        [
+            icechunk.ManifestPreloadCondition.true(),
+            icechunk.ManifestPreloadCondition.name_matches("foo"),
+        ]
+    )
 
-    assert (
-        repr(config)
-        == r"RepositoryConfig(inline_chunk_threshold_bytes=5, unsafe_overwrite_refs=True, get_partial_values_concurrency=42, compression=CompressionConfig(algorithm=None, level=2), caching=CachingConfig(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None), storage=StorageSettings(concurrency=StorageConcurrencySettings(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000)))"
+    assert re.match(
+        r"RepositoryConfig\(inline_chunk_threshold_bytes=5, unsafe_overwrite_refs=True, get_partial_values_concurrency=42, compression=CompressionConfig\(algorithm=None, level=2\), caching=CachingConfig\(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None\), storage=StorageSettings\(concurrency=StorageConcurrencySettings\(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000\)\), manifest=.*\)",
+        repr(config),
     )
     repo = icechunk.Repository.open(
         storage=storage,
@@ -179,7 +190,24 @@ def test_can_change_deep_config_values() -> None:
     repo.save_config()
 
     stored_config = icechunk.Repository.fetch_config(storage)
+    assert stored_config
     assert stored_config.inline_chunk_threshold_bytes == 5
+    assert stored_config.compression
     assert stored_config.compression.level == 2
+    assert stored_config.caching
     assert stored_config.caching.num_chunk_refs == 8
+    assert stored_config.storage
+    assert stored_config.storage.concurrency
     assert stored_config.storage.concurrency.ideal_concurrent_request_size == 1_000_000
+    assert stored_config.manifest
+    assert stored_config.manifest.preload
+    assert config.manifest.preload.max_total_refs == 42
+    assert (
+        config.manifest.preload.preload_if
+        == icechunk.ManifestPreloadCondition.and_conditions(
+            [
+                icechunk.ManifestPreloadCondition.true(),
+                icechunk.ManifestPreloadCondition.name_matches("foo"),
+            ]
+        )
+    )

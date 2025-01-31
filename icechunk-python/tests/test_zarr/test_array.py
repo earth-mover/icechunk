@@ -76,6 +76,7 @@ def test_array_creation_existing_node(
 
 
 ### We should test serializability in many ways
+@pytest.mark.skip("icechunk requires opting-in to pickling at the session level")
 @pytest.mark.parametrize("store", ["local"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
 def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
