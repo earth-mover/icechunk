@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import contextlib
+from collections.abc import AsyncIterator, Generator
 from typing import Any, Self
 
 from icechunk import (
@@ -87,10 +88,11 @@ class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
     _session: PySession
+    _allow_pickling: bool
 
-    def __init__(self, session: PySession):
+    def __init__(self, session: PySession, _allow_pickling: bool = False):
         self._session = session
-        self._allow_distributed_write = False
+        self._allow_pickling = _allow_pickling
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -98,8 +100,17 @@ class Session:
         return self._session == value._session
 
     def __getstate__(self) -> object:
+        if not self._allow_pickling and not self.read_only:
+            raise ValueError(
+                "You must opt-in to pickle writable sessions in a distributed context "
+                "using the `Session.allow_pickling` context manager. "
+                # link to docs
+                "If you are using xarray's `Dataset.to_zarr` method with dask arrays, "
+                "please consider `icechunk.xarray.to_icechunk` instead."
+            )
         state = {
             "_session": self._session.as_bytes(),
+            "_allow_pickling": self._allow_pickling,
         }
         return state
 
@@ -107,6 +118,18 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
+        self._allow_pickling = state["_allow_pickling"]
+
+    @contextlib.contextmanager
+    def allow_pickling(self) -> Generator[None, None, None]:
+        """
+        Context manager to allow unpickling this store if writable.
+        """
+        try:
+            self._allow_pickling = True
+            yield
+        finally:
+            self._allow_pickling = False
 
     @property
     def read_only(self) -> bool:
@@ -172,7 +195,7 @@ class Session:
         IcechunkStore
             A zarr Store object for reading and writing data from the repository.
         """
-        return IcechunkStore(self._session.store)
+        return IcechunkStore(self._session.store, self._allow_pickling)
 
     def all_virtual_chunk_locations(self) -> list[str]:
         """
