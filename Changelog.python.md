@@ -1,5 +1,39 @@
 # Changelog
 
+## Python Icechunk Library 0.1.0
+
+### Features
+
+- Expiration and garbage collection. It's now possible to maintain only recent versions of the repository, reclaiming the storage used exclusively by expired versions.
+- Allow an arbitrary map of properties to commits. Example:
+  ```
+  session.commit("some message", metadata={"author": "icechunk-team"})
+  ```
+  This properties can be retrieved via `ancestry`.
+- New `chunk_coordinates` function to list all initialized chunks in an array.
+- It's now possible to delete tags. New tags with the same name won't be allowed to preserve the immutability of snapshots pointed by a tag.
+- Safety checks on distributed writes via opt-in pickling of the store.
+- More safety around snapshot timestamps, blocking commits if there is too much clock drift.
+- Don't allow creating repositories in dirty prefixes.
+- Experimental support for Tigris object store: it currently requires the bucket to be restricted to a single region to obtain the Icechunk consistency guarantees.
+- This version is the first candidate for a stable on-disk format. At the moment, we are not planning to change the on-disk format prior to releasing v1 but reserve the right to do so.
+
+### Breaking Changes
+
+- Users must now opt-in to pickling and unpickling of Session and IcechunkStore using the `Session.allow_pickling` context manager
+- `to_icechunk` now accepts a Session, instead of an IcechunkStore
+
+### Performance
+
+- Preload small manifests that look like coordinate arrays on session creation.
+- Faster `ancestry` in an async context via `async_ancestry`.
+
+### Fixes
+
+- Bad manifest split in unmodified arrays
+- Documentation was updated to the latest API.
+
+
 ## Python Icechunk Library 0.1.0a15
 
 ### Fixes
