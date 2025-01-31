@@ -70,7 +70,7 @@ repo.reset_branch("my-new-branch", "198273178639187")
 ```
 
 !!! warning
-    This is a destructive operation. It will overwrite the branch with the snapshot immediately. It can only be undone by resetting the branch again.
+    This is a destructive operation. It will overwrite the branch reference with the snapshot immediately. It can only be undone by resetting the branch again.
 
 At this point, the tip of the branch is now the snapshot `198273178639187` and any changes made to the branch will be based on this snapshot. This also means the history of the branch is now same as the ancestry of this snapshot.
 
