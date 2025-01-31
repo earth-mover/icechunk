@@ -152,7 +152,7 @@ chunk-manifests:
                                           # that will be useful for sparse arrays
 
       target: coord1                      # arrays that match will go to this manifest set
-      
+
 
     - metadata-chunks: [0, 200]           # arrays < 200 chunks will go to coord2
                                           # but only if they didn't get assigned by the rule above
@@ -185,7 +185,7 @@ chunk-manifests:  # of course, we'll have to tune all these numbers
     - coordinates:                # we intend coordinate arrays to be assigned here
         max-manifest-size: 50000
         cardinality: 1
-        max-arrays-per-manifest: null 
+        max-arrays-per-manifest: null
         overflow-to: default
 
     - default:
@@ -267,7 +267,7 @@ def closure({a}):
   found = {}
   to_process = {a}
   manifests_seen = {}
-  
+
   while x in to_process.peek():
     for manifest in manifests(x) if manifest not in manifests_seen:
       manifests_seen.add(manifest)
@@ -327,7 +327,7 @@ def manifest_assignments(modified_arrays: set[array]) -> list[[array]]:
           # this is the default (last) manifest set
           result.push([array])
         else:
-          # the array is too large for this manifest set, but it may fit 
+          # the array is too large for this manifest set, but it may fit
           # in the overflow set
           desired_assignments[manifest_set.overflow_to].push(array)
       else:
@@ -403,4 +403,3 @@ has no dependencies.
 
 We need a bin-pack: [this one](https://crates.io/crates/rpack/0.2.2/dependencies)
 is fast at our scale and has no dependencies.
-
