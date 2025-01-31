@@ -1,12 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
-    iter,
+    collections::{BTreeSet, HashMap},
     sync::Arc,
 };
 
 use bytes::Bytes;
 use futures::Stream;
-use itertools::Either;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -15,7 +13,7 @@ use crate::{
     asset_manager::AssetManager,
     config::{Credentials, RepositoryConfig},
     format::{
-        snapshot::{Snapshot, SnapshotMetadata},
+        snapshot::{Snapshot, SnapshotInfo},
         IcechunkFormatError, NodeId, SnapshotId,
     },
     refs::{
@@ -116,17 +114,17 @@ impl Repository {
             let asset_manager = AssetManager::new_no_cache(
                 Arc::clone(&storage_c),
                 storage_settings.clone(),
+                compression,
             );
             // On create we need to create the default branch
-            let new_snapshot = Arc::new(Snapshot::empty());
-            let new_snapshot_id =
-                asset_manager.write_snapshot(new_snapshot, compression).await?;
+            let new_snapshot = Arc::new(Snapshot::initial());
+            asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
             update_branch(
                 storage_c.as_ref(),
                 &storage_settings,
                 Ref::DEFAULT_BRANCH,
-                new_snapshot_id.clone(),
+                new_snapshot.id().clone(),
                 None,
                 overwrite_refs,
             )
@@ -219,6 +217,7 @@ impl Repository {
             Arc::clone(&storage),
             storage_settings.clone(),
             config.caching(),
+            config.compression().level(),
         ));
         Ok(Self {
             config,
@@ -315,32 +314,35 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    async fn snapshot_ancestry(
+    pub async fn snapshot_ancestry(
         &self,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
-        let parent = self.asset_manager.fetch_snapshot(snapshot_id).await?;
-        let last = parent.metadata.clone();
-        let it = if parent.short_term_history.len() < parent.total_parents as usize {
-            // FIXME: implement splitting of snapshot history
-            #[allow(clippy::unimplemented)]
-            Either::Left(
-                parent.local_ancestry().chain(iter::once_with(|| unimplemented!())),
-            )
-        } else {
-            Either::Right(parent.local_ancestry())
-        };
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
+        Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
+    }
 
-        Ok(futures::stream::iter(iter::once(Ok(last)).chain(it.map(Ok))))
+    pub async fn snapshot_ancestry_arc(
+        self: Arc<Self>,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+        Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
     pub async fn ancestry(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotMetadata>>> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_ancestry(&snapshot_id).await
+    }
+
+    pub async fn ancestry_arc(
+        self: Arc<Self>,
+        version: &VersionInfo,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+        let snapshot_id = self.resolve_version(version).await?;
+        self.snapshot_ancestry_arc(&snapshot_id).await
     }
 
     /// Create a new branch in the repository at the given snapshot id
@@ -371,7 +373,7 @@ impl Repository {
     }
 
     /// List all branches in the repository.
-    pub async fn list_branches(&self) -> RepositoryResult<HashSet<String>> {
+    pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
         let branches =
             list_branches(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(branches)
@@ -456,7 +458,7 @@ impl Repository {
     }
 
     /// List all tags in the repository.
-    pub async fn list_tags(&self) -> RepositoryResult<HashSet<String>> {
+    pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
@@ -562,11 +564,7 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        error::Error,
-        sync::Arc,
-    };
+    use std::{collections::HashMap, error::Error, sync::Arc};
 
     use crate::{
         config::{CachingConfig, RepositoryConfig},
@@ -669,10 +667,10 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         let initial_branches = repo.list_branches().await?;
-        assert_eq!(initial_branches, HashSet::from(["main".into()]));
+        assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
 
         let initial_tags = repo.list_tags().await?;
-        assert_eq!(initial_tags, HashSet::new());
+        assert_eq!(initial_tags, BTreeSet::new());
 
         // Create some branches
         let initial_snapshot = repo.lookup_branch("main").await?;
@@ -682,7 +680,7 @@ mod tests {
         let branches = repo.list_branches().await?;
         assert_eq!(
             branches,
-            HashSet::from([
+            BTreeSet::from([
                 "main".to_string(),
                 "branch1".to_string(),
                 "branch2".to_string()
@@ -699,13 +697,13 @@ mod tests {
         repo.delete_branch("branch1").await?;
 
         let branches = repo.list_branches().await?;
-        assert_eq!(branches, HashSet::from(["main".to_string(), "branch2".to_string()]));
+        assert_eq!(branches, BTreeSet::from(["main".to_string(), "branch2".to_string()]));
 
         // Create some tags
         repo.create_tag("tag1", &initial_snapshot).await?;
 
         let tags = repo.list_tags().await?;
-        assert_eq!(tags, HashSet::from(["tag1".to_string()]));
+        assert_eq!(tags, BTreeSet::from(["tag1".to_string()]));
 
         // get the snapshot id of the tag
         let tag_snapshot = repo.lookup_tag("tag1").await?;

@@ -10,7 +10,7 @@ use std::{
 use bytes::Bytes;
 use format_constants::FileTypeBin;
 use itertools::Itertools;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
@@ -78,7 +78,7 @@ pub type NodeId = ObjectId<8, NodeTag>;
 impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub fn random() -> Self {
         let mut buf = [0u8; SIZE];
-        thread_rng().fill(&mut buf[..]);
+        rng().fill(&mut buf[..]);
         Self(buf, PhantomData)
     }
 
@@ -236,8 +236,6 @@ pub enum IcechunkFormatError {
     InvalidCompressionAlgorithm, // TODO: add more info
 }
 
-pub type IcechunkFormatVersion = u8;
-
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
 pub mod format_constants {
@@ -273,7 +271,7 @@ pub mod format_constants {
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SpecVersionBin {
-        V0_1_0Alpha12 = 1u8,
+        V0dot1 = 1u8,
     }
 
     impl TryFrom<u8> for SpecVersionBin {
@@ -281,9 +279,7 @@ pub mod format_constants {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             match value {
-                n if n == SpecVersionBin::V0_1_0Alpha12 as u8 => {
-                    Ok(SpecVersionBin::V0_1_0Alpha12)
-                }
+                n if n == SpecVersionBin::V0dot1 as u8 => Ok(SpecVersionBin::V0dot1),
                 n => Err(format!("Bad spec version code: {}", n)),
             }
         }
@@ -291,7 +287,7 @@ pub mod format_constants {
 
     impl SpecVersionBin {
         pub fn current() -> Self {
-            Self::V0_1_0Alpha12
+            Self::V0dot1
         }
     }
 

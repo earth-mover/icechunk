@@ -1,4 +1,7 @@
+use async_stream::try_stream;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use futures::Stream;
 use quick_cache::{sync::Cache, Weighter};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,7 +19,7 @@ use crate::{
             deserialize_manifest, deserialize_snapshot, deserialize_transaction_log,
             serialize_manifest, serialize_snapshot, serialize_transaction_log,
         },
-        snapshot::Snapshot,
+        snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
         ChunkId, ChunkOffset, IcechunkFormatError, ManifestId, SnapshotId,
     },
@@ -36,6 +39,7 @@ pub struct AssetManager {
     num_transaction_changes: u64,
     num_bytes_attributes: u64,
     num_bytes_chunks: u64,
+    compression_level: u8,
     #[serde(skip)]
     snapshot_cache: Cache<SnapshotId, Arc<Snapshot>, FileWeighter>,
     #[serde(skip)]
@@ -57,6 +61,7 @@ struct AssetManagerSerializer {
     num_transaction_changes: u64,
     num_bytes_attributes: u64,
     num_bytes_chunks: u64,
+    compression_level: u8,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
@@ -69,11 +74,13 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.num_transaction_changes,
             value.num_bytes_attributes,
             value.num_bytes_chunks,
+            value.compression_level,
         )
     }
 }
 
 impl AssetManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
@@ -82,6 +89,7 @@ impl AssetManager {
         num_transaction_changes: u64,
         num_bytes_attributes: u64,
         num_bytes_chunks: u64,
+        compression_level: u8,
     ) -> Self {
         Self {
             num_snapshot_nodes,
@@ -89,6 +97,7 @@ impl AssetManager {
             num_transaction_changes,
             num_bytes_attributes,
             num_bytes_chunks,
+            compression_level,
             storage,
             storage_settings,
             snapshot_cache: Cache::with_weighter(1, num_snapshot_nodes, FileWeighter),
@@ -105,14 +114,16 @@ impl AssetManager {
     pub fn new_no_cache(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
+        compression_level: u8,
     ) -> Self {
-        Self::new(storage, storage_settings, 0, 0, 0, 0, 0)
+        Self::new(storage, storage_settings, 0, 0, 0, 0, 0, compression_level)
     }
 
     pub fn new_with_config(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
         config: &CachingConfig,
+        compression_level: u8,
     ) -> Self {
         Self::new(
             storage,
@@ -122,18 +133,15 @@ impl AssetManager {
             config.num_transaction_changes(),
             config.num_bytes_attributes(),
             config.num_bytes_chunks(),
+            compression_level,
         )
     }
 
-    pub async fn write_manifest(
-        &self,
-        manifest: Arc<Manifest>,
-        compression_level: u8,
-    ) -> RepositoryResult<u64> {
+    pub async fn write_manifest(&self, manifest: Arc<Manifest>) -> RepositoryResult<u64> {
         let manifest_c = Arc::clone(&manifest);
         let res = write_new_manifest(
             manifest_c,
-            compression_level,
+            self.compression_level,
             self.storage.as_ref(),
             &self.storage_settings,
         )
@@ -170,21 +178,18 @@ impl AssetManager {
         self.fetch_manifest(manifest_id, 0).await
     }
 
-    pub async fn write_snapshot(
-        &self,
-        snapshot: Arc<Snapshot>,
-        compression_level: u8,
-    ) -> RepositoryResult<SnapshotId> {
+    pub async fn write_snapshot(&self, snapshot: Arc<Snapshot>) -> RepositoryResult<()> {
         let snapshot_c = Arc::clone(&snapshot);
-        let snapshot_id = write_new_snapshot(
+        write_new_snapshot(
             snapshot_c,
-            compression_level,
+            self.compression_level,
             self.storage.as_ref(),
             &self.storage_settings,
         )
         .await?;
-        self.snapshot_cache.insert(snapshot_id.clone(), snapshot);
-        Ok(snapshot_id)
+        let snapshot_id = snapshot.id().clone();
+        self.snapshot_cache.insert(snapshot_id, snapshot);
+        Ok(())
     }
 
     pub async fn fetch_snapshot(
@@ -210,13 +215,12 @@ impl AssetManager {
         &self,
         transaction_id: SnapshotId,
         log: Arc<TransactionLog>,
-        compression_level: u8,
     ) -> RepositoryResult<()> {
         let log_c = Arc::clone(&log);
         write_new_tx_log(
             transaction_id.clone(),
             log_c,
-            compression_level,
+            self.compression_level,
             self.storage.as_ref(),
             &self.storage_settings,
         )
@@ -271,6 +275,32 @@ impl AssetManager {
                 Ok(chunk)
             }
         }
+    }
+
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    /// Output stream includes snapshot_id argument
+    pub async fn snapshot_ancestry(
+        self: Arc<Self>,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+        let mut this = self.fetch_snapshot(snapshot_id).await?;
+        let stream = try_stream! {
+            yield this.as_ref().into();
+            while let Some(parent) = this.parent_id() {
+                let snap = self.fetch_snapshot(parent).await?;
+                let info: SnapshotInfo = snap.as_ref().into();
+                yield info;
+                this = snap;
+            }
+        };
+        Ok(stream)
+    }
+
+    pub async fn get_snapshot_last_modified(
+        &self,
+        snap: &SnapshotId,
+    ) -> RepositoryResult<DateTime<Utc>> {
+        Ok(self.storage.get_snapshot_last_modified(&self.storage_settings, snap).await?)
     }
 }
 
@@ -459,7 +489,7 @@ async fn write_new_snapshot(
         ),
     ];
 
-    let id = new_snapshot.metadata.id.clone();
+    let id = new_snapshot.id().clone();
     let buffer = tokio::task::spawn_blocking(move || {
         let buffer = binary_file_header(
             SpecVersionBin::current(),
@@ -529,7 +559,7 @@ async fn write_new_tx_log(
 
     let buffer = tokio::task::spawn_blocking(move || {
         let buffer = binary_file_header(
-            SpecVersionBin::V0_1_0Alpha12,
+            SpecVersionBin::current(),
             FileTypeBin::TransactionLog,
             CompressionAlgorithmBin::Zstd,
         );
@@ -616,7 +646,7 @@ mod test {
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone());
+        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),
@@ -632,8 +662,7 @@ mod test {
             Manifest::from_iter(vec![ci1].into_iter()).await?.unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
         let pre_existing_id = &pre_existing_manifest.id;
-        let pre_size =
-            manager.write_manifest(Arc::clone(&pre_existing_manifest), 1).await?;
+        let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -641,12 +670,13 @@ mod test {
             Arc::clone(&logging_c),
             settings,
             &CachingConfig::default(),
+            1,
         );
 
         let manifest =
             Arc::new(Manifest::from_iter(vec![ci2].into_iter()).await?.unwrap());
         let id = &manifest.id;
-        let size = caching.write_manifest(Arc::clone(&manifest), 1).await?;
+        let size = caching.write_manifest(Arc::clone(&manifest)).await?;
 
         assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
         assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
@@ -686,7 +716,7 @@ mod test {
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone());
+        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),
@@ -705,15 +735,15 @@ mod test {
         let manifest1 =
             Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?.unwrap());
         let id1 = &manifest1.id;
-        let size1 = manager.write_manifest(Arc::clone(&manifest1), 1).await?;
+        let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
         let manifest2 =
             Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?.unwrap());
         let id2 = &manifest2.id;
-        let size2 = manager.write_manifest(Arc::clone(&manifest2), 1).await?;
+        let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
         let manifest3 =
             Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?.unwrap());
         let id3 = &manifest3.id;
-        let size3 = manager.write_manifest(Arc::clone(&manifest3), 1).await?;
+        let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -728,6 +758,7 @@ mod test {
                 num_bytes_attributes: Some(0),
                 num_bytes_chunks: Some(0),
             },
+            1,
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
@@ -749,7 +780,7 @@ mod test {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let settings = storage::Settings::default();
         let manager =
-            Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone()));
+            Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone(), 1));
 
         // some reasonable size so it takes some time to parse
         let manifest = Manifest::from_iter((0..5_000).map(|_| ChunkInfo {
@@ -761,7 +792,7 @@ mod test {
         .unwrap()
         .unwrap();
         let manifest_id = manifest.id.clone();
-        let size = manager.write_manifest(Arc::new(manifest), 1).await?;
+        let size = manager.write_manifest(Arc::new(manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -769,6 +800,7 @@ mod test {
             logging_c.clone(),
             logging_c.default_settings(),
             &CachingConfig::default(),
+            1,
         ));
 
         let manager_c = Arc::new(manager);

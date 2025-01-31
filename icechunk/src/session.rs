@@ -3,17 +3,18 @@ use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
     future::{ready, Future},
-    iter,
     ops::Range,
     pin::Pin,
     sync::Arc,
 };
 
+use async_stream::try_stream;
 use bytes::Bytes;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::task::JoinError;
 
 use crate::{
     asset_manager::AssetManager,
@@ -65,8 +66,21 @@ pub enum SessionError {
     AlreadyExists { node: NodeSnapshot, message: String },
     #[error("cannot commit, no changes made to the session")]
     NoChangesToCommit,
+    #[error(
+        "invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` "
+    )]
+    InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
+    #[error(
+        "snapshot timestamp is invalid: timestamp: `{snapshot_time}`, object store clock: `{object_store_time}` "
+    )]
+    InvalidSnapshotTimestamp {
+        object_store_time: DateTime<Utc>,
+        snapshot_time: DateTime<Utc>,
+    },
     #[error("unknown flush error")]
     OtherFlushError,
+    #[error("a concurrent task failed {0}")]
+    ConcurrencyError(#[from] JoinError),
     #[error("ref error: `{0}`")]
     Ref(#[from] RefError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
@@ -592,6 +606,37 @@ impl Session {
         all_chunks(&self.asset_manager, &self.change_set, self.snapshot_id()).await
     }
 
+    pub async fn chunk_coordinates<'a, 'b: 'a>(
+        &'a self,
+        array_path: &'b Path,
+    ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a> {
+        let node = self.get_array(array_path).await?;
+        let updated_chunks = updated_node_chunks_iterator(
+            self.asset_manager.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            node.clone(),
+        )
+        .await
+        .map_ok(|(_path, chunk_info)| chunk_info.coord);
+
+        let res = try_stream! {
+            let new_chunks = stream::iter(
+                self.change_set
+                    .new_array_chunk_iterator(&node.id, array_path)
+                    .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
+            );
+
+            for await maybe_coords in updated_chunks.chain(new_chunks) {
+                match maybe_coords {
+                    Ok(coords) => {yield coords;}
+                    Err(err) => Err(err)?
+                }
+            }
+        };
+        Ok(res)
+    }
+
     pub async fn all_virtual_chunk_locations(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
@@ -638,14 +683,13 @@ impl Session {
                 do_commit(
                     &self.config,
                     self.storage.as_ref(),
-                    &self.asset_manager,
+                    Arc::clone(&self.asset_manager),
                     self.storage_settings.as_ref(),
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
                     message,
                     properties,
-                    self.config().compression().level(),
                 )
                 .await
             }
@@ -661,14 +705,13 @@ impl Session {
                     do_commit(
                         &self.config,
                         self.storage.as_ref(),
-                        &self.asset_manager,
+                        Arc::clone(&self.asset_manager),
                         self.storage_settings.as_ref(),
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
                         message,
                         properties,
-                        self.config().compression().level(),
                     )
                     .await
                 }
@@ -768,10 +811,17 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             // FIXME: this should be the whole ancestry not local
-            let ancestry = current_snapshot.local_ancestry().map(|meta| meta.id);
-            let new_commits = iter::once(ref_data.snapshot.clone())
-                .chain(ancestry.take_while(|snap_id| snap_id != &self.snapshot_id))
-                .collect::<Vec<_>>();
+            let ancestry = Arc::clone(&self.asset_manager)
+                .snapshot_ancestry(current_snapshot.id())
+                .await?
+                .map_ok(|meta| meta.id);
+            let new_commits =
+                stream::once(ready(Ok(ref_data.snapshot.clone())))
+                    .chain(ancestry.try_take_while(|snap_id| {
+                        ready(Ok(snap_id != &self.snapshot_id))
+                    }))
+                    .try_collect::<Vec<_>>()
+                    .await?;
 
             // TODO: this clone is expensive
             // we currently need it to be able to process commits one by one without modifying the
@@ -1138,26 +1188,23 @@ pub fn construct_valid_byte_range(
 }
 
 struct FlushProcess<'a> {
-    asset_manager: &'a AssetManager,
+    asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
-    compression_level: u8,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
 
 impl<'a> FlushProcess<'a> {
     fn new(
-        asset_manager: &'a AssetManager,
+        asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
-        compression_level: u8,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
-            compression_level,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -1181,10 +1228,8 @@ impl<'a> FlushProcess<'a> {
 
         if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
             let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size = self
-                .asset_manager
-                .write_manifest(Arc::clone(&new_manifest), self.compression_level)
-                .await?;
+            let new_manifest_size =
+                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
             let file_info =
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
@@ -1209,7 +1254,7 @@ impl<'a> FlushProcess<'a> {
         node: &NodeSnapshot,
     ) -> SessionResult<()> {
         let updated_chunks = updated_node_chunks_iterator(
-            self.asset_manager,
+            self.asset_manager.as_ref(),
             self.change_set,
             self.parent_id,
             node.clone(),
@@ -1223,10 +1268,8 @@ impl<'a> FlushProcess<'a> {
 
         if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
             let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size = self
-                .asset_manager
-                .write_manifest(Arc::clone(&new_manifest), self.compression_level)
-                .await?;
+            let new_manifest_size =
+                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
             let file_info =
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
@@ -1251,13 +1294,19 @@ impl<'a> FlushProcess<'a> {
                     // manifest file info
                     #[allow(clippy::expect_used)]
                     old_snapshot
-                        .manifest_files
-                        .get(&mr.object_id)
+                        .get_manifest_file(&mr.object_id)
                         .expect(
                             "Bug in flush function, no manifest file found in snapshot",
                         )
                         .clone()
                 }));
+                for mr in array_refs.iter() {
+                    let new_ref = mr.clone();
+                    self.manifest_refs
+                        .entry(node.id.clone())
+                        .and_modify(|v| v.push(new_ref.clone()))
+                        .or_insert_with(|| vec![new_ref]);
+                }
             }
             NodeData::Group => {}
         }
@@ -1303,7 +1352,7 @@ async fn flush(
     }
 
     let all_nodes = updated_nodes(
-        flush_data.asset_manager,
+        flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
     )
@@ -1311,53 +1360,69 @@ async fn flush(
     .map(|node| {
         let id = &node.id;
         // TODO: many clones
-        if let NodeData::Array(meta, original_manifests) = node.node_data {
-            if let Some(manifests) = flush_data.manifest_refs.get(id) {
-                NodeSnapshot {
-                    node_data: NodeData::Array(meta.clone(), manifests.clone()),
-                    ..node
-                }
-            } else {
-                NodeSnapshot {
-                    node_data: NodeData::Array(meta, original_manifests),
-                    ..node
-                }
+        if let NodeData::Array(meta, _) = node.node_data {
+            NodeSnapshot {
+                node_data: NodeData::Array(
+                    meta.clone(),
+                    flush_data.manifest_refs.get(id).cloned().unwrap_or_default(),
+                ),
+                ..node
             }
         } else {
             node
         }
     });
 
-    let mut new_snapshot = Snapshot::from_iter(
-        old_snapshot.as_ref(),
+    let new_snapshot = Snapshot::from_iter(
+        old_snapshot.id().clone(),
+        message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
         vec![],
         all_nodes,
     );
-    new_snapshot.metadata.message = message.to_string();
-    new_snapshot.metadata.written_at = Utc::now();
+
+    if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+        return Err(SessionError::InvalidSnapshotTimestampOrdering {
+            parent: *old_snapshot.flushed_at(),
+            child: *new_snapshot.flushed_at(),
+        });
+    }
 
     let new_snapshot = Arc::new(new_snapshot);
+    let new_snapshot_c = Arc::clone(&new_snapshot);
+    let asset_manager = Arc::clone(&flush_data.asset_manager);
+    let snapshot_timestamp = tokio::spawn(async move {
+        asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
+        asset_manager.get_snapshot_last_modified(new_snapshot_c.id()).await
+    });
+
     // FIXME: this should execute in a non-blocking context
     let tx_log = TransactionLog::new(
         flush_data.change_set,
         old_snapshot.iter(),
         new_snapshot.iter(),
     );
-    let new_snapshot_id = &new_snapshot.metadata.id;
+    let new_snapshot_id = new_snapshot.id();
+
     flush_data
         .asset_manager
-        .write_snapshot(Arc::clone(&new_snapshot), flush_data.compression_level)
+        .write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log))
         .await?;
-    flush_data
-        .asset_manager
-        .write_transaction_log(
-            new_snapshot_id.clone(),
-            Arc::new(tx_log),
-            flush_data.compression_level,
-        )
-        .await?;
+
+    let snapshot_timestamp = snapshot_timestamp
+        .await
+        .map_err(SessionError::ConcurrencyError)?
+        .map_err(SessionError::RepositoryError)?;
+
+    // Fail if there is too much clock difference with the object store
+    // This is to prevent issues with snapshot ordering and expiration
+    if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+        return Err(SessionError::InvalidSnapshotTimestamp {
+            object_store_time: snapshot_timestamp,
+            snapshot_time: *new_snapshot.flushed_at(),
+        });
+    }
 
     Ok(new_snapshot_id.clone())
 }
@@ -1366,19 +1431,17 @@ async fn flush(
 async fn do_commit(
     config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
-    asset_manager: &AssetManager,
+    asset_manager: Arc<AssetManager>,
     storage_settings: &storage::Settings,
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
     message: &str,
     properties: Option<SnapshotProperties>,
-    compression_level: u8,
 ) -> SessionResult<SnapshotId> {
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data =
-        FlushProcess::new(asset_manager, change_set, snapshot_id, compression_level);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     let id = match update_branch(
@@ -1642,7 +1705,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
         let storage_settings = storage.default_settings();
         let asset_manager =
-            AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone());
+            AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {
@@ -1665,8 +1728,7 @@ mod tests {
             Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
         let manifest = Arc::new(manifest);
         let manifest_id = &manifest.id;
-        let manifest_size =
-            asset_manager.write_manifest(Arc::clone(&manifest), 1).await?;
+        let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
             shape: vec![2, 2, 2],
@@ -1712,21 +1774,22 @@ mod tests {
             },
         ];
 
-        let initial = Snapshot::empty();
+        let initial = Snapshot::initial();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
-            &initial,
+            initial.id().clone(),
+            "message".to_string(),
             None,
             manifests,
             vec![],
             nodes.iter().cloned(),
         ));
-        let snapshot_id = asset_manager.write_snapshot(snapshot, 1).await?;
+        asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
         update_branch(
             storage.as_ref(),
             &storage_settings,
             "main",
-            snapshot_id.clone(),
+            snapshot.id().clone(),
             None,
             true,
         )
@@ -2459,6 +2522,38 @@ mod tests {
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 
+        // delete the second chunk, now there are no chunks, so there should be no manifests either
+        let mut ds = repo.writable_session("main").await?;
+        ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 1]), None).await?;
+        let _snap_id = ds.commit("chunk deleted", None).await?;
+
+        let manifests = match ds.get_array(&a1path).await?.node_data {
+            NodeData::Array(_, manifests) => manifests,
+            NodeData::Group => panic!("must be an array"),
+        };
+        assert!(manifests.is_empty());
+
+        // there should be three manifests (unchanged)
+        assert_eq!(
+            3,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("manifest"))
+                .count()
+        );
+        // there should be six snapshots
+        assert_eq!(
+            6,
+            in_mem_storage
+                .all_keys()
+                .await?
+                .iter()
+                .filter(|key| key.contains("snapshot"))
+                .count(),
+        );
+
         Ok(())
     }
 
@@ -2538,7 +2633,7 @@ mod tests {
         assert_eq!(parents[1].message, "first commit");
         assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
         itertools::assert_equal(
-            parents.iter().sorted_by_key(|m| m.written_at).rev(),
+            parents.iter().sorted_by_key(|m| m.flushed_at).rev(),
             parents.iter(),
         );
 

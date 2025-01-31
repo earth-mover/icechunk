@@ -360,7 +360,9 @@ impl PyStore {
             #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list().await })?
-                .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
+                .map_ok(|s| Python::with_gil(|py| s.to_object(py)))
+                .map_err(PyIcechunkStoreError::StoreError)
+                .err_into();
 
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))
@@ -379,7 +381,9 @@ impl PyStore {
             #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list_prefix(prefix.as_str()).await })?
-                .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
+                .map_ok(|s| Python::with_gil(|py| s.to_object(py)))
+                .map_err(PyIcechunkStoreError::StoreError)
+                .err_into();
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))
         })
@@ -397,7 +401,9 @@ impl PyStore {
             #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list_dir(prefix.as_str()).await })?
-                .map_ok(|s| Python::with_gil(|py| s.to_object(py)));
+                .map_ok(|s| Python::with_gil(|py| s.to_object(py)))
+                .map_err(PyIcechunkStoreError::StoreError)
+                .err_into();
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))
         })

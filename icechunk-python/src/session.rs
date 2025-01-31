@@ -1,14 +1,17 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
-use futures::TryStreamExt;
+use async_stream::try_stream;
+use futures::{StreamExt, TryStreamExt};
 use icechunk::{session::Session, Store};
 use pyo3::{prelude::*, types::PyType};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    repository::PySnapshotProperties,
     store::PyStore,
+    streams::PyAsyncGenerator,
 };
 
 #[pyclass]
@@ -109,6 +112,43 @@ impl PySession {
         })
     }
 
+    /// Return vectors of coordinates, up to batch_size in length.
+    ///
+    /// We batch the results to make it faster.
+    pub fn chunk_coordinates(
+        &self,
+        array_path: String,
+        batch_size: u32,
+    ) -> PyResult<PyAsyncGenerator> {
+        // This is blocking function, we need to release the Gil
+        let session = self.0.clone();
+        let res = try_stream! {
+            let session = session.read_owned().await;
+            let array_path = array_path.try_into().map_err(|e| PyIcechunkStoreError::PyValueError(format!("Invalid path: {}", e)))?;
+
+            let stream = session
+                .chunk_coordinates(&array_path)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?
+                .map_err(PyIcechunkStoreError::SessionError)
+                .chunks(batch_size as usize);
+
+            #[allow(unused_braces, deprecated)]
+            { for await coords_vec in stream {
+                let vec = coords_vec
+                    .into_iter()
+                    .map(|maybe_coord| maybe_coord.map(|coord| Python::with_gil(|py| coord.0.to_object(py))))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let vec = Python::with_gil(|py| vec.to_object(py));
+                yield vec
+            } }
+        };
+
+        let prepared_list = Arc::new(Mutex::new(res.boxed()));
+        Ok(PyAsyncGenerator::new(prepared_list))
+    }
+
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
@@ -127,7 +167,13 @@ impl PySession {
         })
     }
 
-    pub fn commit(&self, message: &str, py: Python<'_>) -> PyResult<String> {
+    #[pyo3(signature = (message, metadata=None))]
+    pub fn commit(
+        &self,
+        py: Python<'_>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<String> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
@@ -135,7 +181,7 @@ impl PySession {
                     .0
                     .write()
                     .await
-                    .commit(message, None)
+                    .commit(message, metadata.map(|m| m.into()))
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
