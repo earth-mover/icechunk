@@ -114,7 +114,6 @@ repo.delete_branch("my-new-branch")
 
 Tags are also similar to git tags
 
-
 ### Creating a tag
 
 We create a tag by providing a name and a snapshot id, similar to the `git tag` command.
@@ -162,3 +161,7 @@ repo.lookup_tag("my-new-tag")
 
 # '198273178639187'
 ```
+
+## Merging and Rebasing
+
+Git supports merging and rebasing branches together. Icechunk currently does not support merging and rebasing branches together. It does support [rebasing sessions that share the same branch](../version-control.md#conflict-resolution).
