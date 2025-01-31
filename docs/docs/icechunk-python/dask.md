@@ -104,6 +104,13 @@ The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) 
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported.
 
+!!! warning
+
+    When using Xarray, Icechunk in a Dask Distributed context, you *must* use `to_icechunk` so that the Session has a record
+    of the writes that are executed remotely. Using `to_zarr` in such cases, will result in the local Session having no
+    record of remote writes, and a meaningless commit.
+
+
 Now roundtrip an xarray dataset
 ```python
 import icechunk.xarray
@@ -121,4 +128,10 @@ dataset.identical(roundtripped)
 Finally commit your changes!
 ```python
 icechunk_session.commit("wrote an Xarray dataset!")
+```
+
+In a distributed context you will have to opt-in to pickling:
+```python
+with icechunk_session.allow_pickling():
+    icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store)
 ```
