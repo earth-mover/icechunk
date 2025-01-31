@@ -17,7 +17,9 @@
 - Don't allow creating repositories in dirty prefixes.
 - Experimental support for Tigris object store: it currently requires the bucket to be restricted to a single region to obtain the Icechunk consistency guarantees.
 - This version is the first candidate for a stable on-disk format. At the moment, we are not planning to change the on-disk format prior to releasing v1 but reserve the right to do so.
+
 ### Breaking Changes
+
 - Users must now opt-in to pickling and unpickling of Session and IcechunkStore using the `Session.allow_pickling` context manager
 - `to_icechunk` now accepts a Session, instead of an IcechunkStore
 
