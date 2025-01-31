@@ -16,7 +16,9 @@ from icechunk import (
     s3_storage,
 )
 from icechunk.xarray import to_icechunk
-from tests.xarray_test_compat import ZarrRegionAutoTests
+from xarray.tests.test_backends import (
+    TestZarrRegionAuto as ZarrRegionAutoTests,
+)
 from xarray.tests.test_backends import (
     ZarrBase,
     default_zarr_format,  # noqa: F401; needed otherwise not discovered
