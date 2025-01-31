@@ -1,6 +1,6 @@
 import contextlib
 from collections.abc import Generator
-from typing import Self
+from typing import Any, Self
 
 from icechunk import (
     Conflict,
@@ -219,7 +219,7 @@ class Session:
         """
         self._session.merge(other._session)
 
-    def commit(self, message: str) -> str:
+    def commit(self, message: str, metadata: dict[str, Any] | None = None) -> str:
         """
         Commit the changes in the session to the repository.
 
@@ -243,7 +243,7 @@ class Session:
             If the session is out of date and a conflict occurs.
         """
         try:
-            return self._session.commit(message)
+            return self._session.commit(message, metadata)
         except PyConflictError as e:
             raise ConflictError(e) from None
 

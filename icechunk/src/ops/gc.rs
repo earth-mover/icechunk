@@ -1,4 +1,4 @@
-use std::{collections::HashSet, future::ready, iter};
+use std::{collections::HashSet, future::ready, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use futures::{stream, Stream, StreamExt, TryStreamExt};
@@ -9,7 +9,7 @@ use crate::{
     format::{
         manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
     },
-    refs::{list_refs, RefError},
+    refs::{list_refs, Ref, RefError},
     repository::RepositoryError,
     storage::{self, ListInfo},
     Storage, StorageError,
@@ -117,6 +117,13 @@ impl GCConfig {
             _ => false,
         }
     }
+
+    fn must_delete_transaction_log(&self, tx_log: &ListInfo<SnapshotId>) -> bool {
+        match self.dangling_transaction_logs {
+            Action::DeleteIfCreatedBefore(before) => tx_log.created_at < before,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
@@ -145,7 +152,7 @@ pub type GCResult<A> = Result<A, GCError>;
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-    asset_manager: &AssetManager,
+    asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
     // TODO: this function could have much more parallelism
@@ -153,12 +160,15 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
 
-    let all_snaps =
-        pointed_snapshots(storage, storage_settings, asset_manager, &config.extra_roots)
-            .await?;
+    let all_snaps = pointed_snapshots(
+        storage,
+        storage_settings,
+        Arc::clone(&asset_manager),
+        &config.extra_roots,
+    )
+    .await?;
 
     // FIXME: add attribute files
-    // FIXME: add transaction log files
     let mut keep_chunks = HashSet::new();
     let mut keep_manifests = HashSet::new();
     let mut keep_snapshots = HashSet::new();
@@ -171,11 +181,11 @@ pub async fn garbage_collect(
         }
 
         if config.deletes_manifests() {
-            keep_manifests.extend(snap.manifest_files.keys().cloned());
+            keep_manifests.extend(snap.manifest_files().keys().cloned());
         }
 
         if config.deletes_chunks() {
-            for manifest_id in snap.manifest_files.keys() {
+            for manifest_id in snap.manifest_files().keys() {
                 let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
                     IcechunkFormatError::ManifestInfoNotFound {
                         manifest_id: manifest_id.clone(),
@@ -198,15 +208,20 @@ pub async fn garbage_collect(
 
     if config.deletes_snapshots() {
         summary.snapshots_deleted =
-            gc_snapshots(storage, storage_settings, config, keep_snapshots).await?;
+            gc_snapshots(storage, storage_settings, config, &keep_snapshots).await?;
+    }
+    if config.deletes_transaction_logs() {
+        summary.transaction_logs_deleted =
+            gc_transaction_logs(storage, storage_settings, config, &keep_snapshots)
+                .await?;
     }
     if config.deletes_manifests() {
         summary.manifests_deleted =
-            gc_manifests(storage, storage_settings, config, keep_manifests).await?;
+            gc_manifests(storage, storage_settings, config, &keep_manifests).await?;
     }
     if config.deletes_chunks() {
         summary.chunks_deleted =
-            gc_chunks(storage, storage_settings, config, keep_chunks).await?;
+            gc_chunks(storage, storage_settings, config, &keep_chunks).await?;
     }
 
     Ok(summary)
@@ -232,17 +247,22 @@ async fn all_roots<'a>(
 async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,
-    asset_manager: &'a AssetManager,
+    asset_manager: Arc<AssetManager>,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
     let roots = all_roots(storage, storage_settings, extra_roots).await?;
     Ok(roots
-        .and_then(move |snap_id| async move {
-            let snap = asset_manager.fetch_snapshot(&snap_id).await?;
-            // FIXME: this should be global ancestry, not local
-            let parents = snap.local_ancestry().map(|parent| parent.id);
-            Ok(stream::iter(iter::once(snap_id).chain(parents))
-                .map(Ok::<SnapshotId, GCError>))
+        .and_then(move |snap_id| {
+            let asset_manager = Arc::clone(&asset_manager.clone());
+            async move {
+                let snap = asset_manager.fetch_snapshot(&snap_id).await?;
+                let parents = Arc::clone(&asset_manager)
+                    .snapshot_ancestry(snap.id())
+                    .await?
+                    .map_ok(|parent| parent.id)
+                    .err_into();
+                Ok(stream::once(ready(Ok(snap_id))).chain(parents))
+            }
         })
         .try_flatten())
 }
@@ -251,7 +271,7 @@ async fn gc_chunks(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
-    keep_ids: HashSet<ChunkId>,
+    keep_ids: &HashSet<ChunkId>,
 ) -> GCResult<usize> {
     let to_delete = storage
         .list_chunks(storage_settings)
@@ -274,7 +294,7 @@ async fn gc_manifests(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
-    keep_ids: HashSet<ManifestId>,
+    keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<usize> {
     let to_delete = storage
         .list_manifests(storage_settings)
@@ -299,7 +319,7 @@ async fn gc_snapshots(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
-    keep_ids: HashSet<SnapshotId>,
+    keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<usize> {
     let to_delete = storage
         .list_snapshots(storage_settings)
@@ -318,4 +338,153 @@ async fn gc_snapshots(
         })
         .boxed();
     Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
+}
+
+async fn gc_transaction_logs(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    config: &GCConfig,
+    keep_ids: &HashSet<SnapshotId>,
+) -> GCResult<usize> {
+    let to_delete = storage
+        .list_transaction_logs(storage_settings)
+        .await?
+        // TODO: don't skip over errors
+        .filter_map(move |tx| {
+            ready(tx.ok().and_then(|tx| {
+                if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
+                    Some(tx.id.clone())
+                } else {
+                    None
+                }
+            }))
+        })
+        .boxed();
+    Ok(storage.delete_transaction_logs(storage_settings, to_delete).await?)
+}
+
+/// Expire snapshots older than a threshold.
+///
+/// This only processes snapshots found by navigating `reference`
+/// ancestry. Any other snapshots are not touched.
+///
+/// The operation will edit in place the oldest non-expired snapshot,
+/// changing its parent to be the root of the repo.
+///
+/// For this reasons, it's recommended to invalidate any snapshot
+/// caches before traversing history againg. The cache in the
+/// passed `asset_manager` is invalidated here, but other caches
+/// may exist, for example, in [`Repository`] instances.
+///
+/// Returns the ids of all snapshots considered expired and skipped
+/// from history. Notice that this snapshot are not necessarily
+/// available for garbage collection, they could still be pointed by
+/// ether refs.
+///
+/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+pub async fn expire_ref(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    asset_manager: Arc<AssetManager>,
+    reference: &Ref,
+    older_than: DateTime<Utc>,
+) -> GCResult<HashSet<SnapshotId>> {
+    let snap_id = reference
+        .fetch(storage, storage_settings)
+        .await
+        .map(|ref_data| ref_data.snapshot)?;
+
+    // the algorithm works by finding the oldest non expired snap and the root of the repo
+    // we do that in a single pass through the ancestry
+    // we keep two "pointer" the last editable_snap and the root, and we keep
+    // updating them as we navigate the ancestry
+    let mut editable_snap = snap_id.clone();
+    let mut root = snap_id.clone();
+
+    // here we'll populate the results of every expired snapshot
+    let mut released = HashSet::new();
+    let ancestry =
+        Arc::clone(&asset_manager).snapshot_ancestry(&snap_id).await?.peekable();
+
+    pin!(ancestry);
+
+    // If we point to an expired snapshot already, there is nothing to do
+    if let Some(Ok(info)) = ancestry.as_mut().peek().await {
+        if info.flushed_at < older_than {
+            return Ok(HashSet::new());
+        }
+    }
+
+    while let Some(parent) = ancestry.try_next().await? {
+        if parent.flushed_at >= older_than {
+            // we are navigating non-expired snaps, last will be kept in editable_snap
+            editable_snap = parent.id;
+        } else {
+            released.insert(parent.id.clone());
+            root = parent.id;
+        }
+    }
+
+    // we counted the root as released, but it's not
+    released.remove(&root);
+
+    let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
+    let parent_id = editable_snap.parent_id();
+    if editable_snap.id() == &root || Some(&root) == parent_id.as_ref() {
+        // Either the reference is the root, or it is pointing to the root as first parent
+        // Nothing to do
+        return Ok(released);
+    }
+
+    let root = asset_manager.fetch_snapshot(&root).await?;
+    // TODO: add properties to the snapshot that tell us it was history edited
+    let new_snapshot = Arc::new(editable_snap.adopt(root.as_ref()));
+    asset_manager.write_snapshot(new_snapshot).await?;
+
+    Ok(released)
+}
+
+/// Expire all snapshots older than a threshold.
+///
+/// This processes snapshots found by navigating all references in
+/// the repo, tags first, branches leter, both in lexicographical order.
+///
+/// The operation will edit in place the oldest non-expired snapshot,
+/// in every ancestry, changing its parent to be the root of the repo.
+///
+/// For this reasons, it's recommended to invalidate any snapshot
+/// caches before traversing history againg. The cache in the
+/// passed `asset_manager` is invalidated here, but other caches
+/// may exist, for example, in [`Repository`] instances.
+///
+/// Returns the ids of all snapshots considered expired and skipped
+/// from history. Notice that this snapshot are not necessarily
+/// available for garbage collection, they could still be pointed by
+/// ether refs.
+///
+/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+pub async fn expire(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    asset_manager: Arc<AssetManager>,
+    older_than: DateTime<Utc>,
+) -> GCResult<HashSet<SnapshotId>> {
+    let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
+    let asset_manager = Arc::clone(&asset_manager.clone());
+
+    all_refs
+        .then(move |r| {
+            let asset_manager = asset_manager.clone();
+            async move {
+                let released_snaps =
+                    expire_ref(storage, storage_settings, asset_manager, &r, older_than)
+                        .await?;
+                Ok::<HashSet<SnapshotId>, GCError>(released_snaps)
+            }
+        })
+        .try_fold(HashSet::new(), |mut accum, new_set| async move {
+            accum.extend(new_set);
+            Ok(accum)
+        })
+        .await
 }

@@ -1,63 +1,216 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
+use itertools::Itertools;
+
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     config::Credentials,
-    format::{snapshot::SnapshotMetadata, SnapshotId},
+    format::{
+        snapshot::{SnapshotInfo, SnapshotProperties},
+        SnapshotId,
+    },
+    ops::gc::{expire, garbage_collect, GCConfig, GCSummary},
     repository::{RepositoryError, VersionInfo},
     Repository,
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyType};
-use tokio::sync::RwLock;
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyDict, PyNone, PyType},
+    IntoPyObjectExt,
+};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        datetime_repr, PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings,
+        datetime_repr, format_option_string, PyCredentials, PyRepositoryConfig,
+        PyStorage, PyStorageSettings,
     },
     errors::PyIcechunkStoreError,
     session::PySession,
+    streams::PyAsyncGenerator,
 };
 
-#[pyclass(name = "SnapshotMetadata", eq)]
+/// Wrapper needed to implement pyo3 conversion classes
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PySnapshotMetadata {
+pub struct JsonValue(pub serde_json::Value);
+
+/// Wrapper needed to implement pyo3 conversion classes
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PySnapshotProperties(pub HashMap<String, JsonValue>);
+
+#[pyclass(name = "SnapshotInfo", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PySnapshotInfo {
     #[pyo3(get)]
     id: String,
+    #[pyo3(get)]
+    parent_id: Option<String>,
     #[pyo3(get)]
     written_at: DateTime<Utc>,
     #[pyo3(get)]
     message: String,
+    #[pyo3(get)]
+    metadata: PySnapshotProperties,
 }
 
-impl From<SnapshotMetadata> for PySnapshotMetadata {
-    fn from(val: SnapshotMetadata) -> Self {
-        PySnapshotMetadata {
+impl<'py> FromPyObject<'py> for PySnapshotProperties {
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let m: HashMap<String, JsonValue> = ob.extract()?;
+        Ok(Self(m))
+    }
+}
+
+impl<'py> FromPyObject<'py> for JsonValue {
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let value = ob
+            .extract()
+            .map(serde_json::Value::String)
+            .or(ob.extract().map(serde_json::Value::Bool))
+            .or(ob.downcast().map(|_: &Bound<'py, PyNone>| serde_json::Value::Null))
+            .or(ob.extract().map(|n: i64| serde_json::Value::from(n)))
+            .or(ob.extract().map(|n: u64| serde_json::Value::from(n)))
+            .or(ob.extract().map(|n: f64| serde_json::Value::from(n)))
+            .or(ob.extract().map(|xs: Vec<JsonValue>| serde_json::Value::from(xs)))
+            .or(ob.extract().map(|xs: HashMap<String, JsonValue>| {
+                serde_json::Value::Object(xs.into_iter().map(|(k, v)| (k, v.0)).collect())
+            }))?;
+        Ok(JsonValue(value))
+    }
+}
+
+impl<'py> IntoPyObject<'py> for JsonValue {
+    type Target = PyAny;
+
+    type Output = Bound<'py, Self::Target>;
+
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        match self.0 {
+            serde_json::Value::Null => Ok(PyNone::get(py).to_owned().into_any()),
+            serde_json::Value::Bool(b) => b.into_bound_py_any(py),
+            serde_json::Value::Number(n) => {
+                if n.is_i64() || n.is_u64() {
+                    n.as_i128().into_bound_py_any(py)
+                } else {
+                    n.as_f64().into_bound_py_any(py)
+                }
+            }
+            serde_json::Value::String(s) => s.clone().into_bound_py_any(py),
+            serde_json::Value::Array(vec) => {
+                let res: Vec<_> = vec
+                    .into_iter()
+                    .map(|v| JsonValue(v).into_bound_py_any(py))
+                    .try_collect()?;
+                res.into_bound_py_any(py)
+            }
+            serde_json::Value::Object(map) => {
+                let res: HashMap<_, _> = map
+                    .into_iter()
+                    .map(|(k, v)| JsonValue(v).into_bound_py_any(py).map(|v| (k, v)))
+                    .try_collect()?;
+                res.into_bound_py_any(py)
+            }
+        }
+    }
+}
+
+impl<'py> IntoPyObject<'py> for PySnapshotProperties {
+    type Target = PyDict;
+
+    type Output = Bound<'py, Self::Target>;
+
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
+
+impl From<JsonValue> for serde_json::Value {
+    fn from(value: JsonValue) -> Self {
+        value.0
+    }
+}
+
+impl From<serde_json::Value> for JsonValue {
+    fn from(value: serde_json::Value) -> Self {
+        JsonValue(value)
+    }
+}
+
+impl From<SnapshotProperties> for PySnapshotProperties {
+    fn from(value: SnapshotProperties) -> Self {
+        PySnapshotProperties(value.into_iter().map(|(k, v)| (k, v.into())).collect())
+    }
+}
+
+impl From<PySnapshotProperties> for SnapshotProperties {
+    fn from(value: PySnapshotProperties) -> Self {
+        value.0.into_iter().map(|(k, v)| (k, v.into())).collect()
+    }
+}
+
+impl From<SnapshotInfo> for PySnapshotInfo {
+    fn from(val: SnapshotInfo) -> Self {
+        PySnapshotInfo {
             id: val.id.to_string(),
-            written_at: val.written_at,
+            parent_id: val.parent_id.map(|id| id.to_string()),
+            written_at: val.flushed_at,
             message: val.message,
+            metadata: val.metadata.into(),
         }
     }
 }
 
 #[pymethods]
-impl PySnapshotMetadata {
+impl PySnapshotInfo {
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"SnapshotMetadata(id="{id}",written_at={at},message="{message}")"#,
+            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
+            parent = format_option_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
     }
 }
 
+#[pyclass(name = "GCSummary", eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
+pub struct PyGCSummary {
+    #[pyo3(get)]
+    pub chunks_deleted: usize,
+    #[pyo3(get)]
+    pub manifests_deleted: usize,
+    #[pyo3(get)]
+    pub snapshots_deleted: usize,
+    #[pyo3(get)]
+    pub attributes_deleted: usize,
+    #[pyo3(get)]
+    pub transaction_logs_deleted: usize,
+}
+
+impl From<GCSummary> for PyGCSummary {
+    fn from(value: GCSummary) -> Self {
+        Self {
+            chunks_deleted: value.chunks_deleted,
+            manifests_deleted: value.manifests_deleted,
+            snapshots_deleted: value.snapshots_deleted,
+            attributes_deleted: value.attributes_deleted,
+            transaction_logs_deleted: value.transaction_logs_deleted,
+        }
+    }
+}
+
 #[pyclass]
-pub struct PyRepository(Repository);
+pub struct PyRepository(Arc<Repository>);
 
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `allow_threads` so other
@@ -85,7 +238,7 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
 
-            Ok(Self(repository))
+            Ok(Self(Arc::new(repository)))
         })
     }
 
@@ -111,7 +264,7 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
 
-            Ok(Self(repository))
+            Ok(Self(Arc::new(repository)))
         })
     }
 
@@ -139,7 +292,7 @@ impl PyRepository {
                     )
                 })?;
 
-            Ok(Self(repository))
+            Ok(Self(Arc::new(repository)))
         })
     }
 
@@ -169,14 +322,14 @@ impl PyRepository {
         virtual_chunk_credentials: Option<Option<HashMap<String, PyCredentials>>>,
     ) -> PyResult<Self> {
         py.allow_threads(move || {
-            Ok(Self(
+            Ok(Self(Arc::new(
                 self.0
                     .reopen(
                         config.map(|c| c.into()),
                         virtual_chunk_credentials.map(map_credentials),
                     )
                     .map_err(PyIcechunkStoreError::RepositoryError)?,
-            ))
+            )))
         })
     }
 
@@ -218,6 +371,10 @@ impl PyRepository {
         self.0.storage_settings().clone().into()
     }
 
+    pub fn storage(&self) -> PyStorage {
+        PyStorage(Arc::clone(self.0.storage()))
+    }
+
     #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
     pub fn ancestry(
         &self,
@@ -225,7 +382,7 @@ impl PyRepository {
         branch: Option<String>,
         tag: Option<String>,
         snapshot: Option<String>,
-    ) -> PyResult<Vec<PySnapshotMetadata>> {
+    ) -> PyResult<Vec<PySnapshotInfo>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let version = args_to_version_info(branch, tag, snapshot)?;
@@ -237,12 +394,41 @@ impl PyRepository {
                     .ancestry(&version)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?
-                    .map_ok(Into::<PySnapshotMetadata>::into)
+                    .map_ok(Into::<PySnapshotInfo>::into)
                     .try_collect::<Vec<_>>()
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(ancestry)
             })
+        })
+    }
+
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
+    pub fn async_ancestry(
+        &self,
+        py: Python<'_>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot: Option<String>,
+    ) -> PyResult<PyAsyncGenerator> {
+        let repo = Arc::clone(&self.0);
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let version = args_to_version_info(branch, tag, snapshot)?;
+            let ancestry = pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move { repo.ancestry_arc(&version).await })
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map_err(PyIcechunkStoreError::RepositoryError);
+
+            let parents = ancestry.and_then(|info| async move {
+                Python::with_gil(|py| {
+                    let info = PySnapshotInfo::from(info);
+                    Ok(Bound::new(py, info)?.into_any().unbind())
+                })
+            });
+
+            let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
+            Ok(PyAsyncGenerator::new(prepared_list))
         })
     }
 
@@ -270,7 +456,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_branches(&self, py: Python<'_>) -> PyResult<HashSet<String>> {
+    pub fn list_branches(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -372,7 +558,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_tags(&self, py: Python<'_>) -> PyResult<HashSet<String>> {
+    pub fn list_tags(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -435,6 +621,61 @@ impl PyRepository {
                 })?;
 
             Ok(PySession(Arc::new(RwLock::new(session))))
+        })
+    }
+
+    pub fn expire_snapshots(
+        &self,
+        py: Python<'_>,
+        older_than: DateTime<Utc>,
+    ) -> PyResult<HashSet<String>> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let result =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let result = expire(
+                        self.0.storage().as_ref(),
+                        self.0.storage_settings(),
+                        self.0.asset_manager().clone(),
+                        older_than,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::GCError)?;
+                    Ok::<_, PyIcechunkStoreError>(
+                        result.iter().map(|id| id.to_string()).collect(),
+                    )
+                })?;
+
+            Ok(result)
+        })
+    }
+
+    pub fn garbage_collect(
+        &self,
+        py: Python<'_>,
+        delete_object_older_than: DateTime<Utc>,
+    ) -> PyResult<PyGCSummary> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let result =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let gc_config = GCConfig::clean_all(
+                        delete_object_older_than,
+                        delete_object_older_than,
+                        Default::default(),
+                    );
+                    let result = garbage_collect(
+                        self.0.storage().as_ref(),
+                        self.0.storage_settings(),
+                        self.0.asset_manager().clone(),
+                        &gc_config,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::GCError)?;
+                    Ok::<_, PyIcechunkStoreError>(result.into())
+                })?;
+
+            Ok(result)
         })
     }
 }

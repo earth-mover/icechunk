@@ -30,6 +30,8 @@ def _byte_request_to_tuple(
             return (offset, None)
         case SuffixByteRequest(suffix):
             return (None, suffix)
+        case _:
+            raise ValueError(f"Unexpected byte_range, got {byte_request}")
 
 
 class IcechunkStore(Store, SyncMixin):
@@ -197,6 +199,10 @@ class IcechunkStore(Store, SyncMixin):
         key : str
         value : Buffer
         """
+        if not isinstance(value, Buffer):
+            raise TypeError(
+                f"IcechunkStore.set(): `value` must be a Buffer instance. Got an instance of {type(value)} instead."
+            )
         return await self._store.set(key, value.to_bytes())
 
     async def set_if_not_exists(self, key: str, value: Buffer) -> None:

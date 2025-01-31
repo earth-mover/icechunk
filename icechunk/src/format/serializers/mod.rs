@@ -60,7 +60,7 @@ pub fn serialize_snapshot(
     write: &mut impl Write,
 ) -> Result<(), rmp_serde::encode::Error> {
     match version {
-        SpecVersionBin::V0_1_0Alpha12 => {
+        SpecVersionBin::V0dot1 => {
             let serializer = SnapshotSerializer::from(snapshot);
             rmp_serde::encode::write(write, &serializer)
         }
@@ -73,7 +73,7 @@ pub fn serialize_manifest(
     write: &mut impl Write,
 ) -> Result<(), rmp_serde::encode::Error> {
     match version {
-        SpecVersionBin::V0_1_0Alpha12 => {
+        SpecVersionBin::V0dot1 => {
             let serializer = ManifestSerializer::from(manifest);
             rmp_serde::encode::write(write, &serializer)
         }
@@ -86,7 +86,7 @@ pub fn serialize_transaction_log(
     write: &mut impl Write,
 ) -> Result<(), rmp_serde::encode::Error> {
     match version {
-        SpecVersionBin::V0_1_0Alpha12 => {
+        SpecVersionBin::V0dot1 => {
             let serializer = TransactionLogSerializer::from(transaction_log);
             rmp_serde::encode::write(write, &serializer)
         }
@@ -98,7 +98,7 @@ pub fn deserialize_snapshot(
     read: Box<dyn Read>,
 ) -> Result<Snapshot, rmp_serde::decode::Error> {
     match version {
-        SpecVersionBin::V0_1_0Alpha12 => {
+        SpecVersionBin::V0dot1 => {
             let deserializer: SnapshotDeserializer = rmp_serde::from_read(read)?;
             Ok(deserializer.into())
         }
@@ -110,7 +110,7 @@ pub fn deserialize_manifest(
     read: Box<dyn Read>,
 ) -> Result<Manifest, rmp_serde::decode::Error> {
     match version {
-        SpecVersionBin::V0_1_0Alpha12 => {
+        SpecVersionBin::V0dot1 => {
             let deserializer: ManifestDeserializer = rmp_serde::from_read(read)?;
             Ok(deserializer.into())
         }
@@ -122,7 +122,7 @@ pub fn deserialize_transaction_log(
     read: Box<dyn Read>,
 ) -> Result<TransactionLog, rmp_serde::decode::Error> {
     match version {
-        SpecVersionBin::V0_1_0Alpha12 => {
+        SpecVersionBin::V0dot1 => {
             let deserializer: TransactionLogDeserializer = rmp_serde::from_read(read)?;
             Ok(deserializer.into())
         }

@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use crate::{
     conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    repository::PySnapshotProperties,
     store::PyStore,
 };
 
@@ -127,7 +128,13 @@ impl PySession {
         })
     }
 
-    pub fn commit(&self, message: &str, py: Python<'_>) -> PyResult<String> {
+    #[pyo3(signature = (message, metadata=None))]
+    pub fn commit(
+        &self,
+        py: Python<'_>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<String> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
@@ -135,7 +142,7 @@ impl PySession {
                     .0
                     .write()
                     .await
-                    .commit(message, None)
+                    .commit(message, metadata.map(|m| m.into()))
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())

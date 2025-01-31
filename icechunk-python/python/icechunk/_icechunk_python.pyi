@@ -1,7 +1,8 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from enum import Enum
+from typing import Any
 
 class S3Options:
     def __init__(
@@ -64,7 +65,7 @@ class CompressionConfig:
     """Configuration for how Icechunk compresses its metadata files"""
 
     def __init__(
-        self, algorithm: CompressionAlgorithm | None, level: int | None
+        self, algorithm: CompressionAlgorithm | None = None, level: int | None = None
     ) -> None: ...
     @property
     def algorithm(self) -> CompressionAlgorithm | None: ...
@@ -82,11 +83,11 @@ class CachingConfig:
 
     def __init__(
         self,
-        num_snapshot_nodes: int | None,
-        num_chunk_refs: int | None,
-        num_transaction_changes: int | None,
-        num_bytes_attributes: int | None,
-        num_bytes_chunks: int | None,
+        num_snapshot_nodes: int | None = None,
+        num_chunk_refs: int | None = None,
+        num_transaction_changes: int | None = None,
+        num_bytes_attributes: int | None = None,
+        num_bytes_chunks: int | None = None,
     ) -> None: ...
     @property
     def num_snapshot_nodes(self) -> int | None: ...
@@ -116,8 +117,8 @@ class StorageConcurrencySettings:
 
     def __init__(
         self,
-        max_concurrent_requests_for_object: int | None,
-        ideal_concurrent_request_size: int | None,
+        max_concurrent_requests_for_object: int | None = None,
+        ideal_concurrent_request_size: int | None = None,
     ) -> None: ...
     @property
     def max_concurrent_requests_for_object(self) -> int | None: ...
@@ -131,7 +132,7 @@ class StorageConcurrencySettings:
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
-    def __init__(self, concurrency: StorageConcurrencySettings | None) -> None: ...
+    def __init__(self, concurrency: StorageConcurrencySettings | None = None) -> None: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None: ...
     @concurrency.setter
@@ -142,13 +143,13 @@ class RepositoryConfig:
 
     def __init__(
         self,
-        inline_chunk_threshold_bytes: int | None,
-        unsafe_overwrite_refs: bool | None,
-        get_partial_values_concurrency: int | None,
-        compression: CompressionConfig | None,
-        caching: CachingConfig | None,
-        storage: StorageSettings | None,
-        virtual_chunk_containers: dict[str, VirtualChunkContainer] | None,
+        inline_chunk_threshold_bytes: int | None = None,
+        unsafe_overwrite_refs: bool | None = None,
+        get_partial_values_concurrency: int | None = None,
+        compression: CompressionConfig | None = None,
+        caching: CachingConfig | None = None,
+        storage: StorageSettings | None = None,
+        virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
     ) -> None: ...
     @staticmethod
     def default() -> RepositoryConfig: ...
@@ -182,6 +183,18 @@ class RepositoryConfig:
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
     def clear_virtual_chunk_containers(self) -> None: ...
 
+class GCSummary:
+    @property
+    def chunks_deleted(self) -> int: ...
+    @property
+    def manifests_deleted(self) -> int: ...
+    @property
+    def snapshots_deleted(self) -> int: ...
+    @property
+    def attributes_deleted(self) -> int: ...
+    @property
+    def transaction_logs_deleted(self) -> int: ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -213,13 +226,21 @@ class PyRepository:
     def fetch_config(storage: Storage) -> RepositoryConfig | None: ...
     def save_config(self) -> None: ...
     def config(self) -> RepositoryConfig: ...
+    def storage(self) -> Storage: ...
     def ancestry(
         self,
         *,
         branch: str | None = None,
         tag: str | None = None,
         snapshot: str | None = None,
-    ) -> list[SnapshotMetadata]: ...
+    ) -> list[SnapshotInfo]: ...
+    def async_ancestry(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot: str | None = None,
+    ) -> AsyncIterator[SnapshotInfo]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
     def lookup_branch(self, branch: str) -> str: ...
@@ -237,6 +258,10 @@ class PyRepository:
         snapshot: str | None = None,
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
+    def expire_snapshots(self, older_than: datetime.datetime) -> set[str]: ...
+    def garbage_collect(
+        self, delete_object_older_than: datetime.datetime
+    ) -> GCSummary: ...
 
 class PySession:
     @classmethod
@@ -256,7 +281,7 @@ class PySession:
     @property
     def store(self) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
-    def commit(self, message: str) -> str: ...
+    def commit(self, message: str, metadata: dict[str, Any] | None = None) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
@@ -311,10 +336,14 @@ class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
-class SnapshotMetadata:
+class SnapshotInfo:
     """Metadata for a snapshot"""
     @property
     def id(self) -> str:
+        """The snapshot ID"""
+        ...
+    @property
+    def parent_id(self) -> str | None:
         """The snapshot ID"""
         ...
     @property
@@ -329,12 +358,16 @@ class SnapshotMetadata:
         The commit message of the snapshot
         """
         ...
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """
+        The metadata of the snapshot
+        """
+        ...
 
-class PyAsyncSnapshotGenerator(
-    AsyncGenerator[SnapshotMetadata, None], metaclass=abc.ABCMeta
-):
+class PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
-    async def __anext__(self) -> SnapshotMetadata: ...
+    async def __anext__(self) -> SnapshotInfo: ...
 
 class S3StaticCredentials:
     access_key_id: str

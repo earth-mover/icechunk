@@ -1,8 +1,10 @@
 # Index of icechunk-python
 
-- [developing](/icechunk-python/developing/)
-- [examples](/icechunk-python/examples/)
-- [notebooks](/icechunk-python/notebooks/)
 - [quickstart](/icechunk-python/quickstart/)
-- [distributed](/icechunk-python/dask.md)
-- [reference](/icechunk-python/reference/)
+- [configuration](/icechunk-python/configuration/)
+- [version control](/icechunk-python/version-control/)
+- [xarray](/icechunk-python/xarray/)
+- [concurrency](/icechunk-python/concurrency/)
+- [dask](/icechunk-python/dask/)
+- [virtual datasets](/icechunk-python/virtual/)
+- [API reference](/icechunk-python/reference/)
