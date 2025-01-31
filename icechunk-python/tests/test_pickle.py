@@ -23,13 +23,17 @@ def test_pickle_read_only(tmp_repo: Repository) -> None:
     tmp_store = tmp_session.store
 
     assert tmp_store._read_only is False
+    assert tmp_session.read_only is False
 
-    roundtripped = pickle.loads(pickle.dumps(tmp_store))
-    assert roundtripped._read_only is False
+    with pytest.raises(ValueError, match="You must opt in"):
+        roundtripped = pickle.loads(pickle.dumps(tmp_store))
 
-    # with tmp_store.preserve_read_only():
-    #     roundtripped = pickle.loads(pickle.dumps(tmp_store))
-    #     assert roundtripped._read_only is False
+    with tmp_session.allow_pickling():
+        roundtripped = pickle.loads(pickle.dumps(tmp_session.store))
+        assert roundtripped._read_only is False
+
+        roundtripped = pickle.loads(pickle.dumps(tmp_session))
+        assert roundtripped.read_only is False
 
     assert tmp_store._read_only is False
 
