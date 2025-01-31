@@ -2,7 +2,10 @@
 
 Icechunk was designed to work seamlessly with Xarray. Xarray users can read and
 write data to Icechunk using [`xarray.open_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.open_zarr.html#xarray.open_zarr)
-and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr).
+and `icechunk.xarray.to_icechunk` methods.
+[`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr) can be used
+*outside* a distributed context, e.g. writes orchestrated with `multiprocesssing` or a `dask.distributed.Client`. See [these docs](./parallel.md)
+for more.
 
 !!! warning
 
@@ -75,7 +78,7 @@ session = repo.writable_session("main")
 Writing Xarray data to Icechunk is as easy as calling `Dataset.to_zarr`:
 
 ```python
-ds1.to_zarr(session.store, zarr_format=3, consolidated=False)
+ds1.to_icechunk(session.store, zarr_format=3, consolidated=False)
 ```
 
 !!! note
@@ -101,7 +104,7 @@ this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='tim
 ```python
 # we have to get a new session after committing
 session = repo.writable_session("main")
-ds2.to_zarr(session.store, append_dim='time')
+ds2.to_icechunk(session.store, append_dim='time')
 ```
 
 And then we'll commit the changes:
