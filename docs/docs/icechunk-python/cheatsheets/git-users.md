@@ -1,16 +1,16 @@
 # Icechunk for Git Users
 
-While Icechunk does not work the same way as [git](https://git-scm.com/), it borrows from a lot of the same concepts. This guide will talk through the version control features of Icechunk from the perspective of a user that is familiar with git. 
+While Icechunk does not work the same way as [git](https://git-scm.com/), it borrows from a lot of the same concepts. This guide will talk through the version control features of Icechunk from the perspective of a user that is familiar with git.
 
 ## Repositories
 
 The main primitive in Icechunk is the repository. Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
 
-When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consisitency guarentees from storage systems to provide strong consistency even when multiple users are working on the same repository.
+When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consisitency guarantees from storage systems to provide strong consistency even when multiple users are working on the same repository.
 
 ## Working with branches
 
-Icechunk has branches similar to git. 
+Icechunk has branches similar to git.
 
 ### Creating a branch
 
@@ -18,7 +18,7 @@ In practice, this means the workflow is different from git. For instance, I want
 
 ```bash
 # Assume currently on main branch
-# create branch 
+# create branch
 git checkout -b my-new-branch
 # stage changes
 git add myfile.txt
@@ -31,21 +31,21 @@ git push origin -u my-new-branch
 In Icechunk, you would do the following:
 
 ```python
-# We create the branch 
+# We create the branch
 repo.create_branch("my-new-branch", repo.lookup_branch("main"))
 # create a writable session
 session = repo.writable_session("my-new-branch")
-...  # make some changes 
+...  # make some changes
 # commit the changes
 session.commit("My new branch")
 ```
 
-Two things to note: 
+Two things to note:
 
 1. When we create a branch, the branch is now available for any other instance of this `Repository` object. It is not a local branch, it is created in the repositories storage backend.
 2. When we commit the changes are immediately visible to other users of the repository. There is not concept of a local commit, all snapshots happen in the storage backend.
 
-### Checking out a branch 
+### Checking out a branch
 
 In git, you can check out a branch by using the `git checkout` command. Icechunk does not have the concept of checking out a branch, instead you create [`Session`s](../reference/#icechunk.Session) that are based on the tip of a branch.
 
