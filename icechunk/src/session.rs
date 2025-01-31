@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 
+use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
@@ -603,6 +604,37 @@ impl Session {
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
         all_chunks(&self.asset_manager, &self.change_set, self.snapshot_id()).await
+    }
+
+    pub async fn chunk_coordinates<'a, 'b: 'a>(
+        &'a self,
+        array_path: &'b Path,
+    ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a> {
+        let node = self.get_array(array_path).await?;
+        let updated_chunks = updated_node_chunks_iterator(
+            self.asset_manager.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            node.clone(),
+        )
+        .await
+        .map_ok(|(_path, chunk_info)| chunk_info.coord);
+
+        let res = try_stream! {
+            let new_chunks = stream::iter(
+                self.change_set
+                    .new_array_chunk_iterator(&node.id, array_path)
+                    .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
+            );
+
+            for await maybe_coords in updated_chunks.chain(new_chunks) {
+                match maybe_coords {
+                    Ok(coords) => {yield coords;}
+                    Err(err) => Err(err)?
+                }
+            }
+        };
+        Ok(res)
     }
 
     pub async fn all_virtual_chunk_locations(
