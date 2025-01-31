@@ -163,6 +163,34 @@ gitGraph
     commit id: "S3QY2RD" type: NORMAL
 ```
 
+We can also [list all branches](../reference/#icechunk.Repository.list_branches) in the repository.
+
+```python
+repo.list_branches()
+
+# { 'dev', 'feature', 'main' }
+```
+
+If we need to find the snapshot that a branch is based on, we can use the [`lookup_branch`](../reference/#icechunk.Repository.lookup_branch) method.
+
+```python
+repo.lookup_branch("feature")
+
+# 'J1ZJHS4EEQW3ATKMV9TG'
+```
+
+We can also [delete a branch](../reference/#icechunk.Repository.delete_branch) with [`delete_branch`](../reference/#icechunk.Repository.delete_branch).
+
+```python
+repo.delete_branch("feature")
+```
+
+Finally, we can [reset a branch](../reference/#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](../reference/#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
+
+```python
+repo.reset_branch("dev", snapshot_id="J1ZJHS4EEQW3ATKMV9TG")
+```
+
 ## Tags
 
 Tags are immutable references to a snapshot. They are created with [`create_tag`](../reference/#icechunk.Repository.create_tag).
@@ -187,6 +215,31 @@ gitGraph
     commit id: "J1ZJHS4" type: NORMAL
     commit tag: "v1.0.0"
     commit id: "BZ9YP38" type: NORMAL
+```
+
+We can also [list all tags](../reference/#icechunk.Repository.list_tags) in the repository.
+
+```python
+repo.list_tags()
+
+# { 'v1.0.0' }
+```
+
+and we can look up the snapshot that a tag is based on with [`lookup_tag`](../reference/#icechunk.Repository.lookup_tag).
+
+```python
+repo.lookup_tag("v1.0.0")
+
+# 'J1ZJHS4EEQW3ATKMV9TG'
+```
+
+And then finally delete a tag with [`delete_tag`](../reference/#icechunk.Repository.delete_tag).
+
+!!! note
+    Tags are immutable and once a tag is deleted, it can never be recreated.
+
+```python
+repo.delete_tag("v1.0.0")
 ```
 
 ## Conflict Resolution
