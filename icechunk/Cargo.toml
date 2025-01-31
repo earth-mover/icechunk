@@ -48,6 +48,7 @@ typetag = "0.2.19"
 zstd = "0.13.2"
 tokio-util = { version = "0.7.13", features = ["compat", "io-util"] }
 serde_bytes = "0.11.15"
+regex = "1.11.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

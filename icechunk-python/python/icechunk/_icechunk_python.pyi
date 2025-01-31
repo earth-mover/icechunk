@@ -112,6 +112,83 @@ class CachingConfig:
     @staticmethod
     def default() -> CachingConfig: ...
 
+class ManifestPreloadCondition:
+    """Configuration for conditions under which manifests will preload on session creation"""
+
+    @staticmethod
+    def or_conditions(
+        conditions: list[ManifestPreloadCondition],
+    ) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if any of `conditions` matches"""
+        ...
+    @staticmethod
+    def and_conditions(
+        conditions: list[ManifestPreloadCondition],
+    ) -> ManifestPreloadCondition:
+        """Create a preload condition that matches only if all passed `conditions` match"""
+        ...
+    @staticmethod
+    def path_matches(regex: str) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if the full path to the array matches the passed regex.
+
+        Array paths are absolute, as in `/path/to/my/array`
+        """
+        ...
+    @staticmethod
+    def name_matches(regex: str) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if the array's name matches the passed regex.
+
+        Example, for an array  `/model/outputs/temperature`, the following will match:
+        ```
+        name_matches(".*temp.*")
+        ```
+        """
+        ...
+    @staticmethod
+    def num_refs(from_refs: int | None, to_refs: int | None) -> ManifestPreloadCondition:
+        """Create a preload condition that matches only if the number of chunk references in the manifest is within the given range.
+
+        from_refs is inclusive, to_refs is exclusive.
+        """
+        ...
+    @staticmethod
+    def true() -> ManifestPreloadCondition:
+        """Create a preload condition that always matches any manifest"""
+        ...
+    @staticmethod
+    def false() -> ManifestPreloadCondition:
+        """Create a preload condition that never matches any manifests"""
+        ...
+
+class ManifestPreloadConfig:
+    """Configuration for how Icechunk manifest preload on session creation"""
+
+    def __init__(
+        self,
+        max_total_refs: int | None = None,
+        preload_if: ManifestPreloadCondition | None = None,
+    ) -> None: ...
+    @property
+    def max_total_refs(self) -> int | None: ...
+    @max_total_refs.setter
+    def max_total_refs(self, value: int | None) -> None: ...
+    @property
+    def preload_if(self) -> ManifestPreloadCondition | None: ...
+    @preload_if.setter
+    def preload_if(self, value: ManifestPreloadCondition | None) -> None: ...
+
+class ManifestConfig:
+    """Configuration for how Icechunk manifests"""
+
+    def __init__(
+        self,
+        preload: ManifestPreloadConfig | None = None,
+    ) -> None: ...
+    @property
+    def preload(self) -> ManifestPreloadConfig | None: ...
+    @preload.setter
+    def preload(self, value: ManifestPreloadConfig | None) -> None: ...
+
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
@@ -150,6 +227,7 @@ class RepositoryConfig:
         caching: CachingConfig | None = None,
         storage: StorageSettings | None = None,
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
+        manifest: ManifestConfig | None = None,
     ) -> None: ...
     @staticmethod
     def default() -> RepositoryConfig: ...
@@ -174,9 +252,13 @@ class RepositoryConfig:
     @caching.setter
     def caching(self, value: CachingConfig | None) -> None: ...
     @property
-    def storage(self) -> Storage | None: ...
+    def storage(self) -> StorageSettings | None: ...
     @storage.setter
-    def storage(self, value: Storage | None) -> None: ...
+    def storage(self, value: StorageSettings | None) -> None: ...
+    @property
+    def manifest(self) -> ManifestConfig | None: ...
+    @manifest.setter
+    def manifest(self, value: ManifestConfig | None) -> None: ...
     @property
     def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer] | None: ...
     def get_virtual_chunk_container(self, name: str) -> VirtualChunkContainer | None: ...
@@ -522,6 +604,7 @@ class Storage:
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
+    def default_settings(self) -> StorageSettings: ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict"""
