@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any, Self
 
 from icechunk import (
@@ -183,6 +184,22 @@ class Session:
             The location URLs of all virtual chunks.
         """
         return self._session.all_virtual_chunk_locations()
+
+    async def chunk_coordinates(
+        self, array_path: str, batch_size: int = 1000
+    ) -> AsyncIterator[tuple[int, ...]]:
+        """
+        Return an async iterator to all initialized chunks for the array at array_path
+
+        Returns
+        -------
+        an async iterator to chunk coordinates as tuples
+        """
+        # We do unbatching here to improve speed. Switching to rust to get
+        # a batch is much faster than switching for every element
+        async for batch in self._session.chunk_coordinates(array_path, batch_size):
+            for coord in batch:
+                yield tuple(coord)
 
     def merge(self, other: Self) -> None:
         """

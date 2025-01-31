@@ -6,10 +6,10 @@ and [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarra
 
 !!! warning
 
-    Using Xarray and Icechunk together currently requires installing Xarray >= 2024.11.0.
+    Using Xarray and Icechunk together currently requires installing Xarray >= 2025.1.1.
 
     ```shell
-    pip install "xarray>=2024.11.0"
+    pip install "xarray>=2025.1.1"
     ```
 
 In this example, we'll explain how to create a new Icechunk repo, write some sample data
