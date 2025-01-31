@@ -185,19 +185,21 @@ class Session:
         """
         return self._session.all_virtual_chunk_locations()
 
-    def chunk_coordinates(
+    async def chunk_coordinates(
         self, array_path: str, batch_size: int = 1000
-    ) -> AsyncIterator[list[list[int]]]:
+    ) -> AsyncIterator[tuple[int, ...]]:
         """
         Return an async iterator to all initialized chunks for the array at array_path
 
-        The result is batched into lists of size batch_size for performance.
-
         Returns
         -------
-        an iterator to lists of chunk coordinates
+        an async iterator to chunk coordinates as tuples
         """
-        return self._session.chunk_coordinates(array_path, batch_size)
+        # We do unbatching here to improve speed. Switching to rust to get
+        # a batch is much faster than switching for every element
+        async for batch in self._session.chunk_coordinates(array_path, batch_size):
+            for coord in batch:
+                yield tuple(coord)
 
     def merge(self, other: Self) -> None:
         """

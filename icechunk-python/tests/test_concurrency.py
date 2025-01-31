@@ -19,7 +19,6 @@ async def write_to_store(
 async def read_store(array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier) -> None:
     await barrier.wait()
     while True:
-        # print(f"reading {x},{y}")
         value = array[x, y]
         if value == x * y:
             break
@@ -29,7 +28,7 @@ async def read_store(array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier
 async def list_store(store: icechunk.IcechunkStore, barrier: asyncio.Barrier) -> None:
     expected = set(
         ["zarr.json", "array/zarr.json"]
-        + [f"array/c/{x}/{y}" for x in range(N) for y in range(N)]
+        + [f"array/c/{x}/{y}" for x in range(N) for y in range(N - 1)]
     )
     await barrier.wait()
     while True:
@@ -53,27 +52,25 @@ async def test_concurrency() -> None:
         "array", shape=(N, N), chunks=(1, 1), dtype="f8", fill_value=1e23
     )
 
-    barrier = asyncio.Barrier(2 * N * N + 1)
+    barrier = asyncio.Barrier(2 * N * (N - 1) + 1)
 
     async with asyncio.TaskGroup() as tg:
         _task1 = tg.create_task(list_store(store, barrier), name="listing")
 
         for x in range(N):
-            for y in range(N):
+            for y in range(N - 1):
                 _write_task = tg.create_task(
                     read_store(array, x, y, barrier), name=f"read {x},{y}"
                 )
 
         for x in range(N):
-            for y in range(N):
+            for y in range(N - 1):
                 _write_task = tg.create_task(
                     write_to_store(array, x, y, barrier), name=f"write {x},{y}"
                 )
 
-    all_coords = set()
-    async for coords in session.chunk_coordinates("/array"):
-        all_coords.update(tuple(c) for c in coords)
-    assert all_coords == {(x, y) for x in range(N) for y in range(N)}
+    all_coords = {coords async for coords in session.chunk_coordinates("/array")}
+    assert all_coords == {(x, y) for x in range(N) for y in range(N - 1)}
 
     _res = session.commit("commit")
 
@@ -82,8 +79,5 @@ async def test_concurrency() -> None:
     assert isinstance(array, zarr.Array)
 
     for x in range(N):
-        for y in range(N):
+        for y in range(N - 1):
             assert array[x, y] == x * y
-
-    # FIXME: add assertions
-    print("done")
