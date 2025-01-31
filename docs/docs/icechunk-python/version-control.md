@@ -367,6 +367,50 @@ root["data"][0,:]
 # array([1, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=int32)
 ```
 
+Lastly, if you make changes to non-conflicting chunks or attributes, you can rebase without having to resolve any conflicts.
+
+```python
+session1 = repo.writable_session(branch="main")
+session2 = repo.writable_session(branch="main")
+
+root1 = zarr.group(session1.store)
+root2 = zarr.group(session2.store)
+
+root1["data"][3,:] = 3
+root2["data"][4,:] = 4
+
+session1.commit(message="Update fourth row of data array")
+
+try:
+    session2.rebase(icechunk.ConflictDetector())
+    print("Rebase succeeded")
+except icechunk.RebaseFailedError as e:
+    print(e.conflicts)
+
+session2.commit(message="Update fifth row of data array")
+
+# Rebase succeeded
+```
+
+And now we can see the data in the `data` array to confirm that the changes were committed correctly.
+
+```python
+session = repo.readonly_session(branch="main")
+root = zarr.open_group(session.store, mode="r")
+root["data"][:,:]
+
+# array([[1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+#        [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+#        [4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], dtype=int32)
+```
+
 #### Limitations
 
 At the moment, the rebase functionality is limited to resolving conflicts with attributes on arrays and groups, and conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.
