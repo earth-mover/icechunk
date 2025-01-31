@@ -85,7 +85,7 @@ session = repo.writable_session("main")
 Writing Xarray data to Icechunk is as easy as calling `Dataset.to_zarr`:
 
 ```python
-ds1.to_icechunk(session.store, zarr_format=3, consolidated=False)
+ds1.to_zarr(session.store, zarr_format=3, consolidated=False)
 ```
 
 !!! note
@@ -111,7 +111,7 @@ this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='tim
 ```python
 # we have to get a new session after committing
 session = repo.writable_session("main")
-ds2.to_icechunk(session.store, append_dim='time')
+ds2.to_zarr(session.store, append_dim='time')
 ```
 
 And then we'll commit the changes:
