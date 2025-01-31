@@ -372,6 +372,10 @@ impl Path {
     pub fn ancestors(&self) -> impl Iterator<Item = Path> + '_ {
         self.0.ancestors().map(|p| Path(p.to_owned()))
     }
+
+    pub fn name(&self) -> Option<&str> {
+        self.0.file_name()
+    }
 }
 
 impl TryFrom<&str> for Path {
