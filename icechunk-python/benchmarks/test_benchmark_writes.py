@@ -80,8 +80,7 @@ def test_write_many_chunk_refs(
     # 2. one with commit
     def write_chunk_refs(repo) -> None:
         session = repo.writable_session("main")
-        group = zarr.open_group(session.store)
-        array = group.array("array")
+        array = zarr.open_array(path="array", store=session.store)
         # TODO: configurable?
         with zarr.config.set({"async.concurrency": 64}):
             array[:] = -1
@@ -114,7 +113,7 @@ def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
     session = repo.writable_session("main")
     store = session.store
     group = zarr.group(store)
-    group.create_array(
+    kwargs = dict(
         name="array",
         shape=(NUM_VIRTUAL_CHUNK_REFS,),
         chunks=(1,),
@@ -122,6 +121,10 @@ def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
         dimension_names=("t",),
         overwrite=True,
     )
+    try:
+        group.create_array(**kwargs)
+    except AttributeError:
+        group.array(**kwargs)
     session.commit("initialized")
 
     @benchmark
