@@ -1,0 +1,16 @@
+name: icechunk
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - rust
+  - maturin
+  - xarray
+  - s3fs
+  - fsspec
+  - h5netcdf
+  - ipykernel
+  - cftime
+  - dask
+  - matplotlib
+  - hvplot
