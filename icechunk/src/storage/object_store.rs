@@ -567,6 +567,15 @@ impl Storage for ObjectStorage {
         Ok(res.last_modified)
     }
 
+    async fn root_is_clean(&self) -> StorageResult<bool> {
+        Ok(self
+            .store
+            .list(Some(&ObjectPath::from(self.config.prefix.clone())))
+            .next()
+            .await
+            .is_none())
+    }
+
     async fn get_object_range_buf(
         &self,
         key: &str,

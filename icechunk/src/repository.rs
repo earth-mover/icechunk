@@ -54,8 +54,8 @@ pub enum RepositoryError {
     Ref(#[from] RefError),
     #[error("tag error: `{0}`")]
     Tag(String),
-    #[error("the repository has been initialized already (default branch exists)")]
-    AlreadyInitialized,
+    #[error("repositories can only be created in clean prefixes")]
+    ParentDirectoryNotClean,
     #[error("the repository doesn't exist")]
     RepositoryDoesntExist,
     #[error("error in repository serialization `{0}`")]
@@ -95,9 +95,6 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
-        if Self::exists(storage.as_ref()).await? {
-            return Err(RepositoryError::AlreadyInitialized);
-        }
         let has_overriden_config = match config {
             Some(ref config) => config != &RepositoryConfig::default(),
             None => false,
@@ -110,6 +107,10 @@ impl Repository {
         let storage_c = Arc::clone(&storage);
         let storage_settings =
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+
+        if !storage.root_is_clean().await? {
+            return Err(RepositoryError::ParentDirectoryNotClean);
+        }
 
         let handle1 = tokio::spawn(async move {
             // TODO: we could cache this first snapshot
@@ -657,9 +658,12 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, num::NonZeroU64, sync::Arc};
+    use std::{
+        collections::HashMap, error::Error, num::NonZeroU64, path::PathBuf, sync::Arc,
+    };
 
     use storage::logging::LoggingStorage;
+    use tempfile::TempDir;
 
     use crate::{
         config::{
@@ -669,6 +673,7 @@ mod tests {
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
+        new_local_filesystem_storage,
         storage::new_in_memory_storage,
         Repository, Storage,
     };
@@ -947,6 +952,34 @@ mod tests {
         // nodes sorted lexicographically
         assert_eq!(ops[1], ("fetch_manifest_splitting".to_string(), lat_manifest_id));
         assert_eq!(ops[2], ("fetch_manifest_splitting".to_string(), lon_manifest_id));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn creation_in_non_empty_directory_fails() -> Result<(), Box<dyn Error>> {
+        let repo_dir = TempDir::new()?;
+
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(repo_dir.path())
+                .expect("Creating local storage failed");
+
+        Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        assert!(Repository::create(None, Arc::clone(&storage), HashMap::new())
+            .await
+            .is_err());
+
+        let inner_path: PathBuf =
+            [repo_dir.path().to_string_lossy().into_owned().as_str(), "snapshots"]
+                .iter()
+                .collect();
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(&inner_path)
+                .expect("Creating local storage failed");
+
+        assert!(Repository::create(None, Arc::clone(&storage), HashMap::new())
+            .await
+            .is_err());
 
         Ok(())
     }
