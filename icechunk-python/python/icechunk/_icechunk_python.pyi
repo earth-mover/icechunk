@@ -118,23 +118,47 @@ class ManifestPreloadCondition:
     @staticmethod
     def or_conditions(
         conditions: list[ManifestPreloadCondition],
-    ) -> ManifestPreloadCondition: ...
+    ) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if any of `conditions` matches"""
+        ...
     @staticmethod
     def and_conditions(
         conditions: list[ManifestPreloadCondition],
-    ) -> ManifestPreloadCondition: ...
+    ) -> ManifestPreloadCondition:
+        """Create a preload condition that matches only if all passed `conditions` match"""
+        ...
     @staticmethod
-    def path_matches(regex: str) -> ManifestPreloadCondition: ...
+    def path_matches(regex: str) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if the full path to the array matches the passed regex.
+
+        Array paths are absolute, as in `/path/to/my/array`
+        """
+        ...
     @staticmethod
-    def name_matches(regex: str) -> ManifestPreloadCondition: ...
+    def name_matches(regex: str) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if the array's name matches the passed regex.
+
+        Example, for an array  `/model/outputs/temperature`, the following will match:
+        ```
+        name_matches(".*temp.*")
+        ```
+        """
+        ...
     @staticmethod
-    def num_refs(
-        from_refs: int | None, to_refs: int | None
-    ) -> ManifestPreloadCondition: ...
+    def num_refs(from_refs: int | None, to_refs: int | None) -> ManifestPreloadCondition:
+        """Create a preload condition that matches only if the number of chunk references in the manifest is within the given range.
+
+        from_refs is inclusive, to_refs is exclusive.
+        """
+        ...
     @staticmethod
-    def true() -> ManifestPreloadCondition: ...
+    def true() -> ManifestPreloadCondition:
+        """Create a preload condition that always matches any manifest"""
+        ...
     @staticmethod
-    def false() -> ManifestPreloadCondition: ...
+    def false() -> ManifestPreloadCondition:
+        """Create a preload condition that never matches any manifests"""
+        ...
 
 class ManifestPreloadConfig:
     """Configuration for how Icechunk manifest preload on session creation"""
