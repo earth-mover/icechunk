@@ -106,7 +106,7 @@ class Session:
                 "using the `Session.allow_pickling` context manager. "
                 # link to docs
                 "If you are using xarray's `Dataset.to_zarr` method with dask arrays, "
-                "plese consider `icechunk.xarray.to_icechunk` instead."
+                "please consider `icechunk.xarray.to_icechunk` instead."
             )
         state = {
             "_session": self._session.as_bytes(),
