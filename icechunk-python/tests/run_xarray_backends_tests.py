@@ -15,6 +15,10 @@ from icechunk import (
     local_filesystem_storage,
     s3_storage,
 )
+from icechunk.xarray import to_icechunk
+from xarray.tests.test_backends import (
+    TestZarrRegionAuto as ZarrRegionAutoTests,
+)
 from xarray.tests.test_backends import (
     ZarrBase,
     default_zarr_format,  # noqa: F401; needed otherwise not discovered
@@ -91,3 +95,19 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         session = repo.writable_session("main")
         with session.allow_pickling():
             yield session.store
+
+
+@pytest.mark.filterwarnings("ignore:Failed to open:RuntimeWarning")
+class TestIcechunkRegionAuto(ZarrRegionAutoTests):
+    @contextlib.contextmanager
+    def create_zarr_target(self) -> Generator[IcechunkStore]:
+        if zarr.config.config["default_zarr_format"] == 2:
+            pytest.skip("v2 not supported")
+        repo = Repository.create(in_memory_storage())
+        session = repo.writable_session("main")
+        yield session.store
+
+    def save(self, target, ds, **kwargs):
+        # not really important here
+        kwargs.pop("compute", None)
+        to_icechunk(ds, session=target.session, **kwargs)

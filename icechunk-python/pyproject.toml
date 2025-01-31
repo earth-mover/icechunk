@@ -39,7 +39,7 @@ test = [
   "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
-  "xarray>=2025.01.1",
+  "xarray>=2025.01.2",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
