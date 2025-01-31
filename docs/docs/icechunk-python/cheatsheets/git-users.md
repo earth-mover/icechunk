@@ -6,7 +6,7 @@ While Icechunk does not work the same way as [git](https://git-scm.com/), it bor
 
 The main primitive in Icechunk is the [repository](../reference/#icechunk.Repository). Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
 
-When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consisitency guarantees from storage systems to provide strong consistency even when multiple users are working on the same repository.
+When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consistency guarantees from storage systems to provide strong consistency even when multiple users are working on the same repository.
 
 ## Working with branches
 
