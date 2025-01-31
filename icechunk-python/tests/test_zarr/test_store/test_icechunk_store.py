@@ -12,6 +12,7 @@ from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByt
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import collect_aiterator
 from zarr.testing.store import StoreTests
+from zarr.testing.utils import assert_bytes_equal
 
 DEFAULT_GROUP_METADATA = b'{"zarr_format":3,"node_type":"group"}'
 ARRAY_METADATA = (
@@ -61,6 +62,19 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.writable_session("main")
         return session.store
 
+    @pytest.fixture
+    async def store_not_open(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
+        read_only = store_kwargs.pop("read_only")
+        repo = Repository.open_or_create(**store_kwargs)
+        if read_only:
+            session = repo.readonly_session(branch="main")
+        else:
+            session = repo.writable_session("main")
+
+        store = session.store
+        store._is_open = False
+        return store
+
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
         assert store == store
@@ -76,9 +90,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # stores dont point to the same session instance, so they are not equal
         assert store != store2
 
-    @pytest.mark.xfail(reason="Not implemented")
+    @pytest.mark.skip(reason="Not implemented")
     def test_store_repr(self, store: IcechunkStore) -> None:
-        super().test_store_repr(store)
+        pass
 
     @pytest.mark.parametrize("read_only", [True, False])
     async def test_store_open_read_only(
@@ -117,6 +131,47 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # pickled stores dont point to the same session instance, so they are not equal
         assert loaded != store
 
+    async def test_get_not_open(self, store_not_open: IcechunkStore) -> None:
+        """
+        Ensure that data can be read from the store that isn't yet open using the store.get method.
+        """
+        assert not store_not_open._is_open
+
+        # create an array
+        await store_not_open.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        data_buf = self.buffer_cls.from_bytes(b"\x01\x02\x03\x04")
+        key = "c/0/0/0"
+        await self.set(store_not_open, key, data_buf)
+        observed = await store_not_open.get(key, prototype=default_buffer_prototype())
+        assert_bytes_equal(observed, data_buf)
+
+    async def test_get_raises(self, store: IcechunkStore) -> None:
+        """
+        Ensure that a ValueError is raise for invalid byte range syntax
+        """
+        # create an array
+        await store.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        data_buf = self.buffer_cls.from_bytes(b"\x01\x02\x03\x04")
+        await self.set(store, "c/0/0/0", data_buf)
+        with pytest.raises(
+            (ValueError, TypeError), match=r"Unexpected byte_range, got.*"
+        ):
+            await store.get(
+                "c/0/0/0", prototype=default_buffer_prototype(), byte_range=(0, 2)
+            )  # type: ignore[arg-type]
+
+    @pytest.mark.xfail(reason="Not implemented")
+    async def test_store_context_manager(self, open_kwargs: dict[str, Any]) -> None:
+        # Test that the context manager closes the store
+        with await self.store_cls.open(**open_kwargs) as store:
+            assert store._is_open
+            # Test trying to open an already open store
+            with pytest.raises(ValueError, match="store is already open"):
+                await store._open()
+        assert not store._is_open
+
     async def test_set_many(self, store: IcechunkStore) -> None:
         """
         Test that a dict of key : value pairs can be inserted into the store via the
@@ -141,6 +196,34 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         await store._set_many(store_dict.items())
         for k, v in store_dict.items():
             assert (await self.get(store, k)).to_bytes() == v.to_bytes()
+
+    async def test_set_not_open(self, store_not_open: IcechunkStore) -> None:
+        """
+        Ensure that data can be written to the store that's not yet open using the store.set method.
+        """
+        assert not store_not_open._is_open
+
+        # create an array
+        await store_not_open.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        data_buf = self.buffer_cls.from_bytes(b"\x01\x02\x03\x04")
+        key = "c/0/0/0"
+        await store_not_open.set(key, data_buf)
+        observed = await self.get(store_not_open, key)
+        assert_bytes_equal(observed, data_buf)
+
+    async def test_set_invalid_buffer(self, store: S) -> None:
+        """
+        Ensure that set raises a Type or Value Error for invalid buffer arguments.
+        """
+        # create an array
+        await store.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+
+        with pytest.raises(
+            (ValueError, TypeError),
+            match=r"\S+\.set\(\): `value` must be a Buffer instance. Got an instance of <class 'int'> instead.",
+        ):
+            await store.set("c/0/0/0", 0)  # type: ignore[arg-type]
 
     def test_store_supports_deletes(self, store: IcechunkStore) -> None:
         assert store.supports_deletes
