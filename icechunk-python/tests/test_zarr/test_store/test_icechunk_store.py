@@ -125,6 +125,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         with pytest.raises(ValueError):
             await store.delete("foo")
 
+    @pytest.mark.skip(
+        reason="icechunk requires opting-in to pickling at the session level"
+    )
     def test_serializable_store(self, store: IcechunkStore) -> None:
         foo = pickle.dumps(store)
         loaded = pickle.loads(foo)
