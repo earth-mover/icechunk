@@ -279,7 +279,7 @@ def to_icechunk(
 
       - If ``region`` is set, _all_ variables in a dataset must have at
         least one dimension in common with the region. Other variables
-        should be written in a separate single call to ``to_zarr()``.
+        should be written in a separate single call to ``to_icechunk()``.
       - Dimensions cannot be included in both ``region`` and
         ``append_dim`` at the same time. To create empty arrays to fill
         in with ``region``, use the `XarrayDatasetWriter` directly.
