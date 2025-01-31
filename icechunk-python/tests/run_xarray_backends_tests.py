@@ -110,4 +110,4 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
     def save(self, target, ds, **kwargs):
         # not really important here
         kwargs.pop("compute", None)
-        to_icechunk(ds, target, **kwargs)
+        to_icechunk(ds, session=target.session, **kwargs)

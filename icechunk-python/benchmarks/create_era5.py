@@ -69,9 +69,8 @@ def write_era5(dataset: Dataset, *, ref, arrays_to_write):
             f"reports/era5-ingest-{ref}-{datetime.datetime.now()}.html"
         ):
             logger.info(f"Started writing {arrays_to_write=}.")
-            # FIXME: switch to region="auto" when GH606 is closed
             to_icechunk(
-                towrite, session.store, region=SELECTOR, **zarr_kwargs, split_every=32
+                towrite, session=session, region="auto", **zarr_kwargs, split_every=32
             )
     session.commit("ingest!")
     logger.info(f"Finished writing {arrays_to_write=}.")

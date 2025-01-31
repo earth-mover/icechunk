@@ -117,7 +117,7 @@ import xarray as xr
 # Assuming you have a valid writable Session named icechunk_session
 dataset = xr.tutorial.open_dataset("rasm", chunks={"time": 1}).isel(time=slice(24))
 
-icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store)
+icechunk.xarray.to_icechunk(dataset, session)
 
 roundtripped = xr.open_zarr(icechunk_session.store, consolidated=False)
 dataset.identical(roundtripped)
@@ -126,10 +126,4 @@ dataset.identical(roundtripped)
 Finally commit your changes!
 ```python
 icechunk_session.commit("wrote an Xarray dataset!")
-```
-
-In a distributed context you will have to opt-in to pickling:
-```python
-with icechunk_session.allow_pickling():
-    icechunk.xarray.to_icechunk(dataset, store=icechunk_session.store)
 ```

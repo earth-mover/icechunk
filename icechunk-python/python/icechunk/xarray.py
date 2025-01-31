@@ -8,7 +8,7 @@ from packaging.version import Version
 
 import xarray as xr
 import zarr
-from icechunk import IcechunkStore
+from icechunk import IcechunkStore, Session
 from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
@@ -191,7 +191,7 @@ class XarrayDatasetWriter:
 
 def to_icechunk(
     obj: DataArray | Dataset,
-    store: IcechunkStore,
+    session: Session,
     *,
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
@@ -203,17 +203,14 @@ def to_icechunk(
     split_every: int | None = None,
 ) -> None:
     """
-    Write an Xarray object to a group of an icechunk store.
-
-    For distributed or multi-processing writes, this method must be passed an IcechunkStore
-    object that is created within a `Session.allow_pickling()` context.
+    Write an Xarray object to a group of an Icechunk store.
 
     Parameters
     ----------
     obj: DataArray or Dataset
         Xarray object to write
-    store : MutableMapping, str or path-like, optional
-        Store or path to directory in local or remote file system.
+    session : icechunk.Session
+        Writable Icechunk Session
     mode : {"w", "w-", "a", "a-", r+", None}, optional
         Persistence mode: "w" means create (overwrite if exists);
         "w-" means create (fail if exists);
@@ -289,16 +286,18 @@ def to_icechunk(
     """
 
     as_dataset = make_dataset(obj)
-    writer = XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
+    with session.allow_pickling():
+        store = session.store
+        writer = XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
-    writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+        writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
-    # write metadata
-    writer.write_metadata(encoding)
-    # write in-memory arrays
-    writer.write_eager()
-    # eagerly write dask arrays
-    writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+        # write metadata
+        writer.write_metadata(encoding)
+        # write in-memory arrays
+        writer.write_eager()
+        # eagerly write dask arrays
+        writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
 
 
 @overload

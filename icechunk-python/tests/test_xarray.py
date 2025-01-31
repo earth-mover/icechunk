@@ -57,14 +57,8 @@ def roundtrip(
         repo = Repository.create(local_filesystem_storage(tmpdir))
         session = repo.writable_session("main")
 
-        if allow_pickling:
-            with session.allow_pickling():
-                to_icechunk(data, store=session.store, mode="w")
-                with xr.open_zarr(session.store, consolidated=False) as ds:
-                    yield ds
-
-        else:
-            to_icechunk(data, store=session.store, mode="w")
+        to_icechunk(data, session=session, mode="w")
+        with session.allow_pickling():
             with xr.open_zarr(session.store, consolidated=False) as ds:
                 yield ds
 
