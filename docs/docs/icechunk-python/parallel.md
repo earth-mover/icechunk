@@ -5,6 +5,14 @@ with all appropriate metadata, and any coordinate variables. Following this a la
 is kicked off in a distributed setting, where each worker is responsible for an independent
 "region" of the output.
 
+
+## Why is Icechunk different from any other Zarr store?
+
+The reason is that unlike Zarr, Icechunk is a "stateful" store. The Session object keeps a record of all writes, that is then
+bundled together in a commit. Thus `Session.commit` must be executed on a Session object that knows about all writes,
+including those executed remotely in a multi-processing or any other remote execution context.
+
+## Example
 Here is how you can execute such writes with Icechunk, illustrate with a `ThreadPoolExecutor`.
 First read some example data, and create an Icechunk Repository.
 ```python

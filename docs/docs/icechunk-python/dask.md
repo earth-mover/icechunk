@@ -98,8 +98,6 @@ icechunk_session.commit("wrote a dask array!")
 
 ## Icechunk + Dask + Xarray
 
-### Simple
-
 The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported.
