@@ -54,7 +54,8 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(local_filesystem_storage(tmpdir))
             session = repo.writable_session("main")
-            yield session.store
+            with session.allow_pickling():
+                yield session.store
 
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
@@ -90,7 +91,8 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
             )
         )
         session = repo.writable_session("main")
-        yield session.store
+        with session.allow_pickling():
+            yield session.store
 
 
 @pytest.mark.filterwarnings("ignore:Failed to open:RuntimeWarning")
