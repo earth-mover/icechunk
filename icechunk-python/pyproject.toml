@@ -47,6 +47,7 @@ benchmark = [
   "h5netcdf",
   "pooch",
   "tqdm",
+  "humanize",
 ]
 
 [tool.maturin]
