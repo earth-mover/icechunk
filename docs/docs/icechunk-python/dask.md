@@ -68,6 +68,34 @@ Finally commit your changes!
 icechunk_session.commit("wrote a dask array!")
 ```
 
+
+## Distributed
+
+In distributed contexts where the Session, and Zarr Array objects are sent across the network,
+you must opt-in to successful pickling of a writable store.
+
+[`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) takes care of the hard bit of
+merging Sessions but it is required that you opt-in to pickling prior to creating the target Zarr array objects.
+
+Here is an example:
+```python
+import icechunk.dask
+
+zarr_chunks = (10, 10)
+with icechunk_session.allow_pickling():
+    group = zarr.group(store=icechunk_sesion.store, overwrite=True)
+
+    zarray = group.create_array(
+        "array",
+        shape=shape,
+        chunks=zarr_chunks,
+        dtype="f8",
+        fill_value=float("nan"),
+    )
+    icechunk.dask.store_dask(icechunk_session, sources=[dask_array], targets=[zarray])
+icechunk_session.commit("wrote a dask array!")
+```
+
 ## Icechunk + Dask + Xarray
 
 ### Simple

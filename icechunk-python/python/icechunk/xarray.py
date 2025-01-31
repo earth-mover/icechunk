@@ -205,6 +205,9 @@ def to_icechunk(
     """
     Write an Xarray object to a group of an icechunk store.
 
+    For distributed or multi-processing writes, this method must be passed an IcechunkStore
+    object that is created within a `Session.allow_pickling()` context.
+
     Parameters
     ----------
     obj: DataArray or Dataset
