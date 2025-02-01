@@ -18,17 +18,20 @@ title: Sample Datasets
 Check out an example dataset built using all virtual references pointing to daily Sea Surface Temperature data from 2020 to 2024 on NOAA's S3 bucket using python:
 
 ```python
-import icechunk
+import icechunk as ic
 
-storage = icechunk.StorageConfig.s3_anonymous(
+storage = ic.s3_storage(
     bucket='earthmover-sample-data',
     prefix='icechunk/oisst.2020-2024/',
     region='us-east-1',
+    anonymous=True,
 )
 
-repo = icechunk.Repository.open_existing(storage=storage, mode="r", config=icechunk.RepositoryConfig(
-    virtual_ref_config=icechunk.VirtualRefConfig.s3_anonymous(region='us-east-1'),
-))
+virtual_credentials = ic.containers_credentials({"s3": ic.s3_credentials(anonymous=True)})
+
+repo = ic.Repository.open(
+        storage=storage,
+        virtual_chunk_credentials=virtual_credentials)
 ```
 
 ![oisst](./assets/datasets/oisst.png)
