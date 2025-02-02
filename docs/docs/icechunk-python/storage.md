@@ -1,0 +1,214 @@
+# Storage
+
+Icechunk can be configured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
+
+### S3 Storage
+
+When using Icechunk with s3 compatible storage systems, credentials must be provided to allow access to the data on the given endpoint. Icechunk allows for creating the storage config for s3 in three ways:
+
+=== "From environment"
+
+    With this option, the credentials for connecting to S3 are detected automatically from your environment.
+    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.s3_storage)
+
+    ```python
+    icechunk.s3_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        from_env=True
+    )
+    ```
+
+=== "Provide credentials"
+
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.s3_storage)
+
+    ```python
+    icechunk.s3_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        region='us-east-1',
+        access_key_id='my-access-key',
+        secret_access_key='my-secret-key',
+        # session token is optional
+        session_token='my-token',
+        endpoint_url=None,  # if using a custom endpoint
+        allow_http=False,  # allow http connections (default is False)
+    )
+    ```
+
+=== "Anonymous"
+
+    With this option, you connect to S3 anonymously (without credentials).
+    This is suitable for public data. [See the API](./reference.md#icechunk.s3_storage)
+
+    ```python
+    icechunk.s3_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        region='us-east-1,
+        anonymous=True,
+    )
+    ```
+
+=== "Refreshable Credentials"
+
+    With this option, you provide a callback function that will be called to obtain S3 credentials when needed. [See the API](./reference.md#icechunk.s3_storage)
+
+    ```python
+    def get_credentials() -> S3StaticCredentials:
+        return icechunk.S3StaticCredentials(access_key_id="xyz", secret_access_key="abc")
+
+    icechunk.s3_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        region='us-east-1',
+        get_credentials=get_credentials,
+    )
+    ```
+
+#### Tigris
+
+[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage). There are a few things to be aware of when using Tigris:
+
+1. The `endpoint_url` parameter must be set to the Tigris endpoint. This is defaulted to `https://fly.storage.tigris.dev` but may be different depending on your Tigris configuration.
+2. Tigris is a globally distributed object store by default. There are currently some bugs with consistency when the store is distributed across multiple regions. For now, it is recommended to use a single region for your Tigris store.
+
+#### Minio
+
+[Minio](https://min.io/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint.
+
+For example, if we have a Minio server running at `http://localhost:9000` with access key `minio` and
+secret key `minio123` we can create a storage configuration as follows:
+
+```python
+icechunk.s3_storage(
+    bucket="icechunk-test",
+    prefix="quickstart-demo-1",
+    region='us-east-1',
+    access_key_id='minio',
+    secret_access_key='minio123',
+    endpoint_url='http://localhost:9000',
+    allow_http=True,
+```
+
+A few things to note:
+
+1. The `endpoint_url` parameter is set to the URL of the Minio server.
+2. If the Minio server is running over HTTP and not HTTPS, the `allow_http` parameter must be set to `True`.
+3. Even though this is running on a local server, the `region` parameter must still be set to a valid region. By default Minio uses `us-east-1`.
+
+### Google Cloud Storage
+
+Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storage?hl=en).
+
+=== "From environment"
+
+    With this option, the credentials for connecting to GCS are detected automatically from your environment.  [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        from_env=True
+    )
+    ```
+
+=== "Service Account File"
+
+    With this option, you provide the path to a [service account file](https://cloud.google.com/iam/docs/service-account-creds#key-types). [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        service_account_file="/path/to/service-account.json"
+    )
+    ```
+
+=== "Service Account Key"
+
+    With this option, you provide the service account key as a string. [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        service_account_key={
+            "type": "service_account",
+            "project_id": "my-project",
+            "private_key_id": "my-private-key-id",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nmy-private-key\n-----END PRIVATE KEY-----\n",
+            "client_email": "
+            },
+    )
+    ```
+
+=== "Application Default Credentials"
+
+        With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
+
+        ```python
+        icechunk.gcs_storage(
+            bucket="icechunk-test",
+            prefix="quickstart-demo-1",
+            application_credentials="/path/to/application-credentials.json"
+        )
+        ```
+
+
+#### Limitations
+
+- The consistency guarentees for GCS function differently than S3. Specifically, GCS uses the [generation](https://cloud.google.com/storage/docs/request-preconditions#compose-preconditions) instead of etag for `if-match` `put` requests. Icechunk has not wired this through yet and thus [configuration updating](https://github.com/earth-mover/icechunk/issues/533) is potentially unsafe. This is not a problem for most use cases that are not frequently updating the configuration.
+- GCS does not yet support [`bearer` tokens and auth refreshing](https://github.com/earth-mover/icechunk/issues/637). This means currently auth is limited to service account files.
+- The GCS storage config does not yet support anonymous access.
+
+### Azure Blob Storage
+
+Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
+
+=== "From environment"
+
+    With this option, the credentials for connecting to Azure Blob Storage are detected automatically from your environment. [See the API](./reference.md#icechunk.azure_storage)
+
+    ```python
+    icechunk.azure_storage(
+        container="icechunk-test",
+        prefix="quickstart-demo-1",
+        from_env=True
+    )
+    ```
+
+=== "Provide credentials"
+
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.azure_storage)
+
+    ```python
+    icechunk.azure_storage(
+        container="icechunk-test",
+        prefix="quickstart-demo-1",
+        account_name='my-account-name',
+        account_key='my-account-key',
+        access_token=None,  # optional
+        sas_token=None,  # optional
+        bearer_token=None,  # optional
+    )
+    ```
+
+### Filesystem Storage
+
+Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_filesystem_storage) by providing a path to the location of the store
+
+=== "Local filesystem"
+
+    ```python
+    icechunk.local_filesystem_storage("/path/to/my/dataset")
+    ```
+
+### In Memory Storage
+
+While it should never be used for production data, Icechunk can also be used with an in-memory storage backend. This is useful for testing and development purposes. This is volatile and when the Python process ends, all data is lost.
+
+```python
+icechunk.in_memory_storage()
+```

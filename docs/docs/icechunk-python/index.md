@@ -2,6 +2,7 @@
 
 - [quickstart](/icechunk-python/quickstart/)
 - [configuration](/icechunk-python/configuration/)
+- [storage](/icechunk-python/storage/)
 - [version control](/icechunk-python/version-control/)
 - [xarray](/icechunk-python/xarray/)
 - [concurrency](/icechunk-python/concurrency/)
