@@ -371,7 +371,7 @@ pub trait CredentialsFetcher: fmt::Debug + Sync + Send {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
-#[serde(tag = "type")]
+#[serde(tag = "s3_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum S3Credentials {
     #[default]
@@ -382,6 +382,7 @@ pub enum S3Credentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "gcs_static_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
@@ -390,6 +391,7 @@ pub enum GcsStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "gcs_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsCredentials {
     FromEnv,
@@ -397,6 +399,7 @@ pub enum GcsCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_static_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureStaticCredentials {
     AccessKey(String),
@@ -405,6 +408,7 @@ pub enum AzureStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureCredentials {
     FromEnv,
@@ -412,7 +416,7 @@ pub enum AzureCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum Credentials {
     S3(S3Credentials),
