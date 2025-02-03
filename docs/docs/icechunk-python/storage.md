@@ -67,12 +67,16 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     )
     ```
 
+#### AWS Limitations
+
+- Icechunk is currently incompatible with [S3 Express One Zone](https://aws.amazon.com/s3/storage-classes/express-one-zone/). See [this issue](https://github.com/earth-mover/icechunk/issues/667) for more discussion.
+
 #### Tigris
 
 [Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage). There are a few things to be aware of when using Tigris:
 
-1. The `endpoint_url` parameter must be set to the Tigris endpoint. This is defaulted to `https://fly.storage.tigris.dev` but may be different depending on your Tigris configuration.
-2. Tigris is a globally distributed object store by default. There are currently some bugs with consistency when the store is distributed across multiple regions. For now, it is recommended to use a single region for your Tigris store.
+- The `endpoint_url` parameter must be set to the Tigris endpoint. This is defaulted to `https://fly.storage.tigris.dev` but may be different depending on your Tigris configuration.
+- Tigris is a globally distributed object store by default. There are currently some bugs with consistency when the store is distributed across multiple regions. For now, it is recommended to use a single region for your Tigris store.
 
 #### Minio
 
@@ -204,6 +208,10 @@ Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_
     ```python
     icechunk.local_filesystem_storage("/path/to/my/dataset")
     ```
+
+#### Limitations
+
+- Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
 
 ### In Memory Storage
 
