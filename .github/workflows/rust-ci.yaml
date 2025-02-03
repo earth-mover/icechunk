@@ -5,16 +5,6 @@ name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
-    paths:
-      - 'icechunk/**'
-      - 'icechunk-python/**'
-      - '.github/workflows/rust-ci.yaml'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'compose.yaml'
-      - 'deny.toml'
-      - 'Justfile'
-      - 'rustfmt.toml'
   push:
     branches:
       - main
