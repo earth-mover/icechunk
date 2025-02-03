@@ -669,10 +669,27 @@ pub fn new_gcs_storage(
 #[allow(clippy::unwrap_used)]
 mod tests {
 
-    use std::collections::HashSet;
+    use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
     use super::*;
     use proptest::prelude::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_is_clean() {
+        let repo_dir = TempDir::new().unwrap();
+        let s = new_local_filesystem_storage(repo_dir.path()).unwrap();
+        assert!(s.root_is_clean().await.unwrap());
+
+        let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
+        write!(file, "hello").unwrap();
+        assert!(!s.root_is_clean().await.unwrap());
+
+        let inside_existing =
+            PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
+        let s = new_local_filesystem_storage(&inside_existing).unwrap();
+        assert!(s.root_is_clean().await.unwrap());
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig {

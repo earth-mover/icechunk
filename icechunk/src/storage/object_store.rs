@@ -71,7 +71,9 @@ impl ObjectStorage {
             .map_err(|e| StorageError::Other(e.to_string()))?;
         let prefix =
             prefix.into_os_string().into_string().map_err(StorageError::BadPrefix)?;
-        let url = format!("file://{prefix}");
+        dbg!(&prefix);
+        let url = format!("file:///{prefix}");
+        dbg!(&url);
         let config = ObjectStorageConfig { url, prefix, options: vec![] };
         Self::from_config(config)
     }
