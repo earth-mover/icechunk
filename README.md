@@ -17,12 +17,12 @@ that enhance performance, collaboration, and safety in a cloud-computing context
 
 - This page: a general overview of the project's goals and components.
 - [Icechunk Launch Blog Post](https://earthmover.io/blog/icechunk)
-- [Frequently Asked Questions](https://icechunk.io/faq)
-- Documentation for [Icechunk Python](https://icechunk.io/icechunk-python), the main user-facing
+- [Frequently Asked Questions](https://icechunk.io/en/latest/faq/)
+- Documentation for [Icechunk Python](https://icechunk.io/en/latest/icechunk-python), the main user-facing
   library
-- Documentation for the [Icechunk Rust Crate](https://icechunk.io/icechunk-rust)
-- The [Contributor Guide](https://icechunk.io/contributing)
-- The [Icechunk Spec](https://icechunk.io/spec)
+- Documentation for the [Icechunk Rust Crate](https://icechunk.io/en/latest/icechunk-rust)
+- The [Contributor Guide](https://icechunk.io/en/latest/contributing)
+- The [Icechunk Spec](https://icechunk.io/en/latest/spec)
 
 ## Icechunk Overview
 

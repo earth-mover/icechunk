@@ -4,6 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "icechunk"
+description = "Icechunk Python"
 requires-python = ">=3.11"
 classifiers = [
   "Programming Language :: Rust",
@@ -13,18 +14,12 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
-license = { text = "Apache-2.0" }
+readme = "../README.md"
+license = "Apache-2.0"
 dynamic = ["version"]
+authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
 dependencies = ["zarr>=3"]
-
-[tool.poetry]
-name = "icechunk"
-version = "0.1.1"
-description = "Icechunk Python"
-authors = ["Earthmover <info@earthmover.io>"]
-readme = "../README.md"
-packages = [{ include = "icechunk", from = "python" }]
 
 [project.optional-dependencies]
 test = [
@@ -77,10 +72,6 @@ filterwarnings = [
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
 ]
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
 
 [tool.mypy]
 python_version = "3.11"

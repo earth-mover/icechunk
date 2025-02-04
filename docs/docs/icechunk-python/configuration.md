@@ -1,74 +1,8 @@
 # Configuration
 
-When creating and opening Icechunk repositories, there are a two different sets of configuration to be aware of:
+When creating and opening Icechunk repositories, there are many configuration options available to control the behavior of the repository and the storage backend. This page will guide you through the available options and how to use them.
 
-- [`Storage`](./reference.md#icechunk.Storage) - for configuring access to the object store or filesystem
-- [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) - for configuring the behavior of the Icechunk Repository itself
-
-## Storage
-
-Icechunk can be configured to work with both object storage and filesystem backends. The storage configuration defines the location of an Icechunk store, along with any options or information needed to access data from a given storage type.
-
-### S3 Storage
-
-When using Icechunk with s3 compatible storage systems, credentials must be provided to allow access to the data on the given endpoint. Icechunk allows for creating the storage config for s3 in three ways:
-
-=== "From environment"
-
-    With this option, the credentials for connecting to S3 are detected automatically from your environment.
-    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.s3_storage)
-
-    ```python
-    icechunk.s3_storage(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1",
-        from_env=True
-    )
-    ```
-
-=== "Provide credentials"
-
-    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.s3_storage)
-
-    ```python
-    icechunk.s3_storage(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1",
-        region='us-east-1',
-        access_key_id='my-access-key',
-        secret_access_key='my-secret-key',
-        # session token is optional
-        session_token='my-token',
-        endpoint_url=None,  # if using a custom endpoint
-        allow_http=False,  # allow http connections (default is False)
-    )
-    ```
-
-=== "Anonymous"
-
-    With this option, you connect to S3 anonymously (without credentials).
-    This is suitable for public data. [See the API](./reference.md#icechunk.StorageConfig.s3_anonymous)
-
-    ```python
-    icechunk.s3_storage(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1",
-        region='us-east-1,
-        anonymous=True,
-    )
-    ```
-
-### Filesystem Storage
-
-Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_filesystem_storage) by providing a path to the location of the store
-
-=== "Local filesystem"
-
-    ```python
-    icechunk.local_filesystem_storage("/path/to/my/dataset")
-    ```
-
-## Repository Config
+## [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig)
 
 Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
 
