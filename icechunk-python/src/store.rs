@@ -144,17 +144,23 @@ impl PyStore {
         byte_range: Option<(Option<ChunkOffset>, Option<ChunkOffset>)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let byte_range = byte_range.unwrap_or((None, None)).into();
-            let data = store.get(&key, &byte_range).await;
-            // We need to distinguish the "safe" case of trying to fetch an uninitialized key
-            // from other types of errors, we use PyKeyError exception for that
-            match data {
-                Ok(data) => Ok(Vec::from(data)),
-                Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
-                Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
-            }
-        })
+        let res = py.allow_threads(move || {
+            Python::with_gil(|py| {
+                pyo3_async_runtimes::tokio::future_into_py(py, async move {
+                    let byte_range = byte_range.unwrap_or((None, None)).into();
+                    let data = store.get(&key, &byte_range).await;
+                    // We need to distinguish the "safe" case of trying to fetch an uninitialized key
+                    // from other types of errors, we use PyKeyError exception for that
+                    match data {
+                        Ok(data) => Ok(Vec::from(data)),
+                        Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
+                        Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
+                    }
+                })
+                .map(|bound| bound.unbind())
+            })
+        });
+        res.map(|x| x.into_bound(py))
     }
 
     fn get_partial_values<'py>(
