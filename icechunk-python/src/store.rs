@@ -213,20 +213,25 @@ impl PyStore {
         value: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
-
-        // Most of our async functions use structured coroutines so they can be called directly from
-        // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
-        // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
-        // tokio runtime so we use the pyo3_async_runtimes::tokio helper to do this
-        // In the future this will hopefully not be necessary,
-        // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            store
-                .set(&key, Bytes::from(value))
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
-            Ok(())
-        })
+        let res = py.allow_threads(move || {
+            Python::with_gil(|py| {
+                // Most of our async functions use structured coroutines so they can be called directly from
+                // the python event loop, but in this case downstream objectstore crate  calls tokio::spawn
+                // when emplacing chunks into its storage backend. Calling tokio::spawn requires an active
+                // tokio runtime so we use the pyo3_async_runtimes::tokio helper to do this
+                // In the future this will hopefully not be necessary,
+                // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
+                pyo3_async_runtimes::tokio::future_into_py(py, async move {
+                    store
+                        .set(&key, Bytes::from(value))
+                        .await
+                        .map_err(PyIcechunkStoreError::from)?;
+                    Ok(())
+                })
+                .map(|bound| bound.unbind())
+            })
+        })?;
+        Ok(res.into_bound(py))
     }
 
     fn set_if_not_exists<'py>(
