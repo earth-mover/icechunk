@@ -38,6 +38,7 @@ test = [
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
+  "termcolor",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
