@@ -3,6 +3,7 @@
 ![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/docs/docs/assets/logo.svg)
 
 <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
+<a href="https://anaconda.org/conda-forge/icechunk" target="_blank"><img alt="Conda Forge" src="https://img.shields.io/conda/vn/conda-forge/icechunk.svg?logo=conda-forge&style=for-the-badge"></a>
 <a href="https://crates.io/crates/icechunk" target="_blank"><img alt="Crates.io" src="https://img.shields.io/crates/v/icechunk?logo=rust&label=crates.io&link=https%3A%2F%2Fcrates.io%2Fcrates%2Ficechunk&logoColor=CE422B&style=for-the-badge"></a>
 <a href="https://github.com/earth-mover/icechunk" target="_blank"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/earth-mover/icechunk?style=for-the-badge&logo=github"></a>
 <a href="https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ" target="_blank"><img alt="Earthmover Community Slack" src="https://img.shields.io/badge/Slack-4A154B?style=for-the-badge&logo=slack&logoColor=white" /></a>
@@ -87,6 +88,7 @@ Arbitrary JSON-style key-value metadata can be attached to both arrays and group
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.
 Icechunk users must organize their updates into groups of related operations called **transactions**.
 For example, appending a new time slice to multiple arrays should be done as a single transaction, comprising the following steps
+
 1. Update the array metadata to resize the array to accommodate the new elements.
 2. Write new chunks for each array in the group.
 

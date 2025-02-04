@@ -6,17 +6,24 @@ If you're not familiar with Zarr, you may want to start with the [Zarr Tutorial]
 
 ## Installation
 
-Install Icechunk with pip
+Icechunk can be installed using pip or conda:
 
-```python
-pip install icechunk
-```
+=== "pip"
+
+    ```bash
+    python -m pip install icechunk
+    ```
+
+=== "conda"
+
+    ```bash
+    conda install -c conda-forge icechunk
+    ```
 
 !!! note
 
     Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
     Using it today requires installing Zarr Python 3.
-
 
 ## Create a new Icechunk repository
 
@@ -94,7 +101,6 @@ session.commit("first commit")
 !!! note
 
     Once a writable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
-
 
 ## Make a second commit
 
