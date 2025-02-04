@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
@@ -11,7 +11,10 @@ use icechunk::{
     format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
     metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
     new_in_memory_storage,
-    ops::gc::{expire, expire_ref, garbage_collect, GCConfig, GCSummary},
+    ops::gc::{
+        expire, expire_ref, garbage_collect, ExpireRefResult, ExpiredRefAction, GCConfig,
+        GCSummary,
+    },
     refs::{update_branch, Ref},
     repository::VersionInfo,
     session::get_chunk,
@@ -288,16 +291,25 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
         1,
     ));
 
-    let expired_snaps = expire_ref(
+    match expire_ref(
         storage.as_ref(),
         &storage_settings,
         asset_manager.clone(),
         &Ref::Branch("main".to_string()),
         expire_older_than,
     )
-    .await?;
-
-    assert_eq!(expired_snaps.len(), 4);
+    .await?
+    {
+        ExpireRefResult::RefIsExpired => {
+            panic!()
+        }
+        ExpireRefResult::NothingToDo => {
+            panic!()
+        }
+        ExpireRefResult::Done { released_snapshots, .. } => {
+            assert_eq!(released_snapshots.len(), 4);
+        }
+    }
 
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -318,16 +330,21 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
         Vec::from(["8", "7", "6", "3", "2", "1", "Repository initialized"])
     );
 
-    let expired_snaps = expire_ref(
+    match expire_ref(
         storage.as_ref(),
         &storage_settings,
         asset_manager.clone(),
         &Ref::Branch("develop".to_string()),
         expire_older_than,
     )
-    .await?;
-
-    assert_eq!(expired_snaps.len(), 4);
+    .await?
+    {
+        ExpireRefResult::RefIsExpired => panic!(),
+        ExpireRefResult::NothingToDo => panic!(),
+        ExpireRefResult::Done { released_snapshots, .. } => {
+            assert_eq!(released_snapshots.len(), 4);
+        }
+    }
 
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -348,16 +365,21 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
         Vec::from(["8", "7", "6", "3", "2", "1", "Repository initialized"])
     );
 
-    let expired_snaps = expire_ref(
+    match expire_ref(
         storage.as_ref(),
         &storage_settings,
         asset_manager.clone(),
         &Ref::Branch("test".to_string()),
         expire_older_than,
     )
-    .await?;
-
-    assert_eq!(expired_snaps.len(), 5);
+    .await?
+    {
+        ExpireRefResult::RefIsExpired => panic!(),
+        ExpireRefResult::NothingToDo => panic!(),
+        ExpireRefResult::Done { released_snapshots, .. } => {
+            assert_eq!(released_snapshots.len(), 5);
+        }
+    }
 
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -378,16 +400,21 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
         Vec::from(["8", "7", "6", "3", "2", "1", "Repository initialized"])
     );
 
-    let expired_snaps = expire_ref(
+    match expire_ref(
         storage.as_ref(),
         &storage_settings,
         asset_manager.clone(),
         &Ref::Branch("qa".to_string()),
         expire_older_than,
     )
-    .await?;
-
-    assert_eq!(expired_snaps.len(), 5);
+    .await?
+    {
+        ExpireRefResult::RefIsExpired => panic!(),
+        ExpireRefResult::NothingToDo => panic!(),
+        ExpireRefResult::Done { released_snapshots, .. } => {
+            assert_eq!(released_snapshots.len(), 5);
+        }
+    }
 
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -429,15 +456,17 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
         1,
     ));
 
-    let expired_snaps = expire(
+    let result = expire(
         storage.as_ref(),
         &storage_settings,
         asset_manager.clone(),
         expire_older_than,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
     )
     .await?;
 
-    assert_eq!(expired_snaps.len(), 7);
+    assert_eq!(result.released_snapshots.len(), 7);
 
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 

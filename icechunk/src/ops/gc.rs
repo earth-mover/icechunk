@@ -9,7 +9,7 @@ use crate::{
     format::{
         manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
     },
-    refs::{list_refs, Ref, RefError},
+    refs::{delete_branch, delete_tag, list_refs, Ref, RefError},
     repository::RepositoryError,
     storage::{self, ListInfo},
     Storage, StorageError,
@@ -363,6 +363,13 @@ async fn gc_transaction_logs(
     Ok(storage.delete_transaction_logs(storage_settings, to_delete).await?)
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ExpireRefResult {
+    RefIsExpired,
+    NothingToDo,
+    Done { released_snapshots: HashSet<SnapshotId>, edited_snapshot: SnapshotId },
+}
+
 /// Expire snapshots older than a threshold.
 ///
 /// This only processes snapshots found by navigating `reference`
@@ -388,7 +395,7 @@ pub async fn expire_ref(
     asset_manager: Arc<AssetManager>,
     reference: &Ref,
     older_than: DateTime<Utc>,
-) -> GCResult<HashSet<SnapshotId>> {
+) -> GCResult<ExpireRefResult> {
     let snap_id = reference
         .fetch(storage, storage_settings)
         .await
@@ -411,7 +418,7 @@ pub async fn expire_ref(
     // If we point to an expired snapshot already, there is nothing to do
     if let Some(Ok(info)) = ancestry.as_mut().peek().await {
         if info.flushed_at < older_than {
-            return Ok(HashSet::new());
+            return Ok(ExpireRefResult::RefIsExpired);
         }
     }
 
@@ -433,7 +440,7 @@ pub async fn expire_ref(
     if editable_snap.id() == &root || Some(&root) == parent_id.as_ref() {
         // Either the reference is the root, or it is pointing to the root as first parent
         // Nothing to do
-        return Ok(released);
+        return Ok(ExpireRefResult::NothingToDo);
     }
 
     let root = asset_manager.fetch_snapshot(&root).await?;
@@ -441,7 +448,23 @@ pub async fn expire_ref(
     let new_snapshot = Arc::new(editable_snap.adopt(root.as_ref()));
     asset_manager.write_snapshot(new_snapshot).await?;
 
-    Ok(released)
+    Ok(ExpireRefResult::Done {
+        released_snapshots: released,
+        edited_snapshot: editable_snap.id().clone(),
+    })
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ExpiredRefAction {
+    Delete,
+    Ignore,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+pub struct ExpireResult {
+    pub released_snapshots: HashSet<SnapshotId>,
+    pub edited_snapshots: HashSet<SnapshotId>,
+    pub deleted_refs: HashSet<Ref>,
 }
 
 /// Expire all snapshots older than a threshold.
@@ -457,8 +480,7 @@ pub async fn expire_ref(
 /// passed `asset_manager` is invalidated here, but other caches
 /// may exist, for example, in [`Repository`] instances.
 ///
-/// Returns the ids of all snapshots considered expired and skipped
-/// from history. Notice that this snapshot are not necessarily
+/// Notice that the snapshot returned as released, are not necessarily
 /// available for garbage collection, they could still be pointed by
 /// ether refs.
 ///
@@ -468,7 +490,9 @@ pub async fn expire(
     storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
-) -> GCResult<HashSet<SnapshotId>> {
+    expired_branches: ExpiredRefAction,
+    expired_tags: ExpiredRefAction,
+) -> GCResult<ExpireResult> {
     let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
     let asset_manager = Arc::clone(&asset_manager.clone());
 
@@ -476,15 +500,43 @@ pub async fn expire(
         .then(move |r| {
             let asset_manager = asset_manager.clone();
             async move {
-                let released_snaps =
+                let ref_result =
                     expire_ref(storage, storage_settings, asset_manager, &r, older_than)
                         .await?;
-                Ok::<HashSet<SnapshotId>, GCError>(released_snaps)
+                Ok::<(Ref, ExpireRefResult), GCError>((r, ref_result))
             }
         })
-        .try_fold(HashSet::new(), |mut accum, new_set| async move {
-            accum.extend(new_set);
-            Ok(accum)
+        .try_fold(ExpireResult::default(), |mut result, (r, ref_result)| async move {
+            match ref_result {
+                ExpireRefResult::Done { released_snapshots, edited_snapshot } => {
+                    result.released_snapshots.extend(released_snapshots.into_iter());
+                    result.edited_snapshots.insert(edited_snapshot);
+                    Ok(result)
+                }
+                ExpireRefResult::RefIsExpired => match &r {
+                    Ref::Tag(name) => {
+                        if expired_tags == ExpiredRefAction::Delete {
+                            delete_tag(storage, storage_settings, name.as_str(), false)
+                                .await
+                                .map_err(GCError::Ref)?;
+                            result.deleted_refs.insert(r);
+                        }
+                        Ok(result)
+                    }
+                    Ref::Branch(name) => {
+                        if expired_branches == ExpiredRefAction::Delete
+                            && name != Ref::DEFAULT_BRANCH
+                        {
+                            delete_branch(storage, storage_settings, name.as_str())
+                                .await
+                                .map_err(GCError::Ref)?;
+                            result.deleted_refs.insert(r);
+                        }
+                        Ok(result)
+                    }
+                },
+                ExpireRefResult::NothingToDo => Ok(result),
+            }
         })
         .await
 }
