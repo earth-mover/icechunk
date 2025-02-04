@@ -53,11 +53,17 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Refreshable Credentials"
 
-    With this option, you provide a callback function that will be called to obtain S3 credentials when needed. [See the API](./reference.md#icechunk.s3_storage)
+    With this option, you provide a callback function that will be called to obtain S3 credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from AWS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. [See the API](./reference.md#icechunk.s3_storage)
 
     ```python
     def get_credentials() -> S3StaticCredentials:
-        return icechunk.S3StaticCredentials(access_key_id="xyz", secret_access_key="abc")
+        # In practice, you would use a function that actually fetches the credentials and returns them
+        # along with an optional expiration time which will trigger this callback to run again
+        return icechunk.S3StaticCredentials(
+            access_key_id="xyz",
+            secret_access_key="abc",å
+            expires_after=datetime.now(UTC) + timedelta(days=1)
+        )
 
     icechunk.s3_storage(
         bucket="icechunk-test",
@@ -76,7 +82,8 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 [Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage). There are a few things to be aware of when using Tigris:
 
 - The `endpoint_url` parameter must be set to the Tigris endpoint. This is defaulted to `https://fly.storage.tigris.dev` but may be different depending on your Tigris configuration.
-- Tigris is a globally distributed object store by default. There are currently some bugs with consistency when the store is distributed across multiple regions. For now, it is recommended to use a single region for your Tigris store.
+- Tigris is a globally distributed object store by default. The caveat is that Tigris does not currently support the full consistency guarantees when the store is distributed across multiple regions. For now, to get the all the consistency guarantees Icechunk offers, you will need to setup your Tigris bucket as restricted to a single region. This can be done by setting the region in the Tigris bucket settings:
+![tigris bucket settings](../assets/storage/tigris-region-set.png)
 
 #### Minio
 
@@ -100,7 +107,7 @@ A few things to note:
 
 1. The `endpoint_url` parameter is set to the URL of the Minio server.
 2. If the Minio server is running over HTTP and not HTTPS, the `allow_http` parameter must be set to `True`.
-3. Even though this is running on a local server, the `region` parameter must still be set to a valid region. By default Minio uses `us-east-1`.
+3. Even though this is running on a local server, the `region` parameter must still be set to a valid region. [By default use `us-east-1`](https://github.com/minio/minio/discussions/15063).
 
 ### Google Cloud Storage
 
