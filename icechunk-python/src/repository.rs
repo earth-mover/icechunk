@@ -13,7 +13,7 @@ use icechunk::{
         snapshot::{SnapshotInfo, SnapshotProperties},
         SnapshotId,
     },
-    ops::gc::{expire, garbage_collect, GCConfig, GCSummary},
+    ops::gc::{expire, garbage_collect, ExpiredRefAction, GCConfig, GCSummary},
     repository::{RepositoryError, VersionInfo},
     Repository,
 };
@@ -624,10 +624,13 @@ impl PyRepository {
         })
     }
 
+    #[pyo3(signature = (older_than, *, delete_expired_branches = false, delete_expired_tags = false))]
     pub fn expire_snapshots(
         &self,
         py: Python<'_>,
         older_than: DateTime<Utc>,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
     ) -> PyResult<HashSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -638,11 +641,25 @@ impl PyRepository {
                         self.0.storage_settings(),
                         self.0.asset_manager().clone(),
                         older_than,
+                        if delete_expired_branches {
+                            ExpiredRefAction::Delete
+                        } else {
+                            ExpiredRefAction::Ignore
+                        },
+                        if delete_expired_tags {
+                            ExpiredRefAction::Delete
+                        } else {
+                            ExpiredRefAction::Ignore
+                        },
                     )
                     .await
                     .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(
-                        result.iter().map(|id| id.to_string()).collect(),
+                        result
+                            .released_snapshots
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect(),
                     )
                 })?;
 

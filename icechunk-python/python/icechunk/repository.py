@@ -445,7 +445,13 @@ class Repository:
         """
         return Session(self._repository.writable_session(branch))
 
-    def expire_snapshots(self, older_than: datetime.datetime) -> set[str]:
+    def expire_snapshots(
+        self,
+        older_than: datetime.datetime,
+        *,
+        delete_expired_branches: bool = False,
+        delete_expired_tags: bool = False,
+    ) -> set[str]:
         """Expire all snapshots older than a threshold.
 
         This processes snapshots found by navigating all references in
@@ -455,6 +461,10 @@ class Repository:
         from history. Notice that this snapshot are not necessarily
         available for garbage collection, they could still be pointed by
         ether refs.
+
+        If delete_expired_* is set to True, branches or tags that, after the
+        expiration process, point to expired snapshots directly, will be
+        deleted.
 
         Warning: this is an administrative operation, it should be run
         carefully. The repository can still operate concurrently while
