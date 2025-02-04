@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 0.1.1
+
+### Fixes
+
+- Session deserialization error when using distributed writes
+
+
 ## Python Icechunk Library 0.1.0
 
 ### Features
