@@ -10,7 +10,7 @@ use futures::{stream, StreamExt, TryStreamExt};
 use crate::{
     change_set::ChangeSet,
     format::{snapshot::NodeSnapshot, transaction_log::TransactionLog, NodeId, Path},
-    session::{Session, SessionError, SessionResult},
+    session::{Session, SessionError, SessionErrorKind, SessionResult},
 };
 
 use super::{Conflict, ConflictResolution, ConflictSolver};
@@ -35,7 +35,9 @@ impl ConflictSolver for ConflictDetector {
                 Ok(_) => {
                     Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
                 }
-                Err(SessionError::NodeNotFound { .. }) => Ok(None),
+                Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { .. }, ..
+                }) => Ok(None),
                 Err(err) => Err(err),
             }
         });
@@ -47,8 +49,14 @@ impl ConflictSolver for ConflictDetector {
             for parent in path.ancestors().skip(1) {
                 match previous_repo.get_array(&parent).await {
                     Ok(_) => return Ok(Some(Conflict::NewNodeInInvalidGroup(parent))),
-                    Err(SessionError::NodeNotFound { .. })
-                    | Err(SessionError::NotAnArray { .. }) => {}
+                    Err(SessionError {
+                        kind: SessionErrorKind::NodeNotFound { .. },
+                        ..
+                    })
+                    | Err(SessionError {
+                        kind: SessionErrorKind::NotAnArray { .. },
+                        ..
+                    }) => {}
                     Err(err) => return Err(err),
                 }
             }
@@ -172,7 +180,9 @@ impl ConflictSolver for ConflictDetector {
         .try_filter_map(|(path, _node_id)| async {
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
-                Err(SessionError::NodeNotFound { .. }) => None,
+                Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { .. }, ..
+                }) => None,
                 Err(err) => Err(err)?,
             };
 
@@ -199,7 +209,9 @@ impl ConflictSolver for ConflictDetector {
         .try_filter_map(|(path, _node_id)| async {
             let id = match previous_repo.get_node(path).await {
                 Ok(node) => Some(node.id),
-                Err(SessionError::NodeNotFound { .. }) => None,
+                Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { .. }, ..
+                }) => None,
                 Err(err) => Err(err)?,
             };
 
@@ -268,9 +280,9 @@ impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
                 }
             }
             *iter = None;
-            Err(SessionError::ConflictingPathNotFound(node_id.clone()))
+            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
         } else {
-            Err(SessionError::ConflictingPathNotFound(node_id.clone()))
+            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
         }
     }
 }

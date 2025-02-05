@@ -6,6 +6,8 @@ mod session;
 mod store;
 mod streams;
 
+use std::env;
+
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsCredentials,
@@ -22,10 +24,19 @@ use errors::{
     IcechunkError, PyConflictError, PyConflictErrorData, PyRebaseFailedData,
     PyRebaseFailedError,
 };
+use icechunk::initialize_tracing;
 use pyo3::prelude::*;
 use repository::{PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::PyStore;
+
+#[pyfunction]
+fn initialize_logs() -> PyResult<()> {
+    if env::var("ICECHUNK_NO_LOGS").is_err() {
+        initialize_tracing()
+    }
+    Ok(())
+}
 
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
@@ -61,6 +72,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyManifestConfig>()?;
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
+    m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;

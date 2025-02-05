@@ -15,8 +15,8 @@ use crate::metadata::{
 
 use super::{
     manifest::{Manifest, ManifestRef},
-    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkResult, ManifestId, NodeId,
-    Path, SnapshotId, TableOffset,
+    AttributesId, ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, ManifestId,
+    NodeId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,7 +308,7 @@ impl Snapshot {
     pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
         self.nodes
             .get(path)
-            .ok_or(IcechunkFormatError::NodeNotFound { path: path.clone() })
+            .ok_or(IcechunkFormatErrorKind::NodeNotFound { path: path.clone() }.into())
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &NodeSnapshot> + '_ {
@@ -510,39 +510,42 @@ mod tests {
             nodes,
         );
 
-        assert_eq!(
+        assert!(matches!(
             st.get_node(&"/nonexistent".try_into().unwrap()),
-            Err(IcechunkFormatError::NodeNotFound {
-                path: "/nonexistent".try_into().unwrap()
-            })
-        );
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::NodeNotFound {
+                    path
+                },
+                ..
+            }) if path == "/nonexistent".try_into().unwrap()
+        ));
 
-        let node = st.get_node(&"/b/c".try_into().unwrap());
+        let node = st.get_node(&"/b/c".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            Ok(&NodeSnapshot {
+            &NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
                     UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
                 )),
                 node_data: NodeData::Group,
-            }),
+            },
         );
-        let node = st.get_node(&Path::root());
+        let node = st.get_node(&Path::root()).unwrap();
         assert_eq!(
             node,
-            Ok(&NodeSnapshot {
+            &NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
                 user_attributes: None,
                 node_data: NodeData::Group,
-            }),
+            },
         );
-        let node = st.get_node(&"/b/array1".try_into().unwrap());
+        let node = st.get_node(&"/b/array1".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            Ok(&NodeSnapshot {
+            &NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
@@ -550,27 +553,27 @@ mod tests {
                     location: 42,
                 })),
                 node_data: NodeData::Array(zarr_meta1.clone(), vec![man_ref1, man_ref2]),
-            }),
+            },
         );
-        let node = st.get_node(&"/array2".try_into().unwrap());
+        let node = st.get_node(&"/array2".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            Ok(&NodeSnapshot {
+            &NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            }),
+            },
         );
-        let node = st.get_node(&"/b/array3".try_into().unwrap());
+        let node = st.get_node(&"/b/array3".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            Ok(&NodeSnapshot {
+            &NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
-            }),
+            },
         );
         Ok(())
     }
