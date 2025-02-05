@@ -31,9 +31,10 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
 use super::{
-    ConcurrencySettings, ETag, ListInfo, Reader, Settings, Storage, StorageError,
-    StorageResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
-    SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    ConcurrencySettings, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
+    Storage, StorageError, StorageResult, UpdateConfigResult, WriteRefResult,
+    CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
+    TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -285,16 +286,18 @@ impl Storage for ObjectStorage {
     async fn fetch_config(
         &self,
         _settings: &Settings,
-    ) -> StorageResult<Option<(Bytes, ETag)>> {
+    ) -> StorageResult<FetchConfigResult> {
         let path = self.get_config_path();
         let response = self.store.get(&path).await;
 
         match response {
             Ok(result) => match result.meta.e_tag.clone() {
-                Some(etag) => Ok(Some((result.bytes().await?, etag))),
-                None => Err(StorageError::Other("No ETag found for config".to_string())),
+                Some(etag) => {
+                    Ok(FetchConfigResult::Found { bytes: result.bytes().await?, etag })
+                }
+                None => Ok(FetchConfigResult::NotFound),
             },
-            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(object_store::Error::NotFound { .. }) => Ok(FetchConfigResult::NotFound),
             Err(err) => Err(err.into()),
         }
     }
@@ -303,7 +306,7 @@ impl Storage for ObjectStorage {
         _settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
-    ) -> StorageResult<ETag> {
+    ) -> StorageResult<UpdateConfigResult> {
         let path = self.get_config_path();
         let attributes = if self.supports_metadata() {
             Attributes::from_iter(vec![(
@@ -327,13 +330,13 @@ impl Storage for ObjectStorage {
         let res = self.store.put_opts(&path, config.into(), options).await;
         match res {
             Ok(res) => {
-                let etag = res.e_tag.ok_or(StorageError::Other(
+                let new_etag = res.e_tag.ok_or(StorageError::Other(
                     "Config object should have an etag".to_string(),
                 ))?;
-                Ok(etag)
+                Ok(UpdateConfigResult::Updated { new_etag })
             }
             Err(object_store::Error::Precondition { .. }) => {
-                Err(StorageError::ConfigUpdateConflict)
+                Ok(UpdateConfigResult::NotOnLatestVersion)
             }
             Err(err) => Err(err.into()),
         }
@@ -449,13 +452,15 @@ impl Storage for ObjectStorage {
         Ok(())
     }
 
-    async fn get_ref(&self, _settings: &Settings, ref_key: &str) -> StorageResult<Bytes> {
+    async fn get_ref(
+        &self,
+        _settings: &Settings,
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult> {
         let key = self.ref_key(ref_key);
         match self.store.get(&key).await {
-            Ok(res) => Ok(res.bytes().await?),
-            Err(object_store::Error::NotFound { .. }) => {
-                Err(StorageError::RefNotFound(key.to_string()))
-            }
+            Ok(res) => Ok(GetRefResult::Found { bytes: res.bytes().await? }),
+            Err(object_store::Error::NotFound { .. }) => Ok(GetRefResult::NotFound),
             Err(err) => Err(err.into()),
         }
     }
@@ -503,21 +508,18 @@ impl Storage for ObjectStorage {
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key);
         let mode = if overwrite_refs { PutMode::Overwrite } else { PutMode::Create };
         let opts = PutOptions { mode, ..PutOptions::default() };
 
-        self.store
-            .put_opts(&key, PutPayload::from_bytes(bytes), opts)
-            .await
-            .map_err(|e| match e {
-                object_store::Error::AlreadyExists { path, .. } => {
-                    StorageError::RefAlreadyExists(path)
-                }
-                _ => e.into(),
-            })
-            .map(|_| ())
+        match self.store.put_opts(&key, PutPayload::from_bytes(bytes), opts).await {
+            Ok(_) => Ok(WriteRefResult::Written),
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                Ok(WriteRefResult::WontOverwrite)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     async fn list_objects<'a>(

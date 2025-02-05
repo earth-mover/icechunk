@@ -9,9 +9,9 @@ use icechunk::{
     },
     storage::{
         new_in_memory_storage, new_s3_storage, object_store::ObjectStorageConfig,
-        StorageResult,
+        FetchConfigResult, StorageResult, UpdateConfigResult,
     },
-    ObjectStorage, Storage, StorageError,
+    ObjectStorage, Storage,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use tokio::io::AsyncReadExt;
@@ -395,15 +395,19 @@ pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+#[allow(clippy::panic)]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
-        let etag = storage.update_config(&storage_settings, config.clone(), None).await?;
+        let etag = match storage.update_config(&storage_settings, config.clone(), None).await? {
+    UpdateConfigResult::Updated { new_etag } => new_etag,
+    UpdateConfigResult::NotOnLatestVersion => panic!(),
+};
         assert_ne!(etag, "");
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, Some((bytes, actual_etag)) if actual_etag == etag && bytes == config )
+            matches!(res, FetchConfigResult::Found{bytes, etag: actual_etag} if actual_etag == etag && bytes == config )
         );
         Ok(())
     }).await?;
@@ -411,16 +415,23 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[tokio::test]
+#[allow(clippy::panic)]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
         let storage_settings = storage.default_settings();
-        let first_etag = storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), None).await?;
+        let first_etag = match storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), None).await? {
+            UpdateConfigResult::Updated { new_etag } => new_etag,
+            _ => panic!(),
+        };
         let config = Bytes::copy_from_slice(b"bye");
-        let second_etag = storage.update_config(&storage_settings, config.clone(), Some(first_etag.as_str())).await?;
+        let second_etag = match storage.update_config(&storage_settings, config.clone(), Some(first_etag.as_str())).await? {
+            UpdateConfigResult::Updated { new_etag } => new_etag,
+            _ => panic!(),
+        };
         assert_ne!(second_etag, first_etag);
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, Some((bytes, actual_etag)) if actual_etag == second_etag && bytes == config )
+            matches!(res, FetchConfigResult::Found{bytes, etag: actual_etag} if actual_etag == second_etag && bytes == config )
         );
         Ok(())
     }).await?;
@@ -442,28 +453,32 @@ pub async fn test_write_config_fails_on_bad_etag_when_non_existing(
         )
         .await;
 
-    assert!(etag.is_err());
+    assert!(matches!(etag, Ok(UpdateConfigResult::NotOnLatestVersion)));
     Ok(())
 }
 
 #[tokio::test]
+#[allow(clippy::panic)]
 pub async fn test_write_config_fails_on_bad_etag_when_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage| async move {
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
-        let etag = storage.update_config(&storage_settings, config.clone(), None).await?;
+        let etag = match storage.update_config(&storage_settings, config.clone(), None).await? {
+            UpdateConfigResult::Updated { new_etag } => new_etag,
+            _ => panic!(),
+        };
         let res = storage
             .update_config(&storage_settings,
                 Bytes::copy_from_slice(b"bye"),
                 Some("00000000000000000000000000000000"),
             )
-            .await;
-        assert!(matches!(res, Err(StorageError::ConfigUpdateConflict)));
+            .await?;
+        assert!(matches!(res, UpdateConfigResult::NotOnLatestVersion));
 
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, Some((bytes, actual_etag)) if actual_etag == etag && bytes == config )
+            matches!(res, FetchConfigResult::Found{bytes, etag: actual_etag} if actual_etag == etag && bytes == config )
         );
             Ok(())
     }).await?;
