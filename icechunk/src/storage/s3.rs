@@ -38,8 +38,9 @@ use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
 
 use super::{
-    ETag, ListInfo, Reader, Settings, StorageResult, CHUNK_PREFIX, CONFIG_PATH,
-    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, StorageResult,
+    UpdateConfigResult, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX,
+    REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,7 +252,7 @@ impl Storage for S3Storage {
     async fn fetch_config(
         &self,
         _settings: &Settings,
-    ) -> StorageResult<Option<(Bytes, ETag)>> {
+    ) -> StorageResult<FetchConfigResult> {
         let key = self.get_config_path()?;
         let res = self
             .get_client()
@@ -264,11 +265,14 @@ impl Storage for S3Storage {
 
         match res {
             Ok(output) => match output.e_tag {
-                Some(etag) => Ok(Some((output.body.collect().await?.into_bytes(), etag))),
-                None => Err(StorageError::Other("No ETag found for config".to_string())),
+                Some(etag) => Ok(FetchConfigResult::Found {
+                    bytes: output.body.collect().await?.into_bytes(),
+                    etag,
+                }),
+                None => Ok(FetchConfigResult::NotFound),
             },
             Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => Ok(None),
+                Some(e) if e.is_no_such_key() => Ok(FetchConfigResult::NotFound),
                 _ => Err(sdk_err.into()),
             },
         }
@@ -279,7 +283,7 @@ impl Storage for S3Storage {
         _settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
-    ) -> StorageResult<ETag> {
+    ) -> StorageResult<UpdateConfigResult> {
         let key = self.get_config_path()?;
         let mut req = self
             .get_client()
@@ -300,15 +304,18 @@ impl Storage for S3Storage {
 
         match res {
             Ok(out) => {
-                let etag = out.e_tag().ok_or(StorageError::Other(
-                    "Config object should have an etag".to_string(),
-                ))?;
-                Ok(etag.to_string())
+                let new_etag = out
+                    .e_tag()
+                    .ok_or(StorageError::Other(
+                        "Config object should have an etag".to_string(),
+                    ))?
+                    .to_string();
+                Ok(UpdateConfigResult::Updated { new_etag })
             }
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
                 if err.err().meta().code() == Some("PreconditionFailed") {
-                    Err(StorageError::ConfigUpdateConflict)
+                    Ok(UpdateConfigResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(SdkError::<PutObjectError>::ServiceError(err)))
                 }
@@ -318,7 +325,7 @@ impl Storage for S3Storage {
                 let status = err.raw().status().as_u16();
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    Err(StorageError::ConfigUpdateConflict)
+                    Ok(UpdateConfigResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(SdkError::<PutObjectError>::ResponseError(
                         err,
@@ -424,7 +431,11 @@ impl Storage for S3Storage {
         self.put_object(key.as_str(), None::<String>, metadata, bytes).await
     }
 
-    async fn get_ref(&self, _settings: &Settings, ref_key: &str) -> StorageResult<Bytes> {
+    async fn get_ref(
+        &self,
+        _settings: &Settings,
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult> {
         let key = self.ref_key(ref_key)?;
         let res = self
             .get_client()
@@ -436,14 +447,17 @@ impl Storage for S3Storage {
             .await;
 
         match res {
-            Ok(res) => Ok(res.body.collect().await?.into_bytes()),
+            Ok(res) => {
+                let bytes = res.body.collect().await?.into_bytes();
+                Ok(GetRefResult::Found { bytes })
+            }
             Err(err)
                 if err
                     .as_service_error()
                     .map(|e| e.is_no_such_key())
                     .unwrap_or(false) =>
             {
-                Err(StorageError::RefNotFound(key.to_string()))
+                Ok(GetRefResult::NotFound)
             }
             Err(err) => Err(err.into()),
         }
@@ -513,7 +527,7 @@ impl Storage for S3Storage {
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key)?;
         let mut builder = self
             .get_client()
@@ -529,13 +543,13 @@ impl Storage for S3Storage {
         let res = builder.body(bytes.into()).send().await;
 
         match res {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(WriteRefResult::Written),
             Err(err) => {
                 let code = err.as_service_error().and_then(|e| e.code()).unwrap_or("");
                 if code.contains("PreconditionFailed")
                     || code.contains("ConditionalRequestConflict")
                 {
-                    Err(StorageError::RefAlreadyExists(key))
+                    Ok(WriteRefResult::WontOverwrite)
                 } else {
                     Err(err.into())
                 }

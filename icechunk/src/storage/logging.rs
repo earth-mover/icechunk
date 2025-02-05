@@ -10,7 +10,10 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
 
-use super::{ETag, ListInfo, Reader, Settings, Storage, StorageError, StorageResult};
+use super::{
+    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, Storage, StorageError,
+    StorageResult, UpdateConfigResult, WriteRefResult,
+};
 use crate::{
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
@@ -46,7 +49,7 @@ impl Storage for LoggingStorage {
     async fn fetch_config(
         &self,
         settings: &Settings,
-    ) -> StorageResult<Option<(Bytes, ETag)>> {
+    ) -> StorageResult<FetchConfigResult> {
         self.backend.fetch_config(settings).await
     }
     async fn update_config(
@@ -54,7 +57,7 @@ impl Storage for LoggingStorage {
         settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
-    ) -> StorageResult<ETag> {
+    ) -> StorageResult<UpdateConfigResult> {
         self.backend.update_config(settings, config, etag).await
     }
 
@@ -159,7 +162,11 @@ impl Storage for LoggingStorage {
         self.backend.write_chunk(settings, id, bytes).await
     }
 
-    async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes> {
+    async fn get_ref(
+        &self,
+        settings: &Settings,
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult> {
         self.backend.get_ref(settings, ref_key).await
     }
 
@@ -173,7 +180,7 @@ impl Storage for LoggingStorage {
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<WriteRefResult> {
         self.backend.write_ref(settings, ref_key, overwrite_refs, bytes).await
     }
 
