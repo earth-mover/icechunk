@@ -15,7 +15,11 @@ use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 
-use crate::{format::SnapshotId, storage, Storage, StorageError};
+use crate::{
+    format::SnapshotId,
+    storage::{self, GetRefResult, WriteRefResult},
+    Storage, StorageError,
+};
 
 fn crock_encode_int(n: u64) -> String {
     // skip the first 3 bytes (zeroes)
@@ -179,7 +183,7 @@ pub async fn create_tag(
     let key = tag_key(name)?;
     let data = RefData { snapshot };
     let content = serde_json::to_vec(&data)?;
-    storage
+    match storage
         .write_ref(
             storage_settings,
             key.as_str(),
@@ -187,13 +191,13 @@ pub async fn create_tag(
             Bytes::copy_from_slice(&content),
         )
         .await
-        .map_err(|e| match e {
-            StorageError::RefAlreadyExists(_) => {
-                RefError::TagAlreadyExists(name.to_string())
-            }
-            err => err.into(),
-        })?;
-    Ok(())
+    {
+        Ok(WriteRefResult::Written) => Ok(()),
+        Ok(WriteRefResult::WontOverwrite) => {
+            Err(RefError::TagAlreadyExists(name.to_string()))
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[async_recursion]
@@ -237,8 +241,8 @@ pub async fn update_branch(
         )
         .await
     {
-        Ok(_) => Ok(new_version),
-        Err(StorageError::RefAlreadyExists(_)) => {
+        Ok(WriteRefResult::Written) => Ok(new_version),
+        Ok(WriteRefResult::WontOverwrite) => {
             // If the branch version already exists, an update happened since we checked
             // we can just try again and the conflict will be reported
             update_branch(
@@ -370,7 +374,7 @@ pub async fn delete_tag(
 
     // no race condition: delete_tag ^ 2 = delete_tag
     let key = tag_delete_marker_key(tag)?;
-    storage
+    match storage
         .write_ref(
             storage_settings,
             key.as_str(),
@@ -378,11 +382,11 @@ pub async fn delete_tag(
             Bytes::from_static(&[]),
         )
         .await
-        .map_err(|e| match e {
-            StorageError::RefAlreadyExists(_) => RefError::RefNotFound(tag.to_string()),
-            err => err.into(),
-        })?;
-    Ok(())
+    {
+        Ok(WriteRefResult::Written) => Ok(()),
+        Ok(WriteRefResult::WontOverwrite) => Err(RefError::RefNotFound(tag.to_string())),
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub async fn fetch_tag(
@@ -395,20 +399,16 @@ pub async fn fetch_tag(
 
     let fut1: Pin<Box<dyn Future<Output = RefResult<Bytes>>>> = async move {
         match storage.get_ref(storage_settings, ref_path.as_str()).await {
-            Ok(data) => Ok(data),
-            Err(StorageError::RefNotFound(..)) => {
-                Err(RefError::RefNotFound(name.to_string()))
-            }
+            Ok(GetRefResult::Found { bytes }) => Ok(bytes),
+            Ok(GetRefResult::NotFound) => Err(RefError::RefNotFound(name.to_string())),
             Err(err) => Err(err.into()),
         }
     }
     .boxed();
     let fut2 = async move {
         match storage.get_ref(storage_settings, delete_marker_path.as_str()).await {
-            Ok(_) => Ok(Bytes::new()),
-            Err(StorageError::RefNotFound(..)) => {
-                Err(RefError::RefNotFound(name.to_string()))
-            }
+            Ok(GetRefResult::Found { .. }) => Ok(Bytes::new()),
+            Ok(GetRefResult::NotFound) => Err(RefError::RefNotFound(name.to_string())),
             Err(err) => Err(err.into()),
         }
     }
@@ -441,10 +441,8 @@ async fn fetch_branch(
 ) -> RefResult<RefData> {
     let path = version.to_path(name)?;
     match storage.get_ref(storage_settings, path.as_str()).await {
-        Ok(data) => Ok(serde_json::from_slice(data.as_ref())?),
-        Err(StorageError::RefNotFound(..)) => {
-            Err(RefError::RefNotFound(name.to_string()))
-        }
+        Ok(GetRefResult::Found { bytes }) => Ok(serde_json::from_slice(bytes.as_ref())?),
+        Ok(GetRefResult::NotFound) => Err(RefError::RefNotFound(name.to_string())),
         Err(err) => Err(err.into()),
     }
 }

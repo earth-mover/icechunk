@@ -75,12 +75,6 @@ pub enum StorageError {
     S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] ByteStreamError),
-    #[error("cannot overwrite ref: {0}")]
-    RefAlreadyExists(String),
-    #[error("ref not found: {0}")]
-    RefNotFound(String),
-    #[error("the etag does not match")]
-    ConfigUpdateConflict,
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]
@@ -192,6 +186,30 @@ impl Reader {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchConfigResult {
+    Found { bytes: Bytes, etag: ETag },
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateConfigResult {
+    Updated { new_etag: ETag },
+    NotOnLatestVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GetRefResult {
+    Found { bytes: Bytes },
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteRefResult {
+    Written,
+    WontOverwrite,
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
@@ -202,16 +220,14 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     fn default_settings(&self) -> Settings {
         Default::default()
     }
-    async fn fetch_config(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<Option<(Bytes, ETag)>>;
+    async fn fetch_config(&self, settings: &Settings)
+        -> StorageResult<FetchConfigResult>;
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
         etag: Option<&str>,
-    ) -> StorageResult<ETag>;
+    ) -> StorageResult<UpdateConfigResult>;
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
@@ -273,7 +289,11 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         bytes: Bytes,
     ) -> StorageResult<()>;
 
-    async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes>;
+    async fn get_ref(
+        &self,
+        settings: &Settings,
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult>;
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
     async fn ref_versions(
         &self,
@@ -286,7 +306,7 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         ref_key: &str,
         overwrite_refs: bool,
         bytes: Bytes,
-    ) -> StorageResult<()>;
+    ) -> StorageResult<WriteRefResult>;
 
     async fn list_objects<'a>(
         &'a self,
@@ -666,7 +686,7 @@ pub fn new_gcs_storage(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
     use std::collections::HashSet;

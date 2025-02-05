@@ -23,7 +23,7 @@ use crate::{
         list_branches, list_tags, update_branch, BranchVersion, Ref, RefError,
     },
     session::Session,
-    storage::{self, ETag},
+    storage::{self, ETag, FetchConfigResult, UpdateConfigResult},
     virtual_chunks::{ContainerName, VirtualChunkResolver},
     Storage, StorageError,
 };
@@ -66,6 +66,8 @@ pub enum RepositoryError {
     ConflictingPathNotFound(NodeId),
     #[error("error in config deserialization `{0}`")]
     ConfigDeserializationError(#[from] serde_yml::Error),
+    #[error("config was updated by other session")]
+    ConfigWasUpdated,
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     #[error("I/O error `{0}`")]
@@ -267,11 +269,11 @@ impl Repository {
         storage: &(dyn Storage + Send + Sync),
     ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
         match storage.fetch_config(&storage.default_settings()).await? {
-            Some((bytes, etag)) => {
+            FetchConfigResult::Found { bytes, etag } => {
                 let config = serde_yml::from_slice(&bytes)?;
                 Ok(Some((config, etag)))
             }
-            None => Ok(None),
+            FetchConfigResult::NotFound => Ok(None),
         }
     }
 
@@ -290,14 +292,19 @@ impl Repository {
         config_etag: Option<&ETag>,
     ) -> RepositoryResult<ETag> {
         let bytes = Bytes::from(serde_yml::to_string(config)?);
-        let res = storage
+        match storage
             .update_config(
                 &storage.default_settings(),
                 bytes,
                 config_etag.map(|e| e.as_str()),
             )
-            .await?;
-        Ok(res)
+            .await?
+        {
+            UpdateConfigResult::Updated { new_etag } => Ok(new_etag),
+            UpdateConfigResult::NotOnLatestVersion => {
+                Err(RepositoryError::ConfigWasUpdated)
+            }
+        }
     }
 
     pub fn config(&self) -> &RepositoryConfig {
