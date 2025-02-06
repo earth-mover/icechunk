@@ -27,9 +27,7 @@ AnyGcsStaticCredential = (
 )
 
 AnyGcsCredential = (
-    GcsCredentials.FromEnv
-    | GcsCredentials.Static
-    | GcsCredentials.Refreshable
+    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
 )
 
 AnyAzureStaticCredential = (

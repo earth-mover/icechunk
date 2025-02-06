@@ -401,9 +401,7 @@ pub struct GcsBearerCredential {
 
 impl From<GcsBearerCredential> for GcpCredential {
     fn from(value: GcsBearerCredential) -> Self {
-        GcpCredential {
-            bearer: value.bearer,
-        }
+        GcpCredential { bearer: value.bearer }
     }
 }
 

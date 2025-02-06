@@ -498,7 +498,9 @@ class GcsBearerCredential:
     bearer: str
     expires_after: datetime.datetime | None
 
-    def __init__(self, bearer: str, *, expires_after: datetime.datetime | None = None) -> None: ...
+    def __init__(
+        self, bearer: str, *, expires_after: datetime.datetime | None = None
+    ) -> None: ...
 
 class GcsStaticCredentials:
     class ServiceAccount:
@@ -527,9 +529,7 @@ class GcsCredentials:
         def __init__(self, pickled_function: bytes) -> None: ...
 
 AnyGcsCredential = (
-    GcsCredentials.FromEnv
-    | GcsCredentials.Static
-    | GcsCredentials.Refreshable
+    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
 )
 
 class AzureStaticCredentials:

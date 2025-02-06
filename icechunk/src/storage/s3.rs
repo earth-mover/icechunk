@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    config::{S3CredentialsFetcher, S3Credentials, S3Options},
+    config::{S3Credentials, S3CredentialsFetcher, S3Options},
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private, Storage, StorageError,
 };
