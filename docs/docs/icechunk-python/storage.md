@@ -92,7 +92,6 @@ icechunk.tigris_storage(
 There are a few things to be aware of when using Tigris:
 - Tigris is a globally distributed object store by default. The caveat is that Tigris does not currently support the full consistency guarantees when the store is distributed across multiple regions. For now, to get all the consistency guarantees Icechunk offers, you will need to setup your Tigris bucket as restricted to a single region. This can be done by setting the region in the Tigris bucket settings:
 ![tigris bucket settings](../assets/storage/tigris-region-set.png)
-- To authenticate you will need to set the IAM endpoint URL, possibly by setting the environment variable: `{"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}`. See the [Tigris docs](https://www.tigrisdata.com/docs/iam/#create-an-access-key) for more.
 
 #### Minio
 
