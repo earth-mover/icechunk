@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-pub use object_store::gcp::GcpCredential as GcsBearerCredential;
+pub use object_store::gcp::GcpCredential;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -389,6 +389,22 @@ pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
     ServiceAccountKey(String),
     ApplicationCredentials(PathBuf),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "gcs_bearer_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub struct GcsBearerCredential {
+    pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
+}
+
+impl From<GcsBearerCredential> for GcpCredential {
+    fn from(value: GcsBearerCredential) -> Self {
+        GcpCredential {
+            bearer: value.bearer,
+        }
+    }
 }
 
 #[async_trait]

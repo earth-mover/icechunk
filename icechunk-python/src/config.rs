@@ -11,7 +11,11 @@ use std::{
 
 use icechunk::{
     config::{
-        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm, CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials
+        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
+        CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
+        GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
+        ManifestPreloadCondition, ManifestPreloadConfig, S3Credentials,
+        S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -228,30 +232,31 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
     }
 }
 
-
 #[pyclass(name = "GcsBearerCredential")]
 #[derive(Clone, Debug)]
 pub struct PyGcsBearerCredential {
     pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
 }
 
 #[pymethods]
 impl PyGcsBearerCredential {
     #[new]
-    pub fn new(bearer: String) -> Self {
-        PyGcsBearerCredential { bearer }
+    #[pyo3(signature = (bearer, *, expires_after = None))]
+    pub fn new(bearer: String, expires_after: Option<DateTime<Utc>>) -> Self {
+        PyGcsBearerCredential { bearer, expires_after }
     }
 }
 
 impl From<PyGcsBearerCredential> for GcsBearerCredential {
     fn from(value: PyGcsBearerCredential) -> Self {
-        GcsBearerCredential { bearer: value.bearer }
+        GcsBearerCredential { bearer: value.bearer, expires_after: value.expires_after }
     }
 }
 
 impl From<GcsBearerCredential> for PyGcsBearerCredential {
     fn from(value: GcsBearerCredential) -> Self {
-        PyGcsBearerCredential { bearer: value.bearer }
+        PyGcsBearerCredential { bearer: value.bearer, expires_after: value.expires_after }
     }
 }
 
@@ -260,7 +265,7 @@ impl From<GcsBearerCredential> for PyGcsBearerCredential {
 pub enum PyGcsCredentials {
     FromEnv(),
     Static(PyGcsStaticCredentials),
-    Refreshable(Vec<u8>)
+    Refreshable(Vec<u8>),
 }
 
 impl From<PyGcsCredentials> for GcsCredentials {

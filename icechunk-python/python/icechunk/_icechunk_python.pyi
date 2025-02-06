@@ -496,8 +496,9 @@ AnyS3Credential = (
 
 class GcsBearerCredential:
     bearer: str
+    expires_after: datetime.datetime | None
 
-    def __init__(self, bearer: str) -> None: ...
+    def __init__(self, bearer: str, *, expires_after: datetime.datetime | None = None) -> None: ...
 
 class GcsStaticCredentials:
     class ServiceAccount:
