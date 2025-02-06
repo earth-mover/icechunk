@@ -115,8 +115,13 @@ class StorageConfig:
         else:
             raise NotImplementedError("I don't know what to do here.")
 
-    def get_coiled_backend(self) -> str:
-        BACKENDS = {"s3": "aws", "gcs": "gcp", "tigris": "aws"}
+    def get_coiled_workspace(self) -> str:
+        BACKENDS = {
+            "s3": "earthmover-devs",
+            "tigris": "earthmover-devs",
+            "gcs": "earthmover-devs-gcp",
+            "az": "earthmover-devs-azure",
+        }
         return BACKENDS[self.store]
 
 

@@ -186,7 +186,7 @@ def write(
         shutdown_on_close=False,
         n_workers=(4, 200),
         worker_cpu=2,
-        # backend=dataset.storage_config.get_coiled_backend(),
+        workspace=dataset.storage_config.get_coiled_workspace(),
         region=dataset.storage_config.region,
     ) as cluster:
         # https://docs.coiled.io/user_guide/clusters/environ.html
