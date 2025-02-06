@@ -1,4 +1,5 @@
 import datetime
+import logging
 import time
 import warnings
 from collections.abc import Callable
@@ -24,6 +25,20 @@ CONSTRUCTORS = {
 }
 
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+console_handler = logging.StreamHandler()
+logger.addHandler(console_handler)
+
+
+def tigris_credentials() -> tuple[str, str]:
+    import boto3
+
+    session = boto3.Session()
+    creds = session.get_credentials()
+    return {"access_key_id": creds.access_key, "secret_access_key": creds.secret_key}
+
+
 @dataclass
 class StorageConfig:
     """wrapper that allows us to config the prefix for a ref."""
@@ -43,8 +58,10 @@ class StorageConfig:
             kwargs["prefix"] = self.prefix
         if self.path is not None:
             kwargs["path"] = self.path
-        if self.region is not None and self.store != "gcs":
+        if self.region is not None and self.store not in ["gcs", "tigris"]:
             kwargs["region"] = self.region
+        if self.store == "tigris":
+            kwargs.update(tigris_credentials())
         return CONSTRUCTORS[self.store](**self.config, **kwargs)
 
     def with_extra(
@@ -72,17 +89,27 @@ class StorageConfig:
             config=self.config,
         )
 
-    def clear_uri(self) -> str:
-        """URI to clear when re-creating data from scratch."""
-        if self.store in ("s3", "tigtis"):
-            protocol = "s3://"
+    @property
+    def env_vars(self) -> dict[str, str]:
+        if self.store == "tigris":
+            # https://www.tigrisdata.com/docs/iam/#create-an-access-key
+            return {"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}
+        return {}
+
+    @property
+    def protocol(self) -> str:
+        if self.store in ("s3", "tigris"):
+            protocol = "s3"
         elif self.store == "gcs":
-            protocol = "gcs://"
+            protocol = "gcs"
         else:
             protocol = ""
+        return protocol
 
+    def clear_uri(self) -> str:
+        """URI to clear when re-creating data from scratch."""
         if self.bucket is not None:
-            return f"{protocol}{self.bucket}/{self.prefix}"
+            return f"{self.protocol}://{self.bucket}/{self.prefix}"
         elif self.path is not None:
             return self.path
         else:
@@ -115,15 +142,16 @@ class Dataset:
             clear_uri = self.storage_config.clear_uri()
             if clear_uri is None:
                 raise NotImplementedError
-            if self.storage_config.store == "tigris":
+            if self.storage_config.protocol not in ["s3", "gcs"]:
                 warnings.warn(
-                    f"Only clearing of GCS, S3 URIs supported at the moment. Received {clear_uri!r}",
+                    f"Only clearing of GCS, S3-compatible URIs supported at the moment. Received {clear_uri!r}",
                     RuntimeWarning,
                     stacklevel=2,
                 )
             else:
-                fs = fsspec.filesystem(self.storage_config.store)
+                fs = fsspec.filesystem(self.storage_config.protocol)
                 try:
+                    logger.info("Clearing prefix")
                     fs.rm(clear_uri, recursive=True)
                 except FileNotFoundError:
                     pass
