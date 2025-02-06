@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+pub use object_store::gcp::GcpCredential;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -365,8 +366,8 @@ pub struct S3StaticCredentials {
 }
 
 #[async_trait]
-#[typetag::serde(tag = "type")]
-pub trait CredentialsFetcher: fmt::Debug + Sync + Send {
+#[typetag::serde(tag = "s3_credentials_fetcher_type")]
+pub trait S3CredentialsFetcher: fmt::Debug + Sync + Send {
     async fn get(&self) -> Result<S3StaticCredentials, String>;
 }
 
@@ -378,7 +379,7 @@ pub enum S3Credentials {
     FromEnv,
     Anonymous,
     Static(S3StaticCredentials),
-    Refreshable(Arc<dyn CredentialsFetcher>),
+    Refreshable(Arc<dyn S3CredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -391,11 +392,33 @@ pub enum GcsStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "gcs_bearer_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub struct GcsBearerCredential {
+    pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
+}
+
+impl From<GcsBearerCredential> for GcpCredential {
+    fn from(value: GcsBearerCredential) -> Self {
+        GcpCredential { bearer: value.bearer }
+    }
+}
+
+#[async_trait]
+#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
+pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
+    async fn get(&self) -> Result<GcsBearerCredential, String>;
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(tag = "gcs_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsCredentials {
+    #[default]
     FromEnv,
     Static(GcsStaticCredentials),
+    Refreshable(Arc<dyn GcsCredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

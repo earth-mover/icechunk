@@ -1,4 +1,5 @@
 use crate::{
+    config::{GcsBearerCredential, GcsCredentialsFetcher},
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
@@ -10,9 +11,9 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use object_store::{
-    local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath, Attribute,
-    AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
-    PutPayload, UpdateVersion,
+    gcp::GcpCredential, local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath,
+    Attribute, AttributeValue, Attributes, CredentialProvider, GetOptions, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -26,7 +27,7 @@ use std::{
         Arc,
     },
 };
-use tokio::io::AsyncRead;
+use tokio::{io::AsyncRead, sync::Mutex};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
@@ -609,6 +610,50 @@ impl Storage for ObjectStorage {
                 .compat(),
         );
         Ok(res)
+    }
+}
+
+#[derive(Debug)]
+pub struct GcsRefreshableCredentialProvider {
+    last_credential: Arc<Mutex<Option<GcsBearerCredential>>>,
+    refresher: Arc<dyn GcsCredentialsFetcher>,
+}
+
+impl GcsRefreshableCredentialProvider {
+    pub fn new(refresher: Arc<dyn GcsCredentialsFetcher>) -> Self {
+        Self { last_credential: Arc::new(Mutex::new(None)), refresher }
+    }
+
+    pub async fn get_or_update_credentials(
+        &self,
+    ) -> Result<GcsBearerCredential, StorageError> {
+        let mut last_credential = self.last_credential.lock().await;
+
+        // If we have a credential and it hasn't expired, return it
+        if let Some(creds) = last_credential.as_ref() {
+            if let Some(expires_after) = creds.expires_after {
+                if expires_after > Utc::now() {
+                    return Ok(creds.clone());
+                }
+            }
+        }
+
+        // Otherwise, refresh the credential and cache it
+        let creds = self.refresher.get().await.map_err(StorageError::Other)?;
+        *last_credential = Some(creds.clone());
+        Ok(creds)
+    }
+}
+
+#[async_trait]
+impl CredentialProvider for GcsRefreshableCredentialProvider {
+    type Credential = GcpCredential;
+
+    async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
+        let creds = self.get_or_update_credentials().await.map_err(|e| {
+            object_store::Error::Generic { store: "gcp", source: Box::new(e) }
+        })?;
+        Ok(Arc::new(creds.into()))
     }
 }
 
