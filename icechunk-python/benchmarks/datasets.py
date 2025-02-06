@@ -1,9 +1,11 @@
 import datetime
+import logging
 import time
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Self
+from typing import Any, Literal, Self, TypeAlias
 
 import fsspec
 import numpy as np
@@ -14,15 +16,38 @@ import zarr
 
 rng = np.random.default_rng(seed=123)
 
+Store: TypeAlias = Literal["s3", "gcs", "az", "tigris"]
+
+CONSTRUCTORS = {
+    "s3": ic.s3_storage,
+    "gcs": ic.gcs_storage,
+    "tigris": ic.tigris_storage,
+}
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+console_handler = logging.StreamHandler()
+logger.addHandler(console_handler)
+
+
+def tigris_credentials() -> tuple[str, str]:
+    import boto3
+
+    session = boto3.Session()
+    creds = session.get_credentials()
+    return {"access_key_id": creds.access_key, "secret_access_key": creds.secret_key}
+
 
 @dataclass
 class StorageConfig:
     """wrapper that allows us to config the prefix for a ref."""
 
-    constructor: Callable
-    config: Any
+    store: str
+    config: dict[str, Any] = field(default_factory=dict)
     bucket: str | None = None
     prefix: str | None = None
+    region: str | None = None
     path: str | None = None
 
     def create(self) -> ic.Storage:
@@ -33,7 +58,11 @@ class StorageConfig:
             kwargs["prefix"] = self.prefix
         if self.path is not None:
             kwargs["path"] = self.path
-        return self.constructor(config=self.config, **kwargs)
+        if self.region is not None and self.store not in ["gcs", "tigris"]:
+            kwargs["region"] = self.region
+        if self.store == "tigris":
+            kwargs.update(tigris_credentials())
+        return CONSTRUCTORS[self.store](**self.config, **kwargs)
 
     def with_extra(
         self, *, prefix: str | None = None, force_idempotent: bool = False
@@ -52,26 +81,43 @@ class StorageConfig:
         else:
             new_path = None
         return type(self)(
-            constructor=self.constructor,
+            store=self.store,
             bucket=self.bucket,
             prefix=new_prefix,
             path=new_path,
+            region=self.region,
             config=self.config,
         )
 
-    def clear_uri(self) -> str:
-        """URI to clear when re-creating data from scratch."""
-        if self.constructor == ic.Storage.new_s3:
-            protocol = "s3://"
+    @property
+    def env_vars(self) -> dict[str, str]:
+        if self.store == "tigris":
+            # https://www.tigrisdata.com/docs/iam/#create-an-access-key
+            return {"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}
+        return {}
+
+    @property
+    def protocol(self) -> str:
+        if self.store in ("s3", "tigris"):
+            protocol = "s3"
+        elif self.store == "gcs":
+            protocol = "gcs"
         else:
             protocol = ""
+        return protocol
 
+    def clear_uri(self) -> str:
+        """URI to clear when re-creating data from scratch."""
         if self.bucket is not None:
-            return f"{protocol}{self.bucket}/{self.prefix}"
+            return f"{self.protocol}://{self.bucket}/{self.prefix}"
         elif self.path is not None:
             return self.path
         else:
             raise NotImplementedError("I don't know what to do here.")
+
+    def get_coiled_backend(self) -> str:
+        BACKENDS = {"s3": "aws", "gcs": "gcp", "tigris": "aws"}
+        return BACKENDS[self.store]
 
 
 @dataclass
@@ -81,17 +127,9 @@ class Dataset:
     """
 
     storage_config: StorageConfig
-    # data variable to load in `time_xarray_read_chunks`
-    load_variables: list[str]
-    # Passed to .isel for `time_xarray_read_chunks`
-    chunk_selector: dict[str, Any]
-    # name of (coordinate) variable used for testing "time to first byte"
-    first_byte_variable: str | None
     # core useful group path used to open an Xarray Dataset
     group: str | None = None
-    # function used to construct the dataset prior to read benchmarks
-    setupfn: Callable | None = None
-    _storage: ic.Storage | None = field(default=None, init=False)
+    _storage: ic.Storage | None = field(default=None, init=False, repr=False)
 
     @property
     def storage(self) -> ic.Storage:
@@ -99,25 +137,47 @@ class Dataset:
             self._storage = self.storage_config.create()
         return self._storage
 
-    def create(self) -> ic.Repository:
-        clear_uri = self.storage_config.clear_uri()
-        if clear_uri is None:
-            raise NotImplementedError
-        if not clear_uri.startswith("s3://"):
-            raise NotImplementedError(
-                f"Only S3 URIs supported at the moment. Received {clear_uri}"
-            )
-        fs = fsspec.filesystem("s3")
-        try:
-            fs.rm(f"{clear_uri}", recursive=True)
-        except FileNotFoundError:
-            pass
+    def create(self, clear: bool = False) -> ic.Repository:
+        if clear:
+            clear_uri = self.storage_config.clear_uri()
+            if clear_uri is None:
+                raise NotImplementedError
+            if self.storage_config.protocol not in ["s3", "gcs"]:
+                warnings.warn(
+                    f"Only clearing of GCS, S3-compatible URIs supported at the moment. Received {clear_uri!r}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            else:
+                fs = fsspec.filesystem(self.storage_config.protocol)
+                try:
+                    logger.info("Clearing prefix")
+                    fs.rm(clear_uri, recursive=True)
+                except FileNotFoundError:
+                    pass
         return ic.Repository.create(self.storage)
 
     @property
     def store(self) -> ic.IcechunkStore:
         repo = ic.Repository.open(self.storage)
         return repo.readonly_session(branch="main").store
+
+
+@dataclass(kw_only=True)
+class BenchmarkDataset(Dataset):
+    # data variable to load in `time_xarray_read_chunks`
+    load_variables: list[str]
+    # Passed to .isel for `time_xarray_read_chunks`
+    chunk_selector: dict[str, Any]
+    # name of (coordinate) variable used for testing "time to first byte"
+    first_byte_variable: str | None
+    # function used to construct the dataset prior to read benchmarks
+    setupfn: Callable | None = None
+
+    def create(self, clear: bool = True):
+        if clear is not True:
+            raise ValueError("clear *must* be true for benchmark datasets.")
+        super().create(clear=True)
 
     def setup(self, force: bool = False) -> None:
         """
@@ -194,13 +254,11 @@ def setup_era5_single(dataset: Dataset):
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
 
-# TODO: passing Storage directly is nice, but doesn't let us add an extra prefix.
-ERA5 = Dataset(
+ERA5 = BenchmarkDataset(
     storage_config=StorageConfig(
-        constructor=ic.Storage.new_s3,
+        store="s3",
         bucket="icechunk-test",
         prefix="era5-weatherbench",
-        config=ic.S3Options(),
     ),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
@@ -210,12 +268,25 @@ ERA5 = Dataset(
     # by mistake
 )
 
-ERA5_SINGLE = Dataset(
+ERA5_LARGE = BenchmarkDataset(
     storage_config=StorageConfig(
-        constructor=ic.Storage.new_s3,
+        store="s3",
+        bucket="icechunk-public-data",
+        prefix="era5-weatherbench2",
+    ),
+    load_variables=["2m_temperature"],
+    chunk_selector={"time": 1},
+    first_byte_variable="latitude",
+    group="1x721x1440",
+    # don't set setupfn here so we don't run a really expensive job
+    # by mistake
+)
+
+ERA5_SINGLE = BenchmarkDataset(
+    storage_config=StorageConfig(
+        store="s3",
         bucket="icechunk-test",
         prefix="perf-era5-single",
-        config=ic.S3Options(),
     ),
     load_variables=["PV"],
     chunk_selector={"time": 1},
@@ -223,12 +294,11 @@ ERA5_SINGLE = Dataset(
     setupfn=setup_era5_single,
 )
 
-GB_128MB_CHUNKS = Dataset(
+GB_128MB_CHUNKS = BenchmarkDataset(
     storage_config=StorageConfig(
-        constructor=ic.Storage.new_s3,
+        store="s3",
         bucket="icechunk-test",
         prefix="gb-128mb-chunks",
-        config=ic.S3Options(),
     ),
     load_variables=["array"],
     chunk_selector={},
@@ -236,12 +306,11 @@ GB_128MB_CHUNKS = Dataset(
     setupfn=partial(setup_synthetic_gb_dataset, chunk_shape=(64, 512, 512)),
 )
 
-GB_8MB_CHUNKS = Dataset(
+GB_8MB_CHUNKS = BenchmarkDataset(
     storage_config=StorageConfig(
-        constructor=ic.Storage.new_s3,
+        store="s3",
         bucket="icechunk-test",
         prefix="gb-8mb-chunks",
-        config=ic.S3Options(),
     ),
     load_variables=["array"],
     chunk_selector={},
@@ -250,12 +319,12 @@ GB_8MB_CHUNKS = Dataset(
 )
 
 # TODO
-GPM_IMERG_VIRTUAL = Dataset(
+GPM_IMERG_VIRTUAL = BenchmarkDataset(
     storage_config=StorageConfig(
-        constructor=ic.Storage.new_s3,
+        store="s3",
         bucket="earthmover-icechunk-us-west-2",
         prefix="nasa-impact/GPM_3IMERGHH.07-virtual-1998",
-        config=ic.S3Options(),
+        region="us-west-2",
         # access_key_id=access_key_id,
         # secret_access_key=secret,
         # session_token=session_token,
