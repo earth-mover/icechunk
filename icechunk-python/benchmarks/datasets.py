@@ -162,6 +162,23 @@ class Dataset:
         repo = ic.Repository.open(self.storage)
         return repo.readonly_session(branch="main").store
 
+
+@dataclass(kw_only=True)
+class BenchmarkDataset(Dataset):
+    # data variable to load in `time_xarray_read_chunks`
+    load_variables: list[str]
+    # Passed to .isel for `time_xarray_read_chunks`
+    chunk_selector: dict[str, Any]
+    # name of (coordinate) variable used for testing "time to first byte"
+    first_byte_variable: str | None
+    # function used to construct the dataset prior to read benchmarks
+    setupfn: Callable | None = None
+
+    def create(self, clear: bool = True):
+        if clear is not True:
+            raise ValueError("clear *must* be true for benchmark datasets.")
+        super().create(clear=True)
+
     def setup(self, force: bool = False) -> None:
         """
         force: if True, recreate from scratch. If False, try opening the store,
@@ -181,23 +198,6 @@ class Dataset:
             print("Read of existing store failed. Re-creating")
             print(e)
             self.setupfn(self)
-
-
-@dataclass(kw_only=True)
-class BenchmarkDataset(Dataset):
-    # data variable to load in `time_xarray_read_chunks`
-    load_variables: list[str]
-    # Passed to .isel for `time_xarray_read_chunks`
-    chunk_selector: dict[str, Any]
-    # name of (coordinate) variable used for testing "time to first byte"
-    first_byte_variable: str | None
-    # function used to construct the dataset prior to read benchmarks
-    setupfn: Callable | None = None
-
-    def create(self, clear: bool = True):
-        if clear is not True:
-            raise ValueError("clear *must* be true for benchmark datasets.")
-        super().create(clear=True)
 
 
 def setup_synthetic_gb_dataset(
@@ -254,7 +254,6 @@ def setup_era5_single(dataset: Dataset):
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
 
-# TODO: passing Storage directly is nice, but doesn't let us add an extra prefix.
 ERA5 = BenchmarkDataset(
     storage_config=StorageConfig(
         store="s3",
