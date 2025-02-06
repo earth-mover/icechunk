@@ -3,10 +3,12 @@
 #   1. just create-deepak-env v0.1.0a12
 #   2. conda activate icechunk-v0.1.0a12
 #   3. python benchmarks/create-era5.py
+
 import argparse
 import datetime
 import logging
 import math
+import random
 import warnings
 from dataclasses import dataclass
 from enum import StrEnum, auto
@@ -14,12 +16,15 @@ from typing import Any
 
 import helpers
 import humanize
+import pandas as pd
 from datasets import Dataset, StorageConfig
 from packaging.version import Version
 
+import dask
 import icechunk as ic
 import xarray as xr
 import zarr
+from dask.diagnostics import ProgressBar
 from icechunk.xarray import to_icechunk
 
 logger = logging.getLogger("icechunk-bench")
@@ -52,11 +57,11 @@ class IngestDataset:
     engine: str | None = None
     read_chunks: dict[str, int] | None = None
 
-    def open_dataset(self, **kwargs: Any) -> xr.Dataset:
+    def open_dataset(self, chunks=None, **kwargs: Any) -> xr.Dataset:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             return xr.open_dataset(
-                self.uri, chunks=self.read_chunks, engine=self.engine, **kwargs
+                self.uri, chunks=chunks or self.read_chunks, engine=self.engine, **kwargs
             ).drop_encoding()
 
     def make_dataset(self, *, store: str) -> Dataset:
@@ -77,12 +82,41 @@ ERA5 = IngestDataset(
 
 
 class Mode(StrEnum):
-    CREATE = auto()
     APPEND = auto()
+    CREATE = auto()
     OVERWRITE = auto()
+    VERIFY = auto()
 
 
-# @coiled.function
+def verify(dataset: Dataset, *, ingest: IngestDataset, seed: int | None = None):
+    random.seed(seed)
+
+    format = ICECHUNK_FORMAT
+    prefix = f"{format}/"
+    dataset.storage_config = dataset.storage_config.with_extra(prefix=prefix)
+    repo = ic.Repository.open(dataset.storage)
+    session = repo.readonly_session(branch="main")
+    instore = xr.open_dataset(
+        session.store, group=dataset.group, engine="zarr", chunks=None, consolidated=False
+    )
+    time = pd.Timestamp(random.choice(instore.time.data.tolist()))
+    logger.info(f"Verifying {ingest.name} for {seed=!r}, {time=!r}")
+    actual = instore.sel(time=time)
+
+    ds = ingest.open_dataset(chunks=None)
+    expected = ds[list(instore.data_vars)].sel(time=time)
+
+    # I add global attrs, don't compare those
+    expected.attrs.clear()
+    actual.attrs.clear()
+
+    with ProgressBar():
+        actual, expected = dask.compute(actual, expected)
+        # assert (expected == actual).all().to_array().all()
+    xr.testing.assert_identical(expected, actual)
+    logger.info("Successfully verified!")
+
+
 def write(
     dataset: Dataset,
     *,
@@ -266,7 +300,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("store", help="object store to write to")
-    parser.add_argument("--mode", help="'create'/'overwrite'/'append'", default="append")
+    parser.add_argument(
+        "--mode", help="'create'/'overwrite'/'append'/'verify'", default="append"
+    )
     parser.add_argument(
         "--nyears", help="number of years to write (from start)", default=None, type=int
     )
@@ -275,6 +311,7 @@ if __name__ == "__main__":
         "--append", action="store_true", help="append or create?", default=False
     )
     parser.add_argument("--arrays", help="arrays to write", nargs="+", default=[])
+    parser.add_argument("--seed", help="random seed for verify", default=None, type=int)
 
     args = parser.parse_args()
     if args.mode == "create":
@@ -283,24 +320,29 @@ if __name__ == "__main__":
         mode = Mode.APPEND
     elif args.mode == "overwrite":
         mode = Mode.OVERWRITE
+    elif args.mode == "verify":
+        mode = Mode.VERIFY
     else:
         raise ValueError(
-            f"mode must be one of ['create', 'overwrite', 'append']. Received {args.mode=!r}"
+            f"mode must be one of ['create', 'overwrite', 'append', 'verify']. Received {args.mode=!r}"
         )
-    # setup_for_benchmarks(ERA5_TIGRIS, ref=get_version(), arrays_to_write=args.arrays)
+
     ingest = ERA5
     logger.info(ingest)
     logger.info(args)
     dataset = ingest.make_dataset(store=args.store)
     ds = ingest.open_dataset()
-    setup_dataset(
-        dataset,
-        ingest=ingest,
-        nyears=args.nyears,
-        mode=mode,
-        arrays_to_write=args.arrays or ingest.arrays,
-        dry_run=args.dry_run,
-    )
+    if mode is Mode.VERIFY:
+        verify(dataset, ingest=ingest, seed=args.seed)
+    else:
+        setup_dataset(
+            dataset,
+            ingest=ingest,
+            nyears=args.nyears,
+            mode=mode,
+            arrays_to_write=args.arrays or ingest.arrays,
+            dry_run=args.dry_run,
+        )
 
 
 # always same prefix; different constructor, bucket name
