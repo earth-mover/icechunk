@@ -8,11 +8,13 @@ import datetime
 import logging
 import math
 import warnings
+from dataclasses import dataclass
 from enum import StrEnum, auto
+from typing import Any
 
 import helpers
 import humanize
-from datasets import Dataset, StorageConfig, Store
+from datasets import Dataset, StorageConfig
 from packaging.version import Version
 
 import icechunk as ic
@@ -27,6 +29,7 @@ logger.addHandler(console_handler)
 
 PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ICECHUNK_FORMAT = "v01"  # FIXME: get this from icechunk python
+ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 # Note: this region is really a "compute" region, so `us-east-1` for AWS/Tigris
 BUCKETS = {
@@ -38,27 +41,59 @@ BUCKETS = {
 }
 
 
+@dataclass(kw_only=True)
+class IngestDataset:
+    name: str
+    uri: str
+    group: str
+    prefix: str
+    write_chunks: dict[str, int]
+    arrays: list[str]
+    engine: str | None = None
+    read_chunks: dict[str, int] | None = None
+
+    def open_dataset(self, **kwargs: Any) -> xr.Dataset:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            return xr.open_dataset(
+                self.uri, chunks=self.read_chunks, engine=self.engine, **kwargs
+            ).drop_encoding()
+
+    def make_dataset(self, *, store: str) -> Dataset:
+        storage_config = StorageConfig(prefix=self.prefix, **BUCKETS[store])
+        return Dataset(storage_config=storage_config, group=self.group)
+
+
+ERA5 = IngestDataset(
+    name="ERA5",
+    prefix="era5_weatherbench2",
+    uri="gs://weatherbench2/datasets/era5/1959-2023_01_10-full_37-1h-0p25deg-chunk-1.zarr",
+    engine="zarr",
+    read_chunks={"time": 24 * 3, "level": 1},
+    write_chunks={"time": 1, "level": 1, "latitude": 721, "longitude": 1440},
+    group="1x721x1440",
+    arrays=["2m_temperature", "10m_u_component_of_wind", "10m_v_component_of_wind"],
+)
+
+
 class Mode(StrEnum):
     CREATE = auto()
     APPEND = auto()
-
-
-def make_dataset(*, store: Store, prefix: str, group: str | None = None) -> Dataset:
-    storage_config = StorageConfig(prefix=prefix, **BUCKETS[store])
-    return Dataset(storage_config=storage_config, group=group)
+    OVERWRITE = auto()
 
 
 # @coiled.function
-def write_era5(
+def write(
     dataset: Dataset,
     *,
+    ingest: IngestDataset,
+    mode: Mode,
     nyears: int | None = None,
-    arrays_to_write: list[str],
+    arrays_to_write: list[str] | None = None,
     extra_attrs: dict[str, str] | None = None,
-    initialize: bool = True,
     initialize_all_vars: bool = False,
     dry_run: bool = False,
-):
+) -> None:
     """
     dataset: Dataset t write
     arrays_to_write: list[str],
@@ -75,26 +110,27 @@ def write_era5(
     import distributed
 
     SELECTOR = {"time": slice(nyears * 365 * 24) if nyears is not None else slice(None)}
-    chunk_shape = {"time": 1, "level": 1, "latitude": 721, "longitude": 1440}
-    ic_kwargs = dict(group=dataset.group)
-    zarr_kwargs = dict(**ic_kwargs, zarr_format=3, consolidated=False)
+    if mode in [Mode.CREATE, Mode.OVERWRITE]:
+        write_mode = "w"
+    elif mode is Mode.APPEND:
+        write_mode = "a"
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=UserWarning)
-        ds = xr.open_zarr(
-            "gs://weatherbench2/datasets/era5/1959-2023_01_10-full_37-1h-0p25deg-chunk-1.zarr",
-            chunks={"time": 24 * 3, "level": 1},
-        ).drop_encoding()
-    for v in ds:
-        ds[v].encoding["chunks"] = tuple(chunk_shape[dim] for dim in ds[v].dims)
+    ic_kwargs = dict(group=dataset.group, mode=write_mode)
 
-    towrite = ds[arrays_to_write].isel(SELECTOR)
-    towrite.attrs["written_arrays"] = " ".join(towrite.data_vars)
+    ds = ingest.open_dataset()
+    if arrays_to_write is not None:
+        towrite = ds[arrays_to_write].isel(SELECTOR)
+    else:
+        towrite = ds.isel(SELECTOR)
     towrite.attrs["selector"] = str(SELECTOR)
     towrite.attrs.update(extra_attrs or {})
+    for v in towrite:
+        towrite[v].encoding["chunks"] = tuple(
+            ingest.write_chunks[dim] for dim in ds[v].dims
+        )
 
     nchunks = tuple(
-        math.prod((var.sizes[dim] // chunk_shape[dim] + 1) for dim in var.dims)
+        math.prod((var.sizes[dim] // ingest.write_chunks[dim] + 1) for dim in var.dims)
         for _, var in towrite.data_vars.items()
     )
     logger.info(
@@ -109,16 +145,7 @@ def write_era5(
         print("Dry run. Exiting")
         return
 
-    if initialize:
-        logger.info("Initializing dataset.")
-        session = repo.writable_session("main")
-        init_dataset = ds if initialize_all_vars else towrite
-        init_dataset.to_zarr(session.store, compute=False, mode="w-", **zarr_kwargs)
-        session.commit("initialized dataset")
-        logger.info("Finished initializing dataset.")
-
     # FIXME: use name
-    #   # name=f"earthmover/{ref}",
     session = repo.writable_session("main")
     with coiled.Cluster(
         name="deepak-era5",
@@ -130,31 +157,64 @@ def write_era5(
     ) as cluster:
         # https://docs.coiled.io/user_guide/clusters/environ.html
         cluster.send_private_envs(dataset.storage_config.env_vars)
-        client = distributed.Client(cluster)
+        client = distributed.Client(cluster)  # type: ignore[no-untyped-call]
         print(client)
-        with distributed.performance_report(
-            f"reports/era5-ingest-{dataset.storage_config.store}-{ICECHUNK_FORMAT}-{datetime.datetime.now()}.html"
+        with distributed.performance_report(  # type: ignore[no-untyped-call]
+            f"reports/{ingest.name}-ingest-{dataset.storage_config.store}-{ICECHUNK_FORMAT}-{datetime.datetime.now()}.html"
         ):
-            logger.info(f"Started writing {arrays_to_write=}.")
+            logger.info(f"Started writing {tuple(towrite.data_vars)}.")
             with zarr.config.set({"async.concurrency": 24}):
-                to_icechunk(
-                    towrite, session=session, region="auto", **ic_kwargs, split_every=32
-                )
+                to_icechunk(towrite, session=session, **ic_kwargs, split_every=32)
     session.commit("ingest!")
-    logger.info(f"Finished writing {arrays_to_write=}.")
+    logger.info(f"Finished writing {tuple(towrite.data_vars)}.")
 
 
 def setup_for_benchmarks(
-    dataset: Dataset, *, ref: str, arrays_to_write: list[str]
+    dataset: Dataset,
+    *,
+    ingest: IngestDataset,
+    mode: Mode,
+    ref: str,
+    arrays_to_write: list[str],
 ) -> None:
+    """
+    FIXME: set the right bucket.
+    For benchmarks, we
+    1. add a specific prefix.
+    2. always write the metadata for the WHOLE dataset
+    3. then append a small subset of data for a few arrays
+    """
+    ref = helpers.get_version()
+
     commit = helpers.get_commit(ref)
-    logger.info(f"Writing ERA5 for {ref=}, {commit=}, {arrays_to_write=}")
+    logger.info(
+        f"Benchmarks: Writing {ingest.name} for {ref=}, {commit=}, {arrays_to_write=}"
+    )
     prefix = f"benchmarks/{ref}_{commit}/"
     dataset.storage_config = dataset.storage_config.with_extra(prefix=prefix)
     dataset.create()
-    attrs = {"icechunk_commit": helpers.get_commit(ref), "icechunk_ref": ref}
-    write_era5(
+    attrs = {
+        "icechunk_commit": helpers.get_commit(ref),
+        "icechunk_ref": ref,
+        "written_arrays": " ".join(arrays_to_write),
+    }
+
+    repo = ic.Repository.open(dataset.storage)
+    ds = ingest.open_dataset()
+
+    if mode is Mode.CREATE:
+        logger.info("Initializing dataset for benchmarks..")
+        session = repo.writable_session("main")
+        ds.to_zarr(
+            session.store, compute=False, mode="w-", group=dataset.group, **ZARR_KWARGS
+        )
+        session.commit("initialized dataset")
+        logger.info("Finished initializing dataset.")
+
+    write(
         dataset,
+        ingest=ingest,
+        mode=Mode.APPEND,
         extra_attrs=attrs,
         arrays_to_write=arrays_to_write,
         initialize_all_vars=False,
@@ -162,14 +222,19 @@ def setup_for_benchmarks(
 
 
 def setup_dataset(
-    dataset: Dataset, *, mode: Mode, dry_run: bool = False, **kwargs
+    dataset: Dataset,
+    *,
+    ingest: IngestDataset,
+    mode: Mode,
+    dry_run: bool = False,
+    **kwargs: Any,
 ) -> None:
     # commit = helpers.get_commit(ref)
     format = ICECHUNK_FORMAT
-    logger.info(f"Writing ERA5 for {format}, {kwargs=}")
+    logger.info(f"Writing {ingest.name} for {format}, {kwargs=}")
     prefix = f"{format}/"
     dataset.storage_config = dataset.storage_config.with_extra(prefix=prefix)
-    if mode == mode.CREATE:
+    if mode is Mode.CREATE:
         logger.info("Creating new repository")
         repo = dataset.create(clear=True)
         logger.info("Initializing root group")
@@ -178,9 +243,10 @@ def setup_dataset(
         session.commit("initialized root group")
         logger.info("Initialized root group")
 
-    write_era5(
+    write(
         dataset,
-        initialize=mode == mode.CREATE,
+        ingest=ingest,
+        mode=mode,
         initialize_all_vars=False,
         dry_run=dry_run,
         **kwargs,
@@ -200,7 +266,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("store", help="object store to write to")
-    parser.add_argument("--mode", help="'create' or 'append'", default="append")
+    parser.add_argument("--mode", help="'create'/'overwrite'/'append'", default="append")
     parser.add_argument(
         "--nyears", help="number of years to write (from start)", default=None, type=int
     )
@@ -208,35 +274,31 @@ if __name__ == "__main__":
     parser.add_argument(
         "--append", action="store_true", help="append or create?", default=False
     )
-    parser.add_argument(
-        "--arrays",
-        help="arrays to write",
-        nargs="+",
-        default=[
-            "2m_temperature",
-            "10m_u_component_of_wind",
-            "10m_v_component_of_wind",
-        ],
-    )
+    parser.add_argument("--arrays", help="arrays to write", nargs="+", default=[])
 
     args = parser.parse_args()
     if args.mode == "create":
         mode = Mode.CREATE
     elif args.mode == "append":
         mode = Mode.APPEND
+    elif args.mode == "overwrite":
+        mode = Mode.OVERWRITE
     else:
-        raise ValueError(f"mode must be one of ['create', 'append']. Received {mode=!r}")
+        raise ValueError(
+            f"mode must be one of ['create', 'overwrite', 'append']. Received {args.mode=!r}"
+        )
     # setup_for_benchmarks(ERA5_TIGRIS, ref=get_version(), arrays_to_write=args.arrays)
-    dataset = make_dataset(
-        store=args.store, prefix="era5_weatherbench2", group="1x721x1440"
-    )
-    logger.info(dataset)
+    ingest = ERA5
+    logger.info(ingest)
     logger.info(args)
+    dataset = ingest.make_dataset(store=args.store)
+    ds = ingest.open_dataset()
     setup_dataset(
         dataset,
+        ingest=ingest,
         nyears=args.nyears,
         mode=mode,
-        arrays_to_write=args.arrays,
+        arrays_to_write=args.arrays or ingest.arrays,
         dry_run=args.dry_run,
     )
 
