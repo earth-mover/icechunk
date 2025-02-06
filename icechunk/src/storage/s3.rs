@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    config::{CredentialsFetcher, S3Credentials, S3Options},
+    config::{S3CredentialsFetcher, S3Credentials, S3Options},
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private, Storage, StorageError,
 };
@@ -679,7 +679,7 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
 }
 
 #[derive(Debug)]
-struct ProvideRefreshableCredentials(Arc<dyn CredentialsFetcher>);
+struct ProvideRefreshableCredentials(Arc<dyn S3CredentialsFetcher>);
 
 impl ProvideCredentials for ProvideRefreshableCredentials {
     fn provide_credentials<'a>(

@@ -494,6 +494,11 @@ AnyS3Credential = (
     | S3Credentials.Refreshable
 )
 
+class GcsBearerCredential:
+    bearer: str
+
+    def __init__(self, bearer: str) -> None: ...
+
 class GcsStaticCredentials:
     class ServiceAccount:
         def __init__(self, path: str) -> None: ...
@@ -517,7 +522,14 @@ class GcsCredentials:
     class Static:
         def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
 
-AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
+    class Refreshable:
+        def __init__(self, pickled_function: bytes) -> None: ...
+
+AnyGcsCredential = (
+    GcsCredentials.FromEnv
+    | GcsCredentials.Static
+    | GcsCredentials.Refreshable
+)
 
 class AzureStaticCredentials:
     class AccessKey:

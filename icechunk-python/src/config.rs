@@ -11,10 +11,7 @@ use std::{
 
 use icechunk::{
     config::{
-        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
-        CompressionConfig, Credentials, CredentialsFetcher, GcsCredentials,
-        GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition,
-        ManifestPreloadConfig, S3Credentials, S3Options, S3StaticCredentials,
+        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm, CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -155,13 +152,28 @@ impl PythonCredentialsFetcher {
 }
 #[async_trait]
 #[typetag::serde]
-impl CredentialsFetcher for PythonCredentialsFetcher {
+impl S3CredentialsFetcher for PythonCredentialsFetcher {
     async fn get(&self) -> Result<S3StaticCredentials, String> {
         Python::with_gil(|py| {
             let pickle_module = PyModule::import(py, "pickle")?;
             let loads_function = pickle_module.getattr("loads")?;
             let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
             let creds: PyS3StaticCredentials = fetcher.call0()?.extract()?;
+            Ok(creds.into())
+        })
+        .map_err(|e: PyErr| e.to_string())
+    }
+}
+
+#[async_trait]
+#[typetag::serde]
+impl GcsCredentialsFetcher for PythonCredentialsFetcher {
+    async fn get(&self) -> Result<GcsBearerCredential, String> {
+        Python::with_gil(|py| {
+            let pickle_module = PyModule::import(py, "pickle")?;
+            let loads_function = pickle_module.getattr("loads")?;
+            let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
+            let creds: PyGcsBearerCredential = fetcher.call0()?.extract()?;
             Ok(creds.into())
         })
         .map_err(|e: PyErr| e.to_string())
@@ -216,11 +228,39 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
     }
 }
 
+
+#[pyclass(name = "GcsBearerCredential")]
+#[derive(Clone, Debug)]
+pub struct PyGcsBearerCredential {
+    pub bearer: String,
+}
+
+#[pymethods]
+impl PyGcsBearerCredential {
+    #[new]
+    pub fn new(bearer: String) -> Self {
+        PyGcsBearerCredential { bearer }
+    }
+}
+
+impl From<PyGcsBearerCredential> for GcsBearerCredential {
+    fn from(value: PyGcsBearerCredential) -> Self {
+        GcsBearerCredential { bearer: value.bearer }
+    }
+}
+
+impl From<GcsBearerCredential> for PyGcsBearerCredential {
+    fn from(value: GcsBearerCredential) -> Self {
+        PyGcsBearerCredential { bearer: value.bearer }
+    }
+}
+
 #[pyclass(name = "GcsCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyGcsCredentials {
     FromEnv(),
     Static(PyGcsStaticCredentials),
+    Refreshable(Vec<u8>)
 }
 
 impl From<PyGcsCredentials> for GcsCredentials {
@@ -228,6 +268,11 @@ impl From<PyGcsCredentials> for GcsCredentials {
         match value {
             PyGcsCredentials::FromEnv() => GcsCredentials::FromEnv,
             PyGcsCredentials::Static(creds) => GcsCredentials::Static(creds.into()),
+            PyGcsCredentials::Refreshable(pickled_function) => {
+                GcsCredentials::Refreshable(Arc::new(PythonCredentialsFetcher {
+                    pickled_function,
+                }))
+            }
         }
     }
 }

@@ -661,6 +661,9 @@ pub fn new_gcs_storage(
                 })?,
             ));
         }
+        Some(GcsCredentials::Refreshable(_)) => {
+            todo!();
+        }
         None | Some(GcsCredentials::FromEnv) => {
             let builder = GoogleCloudStorageBuilder::from_env();
 

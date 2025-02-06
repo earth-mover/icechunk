@@ -6,6 +6,7 @@ from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
     Credentials,
+    GcsBearerCredential,
     GcsCredentials,
     GcsStaticCredentials,
     S3Credentials,
@@ -25,7 +26,11 @@ AnyGcsStaticCredential = (
     | GcsStaticCredentials.ApplicationCredentials
 )
 
-AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
+AnyGcsCredential = (
+    GcsCredentials.FromEnv
+    | GcsCredentials.Static
+    | GcsCredentials.Refreshable
+)
 
 AnyAzureStaticCredential = (
     AzureStaticCredentials.AccessKey
@@ -189,6 +194,13 @@ def gcs_static_credentials(
     raise ValueError("Conflicting arguments to gcs_static_credentials function")
 
 
+def gcs_refreshable_credentials(
+    get_credentials: Callable[[], GcsBearerCredential],
+) -> GcsCredentials.Refreshable:
+    """Create refreshable credentials for Google Cloud Storage object store."""
+    return GcsCredentials.Refreshable(pickle.dumps(get_credentials))
+
+
 def gcs_from_env_credentials() -> GcsCredentials.FromEnv:
     """Instruct Google Cloud Storage object store to fetch credentials from the operative system environment."""
     return GcsCredentials.FromEnv()
@@ -200,6 +212,7 @@ def gcs_credentials(
     service_account_key: str | None = None,
     application_credentials: str | None = None,
     from_env: bool | None = None,
+    get_credentials: Callable[[], GcsBearerCredential] | None = None,
 ) -> AnyGcsCredential:
     """Create credentials Google Cloud Storage object store.
 
@@ -224,6 +237,9 @@ def gcs_credentials(
                 application_credentials=application_credentials,
             )
         )
+
+    if get_credentials is not None:
+        return gcs_refreshable_credentials(get_credentials)
 
     raise ValueError("Conflicting arguments to gcs_credentials function")
 
