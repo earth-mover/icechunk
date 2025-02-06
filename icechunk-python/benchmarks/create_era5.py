@@ -30,8 +30,10 @@ ICECHUNK_FORMAT = "v01"  # FIXME: get this from icechunk python
 # Note: this region is really a "compute" region, so `us-east-1` for AWS/Tigris
 BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
-    "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET, region="us-east1"),
-    "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
+    "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
+    "tigris": dict(
+        store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="us-east-1"
+    ),
 }
 
 
@@ -85,8 +87,6 @@ def write_era5(
     towrite.attrs["selector"] = str(SELECTOR)
     towrite.attrs.update(extra_attrs or {})
 
-    repo = ic.Repository.open(dataset.storage)
-
     nchunks = tuple(
         math.prod((var.sizes[dim] // chunk_shape[dim] + 1) for dim in var.dims)
         for _, var in towrite.data_vars.items()
@@ -97,6 +97,8 @@ def write_era5(
         f"per array: {[humanize.intcomma(i) for i in nchunks]}"
     )
 
+    repo = ic.Repository.open(dataset.storage)
+
     if dry_run:
         print("Dry run. Exiting")
         return
@@ -105,19 +107,23 @@ def write_era5(
         logger.info("Initializing dataset.")
         session = repo.writable_session("main")
         init_dataset = ds if initialize_all_vars else towrite
-        init_dataset.to_zarr(session.store, compute=False, **zarr_kwargs)
+        init_dataset.to_zarr(session.store, compute=False, mode="w-", **zarr_kwargs)
         session.commit("initialized dataset")
         logger.info("Finished initializing dataset.")
 
-    session = repo.writable_session("main")
     # FIXME: use name
     #   # name=f"earthmover/{ref}",
+    session = repo.writable_session("main")
     with coiled.Cluster(
+        name="deepak-era5",
+        shutdown_on_close=False,
         n_workers=(4, 200),
         worker_cpu=2,
         # backend=dataset.storage_config.get_coiled_backend(),
         region=dataset.storage_config.region,
     ) as cluster:
+        # https://docs.coiled.io/user_guide/clusters/environ.html
+        cluster.send_private_envs(dataset.storage_config.env_vars)
         client = distributed.Client(cluster)
         print(client)
         with distributed.performance_report(
@@ -157,8 +163,15 @@ def setup_dataset(
     logger.info(f"Writing ERA5 for {format}, {kwargs=}")
     prefix = f"{format}/"
     dataset.storage_config = dataset.storage_config.with_extra(prefix=prefix)
-    if create and not dry_run:
-        dataset.create(clear=True)
+    if create:
+        logger.info("Creating new repository")
+        repo = dataset.create(clear=True)
+        logger.info("Initializing root group")
+        session = repo.writable_session("main")
+        zarr.open_group(session.store, mode="w-")
+        session.commit("initialized root group")
+        logger.info("Initialized root group")
+
     write_era5(dataset, initialize_all_vars=False, dry_run=dry_run, **kwargs)
 
 
@@ -176,11 +189,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("store", help="object store to write to")
     parser.add_argument(
-        "--create",
-        help="whether to create the store",
-        action="store_true",
-        default=False,
+        "--create", help="whether to create the store", action="store_true", default=False
     )
+    parser.add_argument(
+        "--nyears", help="number of years to write (from start)", default=None, type=int
+    )
+    parser.add_argument("--dry-run", action="store_true", help="dry run/?", default=False)
     parser.add_argument(
         "--arrays",
         help="arrays to write",
@@ -191,16 +205,14 @@ if __name__ == "__main__":
             "10m_v_component_of_wind",
         ],
     )
-    parser.add_argument(
-        "--nyears", help="number of years to write (from start)", default=None, type=int
-    )
-    parser.add_argument("--dry-run", action="store_true", help="dry run/?", default=False)
+
     args = parser.parse_args()
     # setup_for_benchmarks(ERA5_TIGRIS, ref=get_version(), arrays_to_write=args.arrays)
     dataset = make_dataset(
         store=args.store, prefix="era5_weatherbench2", group="1x721x1440"
     )
-    print(dataset)
+    logger.info(dataset)
+    logger.info(args)
     setup_dataset(
         dataset,
         nyears=args.nyears,
