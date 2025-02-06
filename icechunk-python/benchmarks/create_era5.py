@@ -8,6 +8,7 @@ import datetime
 import logging
 import math
 import warnings
+from enum import StrEnum, auto
 
 import helpers
 import humanize
@@ -35,6 +36,11 @@ BUCKETS = {
         store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="us-east-1"
     ),
 }
+
+
+class Mode(StrEnum):
+    CREATE = auto()
+    APPEND = auto()
 
 
 def make_dataset(*, store: Store, prefix: str, group: str | None = None) -> Dataset:
@@ -156,14 +162,14 @@ def setup_for_benchmarks(
 
 
 def setup_dataset(
-    dataset: Dataset, *, create: bool = False, dry_run: bool = False, **kwargs
+    dataset: Dataset, *, mode: Mode, dry_run: bool = False, **kwargs
 ) -> None:
     # commit = helpers.get_commit(ref)
     format = ICECHUNK_FORMAT
     logger.info(f"Writing ERA5 for {format}, {kwargs=}")
     prefix = f"{format}/"
     dataset.storage_config = dataset.storage_config.with_extra(prefix=prefix)
-    if create:
+    if mode == mode.CREATE:
         logger.info("Creating new repository")
         repo = dataset.create(clear=True)
         logger.info("Initializing root group")
@@ -172,7 +178,13 @@ def setup_dataset(
         session.commit("initialized root group")
         logger.info("Initialized root group")
 
-    write_era5(dataset, initialize_all_vars=False, dry_run=dry_run, **kwargs)
+    write_era5(
+        dataset,
+        initialize=mode == mode.CREATE,
+        initialize_all_vars=False,
+        dry_run=dry_run,
+        **kwargs,
+    )
 
 
 def get_version() -> str:
@@ -188,13 +200,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("store", help="object store to write to")
-    parser.add_argument(
-        "--create", help="whether to create the store", action="store_true", default=False
-    )
+    parser.add_argument("--mode", help="'create' or 'append'", default="append")
     parser.add_argument(
         "--nyears", help="number of years to write (from start)", default=None, type=int
     )
     parser.add_argument("--dry-run", action="store_true", help="dry run/?", default=False)
+    parser.add_argument(
+        "--append", action="store_true", help="append or create?", default=False
+    )
     parser.add_argument(
         "--arrays",
         help="arrays to write",
@@ -207,6 +220,12 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.mode == "create":
+        mode = Mode.CREATE
+    elif args.mode == "append":
+        mode = Mode.APPEND
+    else:
+        raise ValueError(f"mode must be one of ['create', 'append']. Received {mode=!r}")
     # setup_for_benchmarks(ERA5_TIGRIS, ref=get_version(), arrays_to_write=args.arrays)
     dataset = make_dataset(
         store=args.store, prefix="era5_weatherbench2", group="1x721x1440"
@@ -216,7 +235,7 @@ if __name__ == "__main__":
     setup_dataset(
         dataset,
         nyears=args.nyears,
-        create=args.create,
+        mode=mode,
         arrays_to_write=args.arrays,
         dry_run=args.dry_run,
     )
