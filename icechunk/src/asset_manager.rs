@@ -9,7 +9,7 @@ use std::{
     ops::Range,
     sync::Arc,
 };
-use tracing::{instrument, Span};
+use tracing::{debug, instrument, trace, Span};
 
 use crate::{
     config::CachingConfig,
@@ -262,6 +262,7 @@ impl AssetManager {
         chunk_id: ChunkId,
         bytes: Bytes,
     ) -> RepositoryResult<()> {
+        trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         Ok(self.storage.write_chunk(&self.storage_settings, chunk_id, bytes).await?)
     }
@@ -276,7 +277,7 @@ impl AssetManager {
         match self.chunk_cache.get_value_or_guard_async(&key).await {
             Ok(chunk) => Ok(chunk),
             Err(guard) => {
-                // TODO: split and parallelize downloads
+                trace!(%chunk_id, ?range, "Downloading chunk");
                 let chunk = self
                     .storage
                     .fetch_chunk(&self.storage_settings, chunk_id, range)
@@ -310,9 +311,13 @@ impl AssetManager {
     #[instrument(skip(self))]
     pub async fn get_snapshot_last_modified(
         &self,
-        snap: &SnapshotId,
+        snapshot_id: &SnapshotId,
     ) -> RepositoryResult<DateTime<Utc>> {
-        Ok(self.storage.get_snapshot_last_modified(&self.storage_settings, snap).await?)
+        debug!(%snapshot_id, "Getting snapshot timestamp");
+        Ok(self
+            .storage
+            .get_snapshot_last_modified(&self.storage_settings, snapshot_id)
+            .await?)
     }
 }
 
@@ -444,6 +449,7 @@ async fn write_new_manifest(
     .await??;
 
     let len = buffer.len() as u64;
+    debug!(%id, size_bytes=len, "Writing manifest");
     storage.write_manifest(storage_settings, id.clone(), metadata, buffer.into()).await?;
     Ok(len)
 }
@@ -454,6 +460,8 @@ async fn fetch_manifest(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Manifest>> {
+    debug!(%manifest_id, "Downloading manifest");
+
     let reader = if manifest_size > 0 {
         storage
             .fetch_manifest_known_size(storage_settings, manifest_id, manifest_size)
@@ -535,6 +543,7 @@ async fn write_new_snapshot(
     })
     .await??;
 
+    debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     storage.write_snapshot(storage_settings, id.clone(), metadata, buffer.into()).await?;
 
     Ok(id)
@@ -545,6 +554,7 @@ async fn fetch_snapshot(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Snapshot>> {
+    debug!(%snapshot_id, "Downloading snapshot");
     let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
 
     let span = Span::current();
@@ -605,6 +615,7 @@ async fn write_new_tx_log(
     })
     .await??;
 
+    debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     storage
         .write_transaction_log(storage_settings, transaction_id, metadata, buffer.into())
         .await?;
@@ -617,6 +628,7 @@ async fn fetch_transaction_log(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<TransactionLog>> {
+    debug!(%transaction_id, "Downloading transaction log");
     let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
 
     let span = Span::current();
