@@ -824,6 +824,31 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_manifest_preload_default_condition() {
+        let condition =
+            RepositoryConfig::default().manifest().preload().preload_if().clone();
+        // no name match
+        assert!(!condition.matches(
+            &"/array".try_into().unwrap(),
+            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+        ));
+        // partial match only
+        assert!(!condition.matches(
+            &"/nottime".try_into().unwrap(),
+            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+        ));
+        // too large to match
+        assert!(!condition.matches(
+            &"/time".try_into().unwrap(),
+            &ManifestFileInfo {
+                id: ManifestId::random(),
+                size_bytes: 1,
+                num_rows: 1_000_000
+            }
+        ));
+    }
+
     #[tokio::test]
     /// Writes four arrays to a repo arrays, checks preloading of the manifests
     ///
