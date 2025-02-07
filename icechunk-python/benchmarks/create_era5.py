@@ -37,6 +37,14 @@ ICECHUNK_FORMAT = "v01"  # FIXME: get this from icechunk python
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 # Note: this region is really a "compute" region, so `us-east-1` for AWS/Tigris
+DEBUG_BUCKETS = {
+    "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
+    "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
+    "tigris": dict(
+        store="tigris", bucket="icechunk-test" + "-tigris", region="us-east-1"
+    ),
+}
+
 BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
     "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
@@ -64,8 +72,9 @@ class IngestDataset:
                 self.uri, chunks=chunks or self.read_chunks, engine=self.engine, **kwargs
             ).drop_encoding()
 
-    def make_dataset(self, *, store: str) -> Dataset:
-        storage_config = StorageConfig(prefix=self.prefix, **BUCKETS[store])
+    def make_dataset(self, *, store: str, debug: bool) -> Dataset:
+        buckets = BUCKETS if not debug else DEBUG_BUCKETS
+        storage_config = StorageConfig(prefix=self.prefix, **buckets[store])
         return Dataset(storage_config=storage_config, group=self.group)
 
 
@@ -312,6 +321,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--arrays", help="arrays to write", nargs="+", default=[])
     parser.add_argument("--seed", help="random seed for verify", default=None, type=int)
+    parser.add_argument(
+        "--debug", help="random seed for verify", default=False, action="store_true"
+    )
 
     args = parser.parse_args()
     if args.mode == "create":
@@ -330,7 +342,7 @@ if __name__ == "__main__":
     ingest = ERA5
     logger.info(ingest)
     logger.info(args)
-    dataset = ingest.make_dataset(store=args.store)
+    dataset = ingest.make_dataset(store=args.store, debug=args.debug)
     ds = ingest.open_dataset()
     if mode is Mode.VERIFY:
         verify(dataset, ingest=ingest, seed=args.seed)
