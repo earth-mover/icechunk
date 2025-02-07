@@ -1,5 +1,7 @@
 use crate::{
-    config::{GcsBearerCredential, GcsCredentialsFetcher},
+    config::{
+        GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+    },
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
@@ -11,17 +13,21 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use object_store::{
-    gcp::GcpCredential, local::LocalFileSystem, parse_url_opts, path::Path as ObjectPath,
+    gcp::{GcpCredential, GoogleCloudStorageBuilder},
+    local::LocalFileSystem,
+    parse_url_opts,
+    path::Path as ObjectPath,
     Attribute, AttributeValue, Attributes, CredentialProvider, GetOptions, ObjectMeta,
     ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs::create_dir_all,
     future::ready,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
-    path::Path as StdPath,
+    path::{Path as StdPath, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -75,7 +81,65 @@ impl ObjectStorage {
             prefix.into_os_string().into_string().map_err(StorageError::BadPrefix)?;
         let url = format!("file://{prefix}");
         let config = ObjectStorageConfig { url, prefix, options: vec![] };
+
         Self::from_config(config)
+    }
+
+    pub fn new_gcs(
+        bucket: String,
+        prefix: Option<String>,
+        credentials: Option<GcsCredentials>,
+        config: Option<HashMap<String, String>>,
+    ) -> Result<ObjectStorage, StorageError> {
+        let url = format!(
+            "gs://{}{}",
+            bucket,
+            prefix.as_ref().map(|p| format!("/{}", p)).unwrap_or("".to_string())
+        );
+        let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
+
+        let builder = GoogleCloudStorageBuilder::new();
+
+        let builder =match credentials {
+            Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
+                let path = path.into_os_string().into_string().map_err(|e| {
+                    StorageError::Other("invalid service account path".to_string())
+                })?;
+                builder.with_service_account_path(path)
+            }
+            Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(
+                key,
+            ))) => {
+                builder.with_service_account_key(key)
+            }
+            Some(GcsCredentials::Static(
+                GcsStaticCredentials::ApplicationCredentials(path),
+            )) => {
+                let path = path.into_os_string().into_string().map_err(|e| {
+                    StorageError::Other(
+                        "invalid application credentials path".to_string(),
+                    )
+                })?;
+                builder.with_application_credentials(path)
+            }
+            Some(GcsCredentials::Refreshable(_)) => {
+                todo!()
+            }
+            None | Some(GcsCredentials::FromEnv) => {
+                GoogleCloudStorageBuilder::from_env()
+            }
+        };
+
+
+        let store = builder.build()?;
+        Ok(ObjectStorage {
+            store: Arc::new(store),
+            config: ObjectStorageConfig {   
+                url,
+                prefix: prefix.unwrap_or("".to_string()),
+                options,
+            },
+        })
     }
 
     /// Create an ObjectStore client from a URL and provided options
@@ -610,6 +674,40 @@ impl Storage for ObjectStorage {
                 .compat(),
         );
         Ok(res)
+    }
+}
+
+#[async_trait]
+#[typetag::serde(tag = "object_store_provider_type")]
+pub trait ObjectStoreProvider: Sync + Send {
+    async fn mk_object_store(&self) -> Result<ObjectStorage, StorageError>;
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+
+pub struct InMemoryObjectStoreProvider;
+
+#[async_trait]
+#[typetag::serde(name = "in_memory_object_store_provider")]
+impl ObjectStoreProvider for InMemoryObjectStoreProvider {
+    async fn mk_object_store(&self) -> Result<ObjectStorage, StorageError> {
+        ObjectStorage::new_in_memory().map_err(|e| e.into())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalFileSystemObjectStoreProvider {
+    path: PathBuf,
+}
+
+#[async_trait]
+#[typetag::serde(name = "local_file_system_object_store_provider")]
+impl ObjectStoreProvider for LocalFileSystemObjectStoreProvider {
+    async fn mk_object_store(&self) -> Result<ObjectStorage, StorageError> {
+        _ = create_dir_all(&self.path).map_err(|e| StorageError::Other(e.to_string()));
+        
+        let path = std::fs::canonicalize(&self.path).map_err(|e| StorageError::Other(e.to_string()))?;
+        ObjectStorage::new_local_filesystem(StdPath::new(&path)).map_err(|e| e.into())
     }
 }
 
