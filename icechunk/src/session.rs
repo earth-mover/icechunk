@@ -16,7 +16,7 @@ use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{instrument, Instrument};
+use tracing::{debug, info, instrument, trace, warn, Instrument};
 
 use crate::{
     asset_manager::AssetManager,
@@ -890,6 +890,7 @@ impl Session {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
 
+        debug!("Rebase started");
         let ref_data = fetch_branch_tip(
             self.storage.as_ref(),
             self.storage_settings.as_ref(),
@@ -899,11 +900,14 @@ impl Session {
 
         if ref_data.snapshot == self.snapshot_id {
             // nothing to do, commit should work without rebasing
+            warn!(
+                branch = &self.branch_name,
+                "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
+            );
             Ok(())
         } else {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
-            // FIXME: this should be the whole ancestry not local
             let ancestry = Arc::clone(&self.asset_manager)
                 .snapshot_ancestry(current_snapshot.id())
                 .await?
@@ -915,6 +919,7 @@ impl Session {
                     }))
                     .try_collect::<Vec<_>>()
                     .await?;
+            trace!("Found {} commits to rebase", new_commits.len());
 
             // TODO: this clone is expensive
             // we currently need it to be able to process commits one by one without modifying the
@@ -923,6 +928,7 @@ impl Session {
 
             // we need to reverse the iterator to process them in order of oldest first
             for snap_id in new_commits.into_iter().rev() {
+                debug!("Rebasing snapshot {}", &snap_id);
                 let tx_log = self.asset_manager.fetch_transaction_log(&snap_id).await?;
 
                 let session = Self::create_readonly_session(
@@ -938,10 +944,12 @@ impl Session {
                 // TODO: this should probably execute in a worker thread
                 match solver.solve(&tx_log, &session, change_set, self).await? {
                     ConflictResolution::Patched(patched_changeset) => {
+                        trace!("Snapshot rebased");
                         self.change_set = patched_changeset;
                         self.snapshot_id = snap_id;
                     }
                     ConflictResolution::Unsolvable { reason, unmodified } => {
+                        warn!("Snapshot cannot be rebased. Aborting rebase.");
                         self.change_set = unmodified;
                         return Err(SessionErrorKind::RebaseFailed {
                             snapshot: snap_id,
@@ -951,7 +959,7 @@ impl Session {
                     }
                 }
             }
-
+            debug!("Rebase done");
             Ok(())
         }
     }
@@ -1427,16 +1435,20 @@ async fn flush(
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
     for node in old_snapshot.iter().filter(|node| node.node_type() == NodeType::Array) {
+        trace!(path=%node.path, "Flushing node");
         let node_id = &node.id;
 
         if flush_data.change_set.array_is_deleted(&(node.path.clone(), node_id.clone())) {
+            trace!(path=%node.path, "Node deleted, not writing a manifest");
             continue;
         }
 
         if flush_data.change_set.has_chunk_changes(node_id) {
+            trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
             flush_data.write_manifest_for_existing_node(node).await?;
         } else {
+            trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
             // FIXME: deal with the case of metadata shrinking an existing array, we should clear
             // extra chunks that no longer fit in the array
@@ -1447,9 +1459,11 @@ async fn flush(
     // Now we need to go through all the new arrays, and generate manifests for them
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
+        trace!(path=%node_path, "New node, writing a manifest");
         flush_data.write_manifest_for_new_node(node_id, node_path).await?;
     }
 
+    trace!("Building new snapshot");
     let all_nodes = updated_nodes(
         flush_data.asset_manager.as_ref(),
         flush_data.change_set,
@@ -1482,6 +1496,11 @@ async fn flush(
     );
 
     if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+        tracing::error!(
+            new_timestamp = %new_snapshot.flushed_at(),
+            old_timestamp = %old_snapshot.flushed_at(),
+            "Snapshot timestamp older than parent, aborting commit"
+        );
         return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
             parent: *old_snapshot.flushed_at(),
             child: *new_snapshot.flushed_at(),
@@ -1500,6 +1519,7 @@ async fn flush(
         .in_current_span(),
     );
 
+    trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     // FIXME: this should execute in a non-blocking context
     let tx_log = TransactionLog::new(
         flush_data.change_set,
@@ -1521,6 +1541,11 @@ async fn flush(
     // Fail if there is too much clock difference with the object store
     // This is to prevent issues with snapshot ordering and expiration
     if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+        tracing::error!(
+            snapshot_timestamp = %new_snapshot.flushed_at(),
+            object_store_timestamp = %snapshot_timestamp,
+            "Snapshot timestamp drifted from object store clock, aborting commit"
+        );
         return Err(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
             snapshot_time: *new_snapshot.flushed_at(),
@@ -1543,11 +1568,13 @@ async fn do_commit(
     message: &str,
     properties: Option<SnapshotProperties>,
 ) -> SessionResult<SnapshotId> {
+    info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
+    debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
     let id = match update_branch(
         storage,
         storage_settings,
@@ -1558,7 +1585,7 @@ async fn do_commit(
     )
     .await
     {
-        Ok(_) => Ok(new_snapshot),
+        Ok(_) => Ok(new_snapshot.clone()),
         Err(RefError {
             kind: RefErrorKind::Conflict { expected_parent, actual_parent },
             ..
@@ -1569,6 +1596,7 @@ async fn do_commit(
         Err(err) => Err(err.into()),
     }?;
 
+    info!(branch_name, old_snapshot_id=%snapshot_id, new_snapshot_id=%new_snapshot, "Commit done");
     Ok(id)
 }
 async fn fetch_manifest(
