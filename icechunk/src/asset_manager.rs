@@ -9,6 +9,7 @@ use std::{
     ops::Range,
     sync::Arc,
 };
+use tracing::{instrument, Span};
 
 use crate::{
     config::CachingConfig,
@@ -21,10 +22,10 @@ use crate::{
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
-        ChunkId, ChunkOffset, IcechunkFormatError, ManifestId, SnapshotId,
+        ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId, SnapshotId,
     },
     private,
-    repository::{RepositoryError, RepositoryResult},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, Reader},
     Storage,
 };
@@ -137,6 +138,7 @@ impl AssetManager {
         )
     }
 
+    #[instrument(skip(self, manifest))]
     pub async fn write_manifest(&self, manifest: Arc<Manifest>) -> RepositoryResult<u64> {
         let manifest_c = Arc::clone(&manifest);
         let res = write_new_manifest(
@@ -150,6 +152,7 @@ impl AssetManager {
         Ok(res)
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_manifest(
         &self,
         manifest_id: &ManifestId,
@@ -171,6 +174,7 @@ impl AssetManager {
         }
     }
 
+    #[instrument(skip(self,))]
     pub async fn fetch_manifest_unknown_size(
         &self,
         manifest_id: &ManifestId,
@@ -178,6 +182,7 @@ impl AssetManager {
         self.fetch_manifest(manifest_id, 0).await
     }
 
+    #[instrument(skip(self, snapshot))]
     pub async fn write_snapshot(&self, snapshot: Arc<Snapshot>) -> RepositoryResult<()> {
         let snapshot_c = Arc::clone(&snapshot);
         write_new_snapshot(
@@ -192,6 +197,7 @@ impl AssetManager {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_snapshot(
         &self,
         snapshot_id: &SnapshotId,
@@ -211,6 +217,7 @@ impl AssetManager {
         }
     }
 
+    #[instrument(skip(self, log))]
     pub async fn write_transaction_log(
         &self,
         transaction_id: SnapshotId,
@@ -229,6 +236,7 @@ impl AssetManager {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_transaction_log(
         &self,
         transaction_id: &SnapshotId,
@@ -248,6 +256,7 @@ impl AssetManager {
         }
     }
 
+    #[instrument(skip(self, bytes))]
     pub async fn write_chunk(
         &self,
         chunk_id: ChunkId,
@@ -257,6 +266,7 @@ impl AssetManager {
         Ok(self.storage.write_chunk(&self.storage_settings, chunk_id, bytes).await?)
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_chunk(
         &self,
         chunk_id: &ChunkId,
@@ -279,6 +289,7 @@ impl AssetManager {
 
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
+    #[instrument(skip(self))]
     pub async fn snapshot_ancestry(
         self: Arc<Self>,
         snapshot_id: &SnapshotId,
@@ -296,6 +307,7 @@ impl AssetManager {
         Ok(stream)
     }
 
+    #[instrument(skip(self))]
     pub async fn get_snapshot_last_modified(
         &self,
         snap: &SnapshotId,
@@ -333,9 +345,10 @@ fn check_header(
     read.read_exact(&mut buf)?;
     // Magic numbers
     if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
-        return Err(RepositoryError::FormatError(
-            IcechunkFormatError::InvalidMagicNumbers,
-        ));
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidMagicNumbers,
+        )
+        .into());
     }
 
     let mut buf = [0; 24];
@@ -346,7 +359,7 @@ fn check_header(
     read.read_exact(std::slice::from_mut(&mut spec_version))?;
 
     let spec_version = spec_version.try_into().map_err(|_| {
-        RepositoryError::FormatError(IcechunkFormatError::InvalidSpecVersion)
+        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion)
     })?;
 
     let mut actual_file_type_int = 0;
@@ -354,24 +367,29 @@ fn check_header(
 
     let actual_file_type: FileTypeBin =
         actual_file_type_int.try_into().map_err(|_| {
-            RepositoryError::FormatError(IcechunkFormatError::InvalidFileType {
+            RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidFileType {
                 expected: file_type,
                 got: actual_file_type_int,
             })
         })?;
 
     if actual_file_type != file_type {
-        return Err(RepositoryError::FormatError(IcechunkFormatError::InvalidFileType {
-            expected: file_type,
-            got: actual_file_type_int,
-        }));
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidFileType {
+                expected: file_type,
+                got: actual_file_type_int,
+            },
+        )
+        .into());
     }
 
     let mut compression = 0;
     read.read_exact(std::slice::from_mut(&mut compression))?;
 
     let compression = compression.try_into().map_err(|_| {
-        RepositoryError::FormatError(IcechunkFormatError::InvalidCompressionAlgorithm)
+        RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
+        )
     })?;
 
     Ok((spec_version, compression))
@@ -401,9 +419,12 @@ async fn write_new_manifest(
     ];
 
     let id = new_manifest.id.clone();
+
+    let span = Span::current();
     // TODO: we should compress only when the manifest reaches a certain size
     // but then, we would need to include metadata to know if it's compressed or not
     let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let buffer = binary_file_header(
             SpecVersionBin::current(),
             FileTypeBin::Manifest,
@@ -418,7 +439,7 @@ async fn write_new_manifest(
             &mut compressor,
         )?;
 
-        compressor.finish().map_err(RepositoryError::IOError)
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
 
@@ -443,11 +464,14 @@ async fn fetch_manifest(
         )
     };
 
+    let span = Span::current();
     tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let (spec_version, decompressor) =
             check_and_get_decompressor(reader, FileTypeBin::Manifest)?;
-        deserialize_manifest(spec_version, decompressor)
-            .map_err(RepositoryError::DeserializationError)
+        deserialize_manifest(spec_version, decompressor).map_err(|err| {
+            RepositoryError::from(RepositoryErrorKind::DeserializationError(err))
+        })
     })
     .await?
     .map(Arc::new)
@@ -490,7 +514,9 @@ async fn write_new_snapshot(
     ];
 
     let id = new_snapshot.id().clone();
+    let span = Span::current();
     let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let buffer = binary_file_header(
             SpecVersionBin::current(),
             FileTypeBin::Snapshot,
@@ -505,7 +531,7 @@ async fn write_new_snapshot(
             &mut compressor,
         )?;
 
-        compressor.finish().map_err(RepositoryError::IOError)
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
 
@@ -521,13 +547,16 @@ async fn fetch_snapshot(
 ) -> RepositoryResult<Arc<Snapshot>> {
     let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
 
+    let span = Span::current();
     tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let (spec_version, decompressor) = check_and_get_decompressor(
             Reader::Asynchronous(read),
             FileTypeBin::Snapshot,
         )?;
-        deserialize_snapshot(spec_version, decompressor)
-            .map_err(RepositoryError::DeserializationError)
+        deserialize_snapshot(spec_version, decompressor).map_err(|err| {
+            RepositoryError::from(RepositoryErrorKind::DeserializationError(err))
+        })
     })
     .await?
     .map(Arc::new)
@@ -557,7 +586,9 @@ async fn write_new_tx_log(
         ),
     ];
 
+    let span = Span::current();
     let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let buffer = binary_file_header(
             SpecVersionBin::current(),
             FileTypeBin::TransactionLog,
@@ -570,7 +601,7 @@ async fn write_new_tx_log(
             SpecVersionBin::current(),
             &mut compressor,
         )?;
-        compressor.finish().map_err(RepositoryError::IOError)
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
 
@@ -588,13 +619,16 @@ async fn fetch_transaction_log(
 ) -> RepositoryResult<Arc<TransactionLog>> {
     let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
 
+    let span = Span::current();
     tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let (spec_version, decompressor) = check_and_get_decompressor(
             Reader::Asynchronous(read),
             FileTypeBin::TransactionLog,
         )?;
-        deserialize_transaction_log(spec_version, decompressor)
-            .map_err(RepositoryError::DeserializationError)
+        deserialize_transaction_log(spec_version, decompressor).map_err(|err| {
+            RepositoryError::from(RepositoryErrorKind::DeserializationError(err))
+        })
     })
     .await?
     .map(Arc::new)

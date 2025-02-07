@@ -2,7 +2,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use test_strategy::Arbitrary;
 
-use crate::format::IcechunkFormatError;
+use crate::format::{IcechunkFormatError, IcechunkFormatErrorKind};
 
 use super::DataType;
 
@@ -163,10 +163,11 @@ impl FillValue {
                     (FillValue::Float32(r), FillValue::Float32(i)) => {
                         Ok(FillValue::Complex64(r, i))
                     }
-                    _ => Err(IcechunkFormatError::FillValueParse {
+                    _ => Err(IcechunkFormatErrorKind::FillValueParse {
                         data_type: dt.clone(),
                         value: value.clone(),
-                    }),
+                    }
+                    .into()),
                 }
             }
             (DataType::Complex128, serde_json::Value::Array(arr)) if arr.len() == 2 => {
@@ -176,10 +177,11 @@ impl FillValue {
                     (FillValue::Float64(r), FillValue::Float64(i)) => {
                         Ok(FillValue::Complex128(r, i))
                     }
-                    _ => Err(IcechunkFormatError::FillValueParse {
+                    _ => Err(IcechunkFormatErrorKind::FillValueParse {
                         data_type: dt.clone(),
                         value: value.clone(),
-                    }),
+                    }
+                    .into()),
                 }
             }
 
@@ -196,20 +198,22 @@ impl FillValue {
                     bytes
                         .iter()
                         .map(|b| match b {
-                            FillValue::UInt8(n) => Ok(*n),
-                            _ => Err(IcechunkFormatError::FillValueParse {
+                            FillValue::UInt8(n) => Ok::<_, IcechunkFormatError>(*n),
+                            _ => Err(IcechunkFormatErrorKind::FillValueParse {
                                 data_type: dt.clone(),
                                 value: value.clone(),
-                            }),
+                            }
+                            .into()),
                         })
                         .try_collect()?,
                 ))
             }
 
-            _ => Err(IcechunkFormatError::FillValueParse {
+            _ => Err(IcechunkFormatErrorKind::FillValueParse {
                 data_type: dt.clone(),
                 value: value.clone(),
-            }),
+            }
+            .into()),
         }
     }
 

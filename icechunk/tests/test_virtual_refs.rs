@@ -7,18 +7,18 @@ mod tests {
         format::{
             manifest::{
                 Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
-                VirtualChunkRef, VirtualReferenceError,
+                VirtualChunkRef, VirtualReferenceErrorKind,
             },
             snapshot::ZarrArrayMetadata,
             ByteRange, ChunkId, ChunkIndices, Path,
         },
         metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::VersionInfo,
-        session::{get_chunk, SessionError},
+        session::{get_chunk, SessionErrorKind},
         storage::{
             self, new_s3_storage, s3::mk_client, ConcurrencySettings, ObjectStorage,
         },
-        store::StoreError,
+        store::{StoreError, StoreErrorKind},
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     };
@@ -427,12 +427,14 @@ mod tests {
         let repo = repo.reopen(Some(config), None)?;
         assert_eq!(
             repo.config()
-                .storage()
+                .storage
                 .as_ref()
                 .unwrap()
-                .concurrency()
-                .ideal_concurrent_request_size(),
-            1.try_into()?
+                .concurrency
+                .as_ref()
+                .unwrap()
+                .ideal_concurrent_request_size,
+            Some(1.try_into()?)
         );
         let session = repo
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -526,7 +528,7 @@ mod tests {
         };
         assert!(matches!(
                 store.set_virtual_ref("array/c/0/0/0", bad_ref, true).await,
-                Err(StoreError::InvalidVirtualChunkContainer { chunk_location }) if chunk_location == bad_location.0));
+                Err(StoreError{kind: StoreErrorKind::InvalidVirtualChunkContainer { chunk_location },..}) if chunk_location == bad_location.0));
         Ok(())
     }
 
@@ -772,9 +774,9 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/0/0", &ByteRange::ALL).await,
-            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
-                VirtualReferenceError::ObjectModified(location)
-            ))) if location == "s3://testbucket/path/to/chunk-3"
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            )),..}) if location == "s3://testbucket/path/to/chunk-3"
         ));
 
         // these are the local file chunks
@@ -786,9 +788,9 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/0/1", &ByteRange::ALL).await,
-            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
-                VirtualReferenceError::ObjectModified(location)
-            ))) if location.contains("chunk-3")
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            )),..}) if location.contains("chunk-3")
         ));
 
         // these are the public bucket chunks
@@ -804,9 +806,9 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/1/2", &ByteRange::ALL).await,
-            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
-                VirtualReferenceError::ObjectModified(location)
-            ))) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            )),..}) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
         ));
 
         let session = store.session();

@@ -8,7 +8,7 @@ use icechunk::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
         ChunkLength, ChunkOffset,
     },
-    store::StoreError,
+    store::{StoreError, StoreErrorKind},
     Store,
 };
 use pyo3::{
@@ -151,7 +151,9 @@ impl PyStore {
             // from other types of errors, we use PyKeyError exception for that
             match data {
                 Ok(data) => Ok(Vec::from(data)),
-                Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
+                Err(StoreError { kind: StoreErrorKind::NotFound(_), .. }) => {
+                    Err(PyKeyError::new_err(key))
+                }
                 Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
             }
         })

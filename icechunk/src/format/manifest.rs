@@ -11,11 +11,11 @@ use thiserror::Error;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::storage::ETag;
+use crate::{error::ICError, storage::ETag};
 
 use super::{
-    ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkFormatError, IcechunkResult,
-    ManifestId, NodeId,
+    ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkFormatErrorKind,
+    IcechunkResult, ManifestId, NodeId,
 };
 
 type ManifestExtents = Range<ChunkIndices>;
@@ -28,10 +28,10 @@ pub struct ManifestRef {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum VirtualReferenceError {
+pub enum VirtualReferenceErrorKind {
     #[error("no virtual chunk container can handle the chunk location ({0})")]
     NoContainerForUrl(String),
-    #[error("error parsing virtual ref URL {0}")]
+    #[error("error parsing virtual ref URL")]
     CannotParseUrl(#[from] url::ParseError),
     #[error("invalid credentials for virtual reference of type {0}")]
     InvalidCredentials(String),
@@ -41,14 +41,27 @@ pub enum VirtualReferenceError {
     UnsupportedScheme(String),
     #[error("error parsing bucket name from virtual ref URL {0}")]
     CannotParseBucketName(String),
-    #[error("error fetching virtual reference {0}")]
-    FetchError(Box<dyn std::error::Error + Send + Sync>),
+    #[error("error fetching virtual reference")]
+    FetchError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
     ObjectModified(String),
     #[error("error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})")]
     InvalidObjectSize { expected: u64, available: u64 },
-    #[error("error parsing virtual reference {0}")]
+    #[error("error parsing virtual reference")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+pub type VirtualReferenceError = ICError<VirtualReferenceErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for VirtualReferenceError
+where
+    E: Into<VirtualReferenceErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -64,7 +77,7 @@ impl VirtualChunkLocation {
         let scheme = url.scheme();
         let new_path: String = url
             .path_segments()
-            .ok_or(VirtualReferenceError::NoPathSegments(path.into()))?
+            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?
             // strip empty segments here, object_store cannot handle them.
             .filter(|x| !x.is_empty())
             .join("/");
@@ -74,7 +87,9 @@ impl VirtualChunkLocation {
         } else if scheme == "file" {
             "".to_string()
         } else {
-            return Err(VirtualReferenceError::CannotParseBucketName(path.into()));
+            return Err(
+                VirtualReferenceErrorKind::CannotParseBucketName(path.into()).into()
+            );
         };
 
         let location = format!("{}://{}/{}", scheme, host, new_path,);
@@ -141,7 +156,8 @@ impl Manifest {
         coord: &ChunkIndices,
     ) -> IcechunkResult<&ChunkPayload> {
         self.chunks.get(node).and_then(|m| m.get(coord)).ok_or_else(|| {
-            IcechunkFormatError::ChunkCoordinatesNotFound { coords: coord.clone() }
+            IcechunkFormatErrorKind::ChunkCoordinatesNotFound { coords: coord.clone() }
+                .into()
         })
     }
 
@@ -257,12 +273,18 @@ mod tests {
         // errors relative chunk location
         assert!(matches!(
             VirtualChunkLocation::from_absolute_path("abcdef"),
-            Err(VirtualReferenceError::CannotParseUrl(_)),
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::CannotParseUrl(_),
+                ..
+            }),
         ));
         // extra / prevents bucket name detection
         assert!(matches!(
             VirtualChunkLocation::from_absolute_path("s3:///foo/path"),
-            Err(VirtualReferenceError::CannotParseBucketName(_)),
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::CannotParseBucketName(_),
+                ..
+            }),
         ));
     }
 

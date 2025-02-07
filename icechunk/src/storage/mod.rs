@@ -53,13 +53,14 @@ use crate::{
         AzureCredentials, AzureStaticCredentials, GcsCredentials, GcsStaticCredentials,
         S3Credentials, S3Options,
     },
+    error::ICError,
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
 };
 
 #[derive(Debug, Error)]
-pub enum StorageError {
-    #[error("error contacting object store {0}")]
+pub enum StorageErrorKind {
+    #[error("object store error {0}")]
     ObjectStore(#[from] ::object_store::Error),
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
@@ -79,6 +80,19 @@ pub enum StorageError {
     IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]
     Other(String),
+}
+
+pub type StorageError = ICError<StorageErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for StorageError
+where
+    E: Into<StorageErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
 }
 
 pub type StorageResult<A> = Result<A, StorageError>;
@@ -170,7 +184,9 @@ impl Reader {
             Reader::Asynchronous(mut read) => {
                 // add some extra space to the buffer to optimize conversion to bytes
                 let mut buffer = Vec::with_capacity(expected_size + 16);
-                tokio::io::copy(&mut read, &mut buffer).await?;
+                tokio::io::copy(&mut read, &mut buffer)
+                    .await
+                    .map_err(StorageErrorKind::IOError)?;
                 Ok(buffer.into())
             }
             Reader::Synchronous(mut buf) => Ok(buf.copy_to_bytes(buf.remaining())),
@@ -642,7 +658,7 @@ pub fn new_gcs_storage(
             options.push((
                 GoogleConfigKey::ServiceAccount.as_ref().to_string(),
                 path.into_os_string().into_string().map_err(|_| {
-                    StorageError::Other("invalid service account path".to_string())
+                    StorageErrorKind::Other("invalid service account path".to_string())
                 })?,
             ));
         }
@@ -655,7 +671,7 @@ pub fn new_gcs_storage(
             options.push((
                 GoogleConfigKey::ApplicationCredentials.as_ref().to_string(),
                 path.into_os_string().into_string().map_err(|_| {
-                    StorageError::Other(
+                    StorageErrorKind::Other(
                         "invalid application credentials path".to_string(),
                     )
                 })?,
