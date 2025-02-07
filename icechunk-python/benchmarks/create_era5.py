@@ -340,9 +340,10 @@ if __name__ == "__main__":
         )
 
     ingest = ERA5
-    logger.info(ingest)
-    logger.info(args)
     dataset = ingest.make_dataset(store=args.store, debug=args.debug)
+    logger.info(ingest)
+    logger.info(dataset)
+    logger.info(args)
     ds = ingest.open_dataset()
     if mode is Mode.VERIFY:
         verify(dataset, ingest=ingest, seed=args.seed)
