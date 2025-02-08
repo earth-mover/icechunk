@@ -70,7 +70,7 @@ pub enum RepositoryErrorKind {
     #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
     ConflictingPathNotFound(NodeId),
     #[error("error in config deserialization")]
-    ConfigDeserializationError(#[from] serde_yml::Error),
+    ConfigDeserializationError(#[from] serde_yaml_ng::Error),
     #[error("config was updated by other session")]
     ConfigWasUpdated,
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
@@ -324,7 +324,7 @@ impl Repository {
     ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
         match storage.fetch_config(&storage.default_settings()).await? {
             FetchConfigResult::Found { bytes, etag } => {
-                let config = serde_yml::from_slice(&bytes)?;
+                let config = serde_yaml_ng::from_slice(&bytes)?;
                 Ok(Some((config, etag)))
             }
             FetchConfigResult::NotFound => Ok(None),
@@ -347,7 +347,7 @@ impl Repository {
         config: &RepositoryConfig,
         config_etag: Option<&ETag>,
     ) -> RepositoryResult<ETag> {
-        let bytes = Bytes::from(serde_yml::to_string(config)?);
+        let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         match storage
             .update_config(
                 &storage.default_settings(),
