@@ -422,4 +422,19 @@ impl PyStore {
             Ok(size)
         })
     }
+
+    fn getsize_prefix<'py>(
+        &self,
+        py: Python<'py>,
+        prefix: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let size = store
+                .getsize_prefix(prefix.as_str())
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(size)
+        })
+    }
 }

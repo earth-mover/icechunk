@@ -211,3 +211,7 @@ def test_can_change_deep_config_values() -> None:
             ]
         )
     )
+
+
+def test_spec_version():
+    assert icechunk.spec_version() >= 1
