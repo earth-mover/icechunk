@@ -805,6 +805,7 @@ async fn get_metadata(
     range: &ByteRange,
     repo: &Session,
 ) -> StoreResult<Bytes> {
+    // FIXME: don't skip errors
     let node = repo.get_node(path).await.map_err(|_| {
         StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
     })?;
@@ -906,19 +907,28 @@ async fn get_key_size(key: &str, session: &Session) -> StoreResult<u64> {
     Ok(bytes)
 }
 
-async fn exists(key: &str, repo: &Session) -> StoreResult<bool> {
-    match get_key(key, &ByteRange::ALL, repo).await {
-        Ok(_) => Ok(true),
-        Err(StoreError { kind: StoreErrorKind::NotFound(_), .. }) => Ok(false),
-        Err(StoreError {
-            kind:
-                StoreErrorKind::SessionError(SessionErrorKind::NodeNotFound {
-                    path: _,
-                    message: _,
-                }),
-            ..
-        }) => Ok(false),
-        Err(other_error) => Err(other_error),
+async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
+    match Key::parse(key)? {
+        Key::Metadata { node_path } => match session.get_node(&node_path).await {
+            Ok(_) => Ok(true),
+            Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        },
+        Key::Chunk { node_path, coords } => {
+            match session.get_chunk_ref(&node_path, &coords).await {
+                Ok(r) => Ok(r.is_some()),
+                Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { .. }, ..
+                }) => Ok(false),
+                Err(err) => Err(err.into()),
+            }
+        }
+        Key::ZarrV2(key) => {
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
+        }
     }
 }
 
