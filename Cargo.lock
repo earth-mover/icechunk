@@ -1354,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-python"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-stream",
  "async-trait",
