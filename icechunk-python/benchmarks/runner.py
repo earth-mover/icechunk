@@ -117,16 +117,23 @@ class Runner:
         )
 
 
-def init_for_ref(ref: str, force_setup: bool):
+def init_for_ref(ref: str, *, skip_setup: bool, force_setup: bool):
     runner = Runner(ref)
     runner.initialize()
-    runner.setup(force=force_setup)
+    if not skip_setup:
+        runner.setup(force=force_setup)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest", default="")
+    parser.add_argument(
+        "--skip-setup",
+        help="skip setup step, useful for benchmarks that don't need data",
+        action="store_true",
+        default=False,
+    )
     parser.add_argument(
         "--force-setup", help="forced recreation of datasets?", type=bool, default=False
     )
@@ -147,7 +154,8 @@ if __name__ == "__main__":
     # ]
 
     tqdm.contrib.concurrent.process_map(
-        partial(init_for_ref, force_setup=args.force_setup), refs
+        partial(init_for_ref, skip_setup=args.skip_setup, force_setup=args.force_setup),
+        refs,
     )
     # For debugging
     # for ref in refs:
