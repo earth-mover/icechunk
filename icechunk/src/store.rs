@@ -626,8 +626,22 @@ impl Store {
 
     #[instrument(skip(self))]
     pub async fn getsize(&self, key: &str) -> StoreResult<u64> {
-        let repo = self.session.read().await;
-        get_key_size(key, &repo).await
+        let session = self.session.read().await;
+        get_key_size(key, &session).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn getsize_prefix(&self, prefix: &str) -> StoreResult<u64> {
+        let session_guard = Arc::clone(&self.session).read_owned().await;
+        let session = session_guard.deref();
+
+        let meta = self.list_metadata_prefix(prefix, false).await?;
+        let chunks = self.list_chunks_prefix(prefix).await?;
+        meta.chain(chunks)
+            .try_fold(0, move |accum, key| async move {
+                get_key_size(key.as_str(), session).await.map(|n| n + accum)
+            })
+            .await
     }
 
     async fn set_array_meta(
@@ -877,11 +891,11 @@ async fn get_key(
     Ok(bytes)
 }
 
-async fn get_key_size(key: &str, repo: &Session) -> StoreResult<u64> {
+async fn get_key_size(key: &str, session: &Session) -> StoreResult<u64> {
     let bytes = match Key::parse(key)? {
-        Key::Metadata { node_path } => get_metadata_size(key, &node_path, repo).await,
+        Key::Metadata { node_path } => get_metadata_size(key, &node_path, session).await,
         Key::Chunk { node_path, coords } => {
-            get_chunk_size(key, &node_path, &coords, repo).await
+            get_chunk_size(key, &node_path, &coords, session).await
         }
         Key::ZarrV2(key) => {
             Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
