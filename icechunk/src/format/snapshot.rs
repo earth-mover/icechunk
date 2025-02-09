@@ -173,6 +173,13 @@ impl From<&Snapshot> for SnapshotInfo {
     }
 }
 
+impl SnapshotInfo {
+    pub fn is_initial(&self) -> bool {
+        // FIXME: add check for known initial id
+        self.parent_id.is_none()
+    }
+}
+
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
