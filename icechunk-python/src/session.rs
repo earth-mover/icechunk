@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
-    repository::PySnapshotProperties,
+    repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
     streams::PyAsyncGenerator,
 };
@@ -71,6 +71,19 @@ impl PySession {
     pub fn has_uncommitted_changes(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || self.0.blocking_read().has_uncommitted_changes())
+    }
+
+    pub fn status(&self, py: Python<'_>) -> PyResult<PyDiff> {
+        // This is blocking function, we need to release the Gil
+        py.allow_threads(move || {
+            let session = self.0.blocking_read();
+
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let res =
+                    session.status().await.map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(res.into())
+            })
+        })
     }
 
     pub fn discard_changes(&self, py: Python<'_>) {

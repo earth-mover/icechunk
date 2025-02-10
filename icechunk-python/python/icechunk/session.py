@@ -6,6 +6,7 @@ from icechunk import (
     Conflict,
     ConflictErrorData,
     ConflictSolver,
+    Diff,
     RebaseFailedData,
 )
 from icechunk._icechunk_python import PyConflictError, PyRebaseFailedError, PySession
@@ -178,6 +179,17 @@ class Session:
             True if the session has uncommitted changes, False otherwise.
         """
         return self._session.has_uncommitted_changes
+
+    def status(self) -> Diff:
+        """
+        Compute an overview of the current session changes
+
+        Returns
+        -------
+        Diff
+            The operations executed in the current session but still not committed.
+        """
+        return self._session.status()
 
     def discard_changes(self) -> None:
         """

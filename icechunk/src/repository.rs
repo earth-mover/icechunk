@@ -1,11 +1,15 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
+    future::ready,
     ops::RangeBounds,
     sync::Arc,
 };
 
 use bytes::Bytes;
-use futures::{stream::FuturesUnordered, Stream, StreamExt};
+use futures::{
+    stream::{FuturesOrdered, FuturesUnordered},
+    Stream, StreamExt, TryStreamExt,
+};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -18,6 +22,7 @@ use crate::{
     error::ICError,
     format::{
         snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
+        transaction_log::{Diff, TransactionLog},
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
     },
@@ -26,7 +31,7 @@ use crate::{
         list_branches, list_tags, update_branch, BranchVersion, Ref, RefError,
         RefErrorKind,
     },
-    session::Session,
+    session::{Session, SessionErrorKind, SessionResult},
     storage::{self, ETag, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
     virtual_chunks::{ContainerName, VirtualChunkResolver},
     Storage, StorageError,
@@ -585,6 +590,66 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    /// Compute the diff between `from` and `to` snapshots.
+    ///
+    /// If `from` is not in the ancestry of `to`, `RepositoryErrorKind::BadSnapshotChainForDiff`
+    /// will be returned.
+    ///
+    /// Result includes the diffs in both `from` and `to` snapshots.
+    pub async fn diff(
+        &self,
+        from: &VersionInfo,
+        to: &VersionInfo,
+    ) -> SessionResult<Diff> {
+        let from = self.resolve_version(from).await?;
+        let from_info =
+            SnapshotInfo::from(self.asset_manager.fetch_snapshot(&from).await?.as_ref());
+        let all_snaps = self
+            .ancestry(to)
+            .await?
+            .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        if all_snaps.last().and_then(|info| info.parent_id.as_ref()) != Some(&from) {
+            return Err(SessionErrorKind::BadSnapshotChainForDiff.into());
+        }
+
+        let fut: FuturesOrdered<_> = all_snaps
+            .iter()
+            .chain(std::iter::once(&from_info))
+            .filter_map(|snap_info| {
+                if snap_info.is_initial() {
+                    None
+                } else {
+                    Some(
+                        self.asset_manager
+                            .fetch_transaction_log(&snap_info.id)
+                            .in_current_span(),
+                    )
+                }
+            })
+            .collect();
+
+        let full_log = fut
+            .try_fold(TransactionLog::default(), |mut res, log| {
+                res.merge(log.as_ref());
+                ready(Ok(res))
+            })
+            .await?;
+
+        if let Some(to_snap) = all_snaps.first().as_ref().map(|snap| snap.id.clone()) {
+            let from_session =
+                self.readonly_session(&VersionInfo::SnapshotId(from)).await?;
+            let to_session =
+                self.readonly_session(&VersionInfo::SnapshotId(to_snap)).await?;
+            tx_to_diff(&full_log, &from_session, &to_session).await
+        } else {
+            Err(SessionErrorKind::BadSnapshotChainForDiff.into())
+        }
+    }
+
+    #[instrument(skip(self))]
     pub async fn readonly_session(
         &self,
         version: &VersionInfo,
@@ -598,7 +663,6 @@ impl Repository {
             self.virtual_resolver.clone(),
             snapshot_id.clone(),
         );
-
         self.preload_manifests(snapshot_id);
 
         Ok(session)
@@ -749,6 +813,20 @@ pub async fn raise_if_invalid_snapshot_id(
         .await
         .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
+}
+
+pub async fn tx_to_diff(
+    tx: &TransactionLog,
+    from: &Session,
+    to: &Session,
+) -> SessionResult<Diff> {
+    let nodes: HashMap<NodeId, Path> = from
+        .list_nodes()
+        .await?
+        .chain(to.list_nodes().await?)
+        .map(|n| (n.id, n.path))
+        .collect();
+    Ok(Diff::from_transaction_log(tx, nodes))
 }
 
 #[cfg(test)]

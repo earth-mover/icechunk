@@ -33,13 +33,13 @@ use crate::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, Snapshot,
             SnapshotProperties, UserAttributesSnapshot, ZarrArrayMetadata,
         },
-        transaction_log::TransactionLog,
+        transaction_log::{Diff, TransactionLog},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError, RefErrorKind},
-    repository::{RepositoryError, RepositoryErrorKind},
+    repository::{tx_to_diff, RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     RepositoryConfig, Storage, StorageError,
@@ -104,6 +104,8 @@ pub enum SessionErrorKind {
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
+    #[error("`to` snapshot ancestry doesn't include `from`")]
+    BadSnapshotChainForDiff,
 }
 
 pub type SessionError = ICError<SessionErrorKind>;
@@ -247,6 +249,20 @@ impl Session {
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
         self.virtual_resolver.matching_container(chunk_location.0.as_str())
+    }
+
+    /// Compute an overview of the current session changes
+    pub async fn status(&self) -> SessionResult<Diff> {
+        let tx_log = TransactionLog::new(&self.change_set);
+        let from_session = Self::create_readonly_session(
+            self.config().clone(),
+            self.storage_settings.as_ref().clone(),
+            Arc::clone(&self.storage),
+            Arc::clone(&self.asset_manager),
+            Arc::clone(&self.virtual_resolver),
+            self.snapshot_id.clone(),
+        );
+        tx_to_diff(&tx_log, &from_session, self).await
     }
 
     /// Add a group to the store.
@@ -1521,11 +1537,7 @@ async fn flush(
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(
-        flush_data.change_set,
-        old_snapshot.iter(),
-        new_snapshot.iter(),
-    );
+    let tx_log = TransactionLog::new(flush_data.change_set);
     let new_snapshot_id = new_snapshot.id();
 
     flush_data
@@ -2079,16 +2091,25 @@ mod tests {
 
         let mut ds = repository.writable_session("main").await?;
 
+        let initial_snapshot = repository.lookup_branch("main").await?;
+
+        let diff = ds.status().await?;
+        assert!(diff.is_empty());
+
         // add a new array and retrieve its node
         ds.add_group(Path::root()).await?;
-        let snapshot_id =
+        let diff = ds.status().await?;
+        assert!(!diff.is_empty());
+        assert_eq!(diff.new_groups, [Path::root()].into());
+
+        let first_commit =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
 
         // We need a new session after the commit
         let mut ds = repository.writable_session("main").await?;
 
         //let node_id3 = NodeId::random();
-        assert_eq!(snapshot_id, ds.snapshot_id);
+        assert_eq!(first_commit, ds.snapshot_id);
         assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
             Some(NodeSnapshot { path, user_attributes, node_data, .. })
@@ -2133,6 +2154,10 @@ mod tests {
         let new_array_path: Path = "/group/array1".try_into().unwrap();
         ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
 
+        let diff = ds.status().await?;
+        assert!(!diff.is_empty());
+        assert_eq!(diff.new_arrays, [new_array_path.clone()].into());
+
         // wo commit to test the case of a chunkless array
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
@@ -2154,6 +2179,10 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
+
+        let diff = ds.status().await?;
+        assert!(!diff.is_empty());
+        assert_eq!(diff.updated_chunks, [(new_array_path.clone(), 1)].into());
 
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
@@ -2299,6 +2328,26 @@ mod tests {
             Some(ChunkPayload::Inline("new chunk".into()))
         );
 
+        let diff = repository
+            .diff(
+                &VersionInfo::SnapshotId(initial_snapshot),
+                &VersionInfo::BranchTipRef("main".to_string()),
+            )
+            .await?;
+
+        assert!(diff.deleted_groups.is_empty());
+        assert!(diff.deleted_arrays.is_empty());
+        assert_eq!(
+            &diff.new_groups,
+            &["/".try_into().unwrap(), "/group".try_into().unwrap()].into()
+        );
+        assert_eq!(
+            &diff.new_arrays,
+            &[new_array_path.clone()].into() // we never committed array2
+        );
+        assert_eq!(&diff.updated_chunks, &[(new_array_path.clone(), 2)].into());
+        assert_eq!(&diff.updated_user_attributes, &[new_array_path.clone()].into());
+        assert_eq!(&diff.updated_zarr_metadata, &[new_array_path.clone()].into());
         Ok(())
     }
 

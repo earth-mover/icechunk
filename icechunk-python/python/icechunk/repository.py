@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from typing import Self
 
 from icechunk._icechunk_python import (
+    Diff,
     GCSummary,
     PyRepository,
     RepositoryConfig,
@@ -387,6 +388,38 @@ class Repository:
             The snapshot ID of the tag.
         """
         return self._repository.lookup_tag(tag)
+
+    def diff(
+        self,
+        *,
+        from_branch: str | None = None,
+        from_tag: str | None = None,
+        from_snapshot: str | None = None,
+        to_branch: str | None = None,
+        to_tag: str | None = None,
+        to_snapshot: str | None = None,
+    ) -> Diff:
+        """
+        Compute an overview of the operations executed from version `from` to version `to`.
+
+        Both versions, `from` and `to`, must be identified. Identification can be done using a branch, tag or snapshot id.
+        The styles used to identify the `from` and `to` versions can be different.
+
+        The `from` version must be a member of the `ancestry` of `to`.
+
+        Returns
+        -------
+        Diff
+            The operations executed between the two versions
+        """
+        return self._repository.diff(
+            from_branch=from_branch,
+            from_tag=from_tag,
+            from_snapshot=from_snapshot,
+            to_branch=to_branch,
+            to_tag=to_tag,
+            to_snapshot=to_snapshot,
+        )
 
     def readonly_session(
         self,
