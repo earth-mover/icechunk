@@ -103,7 +103,7 @@ pub struct RepositoryDefinition {
     config: RepositoryConfig,
 }
 
-struct RepositoryAlias(String);
+pub struct RepositoryAlias(String);
 
 pub struct Repositories {
     repos: HashMap<RepositoryAlias, RepositoryDefinition>,
