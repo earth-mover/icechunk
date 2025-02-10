@@ -230,7 +230,7 @@ def azure_storage(
     Parameters
     ----------
     account: str
-        The account where the repository will store its data
+        The account to which the caller must have access privileges
     container: str
         The container where the repository will store its data
     prefix: str
