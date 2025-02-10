@@ -128,3 +128,7 @@ known-first-party = ["dask", "distributed", "icechunk", "xarray", "zarr"]
 [tool.ruff.lint.flake8-tidy-imports]
 # Disallow all relative imports.
 ban-relative-imports = "all"
+
+
+[project.scripts]
+icechunk = "icechunk._icechunk_python:cli_entrypoint"

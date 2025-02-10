@@ -251,7 +251,7 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
     /// Returns whatever reader is more efficient.
     ///
-    /// For example, if processesed with multiple requests, it will return a synchronous `Buf`
+    /// For example, if processed with multiple requests, it will return a synchronous `Buf`
     /// instance pointing the different parts. If it was executed in a single request, it's more
     /// efficient to return the network `AsyncRead` directly
     async fn fetch_manifest_known_size(

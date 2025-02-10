@@ -8,6 +8,7 @@ mod streams;
 
 use std::env;
 
+use clap::Parser;
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsCredentials,
@@ -29,6 +30,24 @@ use pyo3::prelude::*;
 use repository::{PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::PyStore;
+
+use icechunk::cli::interface::{run_cli, IcechunkCLI};
+use pyo3::wrap_pyfunction;
+
+#[pyfunction]
+fn cli_entrypoint(py: Python) -> PyResult<()> {
+    let sys = py.import("sys")?;
+    let args: Vec<String> = sys.getattr("argv")?.extract()?;
+    match IcechunkCLI::try_parse_from(args.to_vec()) {
+        Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            run_cli(cli_args).await.map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+            })?;
+            Ok(())
+        }),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())),
+    }
+}
 
 #[pyfunction]
 fn initialize_logs() -> PyResult<()> {
@@ -81,6 +100,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCSummary>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
+    m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;

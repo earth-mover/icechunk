@@ -202,7 +202,7 @@ impl ManifestConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
-    /// Chunks smaller than this will be stored inline in the manifst
+    /// Chunks smaller than this will be stored inline in the manifest
     pub inline_chunk_threshold_bytes: Option<u16>,
     /// Unsafely overwrite refs on write. This is not recommended, users should only use it at their
     /// own risk in object stores for which we don't support write-object-if-not-exists. There is
