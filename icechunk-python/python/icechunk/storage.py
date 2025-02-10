@@ -216,6 +216,7 @@ def gcs_storage(
 
 def azure_storage(
     *,
+    account: str,
     container: str,
     prefix: str,
     access_key: str | None = None,
@@ -228,6 +229,8 @@ def azure_storage(
 
     Parameters
     ----------
+    account: str
+        The account where the repository will store its data
     container: str
         The container where the repository will store its data
     prefix: str
@@ -248,6 +251,7 @@ def azure_storage(
         from_env=from_env,
     )
     return Storage.new_azure_blob(
+        account=account,
         container=container,
         prefix=prefix,
         credentials=credentials,
