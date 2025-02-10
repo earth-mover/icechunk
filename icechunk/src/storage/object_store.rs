@@ -784,6 +784,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
                 builder
             }
             Some(S3Credentials::Anonymous) => builder.with_skip_signature(true),
+            // TODO: Support refreshable credentials
             _ => AmazonS3Builder::from_env(),
         };
 
@@ -807,7 +808,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             builder
         };
 
-        // Defualt for consistency
+        // Defaults
         let builder = builder
             .with_bucket_name(&self.bucket)
             .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch);
