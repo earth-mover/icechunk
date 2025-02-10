@@ -10,7 +10,7 @@ use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let storage = new_in_memory_storage()?;
+    let storage = new_in_memory_storage().await?;
     let config = RepositoryConfig {
         inline_chunk_threshold_bytes: Some(128),
         unsafe_overwrite_refs: Some(true),

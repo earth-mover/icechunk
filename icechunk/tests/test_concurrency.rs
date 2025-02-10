@@ -35,7 +35,7 @@ const N: usize = 20;
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
 async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let repo = Repository::create(None, storage, HashMap::new()).await?;
     let mut ds = repo.writable_session("main").await?;
 

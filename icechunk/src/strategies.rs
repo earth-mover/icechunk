@@ -31,10 +31,10 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = new_in_memory_storage().expect("Cannot create in memory storage");
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
+        let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
         Repository::create(None, storage, HashMap::new())
             .await
             .expect("Failed to initialize repository")
@@ -49,10 +49,11 @@ prop_compose! {
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let storage = new_in_memory_storage().expect("Cannot create in memory storage");
+
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
+        let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
         let repository = Repository::create(None, storage, HashMap::new())
             .await
             .expect("Failed to initialize repository");
