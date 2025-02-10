@@ -7,8 +7,6 @@ This document outlines the design of the Icechunk command line interface.
 Here is a list of tasks a user might want to do with Icechunk:
 
 - List my repositories
-    // - This might be actually difficult: repositories where? How to detect them?  - Could start with all repos in my config
-    // eventually perhaps auto-discover?
 - List a history of a repo
 - List branches in a repo
 - List tags in a repo
@@ -16,8 +14,6 @@ Here is a list of tasks a user might want to do with Icechunk:
 - Check configuration
 - Diff between two commits
 - Invoke administrative tasks (garbage collection, compaction, etc)
-    // not covered, API should be discussed?
-
 
 ## Interface
 
