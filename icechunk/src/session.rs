@@ -1712,7 +1712,8 @@ mod tests {
     use tokio::sync::Barrier;
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = new_in_memory_storage().expect("failed to create in-memory store");
+        let storage =
+            new_in_memory_storage().await.expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -1852,7 +1853,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
         let asset_manager =
             AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
@@ -2080,7 +2081,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -2449,7 +2450,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
@@ -2525,7 +2526,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
-        let in_mem_storage = Arc::new(ObjectStorage::new_in_memory()?);
+        let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -2892,7 +2893,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
-        let in_mem_storage = new_in_memory_storage()?;
+        let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;

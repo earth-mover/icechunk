@@ -856,7 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -902,7 +902,7 @@ mod tests {
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
         // creating a repo we can override certain config atts:
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let config = RepositoryConfig {
             inline_chunk_threshold_bytes: Some(20),
             caching: Some(CachingConfig {
@@ -941,7 +941,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -1024,7 +1024,7 @@ mod tests {
     ///
     /// We verify only the correct two arrays are preloaded
     async fn test_manifest_preload_known_manifests() -> Result<(), Box<dyn Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
         let repository = Repository::create(None, storage, HashMap::new()).await?;
@@ -1161,6 +1161,7 @@ mod tests {
 
         let storage: Arc<dyn Storage + Send + Sync> =
             new_local_filesystem_storage(repo_dir.path())
+                .await
                 .expect("Creating local storage failed");
 
         Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
@@ -1174,6 +1175,7 @@ mod tests {
                 .collect();
         let storage: Arc<dyn Storage + Send + Sync> =
             new_local_filesystem_storage(&inner_path)
+                .await
                 .expect("Creating local storage failed");
 
         assert!(Repository::create(None, Arc::clone(&storage), HashMap::new())
