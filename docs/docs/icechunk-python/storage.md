@@ -177,7 +177,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Refreshable Credentials"
 
-    With this option, you provide a callback function that will be called to obtain Gcs credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from GCS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. This works at a lower level than the other methods, and accepts a bearer token and expiration time. These are the same credentials that are created for you when specifying the service account file, key, or ADC. [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you provide a callback function that will be called to obtain GCS credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from GCS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. This works at a lower level than the other methods, and accepts a bearer token and expiration time. These are the same credentials that are created for you when specifying the service account file, key, or ADC. [See the API](./reference.md#icechunk.gcs_storage)
 
     ```python
     def get_credentials() -> GcsBearerCredential:
