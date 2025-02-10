@@ -1,4 +1,8 @@
-use std::{collections::{HashMap, HashSet}, future::Future, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use icechunk::{
@@ -9,8 +13,8 @@ use icechunk::{
         RefErrorKind,
     },
     storage::{
-        new_in_memory_storage, new_s3_storage,
-        FetchConfigResult, StorageResult, UpdateConfigResult,
+        new_in_memory_storage, new_s3_storage, FetchConfigResult, StorageResult,
+        UpdateConfigResult,
     },
     ObjectStorage, Storage,
 };
@@ -41,38 +45,46 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
     Ok(storage)
 }
 
-// #[allow(clippy::expect_used)]
-// async fn mk_s3_object_store_storage(
-//     prefix: &str,
-// ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-//         let storage = Arc::new(ObjectStorage::new_s3(
-//         "testbucket".to_string(),
-//         Some(prefix.to_string()),
-//         Some(S3Credentials::Static(S3StaticCredentials {
-//             access_key_id: "minio123".into(),
-//             secret_access_key: "minio123".into(),
-//             session_token: None,
-//             expires_after: None,
-//         })),
-//         Some(S3Options {
-//             region: Some("us-east-1".to_string()),
-//             endpoint_url: Some("http://localhost:9000".to_string()),
-//             allow_http: true,
-//             anonymous: false,
-//         }),
-//     ).await?);
+#[allow(clippy::expect_used)]
+async fn mk_s3_object_store_storage(
+    prefix: &str,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let storage = Arc::new(
+        ObjectStorage::new_s3(
+            "testbucket".to_string(),
+            Some(prefix.to_string()),
+            Some(S3Credentials::Static(S3StaticCredentials {
+                access_key_id: "minio123".into(),
+                secret_access_key: "minio123".into(),
+                session_token: None,
+                expires_after: None,
+            })),
+            Some(S3Options {
+                region: Some("us-east-1".to_string()),
+                endpoint_url: Some("http://localhost:9000".to_string()),
+                allow_http: true,
+                anonymous: false,
+            }),
+        )
+        .await?,
+    );
 
-//     Ok(storage)
-// }
+    Ok(storage)
+}
 
-async fn mk_azure_blob_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let storage = Arc::new(ObjectStorage::new_azure(
-        "devstoreaccount1".to_string(),
-        "testcontainer".to_string(),
-        Some(prefix.to_string()),
-        None,
-        Some(HashMap::from([(AzureConfigKey::UseEmulator, "true".to_string())])),
-    ).await?);
+async fn mk_azure_blob_storage(
+    prefix: &str,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let storage = Arc::new(
+        ObjectStorage::new_azure(
+            "devstoreaccount1".to_string(),
+            "testcontainer".to_string(),
+            Some(prefix.to_string()),
+            None,
+            Some(HashMap::from([(AzureConfigKey::UseEmulator, "true".to_string())])),
+        )
+        .await?,
+    );
 
     Ok(storage)
 }
@@ -86,11 +98,12 @@ where
     let s1 = mk_s3_storage(prefix.as_str()).await?;
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().await.unwrap();
-    //let s3 = mk_s3_object_store_storage(prefix.as_str()).await?;
+    let s3 =
+        mk_s3_object_store_storage(format!("{prefix}2").as_str()).await?;
     let s4 = mk_azure_blob_storage(prefix.as_str()).await?;
     f(s1).await?;
     f(s2).await?;
-    //f(s3).await?;
+    f(s3).await?;
     f(s4).await?;
     Ok(())
 }
