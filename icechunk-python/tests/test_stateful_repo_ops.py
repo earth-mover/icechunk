@@ -3,11 +3,13 @@
 import json
 import textwrap
 from dataclasses import dataclass
+from typing import Any, Literal
 
 import numpy as np
 import pytest
 
 from zarr.core.buffer import Buffer, default_buffer_prototype
+from zarr.core.metadata.v3 import ArrayV3Metadata
 
 pytest.importorskip("hypothesis")
 pytest.importorskip("xarray")
@@ -38,52 +40,58 @@ simple_attrs = st.dictionaries(
     simple_text,
     st.integers(min_value=-10_000, max_value=10_000),
 )
-# set in_side to one
-array_shapes = npst.array_shapes(max_dims=4, min_side=1)
 
 DEFAULT_BRANCH = "main"
 
 
 #########
 # TODO: port to Zarr
-@st.composite
-def v3_group_metadata(draw):
-    from zarr.core.group import GroupMetadata
-
-    metadata = GroupMetadata(attributes=draw(simple_attrs))
-    return metadata.to_buffer_dict(prototype=default_buffer_prototype())["zarr.json"]
 
 
 @st.composite
-def v3_array_metadata(draw: st.DrawFn) -> bytes:
+def dimension_names(
+    draw: st.DrawFn, *, ndim: int | None = None
+) -> list[None | str] | None:
+    simple_text = st.text(zrst.zarr_key_chars, min_size=0)
+    return draw(
+        st.none() | st.lists(st.none() | simple_text, min_size=ndim, max_size=ndim)
+    )
+
+
+@st.composite
+def array_metadata(
+    draw: st.DrawFn,
+    *,
+    array_shapes: st.SearchStrategy[tuple[int, ...]] = zrst.array_shapes,
+    zarr_formats: st.SearchStrategy[Literal[2, 3]] = zrst.zarr_formats,
+    attributes: st.SearchStrategy[dict[str, Any]] = zrst.attrs,
+) -> ArrayV3Metadata:
     from zarr.codecs.bytes import BytesCodec
     from zarr.core.chunk_grids import RegularChunkGrid
     from zarr.core.chunk_key_encodings import DefaultChunkKeyEncoding
     from zarr.core.metadata.v3 import ArrayV3Metadata
 
+    zarr_format = draw(zarr_formats)
     # separator = draw(st.sampled_from(['/', '\\']))
     shape = draw(array_shapes)
     ndim = len(shape)
     chunk_shape = draw(npst.array_shapes(min_dims=ndim, max_dims=ndim))
     dtype = draw(zrst.v3_dtypes())
     fill_value = draw(npst.from_dtype(dtype))
-    dimension_names = draw(
-        st.none() | st.lists(st.none() | simple_text, min_size=ndim, max_size=ndim)
-    )
-
+    if zarr_format == 2:
+        raise NotImplementedError
     metadata = ArrayV3Metadata(
         shape=shape,
         data_type=dtype,
         chunk_grid=RegularChunkGrid(chunk_shape=chunk_shape),
         fill_value=fill_value,
-        attributes=draw(simple_attrs),
-        dimension_names=dimension_names,
+        attributes=draw(attributes),
+        dimension_names=draw(dimension_names(ndim=ndim)),
         chunk_key_encoding=DefaultChunkKeyEncoding(separator="/"),  # FIXME
         codecs=[BytesCodec()],
         storage_transformers=(),
     )
-
-    return metadata.to_buffer_dict(prototype=default_buffer_prototype())["zarr.json"]
+    return metadata
 
 
 class NewSyncStoreWrapper(SyncStoreWrapper):
@@ -97,6 +105,11 @@ MAX_TEXT_SIZE = 120
 
 keys = st.lists(zrst.node_names, min_size=1, max_size=4).map("/".join)
 metadata_paths = keys.map(lambda x: x + "/zarr.json")
+v3_array_metadata = array_metadata(
+    zarr_formats=st.just(3),
+    array_shapes=npst.array_shapes(max_dims=4, min_side=1),  # set min_side to one
+    attributes=simple_attrs,
+).map(lambda x: x.to_buffer_dict(prototype=default_buffer_prototype())["zarr.json"])
 
 
 @dataclass
@@ -221,7 +234,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
-        self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata()))
+        self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
         return DEFAULT_BRANCH
 
@@ -232,7 +245,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def sync_store(self):
         return NewSyncStoreWrapper(self.session.store)
 
-    @rule(path=metadata_paths, value=v3_array_metadata())
+    @rule(path=metadata_paths, value=v3_array_metadata)
     def set_doc(self, path: str, value: Buffer):
         note(f"setting path {path!r} with {value.to_bytes()!r}")
         # FIXME: remove when we support complex values with infinity fill_value
@@ -374,9 +387,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             actual = json.loads(
                 self.sync_store.get(k, default_buffer_prototype()).to_bytes()
             )
-            # FIXME: zarr omits this if None?
-            if "dimension_names" not in expected:
-                actual.pop("dimension_names")
             actual_fv = actual.pop("fill_value")
             expected_fv = expected.pop("fill_value")
             if actual_fv != expected_fv:
