@@ -2,7 +2,7 @@
 
 Aka: Manifest split
 
-## Current state
+## Current state (pre-Icechunk v0.1.0)
 
 Icechunk format allows to have multiple manifest files per snapshot,
 multiple manifest per array, and multiple arrays in a single manifest.
