@@ -618,6 +618,7 @@ class Storage:
     @classmethod
     def new_azure_blob(
         cls,
+        account: str,
         container: str,
         prefix: str,
         credentials: AnyAzureCredential | None = None,

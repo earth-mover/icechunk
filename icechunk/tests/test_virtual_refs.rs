@@ -103,6 +103,7 @@ mod tests {
     async fn create_local_repository(path: &StdPath) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_filesystem(path)
+                .await
                 .expect("Creating local storage failed"),
         );
 

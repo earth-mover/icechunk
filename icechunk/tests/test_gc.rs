@@ -279,7 +279,7 @@ async fn make_design_doc_repo(
 /// We then, expire the branches and tags in the same order as the document
 /// and we verify we get the same results.
 pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().unwrap();
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings();
     let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -444,7 +444,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
 /// We then, expire old snapshots and garbage collect. We verify we end up
 /// with what is expected according to the design document.
 pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().unwrap();
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings();
     let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 

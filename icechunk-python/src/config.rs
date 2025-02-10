@@ -1182,60 +1182,90 @@ impl PyStorage {
     }
 
     #[classmethod]
-    pub fn new_in_memory(_cls: &Bound<'_, PyType>) -> PyResult<Self> {
-        let storage = icechunk::storage::new_in_memory_storage()
-            .map_err(PyIcechunkStoreError::StorageError)?;
+    pub fn new_in_memory<'py>(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'py>,
+    ) -> PyResult<Self> {
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_in_memory_storage()
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
     #[classmethod]
-    pub fn new_local_filesystem(
+    pub fn new_local_filesystem<'py>(
         _cls: &Bound<'_, PyType>,
+        py: Python<'py>,
         path: PathBuf,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_local_filesystem_storage(&path)
-            .map_err(PyIcechunkStoreError::StorageError)?;
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_local_filesystem_storage(&path)
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
-    #[staticmethod]
+    #[classmethod]
     #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
-    pub fn new_gcs(
+    pub fn new_gcs<'py>(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'py>,
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_gcs_storage(
-            bucket,
-            prefix,
-            credentials.map(|cred| cred.into()),
-            config,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_gcs_storage(
+                    bucket,
+                    prefix,
+                    credentials.map(|cred| cred.into()),
+                    config,
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
-    #[staticmethod]
-    #[pyo3(signature = (container, prefix, credentials=None, *, config=None))]
-    pub fn new_azure_blob(
+    #[classmethod]
+    #[pyo3(signature = (account, container, prefix, credentials=None, *, config=None))]
+    pub fn new_azure_blob<'py>(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'py>,
+        account: String,
         container: String,
         prefix: String,
         credentials: Option<PyAzureCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_azure_blob_storage(
-            container,
-            prefix,
-            credentials.map(|cred| cred.into()),
-            config,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_azure_blob_storage(
+                    account,
+                    container,
+                    Some(prefix),
+                    credentials.map(|cred| cred.into()),
+                    config,
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
     pub fn default_settings(&self) -> PyStorageSettings {
