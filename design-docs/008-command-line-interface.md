@@ -123,7 +123,7 @@ Following the [Python entrypoint](https://www.maturin.rs/bindings#both-binary-an
 icechunk = "icechunk._icechunk_python:cli_entrypoint"
 ```
 
-The disadvantage is that Python users need to call Python, resulting in ~200ms latency.
+The disadvantage is that Python users need to call Python to use the CLI, resulting in hundreds of milliseconds of latency.
 
 The user can also install the Rust binary directly through `cargo install`.
 
