@@ -1063,6 +1063,7 @@ pub struct ZarrArrayMetadataSerialzer {
     pub codecs: Vec<Codec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_transformers: Option<Vec<StorageTransformer>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     // each dimension name can be null in Zarr
     pub dimension_names: Option<DimensionNames>,
 }
