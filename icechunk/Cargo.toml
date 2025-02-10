@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "0.1.1"
+version = "0.1.2"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -43,12 +43,18 @@ aws-smithy-types-convert = { version = "0.60.8", features = [
   "convert-chrono",
   "convert-streams",
 ] }
-serde_yml = "0.0.12"
 typetag = "0.2.19"
 zstd = "0.13.2"
 tokio-util = { version = "0.7.13", features = ["compat", "io-util"] }
 serde_bytes = "0.11.15"
 regex = "1.11.1"
+tracing-error = "0.2.1"
+tracing-subscriber = { version = "0.3.19", features = [
+  "env-filter",
+], optional = true }
+tracing = "0.1.41"
+err-into = "1.0.1"
+serde_yaml_ng = "0.10.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
@@ -57,3 +63,6 @@ tempfile = "3.15.0"
 
 [lints]
 workspace = true
+
+[features]
+logs = ["dep:tracing-subscriber"]

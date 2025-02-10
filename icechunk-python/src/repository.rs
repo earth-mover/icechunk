@@ -14,7 +14,7 @@ use icechunk::{
         SnapshotId,
     },
     ops::gc::{expire, garbage_collect, ExpiredRefAction, GCConfig, GCSummary},
-    repository::{RepositoryError, VersionInfo},
+    repository::{RepositoryErrorKind, VersionInfo},
     Repository,
 };
 use pyo3::{
@@ -441,9 +441,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
-                    snapshot_id.to_owned(),
-                ))
+                PyIcechunkStoreError::RepositoryError(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+                )
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -493,9 +493,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
-                    snapshot_id.to_owned(),
-                ))
+                PyIcechunkStoreError::RepositoryError(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+                )
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -543,9 +543,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
-                    snapshot_id.to_owned(),
-                ))
+                PyIcechunkStoreError::RepositoryError(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+                )
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -724,9 +724,9 @@ fn args_to_version_info(
         Ok(VersionInfo::TagRef(tag_name))
     } else if let Some(snapshot_id) = snapshot {
         let snapshot_id = SnapshotId::try_from(snapshot_id.as_str()).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(RepositoryError::InvalidSnapshotId(
-                snapshot_id.to_owned(),
-            ))
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
         })?;
 
         Ok(VersionInfo::SnapshotId(snapshot_id))

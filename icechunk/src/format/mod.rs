@@ -16,7 +16,7 @@ use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
 
-use crate::{metadata::DataType, private};
+use crate::{error::ICError, metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
@@ -215,10 +215,10 @@ pub type TableOffset = u32;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum IcechunkFormatError {
-    #[error("error decoding fill_value from array")]
+pub enum IcechunkFormatErrorKind {
+    #[error("error decoding fill_value from array. Found size: {found_size}, target size: {target_size}, type: {target_type}")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
-    #[error("error decoding fill_value from json")]
+    #[error("error decoding fill_value from json. Type: {data_type}, value: {value}")]
     FillValueParse { data_type: DataType, value: serde_json::Value },
     #[error("node not found at `{path:?}`")]
     NodeNotFound { path: Path },
@@ -234,6 +234,19 @@ pub enum IcechunkFormatError {
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
     InvalidCompressionAlgorithm, // TODO: add more info
+}
+
+pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for IcechunkFormatError
+where
+    E: Into<IcechunkFormatErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
 }
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;

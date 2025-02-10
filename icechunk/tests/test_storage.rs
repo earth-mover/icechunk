@@ -6,6 +6,7 @@ use icechunk::{
     format::{ChunkId, ManifestId, SnapshotId},
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
+        RefErrorKind,
     },
     storage::{
         new_in_memory_storage, new_s3_storage, object_store::ObjectStorageConfig,
@@ -193,7 +194,7 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 
         let back =
             fetch_tag(storage.as_ref(), &storage_settings, "non-existing-tag").await;
-        assert!(matches!(back, Err(RefError::RefNotFound(r)) if r == "non-existing-tag"));
+        assert!(matches!(back, Err(RefError{kind: RefErrorKind::RefNotFound(r), ..}) if r == "non-existing-tag"));
         Ok(())
     })
     .await?;
@@ -211,7 +212,7 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
         let res =
             create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
                 .await;
-        assert!(matches!(res, Err(RefError::TagAlreadyExists(r)) if r == "mytag"));
+        assert!(matches!(res, Err(RefError{kind: RefErrorKind::TagAlreadyExists(r), ..}) if r == "mytag"));
         Ok(())
     })
     .await?;
@@ -264,7 +265,7 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
             fetch_branch_tip(storage.as_ref(), &storage_settings, "non-existing-branch")
                 .await;
         assert!(
-            matches!(back, Err(RefError::RefNotFound(r)) if r == "non-existing-branch")
+            matches!(back, Err(RefError{kind: RefErrorKind::RefNotFound(r),..}) if r == "non-existing-branch")
         );
         Ok(())
     })

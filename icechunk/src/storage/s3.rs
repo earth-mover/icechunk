@@ -30,17 +30,19 @@ use aws_sdk_s3::{
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
+use err_into::ErrorInto as _;
 use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
+use tracing::instrument;
 
 use super::{
-    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, StorageResult,
-    UpdateConfigResult, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX,
-    REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, StorageErrorKind,
+    StorageResult, UpdateConfigResult, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH,
+    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,6 +60,7 @@ pub struct S3Storage {
     client: OnceCell<Arc<Client>>,
 }
 
+#[instrument(skip(credentials))]
 pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client {
     let region = config
         .region
@@ -126,6 +129,7 @@ impl S3Storage {
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
+    #[instrument(skip(self))]
     async fn get_client(&self) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
@@ -136,7 +140,10 @@ impl S3Storage {
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
-        path.into_os_string().into_string().map_err(StorageError::BadPrefix)
+        path.into_os_string()
+            .into_string()
+            .map_err(StorageErrorKind::BadPrefix)
+            .err_into()
     }
 
     fn get_path<const SIZE: usize, T: FileTypeTag>(
@@ -170,7 +177,10 @@ impl S3Storage {
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
-        path.into_os_string().into_string().map_err(StorageError::BadPrefix)
+        path.into_os_string()
+            .into_string()
+            .map_err(StorageErrorKind::BadPrefix)
+            .err_into()
     }
 
     async fn get_object_reader(
@@ -225,7 +235,7 @@ impl S3Storage {
         let delete = Delete::builder()
             .set_objects(Some(keys))
             .build()
-            .map_err(|e| StorageError::Other(e.to_string()))?;
+            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
         let res = self
             .get_client()
@@ -249,6 +259,7 @@ impl private::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
+    #[instrument(skip(self, _settings))]
     async fn fetch_config(
         &self,
         _settings: &Settings,
@@ -278,6 +289,7 @@ impl Storage for S3Storage {
         }
     }
 
+    #[instrument(skip(self, _settings, config))]
     async fn update_config(
         &self,
         _settings: &Settings,
@@ -306,7 +318,7 @@ impl Storage for S3Storage {
             Ok(out) => {
                 let new_etag = out
                     .e_tag()
-                    .ok_or(StorageError::Other(
+                    .ok_or(StorageErrorKind::Other(
                         "Config object should have an etag".to_string(),
                     ))?
                     .to_string();
@@ -336,6 +348,7 @@ impl Storage for S3Storage {
         }
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
@@ -345,6 +358,7 @@ impl Storage for S3Storage {
         self.get_object_reader(settings, key.as_str()).await
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_manifest_known_size(
         &self,
         settings: &Settings,
@@ -355,6 +369,7 @@ impl Storage for S3Storage {
         self.get_object_concurrently(settings, key.as_str(), &(0..size)).await
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_manifest_unknown_size(
         &self,
         settings: &Settings,
@@ -364,6 +379,7 @@ impl Storage for S3Storage {
         self.get_object_reader(settings, key.as_str()).await
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_transaction_log(
         &self,
         settings: &Settings,
@@ -373,6 +389,7 @@ impl Storage for S3Storage {
         self.get_object_reader(settings, key.as_str()).await
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_chunk(
         &self,
         settings: &Settings,
@@ -386,6 +403,7 @@ impl Storage for S3Storage {
             .await
     }
 
+    #[instrument(skip(self, _settings, metadata, bytes))]
     async fn write_snapshot(
         &self,
         _settings: &Settings,
@@ -397,6 +415,7 @@ impl Storage for S3Storage {
         self.put_object(key.as_str(), None::<String>, metadata, bytes).await
     }
 
+    #[instrument(skip(self, _settings, metadata, bytes))]
     async fn write_manifest(
         &self,
         _settings: &Settings,
@@ -408,6 +427,7 @@ impl Storage for S3Storage {
         self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
     }
 
+    #[instrument(skip(self, _settings, metadata, bytes))]
     async fn write_transaction_log(
         &self,
         _settings: &Settings,
@@ -419,6 +439,7 @@ impl Storage for S3Storage {
         self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
     }
 
+    #[instrument(skip(self, _settings, bytes))]
     async fn write_chunk(
         &self,
         _settings: &Settings,
@@ -431,6 +452,7 @@ impl Storage for S3Storage {
         self.put_object(key.as_str(), None::<String>, metadata, bytes).await
     }
 
+    #[instrument(skip(self, _settings))]
     async fn get_ref(
         &self,
         _settings: &Settings,
@@ -463,6 +485,7 @@ impl Storage for S3Storage {
         }
     }
 
+    #[instrument(skip(self, _settings))]
     async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
         let mut paginator = self
@@ -493,6 +516,7 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
+    #[instrument(skip(self, _settings))]
     async fn ref_versions(
         &self,
         _settings: &Settings,
@@ -521,6 +545,7 @@ impl Storage for S3Storage {
         Ok(stream.boxed())
     }
 
+    #[instrument(skip(self, _settings, bytes))]
     async fn write_ref(
         &self,
         _settings: &Settings,
@@ -557,6 +582,7 @@ impl Storage for S3Storage {
         }
     }
 
+    #[instrument(skip(self, _settings))]
     async fn list_objects<'a>(
         &'a self,
         _settings: &Settings,
@@ -565,7 +591,7 @@ impl Storage for S3Storage {
         let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
             .into_os_string()
             .into_string()
-            .map_err(StorageError::BadPrefix)?;
+            .map_err(StorageErrorKind::BadPrefix)?;
         let stream = self
             .get_client()
             .await
@@ -585,6 +611,7 @@ impl Storage for S3Storage {
         Ok(stream.boxed())
     }
 
+    #[instrument(skip(self, _settings, ids))]
     async fn delete_objects(
         &self,
         _settings: &Settings,
@@ -606,6 +633,7 @@ impl Storage for S3Storage {
         Ok(deleted.into_inner())
     }
 
+    #[instrument(skip(self, _settings))]
     async fn get_snapshot_last_modified(
         &self,
         _settings: &Settings,
@@ -621,16 +649,17 @@ impl Storage for S3Storage {
             .send()
             .await?;
 
-        let res = res.last_modified.ok_or(StorageError::Other(
+        let res = res.last_modified.ok_or(StorageErrorKind::Other(
             "Object has no last_modified field".to_string(),
         ))?;
-        let res = res
-            .to_chrono_utc()
-            .map_err(|_| StorageError::Other("Invalid metadata timestamp".to_string()))?;
+        let res = res.to_chrono_utc().map_err(|_| {
+            StorageErrorKind::Other("Invalid metadata timestamp".to_string())
+        })?;
 
         Ok(res)
     }
 
+    #[instrument(skip(self))]
     async fn root_is_clean(&self) -> StorageResult<bool> {
         let res = self
             .get_client()
@@ -644,6 +673,7 @@ impl Storage for S3Storage {
         Ok(res.contents.map(|v| v.is_empty()).unwrap_or(true))
     }
 
+    #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
         key: &str,
@@ -659,6 +689,7 @@ impl Storage for S3Storage {
         Ok(Box::new(b.send().await?.body.collect().await?))
     }
 
+    #[instrument(skip(self))]
     async fn get_object_range_read(
         &self,
         key: &str,

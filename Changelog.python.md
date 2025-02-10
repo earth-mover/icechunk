@@ -1,5 +1,42 @@
 # Changelog
 
+## Python Icechunk Library 0.1.2
+
+### Features
+
+- Improved error messages. Exceptions raised by Icechunk now include a lot more information
+on what happened, and what was Icechunk doing when the exception was raised. Example error message:
+  ![image](https://private-user-images.githubusercontent.com/20792/411051347-2babe5df-dc3b-4305-8ad2-a18fdb4da796.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Mzg5NTY0NzMsIm5iZiI6MTczODk1NjE3MywicGF0aCI6Ii8yMDc5Mi80MTEwNTEzNDctMmJhYmU1ZGYtZGMzYi00MzA1LThhZDItYTE4ZmRiNGRhNzk2LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjA3VDE5MjI1M1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWYzNjY1MTUyOTUwYWMwNWJmMTYwODkzYmY1NGM2YTczNzcxOTBmMTUyNzg3NWE2MWVmMzVmOTcwOTM2MDAxYTQmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.rAstKp5GPVLbftBAAibWNPSCZ0ppz8FTJEvmvbL_Fdw)
+- Icechunk generates logs now. Set the environment variable `ICECHUNK_LOG=icechunk=debug` to print debug logs to stdout. Available "levels" in order of increasing verbosity are `error`, `warn`, `info`, `debug`, `trace`. The default level is `error`. Example log:
+  ![image](https://private-user-images.githubusercontent.com/20792/411051729-7e6de243-73f4-4863-ba79-2dde204fe6e5.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Mzg5NTY3NTQsIm5iZiI6MTczODk1NjQ1NCwicGF0aCI6Ii8yMDc5Mi80MTEwNTE3MjktN2U2ZGUyNDMtNzNmNC00ODYzLWJhNzktMmRkZTIwNGZlNmU1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjA3VDE5MjczNFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTQ1MzdmMDY2MDA2YjdiNzUzM2RhMGE5ZDAxZDA2NWI4ZWU3MjcyZTE0YjRkY2U0ZTZkMTcxMzQzMDVjOGQ0NGQmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.LnILQIXxOjkR1y6P5w6k9UREm0zOH1tIzt2vrjVcRKM)
+- Icechunk can now be installed using `conda`:
+  ```shell
+  conda install -c conda-forge icechunk
+  ```
+- Optionally delete branches and tags that point to expired snapshots:
+  ```python
+    def expire_snapshots(
+        self,
+        older_than: datetime.datetime,
+        *,
+        delete_expired_branches: bool = False,
+        delete_expired_tags: bool = False,
+    ) -> set[str]: ...
+  ```
+- More documentation. See [the Icechunk website](https://icechunk.io/)
+
+
+### Performance
+
+- Faster `exists` zarr `Store` method.
+- Implement `Store.getsize_prefix` method. This significantly speeds up `info_complete`.
+
+
+### Fixes
+
+- Default regular expression to preload manifests.
+
+
 ## Python Icechunk Library 0.1.1
 
 ### Fixes

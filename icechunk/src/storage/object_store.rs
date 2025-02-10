@@ -35,13 +35,14 @@ use std::{
 };
 use tokio::{io::AsyncRead, sync::Mutex};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tracing::instrument;
 use url::Url;
 
 use super::{
     ConcurrencySettings, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
-    Storage, StorageError, StorageResult, UpdateConfigResult, WriteRefResult,
-    CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
-    TRANSACTION_PREFIX,
+    Storage, StorageError, StorageErrorKind, StorageResult, UpdateConfigResult,
+    WriteRefResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
+    SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,12 +74,12 @@ impl ObjectStorage {
     ///
     /// This implementation should not be used in production code.
     pub fn new_local_filesystem(prefix: &StdPath) -> Result<ObjectStorage, StorageError> {
-        create_dir_all(prefix).map_err(|e| StorageError::Other(e.to_string()))?;
+        create_dir_all(prefix).map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
         let prefix = std::fs::canonicalize(prefix)
-            .map_err(|e| StorageError::Other(e.to_string()))?;
+            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
         let prefix =
-            prefix.into_os_string().into_string().map_err(StorageError::BadPrefix)?;
+            prefix.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
         let url = format!("file://{prefix}");
         let config = ObjectStorageConfig { url, prefix, options: vec![] };
 
@@ -147,7 +148,7 @@ impl ObjectStorage {
         config: ObjectStorageConfig,
     ) -> Result<ObjectStorage, StorageError> {
         let url: Url = Url::parse(config.url.as_str())
-            .map_err(|e| StorageError::Other(e.to_string()))?;
+            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
         if url.scheme() == "file" {
             let path = url.path();
             let store = Arc::new(LocalFileSystem::new_with_prefix(path)?);
@@ -162,7 +163,7 @@ impl ObjectStorage {
         }
 
         let (store, path) = parse_url_opts(&url, config.options.clone())
-            .map_err(|e| StorageError::Other(e.to_string()))?;
+            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
         let store: Arc<dyn ObjectStore> = Arc::from(store);
         Ok(ObjectStorage {
             store,
@@ -254,9 +255,12 @@ impl ObjectStorage {
                 ready(
                     self.drop_prefix(&prefix, &meta.location)
                         .map(|path| path.to_string())
-                        .ok_or(StorageError::Other(
-                            "Bug in ref prefix logic".to_string(),
-                        )),
+                        .ok_or(
+                            StorageErrorKind::Other(
+                                "Bug in ref prefix logic".to_string(),
+                            )
+                            .into(),
+                        ),
                 )
             })
             .boxed()
@@ -317,6 +321,7 @@ impl<'de> serde::Deserialize<'de> for ObjectStorage {
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
+    #[instrument(skip(self))]
     fn default_settings(&self) -> Settings {
         let base = Settings::default();
         let url = Url::parse(self.config.url.as_str());
@@ -348,6 +353,7 @@ impl Storage for ObjectStorage {
         }
     }
 
+    #[instrument(skip(self, _settings))]
     async fn fetch_config(
         &self,
         _settings: &Settings,
@@ -366,6 +372,7 @@ impl Storage for ObjectStorage {
             Err(err) => Err(err.into()),
         }
     }
+    #[instrument(skip(self, _settings, config))]
     async fn update_config(
         &self,
         _settings: &Settings,
@@ -395,7 +402,7 @@ impl Storage for ObjectStorage {
         let res = self.store.put_opts(&path, config.into(), options).await;
         match res {
             Ok(res) => {
-                let new_etag = res.e_tag.ok_or(StorageError::Other(
+                let new_etag = res.e_tag.ok_or(StorageErrorKind::Other(
                     "Config object should have an etag".to_string(),
                 ))?;
                 Ok(UpdateConfigResult::Updated { new_etag })
@@ -407,6 +414,7 @@ impl Storage for ObjectStorage {
         }
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
@@ -416,6 +424,7 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_manifest_known_size(
         &self,
         settings: &Settings,
@@ -426,6 +435,7 @@ impl Storage for ObjectStorage {
         self.get_object_concurrently(settings, path.as_ref(), &(0..size)).await
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_manifest_unknown_size(
         &self,
         settings: &Settings,
@@ -435,6 +445,7 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_transaction_log(
         &self,
         settings: &Settings,
@@ -444,6 +455,7 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
+    #[instrument(skip(self, _settings, metadata, bytes))]
     async fn write_snapshot(
         &self,
         _settings: &Settings,
@@ -459,6 +471,7 @@ impl Storage for ObjectStorage {
         Ok(())
     }
 
+    #[instrument(skip(self, _settings, metadata, bytes))]
     async fn write_manifest(
         &self,
         _settings: &Settings,
@@ -474,6 +487,7 @@ impl Storage for ObjectStorage {
         Ok(())
     }
 
+    #[instrument(skip(self, _settings, metadata, bytes))]
     async fn write_transaction_log(
         &self,
         _settings: &Settings,
@@ -489,6 +503,7 @@ impl Storage for ObjectStorage {
         Ok(())
     }
 
+    #[instrument(skip(self, settings))]
     async fn fetch_chunk(
         &self,
         settings: &Settings,
@@ -502,6 +517,7 @@ impl Storage for ObjectStorage {
             .await
     }
 
+    #[instrument(skip(self, _settings))]
     async fn write_chunk(
         &self,
         _settings: &Settings,
@@ -517,6 +533,7 @@ impl Storage for ObjectStorage {
         Ok(())
     }
 
+    #[instrument(skip(self, _settings))]
     async fn get_ref(
         &self,
         _settings: &Settings,
@@ -530,6 +547,7 @@ impl Storage for ObjectStorage {
         }
     }
 
+    #[instrument(skip(self, _settings))]
     async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
         // FIXME: i don't think object_store's implementation of list_with_delimiter is any good
         // we need to test if it even works beyond 1k refs
@@ -547,6 +565,7 @@ impl Storage for ObjectStorage {
             .collect())
     }
 
+    #[instrument(skip(self, _settings))]
     async fn ref_versions(
         &self,
         _settings: &Settings,
@@ -567,6 +586,7 @@ impl Storage for ObjectStorage {
         }
     }
 
+    #[instrument(skip(self, _settings, bytes))]
     async fn write_ref(
         &self,
         _settings: &Settings,
@@ -587,6 +607,7 @@ impl Storage for ObjectStorage {
         }
     }
 
+    #[instrument(skip(self, _settings))]
     async fn list_objects<'a>(
         &'a self,
         _settings: &Settings,
@@ -603,6 +624,7 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
+    #[instrument(skip(self, _settings, ids))]
     async fn delete_objects(
         &self,
         _settings: &Settings,
@@ -624,6 +646,7 @@ impl Storage for ObjectStorage {
         Ok(deleted.into_inner())
     }
 
+    #[instrument(skip(self, _settings))]
     async fn get_snapshot_last_modified(
         &self,
         _settings: &Settings,
@@ -634,6 +657,7 @@ impl Storage for ObjectStorage {
         Ok(res.last_modified)
     }
 
+    #[instrument(skip(self))]
     async fn root_is_clean(&self) -> StorageResult<bool> {
         Ok(self
             .store
@@ -643,6 +667,7 @@ impl Storage for ObjectStorage {
             .is_none())
     }
 
+    #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
         key: &str,
@@ -655,6 +680,7 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.store.get_opts(&path, opts).await?.bytes().await?))
     }
 
+    #[instrument(skip(self))]
     async fn get_object_range_read(
         &self,
         key: &str,

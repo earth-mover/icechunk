@@ -18,8 +18,10 @@ use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::{
+    error::ICError,
     format::{
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
@@ -29,9 +31,9 @@ use crate::{
         ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
         FillValue, StorageTransformer, UserAttributes,
     },
-    refs::RefError,
-    repository::RepositoryError,
-    session::{get_chunk, is_prefix_match, Session, SessionError},
+    refs::{RefError, RefErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind},
+    session::{get_chunk, is_prefix_match, Session, SessionError, SessionErrorKind},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -45,7 +47,7 @@ pub type StoreResult<A> = Result<A, StoreError>;
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum KeyNotFoundError {
-    #[error("chunk cannot be find for key `{key}`")]
+    #[error("chunk cannot be find for key `{key}` (path={path}, coords={coords:?})")]
     ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
     #[error("node not found at `{path}`")]
     NodeNotFound { path: Path },
@@ -55,32 +57,33 @@ pub enum KeyNotFoundError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum StoreError {
+pub enum StoreErrorKind {
+    #[error(transparent)]
+    SessionError(SessionErrorKind),
+    #[error(transparent)]
+    RepositoryError(RepositoryErrorKind),
+    #[error(transparent)]
+    RefError(RefErrorKind),
+
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
     #[error("this operation is not allowed: {0}")]
     NotAllowed(String),
-    #[error("object not found: `{0}`")]
+    #[error(transparent)]
     NotFound(#[from] KeyNotFoundError),
-    #[error("unsuccessful session operation: `{0}`")]
-    SessionError(#[from] SessionError),
-    #[error("unsuccessful repository operation: `{0}`")]
-    RepositoryError(#[from] RepositoryError),
     #[error("error merging stores: `{0}`")]
     MergeError(String),
-    #[error("unsuccessful ref operation: `{0}`")]
-    RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("could not create path from prefix")]
     PathError(#[from] PathError),
     #[error("all commits must be made on a branch")]
     NotOnBranch,
-    #[error("bad metadata: `{0}`")]
+    #[error("bad metadata")]
     BadMetadata(#[from] serde_json::Error),
-    #[error("deserialization error: `{0}`")]
+    #[error("deserialization error")]
     DeserializationError(#[from] rmp_serde::decode::Error),
-    #[error("serialization error: `{0}`")]
+    #[error("serialization error")]
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
@@ -98,8 +101,39 @@ pub enum StoreError {
         "invalid chunk location, no matching virtual chunk container: `{chunk_location}`"
     )]
     InvalidVirtualChunkContainer { chunk_location: String },
-    #[error("unknown store error: `{0}`")]
+    #[error("unknown store error")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
+}
+
+pub type StoreError = ICError<StoreErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for StoreError
+where
+    E: Into<StoreErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
+}
+
+impl From<RepositoryError> for StoreError {
+    fn from(value: RepositoryError) -> Self {
+        Self::with_context(StoreErrorKind::RepositoryError(value.kind), value.context)
+    }
+}
+
+impl From<RefError> for StoreError {
+    fn from(value: RefError) -> Self {
+        Self::with_context(StoreErrorKind::RefError(value.kind), value.context)
+    }
+}
+
+impl From<SessionError> for StoreError {
+    fn from(value: SessionError) -> Self {
+        Self::with_context(StoreErrorKind::SessionError(value.kind), value.context)
+    }
 }
 
 #[derive(Clone)]
@@ -121,12 +155,14 @@ impl Store {
         Self { session, get_partial_values_concurrency }
     }
 
+    #[instrument(skip(bytes))]
     pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 
+    #[instrument(skip(self))]
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
         let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
@@ -137,19 +173,23 @@ impl Store {
         Arc::clone(&self.session)
     }
 
+    #[instrument(skip(self))]
     pub async fn read_only(&self) -> bool {
         self.session.read().await.read_only()
     }
 
+    #[instrument(skip(self))]
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
         Ok(self.list_dir(prefix).await?.next().await.is_none())
     }
 
+    #[instrument(skip(self))]
     pub async fn clear(&self) -> StoreResult<()> {
         let mut repo = self.session.write().await;
         Ok(repo.clear().await?)
     }
 
+    #[instrument(skip(self))]
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
         let repo = self.session.read().await;
         get_key(key, byte_range, &repo).await
@@ -164,6 +204,7 @@ impl Store {
     ///
     /// Currently this function is using concurrency but not parallelism. To limit the number of
     /// concurrent tasks use the Store config value `get_partial_values_concurrency`.
+    #[instrument(skip(self, key_ranges))]
     pub async fn get_partial_values(
         &self,
         key_ranges: impl IntoIterator<Item = (String, ByteRange)>,
@@ -207,31 +248,35 @@ impl Store {
             .await;
 
         let results = Arc::into_inner(results)
-            .ok_or(StoreError::PartialValuesPanic)?
+            .ok_or(StoreErrorKind::PartialValuesPanic)?
             .into_inner()
-            .map_err(|_| StoreError::PartialValuesPanic)?;
+            .map_err(|_| StoreErrorKind::PartialValuesPanic)?;
 
         debug_assert!(results.len() == num_keys.into_inner());
         let res: Option<Vec<_>> = results.into_iter().collect();
-        res.ok_or(StoreError::PartialValuesPanic)
+        res.ok_or(StoreErrorKind::PartialValuesPanic.into())
     }
 
+    #[instrument(skip(self))]
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
         let guard = self.session.read().await;
         exists(key, guard.deref()).await
     }
 
+    #[instrument(skip(self))]
     pub fn supports_writes(&self) -> StoreResult<bool> {
         Ok(true)
     }
 
+    #[instrument(skip(self))]
     pub fn supports_deletes(&self) -> StoreResult<bool> {
         Ok(true)
     }
 
+    #[instrument(skip(self, value))]
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
         self.set_with_optional_locking(key, value, None).await
@@ -245,10 +290,10 @@ impl Store {
     ) -> StoreResult<()> {
         if let Some(session) = locked_session.as_ref() {
             if session.read_only() {
-                return Err(StoreError::ReadOnly);
+                return Err(StoreErrorKind::ReadOnly.into());
             }
         } else if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
         match Key::parse(key)? {
@@ -261,7 +306,7 @@ impl Store {
                             self.set_group_meta(node_path, group_meta, locked_session)
                                 .await
                         }
-                        Err(err) => Err(StoreError::BadMetadata(err)),
+                        Err(err) => Err(StoreErrorKind::BadMetadata(err).into()),
                     }
                 }
             }
@@ -287,22 +332,25 @@ impl Store {
                 }
                 Ok(())
             }
-            Key::ZarrV2(_) => Err(StoreError::Unimplemented(
+            Key::ZarrV2(_) => Err(StoreErrorKind::Unimplemented(
                 "Icechunk cannot set Zarr V2 metadata keys",
-            )),
+            )
+            .into()),
         }
     }
 
-    pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
+    #[instrument(skip(self, bytes))]
+    pub async fn set_if_not_exists(&self, key: &str, bytes: Bytes) -> StoreResult<()> {
         let mut guard = self.session.write().await;
         if exists(key, guard.deref()).await? {
             Ok(())
         } else {
-            self.set_with_optional_locking(key, value, Some(guard.deref_mut())).await
+            self.set_with_optional_locking(key, bytes, Some(guard.deref_mut())).await
         }
     }
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
+    #[instrument(skip(self))]
     pub async fn set_virtual_ref(
         &self,
         key: &str,
@@ -310,7 +358,7 @@ impl Store {
         validate_container: bool,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
         match Key::parse(key)? {
@@ -319,9 +367,10 @@ impl Store {
                 if validate_container
                     && session.matching_container(&reference.location).is_none()
                 {
-                    return Err(StoreError::InvalidVirtualChunkContainer {
+                    return Err(StoreErrorKind::InvalidVirtualChunkContainer {
                         chunk_location: reference.location.0,
-                    });
+                    }
+                    .into());
                 }
                 session
                     .set_chunk_ref(
@@ -332,27 +381,29 @@ impl Store {
                     .await?;
                 Ok(())
             }
-            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreError::NotAllowed(
+            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreErrorKind::NotAllowed(
                 format!("use .set to modify metadata for key {}", key),
-            )),
+            )
+            .into()),
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
         let prefix = prefix.trim_start_matches("/").trim_end_matches("/");
         // TODO: Handling preceding "/" is ugly!
         let path = format!("/{}", prefix)
             .try_into()
-            .map_err(|_| StoreError::BadKeyPrefix(prefix.to_owned()))?;
+            .map_err(|_| StoreErrorKind::BadKeyPrefix(prefix.to_owned()))?;
 
         let mut guard = self.session.write().await;
         let node = guard.get_node(&path).await;
         match node {
             Ok(node) => Ok(guard.deref_mut().delete_node(node).await?),
-            Err(SessionError::NodeNotFound { .. }) => {
+            Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 // other cases are
                 // 1. delete("/path/to/array/c")
                 // 2. delete("/path/to/array/c/0/0")
@@ -399,6 +450,7 @@ impl Store {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn delete(&self, key: &str) -> StoreResult<()> {
         // we need to hold the lock while we do the node search and the write
         // to avoid race conditions with other writers
@@ -409,10 +461,14 @@ impl Store {
                 let node = session.get_node(&node_path).await;
 
                 // When there is no node at the given key, we don't consider it an error, instead we just do nothing
-                if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
+                if let Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { path: _, message: _ },
+                    ..
+                }) = node
+                {
                     return Ok(());
                 };
-                Ok(session.delete_node(node.map_err(StoreError::SessionError)?).await?)
+                Ok(session.delete_node(node.map_err(StoreError::from)?).await?)
             }
             Key::Chunk { node_path, coords } => {
                 Ok(session.delete_chunks(&node_path, vec![coords].into_iter()).await?)
@@ -425,15 +481,16 @@ impl Store {
         Ok(false)
     }
 
+    #[instrument(skip(self, _key_start_values))]
     pub async fn set_partial_values(
         &self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
-        Err(StoreError::Unimplemented("set_partial_values"))
+        Err(StoreErrorKind::Unimplemented("set_partial_values").into())
     }
 
     pub fn supports_listing(&self) -> StoreResult<bool> {
@@ -446,6 +503,7 @@ impl Store {
         self.list_prefix("/").await
     }
 
+    #[instrument(skip(self))]
     pub async fn list_prefix(
         &self,
         prefix: &str,
@@ -470,6 +528,7 @@ impl Store {
         Ok(res)
     }
 
+    #[instrument(skip(self))]
     pub async fn list_dir_items(
         &self,
         prefix: &str,
@@ -565,9 +624,24 @@ impl Store {
         Ok(futures::stream::iter(results.into_iter().map(Ok)))
     }
 
+    #[instrument(skip(self))]
     pub async fn getsize(&self, key: &str) -> StoreResult<u64> {
-        let repo = self.session.read().await;
-        get_key_size(key, &repo).await
+        let session = self.session.read().await;
+        get_key_size(key, &session).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn getsize_prefix(&self, prefix: &str) -> StoreResult<u64> {
+        let session_guard = Arc::clone(&self.session).read_owned().await;
+        let session = session_guard.deref();
+
+        let meta = self.list_metadata_prefix(prefix, false).await?;
+        let chunks = self.list_chunks_prefix(prefix).await?;
+        meta.chain(chunks)
+            .try_fold(0, move |accum, key| async move {
+                get_key_size(key.as_str(), session).await.map(|n| n + accum)
+            })
+            .await
     }
 
     async fn set_array_meta(
@@ -648,7 +722,7 @@ impl Store {
             let repository = Arc::clone(&self.session).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::SessionError)? {
+            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::from)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
                     Ok((path, chunk)) => {
@@ -731,8 +805,9 @@ async fn get_metadata(
     range: &ByteRange,
     repo: &Session,
 ) -> StoreResult<Bytes> {
+    // FIXME: don't skip errors
     let node = repo.get_node(path).await.map_err(|_| {
-        StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
+        StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
     })?;
     let user_attributes = match node.user_attributes {
         None => None,
@@ -764,11 +839,14 @@ async fn get_chunk_bytes(
 
     // then we can fetch the bytes without holding the lock
     let chunk = get_chunk(reader).await?;
-    chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
-        key: key.to_string(),
-        path,
-        coords,
-    }))
+    chunk.ok_or(
+        StoreErrorKind::NotFound(KeyNotFoundError::ChunkNotFound {
+            key: key.to_string(),
+            path,
+            coords,
+        })
+        .into(),
+    )
 }
 
 async fn get_metadata_size(key: &str, path: &Path, repo: &Session) -> StoreResult<u64> {
@@ -806,36 +884,51 @@ async fn get_key(
             get_chunk_bytes(key, node_path, coords, byte_range, repo).await
         }
         Key::ZarrV2(key) => {
-            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
         }
     }?;
 
     Ok(bytes)
 }
 
-async fn get_key_size(key: &str, repo: &Session) -> StoreResult<u64> {
+async fn get_key_size(key: &str, session: &Session) -> StoreResult<u64> {
     let bytes = match Key::parse(key)? {
-        Key::Metadata { node_path } => get_metadata_size(key, &node_path, repo).await,
+        Key::Metadata { node_path } => get_metadata_size(key, &node_path, session).await,
         Key::Chunk { node_path, coords } => {
-            get_chunk_size(key, &node_path, &coords, repo).await
+            get_chunk_size(key, &node_path, &coords, session).await
         }
         Key::ZarrV2(key) => {
-            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
         }
     }?;
 
     Ok(bytes)
 }
 
-async fn exists(key: &str, repo: &Session) -> StoreResult<bool> {
-    match get_key(key, &ByteRange::ALL, repo).await {
-        Ok(_) => Ok(true),
-        Err(StoreError::NotFound(_)) => Ok(false),
-        Err(StoreError::SessionError(SessionError::NodeNotFound {
-            path: _,
-            message: _,
-        })) => Ok(false),
-        Err(other_error) => Err(other_error),
+async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
+    match Key::parse(key)? {
+        Key::Metadata { node_path } => match session.get_node(&node_path).await {
+            Ok(_) => Ok(true),
+            Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        },
+        Key::Chunk { node_path, coords } => {
+            match session.get_chunk_ref(&node_path, &coords).await {
+                Ok(r) => Ok(r.is_some()),
+                Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { .. }, ..
+                }) => Ok(false),
+                Err(err) => Err(err.into()),
+            }
+        }
+        Key::ZarrV2(key) => {
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
+        }
     }
 }
 
@@ -876,17 +969,17 @@ impl Key {
                 if coords.is_empty() {
                     Ok(Key::Chunk {
                         node_path: format!("/{path}").try_into().map_err(|_| {
-                            StoreError::InvalidKey { key: key.to_string() }
+                            StoreErrorKind::InvalidKey { key: key.to_string() }
                         })?,
                         coords: ChunkIndices(vec![]),
                     })
                 } else {
-                    let absolute = format!("/{path}")
-                        .try_into()
-                        .map_err(|_| StoreError::InvalidKey { key: key.to_string() })?;
+                    let absolute = format!("/{path}").try_into().map_err(|_| {
+                        StoreErrorKind::InvalidKey { key: key.to_string() }
+                    })?;
                     coords
                         .strip_prefix('/')
-                        .ok_or(StoreError::InvalidKey { key: key.to_string() })?
+                        .ok_or(StoreErrorKind::InvalidKey { key: key.to_string() })?
                         .split('/')
                         .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
@@ -894,10 +987,12 @@ impl Key {
                             node_path: absolute,
                             coords: ChunkIndices(coords),
                         })
-                        .map_err(|_| StoreError::InvalidKey { key: key.to_string() })
+                        .map_err(|_| {
+                            StoreErrorKind::InvalidKey { key: key.to_string() }.into()
+                        })
                 }
             } else {
-                Err(StoreError::InvalidKey { key: key.to_string() })
+                Err(StoreErrorKind::InvalidKey { key: key.to_string() }.into())
             }
         }
 
@@ -908,7 +1003,7 @@ impl Key {
             Ok(Key::Metadata {
                 node_path: format!("/{path}")
                     .try_into()
-                    .map_err(|_| StoreError::InvalidKey { key: key.to_string() })?,
+                    .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })?,
             })
         } else {
             parse_chunk(key)
@@ -1541,7 +1636,7 @@ mod tests {
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_string() == "/"
+            Err(StoreError{kind: StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound {path}),..}) if path.to_string() == "/"
         ));
 
         store
@@ -1594,7 +1689,7 @@ mod tests {
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
             store.get("array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
+            Err(StoreError{kind: StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path }),..})
                 if path.to_string() == "/array",
         ));
         // Deleting a non-existent key should not fail
@@ -1604,7 +1699,7 @@ mod tests {
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
             store.get("array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
+            Err(StoreError{kind: StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path } ), ..})
                 if path.to_string() == "/array",
         ));
         store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
@@ -1728,17 +1823,17 @@ mod tests {
         store.delete("array/c/1/1/1").await.unwrap();
         assert!(matches!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
+            Err(StoreError{kind:StoreErrorKind::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }),..})
                 if key == "array/c/0/1/0" && path.to_string() == "/array" && coords == ChunkIndices([0, 1, 0].to_vec())
         ));
         assert!(matches!(
             store.delete("array/foo").await,
-            Err(StoreError::InvalidKey { key }) if key == "array/foo",
+            Err(StoreError{kind: StoreErrorKind::InvalidKey { key }, ..}) if key == "array/foo",
         ));
 
         assert!(matches!(
             store.delete("array/c/10/1/1").await,
-            Err(StoreError::SessionError(SessionError::InvalidIndex { coords, path }))
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::InvalidIndex { coords, path }),..})
                 if path.to_string() == "/array" && coords == ChunkIndices([10, 1, 1].to_vec())
         ));
 
@@ -1758,18 +1853,18 @@ mod tests {
         store.delete_dir("group/array").await.unwrap();
         assert!(matches!(
             store.get("group/array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(..))
+            Err(StoreError { kind: StoreErrorKind::NotFound(..), .. })
         ));
 
         add_array_and_chunk(&store, "group/array").await.unwrap();
         store.delete_dir("group").await.unwrap();
         assert!(matches!(
             store.get("group/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(..))
+            Err(StoreError { kind: StoreErrorKind::NotFound(..), .. })
         ));
         assert!(matches!(
             store.get("group/array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(..))
+            Err(StoreError { kind: StoreErrorKind::NotFound(..), .. })
         ));
 
         add_group(&store, "group").await.unwrap();
@@ -2451,7 +2546,8 @@ mod tests {
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
             )
             .await;
-        let correct_error = matches!(result, Err(StoreError::ReadOnly));
+        let correct_error =
+            matches!(result, Err(StoreError { kind: StoreErrorKind::ReadOnly, .. }));
         assert!(correct_error);
     }
 

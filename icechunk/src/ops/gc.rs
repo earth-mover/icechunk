@@ -7,7 +7,8 @@ use tokio::pin;
 use crate::{
     asset_manager::AssetManager,
     format::{
-        manifest::ChunkPayload, ChunkId, IcechunkFormatError, ManifestId, SnapshotId,
+        manifest::ChunkPayload, ChunkId, IcechunkFormatError, IcechunkFormatErrorKind,
+        ManifestId, SnapshotId,
     },
     refs::{delete_branch, delete_tag, list_refs, Ref, RefError},
     repository::RepositoryError,
@@ -187,9 +188,11 @@ pub async fn garbage_collect(
         if config.deletes_chunks() {
             for manifest_id in snap.manifest_files().keys() {
                 let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
-                    IcechunkFormatError::ManifestInfoNotFound {
-                        manifest_id: manifest_id.clone(),
-                    }
+                    IcechunkFormatError::from(
+                        IcechunkFormatErrorKind::ManifestInfoNotFound {
+                            manifest_id: manifest_id.clone(),
+                        },
+                    )
                 })?;
                 let manifest = asset_manager
                     .fetch_manifest(manifest_id, manifest_info.size_bytes)

@@ -145,28 +145,28 @@ impl ManifestPreloadConfig {
                         // regexes taken from https://github.com/xarray-contrib/cf-xarray/blob/1591ff5ea7664a6bdef24055ef75e242cd5bfc8b/cf_xarray/criteria.py#L149-L160
                         ManifestPreloadCondition::NameMatches {
                             // time
-                            regex: r#"\bt\b|(time|min|hour|day|week|month|year)[0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^\bt\b$|^(time|min|hour|day|week|month|year)[0-9]*$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // Z
-                            regex: r#"(z|nav_lev|gdep|lv_|[o]*lev|bottom_top|sigma|h(ei)?ght|altitude|depth|isobaric|pres|isotherm)[a-z_]*[0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^(z|nav_lev|gdep|lv_|[o]*lev|bottom_top|sigma|h(ei)?ght|altitude|depth|isobaric|pres|isotherm)[a-z_]*[0-9]*$"#.to_string(), // codespell:ignore
 
                         },
                         ManifestPreloadCondition::NameMatches {
                             // Y
-                            regex: r#"y|j|nlat|rlat|nj"#.to_string(), // codespell:ignore
+                            regex: r#"^(y|j|nlat|rlat|nj)$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // latitude
-                            regex: r#"y?(nav_lat|lat|gphi)[a-z0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^y?(nav_lat|lat|gphi)[a-z0-9]*$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // longitude
-                            regex: r#"x?(nav_lon|lon|glam)[a-z0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^x?(nav_lon|lon|glam)[a-z0-9]*$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // X
-                            regex: r#"x|i|nlon|rlon|ni"#.to_string(), // codespell:ignore
+                            regex: r#"^(x|i|nlon|rlon|ni)$"#.to_string(), // codespell:ignore
                         },
                     ]),
                     ManifestPreloadCondition::NumRefs {

@@ -33,6 +33,8 @@ from icechunk._icechunk_python import (
     VersionSelection,
     VirtualChunkContainer,
     __version__,
+    initialize_logs,
+    spec_version,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -123,6 +125,7 @@ __all__ = [
     "gcs_static_credentials",
     "gcs_storage",
     "in_memory_storage",
+    "initialize_logs",
     "local_filesystem_storage",
     "s3_anonymous_credentials",
     "s3_credentials",
@@ -132,5 +135,8 @@ __all__ = [
     "s3_static_credentials",
     "s3_storage",
     "s3_store",
+    "spec_version",
     "tigris_storage",
 ]
+
+initialize_logs()

@@ -348,3 +348,6 @@ class IcechunkStore(Store, SyncMixin):
 
     async def getsize(self, key: str) -> int:
         return await self._store.getsize(key)
+
+    async def getsize_prefix(self, prefix: str) -> int:
+        return await self._store.getsize_prefix(prefix)

@@ -10,20 +10,24 @@ use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
+use tracing::{debug, error, instrument, trace, Instrument};
 
 use crate::{
     asset_manager::AssetManager,
     config::{Credentials, ManifestPreloadCondition, RepositoryConfig},
+    error::ICError,
     format::{
         snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
-        IcechunkFormatError, ManifestId, NodeId, Path, SnapshotId,
+        IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
+        SnapshotId,
     },
     refs::{
         create_tag, delete_branch, delete_tag, fetch_branch_tip, fetch_tag,
         list_branches, list_tags, update_branch, BranchVersion, Ref, RefError,
+        RefErrorKind,
     },
     session::Session,
-    storage::{self, ETag, FetchConfigResult, UpdateConfigResult},
+    storage::{self, ETag, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
     virtual_chunks::{ContainerName, VirtualChunkResolver},
     Storage, StorageError,
 };
@@ -41,41 +45,73 @@ pub enum VersionInfo {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum RepositoryError {
-    #[error("error contacting storage {0}")]
-    StorageError(#[from] StorageError),
+pub enum RepositoryErrorKind {
+    #[error(transparent)]
+    StorageError(StorageErrorKind),
+    #[error(transparent)]
+    FormatError(IcechunkFormatErrorKind),
+    #[error(transparent)]
+    Ref(RefErrorKind),
+
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("invalid snapshot id: `{0}`")]
     InvalidSnapshotId(String),
-    #[error("error in icechunk file")]
-    FormatError(#[from] IcechunkFormatError),
-    #[error("ref error: `{0}`")]
-    Ref(#[from] RefError),
     #[error("tag error: `{0}`")]
     Tag(String),
     #[error("repositories can only be created in clean prefixes")]
     ParentDirectoryNotClean,
     #[error("the repository doesn't exist")]
     RepositoryDoesntExist,
-    #[error("error in repository serialization `{0}`")]
+    #[error("error in repository serialization")]
     SerializationError(#[from] rmp_serde::encode::Error),
-    #[error("error in repository deserialization `{0}`")]
+    #[error("error in repository deserialization")]
     DeserializationError(#[from] rmp_serde::decode::Error),
     #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
     ConflictingPathNotFound(NodeId),
-    #[error("error in config deserialization `{0}`")]
-    ConfigDeserializationError(#[from] serde_yml::Error),
+    #[error("error in config deserialization")]
+    ConfigDeserializationError(#[from] serde_yaml_ng::Error),
     #[error("config was updated by other session")]
     ConfigWasUpdated,
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
-    #[error("I/O error `{0}`")]
+    #[error("I/O error")]
     IOError(#[from] std::io::Error),
-    #[error("a concurrent task failed {0}")]
+    #[error("a concurrent task failed")]
     ConcurrencyError(#[from] JoinError),
     #[error("main branch cannot be deleted")]
     CannotDeleteMain,
+}
+
+pub type RepositoryError = ICError<RepositoryErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for RepositoryError
+where
+    E: Into<RepositoryErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
+}
+
+impl From<StorageError> for RepositoryError {
+    fn from(value: StorageError) -> Self {
+        Self::with_context(RepositoryErrorKind::StorageError(value.kind), value.context)
+    }
+}
+
+impl From<RefError> for RepositoryError {
+    fn from(value: RefError) -> Self {
+        Self::with_context(RepositoryErrorKind::Ref(value.kind), value.context)
+    }
+}
+
+impl From<IcechunkFormatError> for RepositoryError {
+    fn from(value: IcechunkFormatError) -> Self {
+        Self::with_context(RepositoryErrorKind::FormatError(value.kind), value.context)
+    }
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
@@ -92,6 +128,7 @@ pub struct Repository {
 }
 
 impl Repository {
+    #[instrument(skip_all)]
     pub async fn create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
@@ -111,43 +148,50 @@ impl Repository {
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
 
         if !storage.root_is_clean().await? {
-            return Err(RepositoryError::ParentDirectoryNotClean);
+            return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
-        let handle1 = tokio::spawn(async move {
-            // TODO: we could cache this first snapshot
-            let asset_manager = AssetManager::new_no_cache(
-                Arc::clone(&storage_c),
-                storage_settings.clone(),
-                compression,
-            );
-            // On create we need to create the default branch
-            let new_snapshot = Arc::new(Snapshot::initial());
-            asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
+        let handle1 = tokio::spawn(
+            async move {
+                // TODO: we could cache this first snapshot
+                let asset_manager = AssetManager::new_no_cache(
+                    Arc::clone(&storage_c),
+                    storage_settings.clone(),
+                    compression,
+                );
+                // On create we need to create the default branch
+                let new_snapshot = Arc::new(Snapshot::initial());
+                asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
-            update_branch(
-                storage_c.as_ref(),
-                &storage_settings,
-                Ref::DEFAULT_BRANCH,
-                new_snapshot.id().clone(),
-                None,
-                overwrite_refs,
-            )
-            .await?;
-            Ok::<(), RepositoryError>(())
-        });
+                update_branch(
+                    storage_c.as_ref(),
+                    &storage_settings,
+                    Ref::DEFAULT_BRANCH,
+                    new_snapshot.id().clone(),
+                    None,
+                    overwrite_refs,
+                )
+                .await?;
+                Ok::<(), RepositoryError>(())
+            }
+            .in_current_span(),
+        );
 
         let storage_c = Arc::clone(&storage);
         let config_c = config.clone();
-        let handle2 = tokio::spawn(async move {
-            if has_overriden_config {
-                let etag =
-                    Repository::store_config(storage_c.as_ref(), &config_c, None).await?;
-                Ok::<_, RepositoryError>(Some(etag))
-            } else {
-                Ok(None)
+        let handle2 = tokio::spawn(
+            async move {
+                if has_overriden_config {
+                    let etag =
+                        Repository::store_config(storage_c.as_ref(), &config_c, None)
+                            .await?;
+                    Ok::<_, RepositoryError>(Some(etag))
+                } else {
+                    Ok(None)
+                }
             }
-        });
+            .in_current_span(),
+        );
 
         handle1.await??;
         let config_etag = handle2.await??;
@@ -157,22 +201,29 @@ impl Repository {
         Self::new(config, config_etag, storage, virtual_chunk_credentials)
     }
 
+    #[instrument(skip_all)]
     pub async fn open(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
         let storage_c = Arc::clone(&storage);
-        let handle1 =
-            tokio::spawn(async move { Self::fetch_config(storage_c.as_ref()).await });
+        let handle1 = tokio::spawn(
+            async move { Self::fetch_config(storage_c.as_ref()).await }.in_current_span(),
+        );
 
         let storage_c = Arc::clone(&storage);
-        let handle2 = tokio::spawn(async move {
-            if !Self::exists(storage_c.as_ref()).await? {
-                return Err(RepositoryError::RepositoryDoesntExist);
+        let handle2 = tokio::spawn(
+            async move {
+                if !Self::exists(storage_c.as_ref()).await? {
+                    return Err(RepositoryError::from(
+                        RepositoryErrorKind::RepositoryDoesntExist,
+                    ));
+                }
+                Ok(())
             }
-            Ok(())
-        });
+            .in_current_span(),
+        );
 
         #[allow(clippy::expect_used)]
         handle2.await.expect("Error checking if repo exists")?;
@@ -235,17 +286,19 @@ impl Repository {
         })
     }
 
+    #[instrument(skip_all)]
     pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
         match fetch_branch_tip(storage, &storage.default_settings(), Ref::DEFAULT_BRANCH)
             .await
         {
             Ok(_) => Ok(true),
-            Err(RefError::RefNotFound(_)) => Ok(false),
+            Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }
 
     /// Reopen the repository changing its config and or virtual chunk credentials
+    #[instrument(skip_all)]
     pub fn reopen(
         &self,
         config: Option<RepositoryConfig>,
@@ -265,18 +318,20 @@ impl Repository {
         )
     }
 
+    #[instrument(skip_all)]
     pub async fn fetch_config(
         storage: &(dyn Storage + Send + Sync),
     ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
         match storage.fetch_config(&storage.default_settings()).await? {
             FetchConfigResult::Found { bytes, etag } => {
-                let config = serde_yml::from_slice(&bytes)?;
+                let config = serde_yaml_ng::from_slice(&bytes)?;
                 Ok(Some((config, etag)))
             }
             FetchConfigResult::NotFound => Ok(None),
         }
     }
 
+    #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<ETag> {
         Repository::store_config(
             self.storage().as_ref(),
@@ -286,12 +341,13 @@ impl Repository {
         .await
     }
 
+    #[instrument(skip(storage, config))]
     pub(crate) async fn store_config(
         storage: &(dyn Storage + Send + Sync),
         config: &RepositoryConfig,
         config_etag: Option<&ETag>,
     ) -> RepositoryResult<ETag> {
-        let bytes = Bytes::from(serde_yml::to_string(config)?);
+        let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         match storage
             .update_config(
                 &storage.default_settings(),
@@ -302,7 +358,7 @@ impl Repository {
         {
             UpdateConfigResult::Updated { new_etag } => Ok(new_etag),
             UpdateConfigResult::NotOnLatestVersion => {
-                Err(RepositoryError::ConfigWasUpdated)
+                Err(RepositoryErrorKind::ConfigWasUpdated.into())
             }
         }
     }
@@ -324,6 +380,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
+    #[instrument(skip(self))]
     pub async fn snapshot_ancestry(
         &self,
         snapshot_id: &SnapshotId,
@@ -331,6 +388,7 @@ impl Repository {
         Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
     }
 
+    #[instrument(skip(self))]
     pub async fn snapshot_ancestry_arc(
         self: Arc<Self>,
         snapshot_id: &SnapshotId,
@@ -339,6 +397,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
+    #[instrument(skip(self))]
     pub async fn ancestry(
         &self,
         version: &VersionInfo,
@@ -347,6 +406,7 @@ impl Repository {
         self.snapshot_ancestry(&snapshot_id).await
     }
 
+    #[instrument(skip(self))]
     pub async fn ancestry_arc(
         self: Arc<Self>,
         version: &VersionInfo,
@@ -356,6 +416,7 @@ impl Repository {
     }
 
     /// Create a new branch in the repository at the given snapshot id
+    #[instrument(skip(self))]
     pub async fn create_branch(
         &self,
         branch_name: &str,
@@ -372,9 +433,13 @@ impl Repository {
         )
         .await
         {
-            Ok(branch_version) => Ok(branch_version),
-            Err(RefError::Conflict { expected_parent, actual_parent }) => {
-                Err(RepositoryError::Conflict { expected_parent, actual_parent })
+            Ok(branch_version) => Ok::<_, RepositoryError>(branch_version),
+            Err(RefError {
+                kind: RefErrorKind::Conflict { expected_parent, actual_parent },
+                ..
+            }) => {
+                Err(RepositoryErrorKind::Conflict { expected_parent, actual_parent }
+                    .into())
             }
             Err(err) => Err(err.into()),
         }?;
@@ -383,6 +448,7 @@ impl Repository {
     }
 
     /// List all branches in the repository.
+    #[instrument(skip(self))]
     pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
         let branches =
             list_branches(self.storage.as_ref(), &self.storage_settings).await?;
@@ -390,6 +456,7 @@ impl Repository {
     }
 
     /// Get the snapshot id of the tip of a branch
+    #[instrument(skip(self))]
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version =
             fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
@@ -400,6 +467,7 @@ impl Repository {
     /// Make a branch point to the specified snapshot.
     /// After execution, history of the branch will be altered, and the current
     /// store will point to a different base snapshot_id
+    #[instrument(skip(self))]
     pub async fn reset_branch(
         &self,
         branch: &str,
@@ -428,18 +496,20 @@ impl Repository {
     /// Delete a branch from the repository.
     /// This will remove the branch reference and the branch history. It will not remove the
     /// chunks or snapshots associated with the branch.
+    #[instrument(skip(self))]
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
         if branch != Ref::DEFAULT_BRANCH {
             delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
             Ok(())
         } else {
-            Err(RepositoryError::CannotDeleteMain)
+            Err(RepositoryErrorKind::CannotDeleteMain.into())
         }
     }
 
     /// Delete a tag from the repository.
     /// This will remove the tag reference. It will not remove the
     /// chunks or snapshots associated with the tag.
+    #[instrument(skip(self))]
     pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
         Ok(delete_tag(
             self.storage.as_ref(),
@@ -451,6 +521,7 @@ impl Repository {
     }
 
     /// Create a new tag in the repository at the given snapshot id
+    #[instrument(skip(self))]
     pub async fn create_tag(
         &self,
         tag_name: &str,
@@ -468,17 +539,20 @@ impl Repository {
     }
 
     /// List all tags in the repository.
+    #[instrument(skip(self))]
     pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
 
+    #[instrument(skip(self))]
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data =
             fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
         Ok(ref_data.snapshot)
     }
 
+    #[instrument(skip(self))]
     async fn resolve_version(
         &self,
         version: &VersionInfo,
@@ -510,6 +584,7 @@ impl Repository {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn readonly_session(
         &self,
         version: &VersionInfo,
@@ -529,6 +604,7 @@ impl Repository {
         Ok(session)
     }
 
+    #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         let ref_data =
             fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
@@ -548,7 +624,9 @@ impl Repository {
         Ok(session)
     }
 
+    #[instrument(skip(self))]
     fn preload_manifests(&self, snapshot_id: SnapshotId) {
+        debug!("Preloading manifests");
         let asset_manager = Arc::clone(self.asset_manager());
         let preload_config = self.config().manifest().preload().clone();
         if preload_config.max_total_refs() == 0
@@ -583,13 +661,21 @@ impl Repository {
                                             let asset_manager =
                                                 Arc::clone(&asset_manager);
                                             let manifest_id_c = manifest_id.clone();
+                                            let path = node.path.clone();
                                             futures.push(async move {
-                                                let _ = asset_manager
+                                                trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
+                                                if let Err(err) = asset_manager
                                                     .fetch_manifest(
                                                         &manifest_id_c,
                                                         size_bytes,
                                                     )
-                                                    .await;
+                                                    .await
+                                                {
+                                                    error!(
+                                                        "Failure pre-loading manifest {}: {}",
+                                                        &manifest_id_c, err
+                                                    );
+                                                }
                                             });
                                             loaded_manifests.insert(manifest_id);
                                             loaded_refs += manifest_info.num_rows;
@@ -602,7 +688,7 @@ impl Repository {
                 }
             }
             futures.collect::<()>().await;
-        });
+        }.in_current_span());
     }
 }
 
@@ -643,7 +729,10 @@ fn validate_credentials(
     for (cont, cred) in creds {
         if let Some(cont) = config.get_virtual_chunk_container(cont) {
             if let Err(error) = cont.validate_credentials(cred) {
-                return Err(RepositoryError::StorageError(StorageError::Other(error)));
+                return Err(RepositoryErrorKind::StorageError(StorageErrorKind::Other(
+                    error,
+                ))
+                .into());
             }
         }
     }
@@ -658,7 +747,7 @@ pub async fn raise_if_invalid_snapshot_id(
     storage
         .fetch_snapshot(storage_settings, snapshot_id)
         .await
-        .map_err(|_| RepositoryError::SnapshotNotFound { id: snapshot_id.clone() })?;
+        .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
 }
 
@@ -802,7 +891,7 @@ mod tests {
         // Main branch cannot be deleted
         assert!(matches!(
             repo.delete_branch("main").await,
-            Err(RepositoryError::CannotDeleteMain)
+            Err(RepositoryError { kind: RepositoryErrorKind::CannotDeleteMain, .. })
         ));
 
         // Delete a branch
@@ -822,6 +911,31 @@ mod tests {
         assert_eq!(tag_snapshot, initial_snapshot);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_manifest_preload_default_condition() {
+        let condition =
+            RepositoryConfig::default().manifest().preload().preload_if().clone();
+        // no name match
+        assert!(!condition.matches(
+            &"/array".try_into().unwrap(),
+            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+        ));
+        // partial match only
+        assert!(!condition.matches(
+            &"/nottime".try_into().unwrap(),
+            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+        ));
+        // too large to match
+        assert!(!condition.matches(
+            &"/time".try_into().unwrap(),
+            &ManifestFileInfo {
+                id: ManifestId::random(),
+                size_bytes: 1,
+                num_rows: 1_000_000
+            }
+        ));
     }
 
     #[tokio::test]

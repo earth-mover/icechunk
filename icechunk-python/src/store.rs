@@ -8,7 +8,7 @@ use icechunk::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
         ChunkLength, ChunkOffset,
     },
-    store::StoreError,
+    store::{StoreError, StoreErrorKind},
     Store,
 };
 use pyo3::{
@@ -151,7 +151,9 @@ impl PyStore {
             // from other types of errors, we use PyKeyError exception for that
             match data {
                 Ok(data) => Ok(Vec::from(data)),
-                Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
+                Err(StoreError { kind: StoreErrorKind::NotFound(_), .. }) => {
+                    Err(PyKeyError::new_err(key))
+                }
                 Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
             }
         })
@@ -417,6 +419,21 @@ impl PyStore {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let size = store.getsize(&key).await.map_err(PyIcechunkStoreError::from)?;
+            Ok(size)
+        })
+    }
+
+    fn getsize_prefix<'py>(
+        &self,
+        py: Python<'py>,
+        prefix: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let size = store
+                .getsize_prefix(prefix.as_str())
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
             Ok(size)
         })
     }
