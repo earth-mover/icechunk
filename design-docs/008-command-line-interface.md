@@ -138,6 +138,6 @@ Implemented with
 
 ## Optional features
 
-- Structure output option (e.g. JSON)
+- Structured output option (e.g. JSON)
 - Short version of the command (e.g. `ic`)
 - Support for tab completion
