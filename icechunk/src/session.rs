@@ -2182,7 +2182,10 @@ mod tests {
 
         let diff = ds.status().await?;
         assert!(!diff.is_empty());
-        assert_eq!(diff.updated_chunks, [(new_array_path.clone(), 1)].into());
+        assert_eq!(
+            diff.updated_chunks,
+            [(new_array_path.clone(), [ChunkIndices(vec![0, 0, 0])].into())].into()
+        );
 
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
@@ -2345,7 +2348,14 @@ mod tests {
             &diff.new_arrays,
             &[new_array_path.clone()].into() // we never committed array2
         );
-        assert_eq!(&diff.updated_chunks, &[(new_array_path.clone(), 2)].into());
+        assert_eq!(
+            &diff.updated_chunks,
+            &[(
+                new_array_path.clone(),
+                [ChunkIndices(vec![0, 0, 0]), ChunkIndices(vec![0, 0, 1])].into()
+            )]
+            .into()
+        );
         assert_eq!(&diff.updated_user_attributes, &[new_array_path.clone()].into());
         assert_eq!(&diff.updated_zarr_metadata, &[new_array_path.clone()].into());
         Ok(())

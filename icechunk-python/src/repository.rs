@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -187,19 +187,20 @@ impl PySnapshotInfo {
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct PyDiff {
     #[pyo3(get)]
-    pub new_groups: HashSet<String>,
+    pub new_groups: BTreeSet<String>,
     #[pyo3(get)]
-    pub new_arrays: HashSet<String>,
+    pub new_arrays: BTreeSet<String>,
     #[pyo3(get)]
-    pub deleted_groups: HashSet<String>,
+    pub deleted_groups: BTreeSet<String>,
     #[pyo3(get)]
-    pub deleted_arrays: HashSet<String>,
+    pub deleted_arrays: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_user_attributes: HashSet<String>,
+    pub updated_user_attributes: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_zarr_metadata: HashSet<String>,
+    pub updated_zarr_metadata: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_chunks: HashMap<String, u64>,
+    // A Vec instead of a set to avoid issues with list not being hashable in python
+    pub updated_chunks: BTreeMap<String, Vec<Vec<u32>>>,
 }
 
 impl From<Diff> for PyDiff {
@@ -222,8 +223,15 @@ impl From<Diff> for PyDiff {
             .into_iter()
             .map(|path| path.to_string())
             .collect();
-        let updated_chunks =
-            value.updated_chunks.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let updated_chunks = value
+            .updated_chunks
+            .into_iter()
+            .map(|(k, v)| {
+                let path = k.to_string();
+                let map = v.into_iter().map(|idx| idx.0).collect();
+                (path, map)
+            })
+            .collect();
 
         PyDiff {
             new_groups,
@@ -245,7 +253,6 @@ impl PyDiff {
 
         if !self.new_groups.is_empty() {
             res.push_str("Groups created:\n");
-            //print()
             for g in self.new_groups.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
@@ -253,7 +260,6 @@ impl PyDiff {
         }
         if !self.new_arrays.is_empty() {
             res.push_str("Arrays created:\n");
-            //print()
             for g in self.new_arrays.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
@@ -262,7 +268,6 @@ impl PyDiff {
 
         if !self.updated_zarr_metadata.is_empty() {
             res.push_str("Zarr metadata updated:\n");
-            //print()
             for g in self.updated_zarr_metadata.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
@@ -271,7 +276,6 @@ impl PyDiff {
 
         if !self.updated_user_attributes.is_empty() {
             res.push_str("User attributes updated:\n");
-            //print()
             for g in self.updated_user_attributes.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
@@ -280,7 +284,6 @@ impl PyDiff {
 
         if !self.deleted_groups.is_empty() {
             res.push_str("Groups deleted:\n");
-            //print()
             for g in self.deleted_groups.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
@@ -289,7 +292,6 @@ impl PyDiff {
 
         if !self.deleted_arrays.is_empty() {
             res.push_str("Arrays deleted:\n");
-            //print()
             for g in self.deleted_arrays.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
@@ -298,11 +300,19 @@ impl PyDiff {
 
         if !self.updated_chunks.is_empty() {
             res.push_str("Number of chunks updated:\n");
-            //print()
-            for (path, n) in self.updated_chunks.iter() {
-                writeln!(res, "    {}: {}", path, n).unwrap();
+            for (path, chunks) in self.updated_chunks.iter() {
+                writeln!(res, "    {}:", path).unwrap();
+                let coords = chunks
+                    .iter()
+                    .map(|idx| format!("        [{}]", idx.iter().join(", ")))
+                    .take(10)
+                    .join("\n");
+                res.push_str(coords.as_str());
+                res.push('\n');
+                if chunks.len() > 10 {
+                    writeln!(res, "        ... {} more", chunks.len() - 10).unwrap();
+                }
             }
-            res.push('\n');
         }
         res
     }
