@@ -98,8 +98,7 @@ where
     let s1 = mk_s3_storage(prefix.as_str()).await?;
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().await.unwrap();
-    let s3 =
-        mk_s3_object_store_storage(format!("{prefix}2").as_str()).await?;
+    let s3 = mk_s3_object_store_storage(format!("{prefix}2").as_str()).await?;
     let s4 = mk_azure_blob_storage(prefix.as_str()).await?;
     f(s1).await?;
     f(s2).await?;

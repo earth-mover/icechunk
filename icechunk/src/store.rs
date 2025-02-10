@@ -1369,7 +1369,8 @@ mod tests {
     }
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = new_in_memory_storage().await.expect("failed to create in-memory store");
+        let storage =
+            new_in_memory_storage().await.expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 

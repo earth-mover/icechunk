@@ -595,12 +595,13 @@ pub async fn new_azure_blob_storage(
     config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = config
-        .unwrap_or(HashMap::new())
+        .unwrap_or_default()
         .into_iter()
         .filter_map(|(key, value)| key.parse::<AzureConfigKey>().map(|k| (k, value)).ok())
         .collect();
     let storage =
-        ObjectStorage::new_azure(account, container, prefix, credentials, Some(config)).await?;
+        ObjectStorage::new_azure(account, container, prefix, credentials, Some(config))
+            .await?;
     Ok(Arc::new(storage))
 }
 
@@ -611,11 +612,14 @@ pub async fn new_gcs_storage(
     config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = config
-        .unwrap_or(HashMap::new())
+        .unwrap_or_default()
         .into_iter()
-        .filter_map(|(key, value)| key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok())
+        .filter_map(|(key, value)| {
+            key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
+        })
         .collect();
-    let storage = ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config)).await?;
+    let storage =
+        ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config)).await?;
     Ok(Arc::new(storage))
 }
 
