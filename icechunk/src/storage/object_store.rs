@@ -51,13 +51,6 @@ use super::{
     SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ObjectStorageConfig {
-    pub url: String,
-    pub prefix: String,
-    pub options: Vec<(String, String)>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectStorage {
     backend: Arc<dyn ObjectStoreBackend>,
