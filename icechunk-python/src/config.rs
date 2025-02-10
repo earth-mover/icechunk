@@ -1182,10 +1182,7 @@ impl PyStorage {
     }
 
     #[classmethod]
-    pub fn new_in_memory<'py>(
-        _cls: &Bound<'_, PyType>,
-        py: Python<'py>,
-    ) -> PyResult<Self> {
+    pub fn new_in_memory(_cls: &Bound<'_, PyType>, py: Python<'_>) -> PyResult<Self> {
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_in_memory_storage()
@@ -1198,9 +1195,9 @@ impl PyStorage {
     }
 
     #[classmethod]
-    pub fn new_local_filesystem<'py>(
+    pub fn new_local_filesystem(
         _cls: &Bound<'_, PyType>,
-        py: Python<'py>,
+        py: Python<'_>,
         path: PathBuf,
     ) -> PyResult<Self> {
         py.allow_threads(move || {
@@ -1216,9 +1213,9 @@ impl PyStorage {
 
     #[classmethod]
     #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
-    pub fn new_gcs<'py>(
+    pub fn new_gcs(
         _cls: &Bound<'_, PyType>,
-        py: Python<'py>,
+        py: Python<'_>,
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
@@ -1242,9 +1239,9 @@ impl PyStorage {
 
     #[classmethod]
     #[pyo3(signature = (account, container, prefix, credentials=None, *, config=None))]
-    pub fn new_azure_blob<'py>(
+    pub fn new_azure_blob(
         _cls: &Bound<'_, PyType>,
-        py: Python<'py>,
+        py: Python<'_>,
         account: String,
         container: String,
         prefix: String,

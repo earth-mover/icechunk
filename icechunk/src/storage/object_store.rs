@@ -842,9 +842,8 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             Some(AzureCredentials::Static(AzureStaticCredentials::AccessKey(key))) => {
                 builder.with_access_key(key)
             }
-            Some(AzureCredentials::Static(AzureStaticCredentials::SASToken(_token))) => {
-                // TODO: add sas token
-                todo!()
+            Some(AzureCredentials::Static(AzureStaticCredentials::SASToken(token))) => {
+                builder.with_config(AzureConfigKey::SasKey, token)
             }
             Some(AzureCredentials::Static(AzureStaticCredentials::BearerToken(
                 token,
@@ -907,8 +906,10 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                 })?;
                 builder.with_application_credentials(path)
             }
-            Some(GcsCredentials::Refreshable(_)) => {
-                todo!()
+            Some(GcsCredentials::Refreshable(fetcher)) => {
+                let credential_provider =
+                    GcsRefreshableCredentialProvider::new(Arc::clone(fetcher));
+                builder.with_credentials(Arc::new(credential_provider))
             }
             None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
