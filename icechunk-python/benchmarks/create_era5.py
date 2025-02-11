@@ -33,7 +33,7 @@ console_handler = logging.StreamHandler()
 logger.addHandler(console_handler)
 
 PUBLIC_DATA_BUCKET = "icechunk-public-data"
-ICECHUNK_FORMAT = "v01"  # FIXME: get this from icechunk python
+ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 # Note: this region is really a "compute" region, so `us-east-1` for AWS/Tigris
