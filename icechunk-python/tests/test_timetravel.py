@@ -152,7 +152,7 @@ User attributes updated:
     /
     /air_temp
 
-Number of chunks updated:
+Chunks updated:
     /air_temp:
         [0, 0]
         [0, 1]
