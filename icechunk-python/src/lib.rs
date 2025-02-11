@@ -11,11 +11,12 @@ use std::env;
 use clap::Parser;
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
-    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsCredentials,
-    PyGcsStaticCredentials, PyManifestConfig, PyManifestPreloadCondition,
-    PyManifestPreloadConfig, PyObjectStoreConfig, PyRepositoryConfig, PyS3Credentials,
-    PyS3Options, PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
-    PyStorageSettings, PyVirtualChunkContainer, PythonCredentialsFetcher,
+    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
+    PyGcsCredentials, PyGcsStaticCredentials, PyManifestConfig,
+    PyManifestPreloadCondition, PyManifestPreloadConfig, PyObjectStoreConfig,
+    PyRepositoryConfig, PyS3Credentials, PyS3Options, PyS3StaticCredentials, PyStorage,
+    PyStorageConcurrencySettings, PyStorageSettings, PyVirtualChunkContainer,
+    PythonCredentialsFetcher,
 };
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
@@ -27,7 +28,7 @@ use errors::{
 };
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
-use repository::{PyGCSummary, PyRepository, PySnapshotInfo};
+use repository::{PyDiff, PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::PyStore;
 
@@ -81,6 +82,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PythonCredentialsFetcher>()?;
     m.add_class::<PyS3Credentials>()?;
     m.add_class::<PyGcsCredentials>()?;
+    m.add_class::<PyGcsBearerCredential>()?;
     m.add_class::<PyGcsStaticCredentials>()?;
     m.add_class::<PyAzureCredentials>()?;
     m.add_class::<PyAzureStaticCredentials>()?;
@@ -98,6 +100,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyManifestConfig>()?;
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
+    m.add_class::<PyDiff>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;

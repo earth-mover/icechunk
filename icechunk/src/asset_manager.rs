@@ -690,7 +690,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
@@ -760,7 +760,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
@@ -823,7 +823,7 @@ mod test {
     async fn test_dont_fetch_asset_twice() -> Result<(), Box<dyn std::error::Error>> {
         // Test that two concurrent requests for the same manifest doesn't generate two
         // object_store requests, one of them must wait
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager =
             Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone(), 1));

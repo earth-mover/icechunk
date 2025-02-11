@@ -12,9 +12,10 @@ use std::{
 use icechunk::{
     config::{
         AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
-        CompressionConfig, Credentials, CredentialsFetcher, GcsCredentials,
-        GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition,
-        ManifestPreloadConfig, S3Credentials, S3Options, S3StaticCredentials,
+        CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
+        GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
+        ManifestPreloadCondition, ManifestPreloadConfig, S3Credentials,
+        S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -155,13 +156,28 @@ impl PythonCredentialsFetcher {
 }
 #[async_trait]
 #[typetag::serde]
-impl CredentialsFetcher for PythonCredentialsFetcher {
+impl S3CredentialsFetcher for PythonCredentialsFetcher {
     async fn get(&self) -> Result<S3StaticCredentials, String> {
         Python::with_gil(|py| {
             let pickle_module = PyModule::import(py, "pickle")?;
             let loads_function = pickle_module.getattr("loads")?;
             let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
             let creds: PyS3StaticCredentials = fetcher.call0()?.extract()?;
+            Ok(creds.into())
+        })
+        .map_err(|e: PyErr| e.to_string())
+    }
+}
+
+#[async_trait]
+#[typetag::serde]
+impl GcsCredentialsFetcher for PythonCredentialsFetcher {
+    async fn get(&self) -> Result<GcsBearerCredential, String> {
+        Python::with_gil(|py| {
+            let pickle_module = PyModule::import(py, "pickle")?;
+            let loads_function = pickle_module.getattr("loads")?;
+            let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
+            let creds: PyGcsBearerCredential = fetcher.call0()?.extract()?;
             Ok(creds.into())
         })
         .map_err(|e: PyErr| e.to_string())
@@ -216,11 +232,40 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
     }
 }
 
+#[pyclass(name = "GcsBearerCredential")]
+#[derive(Clone, Debug)]
+pub struct PyGcsBearerCredential {
+    pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
+}
+
+#[pymethods]
+impl PyGcsBearerCredential {
+    #[new]
+    #[pyo3(signature = (bearer, *, expires_after = None))]
+    pub fn new(bearer: String, expires_after: Option<DateTime<Utc>>) -> Self {
+        PyGcsBearerCredential { bearer, expires_after }
+    }
+}
+
+impl From<PyGcsBearerCredential> for GcsBearerCredential {
+    fn from(value: PyGcsBearerCredential) -> Self {
+        GcsBearerCredential { bearer: value.bearer, expires_after: value.expires_after }
+    }
+}
+
+impl From<GcsBearerCredential> for PyGcsBearerCredential {
+    fn from(value: GcsBearerCredential) -> Self {
+        PyGcsBearerCredential { bearer: value.bearer, expires_after: value.expires_after }
+    }
+}
+
 #[pyclass(name = "GcsCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyGcsCredentials {
     FromEnv(),
     Static(PyGcsStaticCredentials),
+    Refreshable(Vec<u8>),
 }
 
 impl From<PyGcsCredentials> for GcsCredentials {
@@ -228,6 +273,11 @@ impl From<PyGcsCredentials> for GcsCredentials {
         match value {
             PyGcsCredentials::FromEnv() => GcsCredentials::FromEnv,
             PyGcsCredentials::Static(creds) => GcsCredentials::Static(creds.into()),
+            PyGcsCredentials::Refreshable(pickled_function) => {
+                GcsCredentials::Refreshable(Arc::new(PythonCredentialsFetcher {
+                    pickled_function,
+                }))
+            }
         }
     }
 }
@@ -1132,60 +1182,87 @@ impl PyStorage {
     }
 
     #[classmethod]
-    pub fn new_in_memory(_cls: &Bound<'_, PyType>) -> PyResult<Self> {
-        let storage = icechunk::storage::new_in_memory_storage()
-            .map_err(PyIcechunkStoreError::StorageError)?;
+    pub fn new_in_memory(_cls: &Bound<'_, PyType>, py: Python<'_>) -> PyResult<Self> {
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_in_memory_storage()
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
     #[classmethod]
     pub fn new_local_filesystem(
         _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
         path: PathBuf,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_local_filesystem_storage(&path)
-            .map_err(PyIcechunkStoreError::StorageError)?;
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_local_filesystem_storage(&path)
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
-    #[staticmethod]
+    #[classmethod]
     #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
     pub fn new_gcs(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_gcs_storage(
-            bucket,
-            prefix,
-            credentials.map(|cred| cred.into()),
-            config,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_gcs_storage(
+                    bucket,
+                    prefix,
+                    credentials.map(|cred| cred.into()),
+                    config,
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
-    #[staticmethod]
-    #[pyo3(signature = (container, prefix, credentials=None, *, config=None))]
+    #[classmethod]
+    #[pyo3(signature = (account, container, prefix, credentials=None, *, config=None))]
     pub fn new_azure_blob(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        account: String,
         container: String,
         prefix: String,
         credentials: Option<PyAzureCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_azure_blob_storage(
-            container,
-            prefix,
-            credentials.map(|cred| cred.into()),
-            config,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_azure_blob_storage(
+                    account,
+                    container,
+                    Some(prefix),
+                    credentials.map(|cred| cred.into()),
+                    config,
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
-        Ok(PyStorage(storage))
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
     pub fn default_settings(&self) -> PyStorageSettings {

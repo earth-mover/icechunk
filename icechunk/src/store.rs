@@ -1063,6 +1063,7 @@ pub struct ZarrArrayMetadataSerialzer {
     pub codecs: Vec<Codec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_transformers: Option<Vec<StorageTransformer>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     // each dimension name can be null in Zarr
     pub dimension_names: Option<DimensionNames>,
 }
@@ -1369,7 +1370,8 @@ mod tests {
     }
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = new_in_memory_storage().expect("failed to create in-memory store");
+        let storage =
+            new_in_memory_storage().await.expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -2556,6 +2558,7 @@ mod tests {
         let repo_dir = TempDir::new().expect("could not create temp dir");
         let storage = Arc::new(
             ObjectStorage::new_local_filesystem(repo_dir.path())
+                .await
                 .expect("could not create storage"),
         );
 

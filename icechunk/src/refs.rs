@@ -559,11 +559,12 @@ mod tests {
     >(
         mut f: F,
     ) -> ((Arc<dyn Storage>, R), (Arc<dyn Storage>, R, TempDir)) {
-        let mem_storage = new_in_memory_storage().unwrap();
+        let mem_storage = new_in_memory_storage().await.unwrap();
         let res1 = f(Arc::clone(&mem_storage) as Arc<dyn Storage + Send + Sync>).await;
 
         let dir = tempdir().expect("cannot create temp dir");
         let local_storage = new_local_filesystem_storage(dir.path())
+            .await
             .expect("Cannot create local Storage");
 
         let res2 = f(Arc::clone(&local_storage) as Arc<dyn Storage + Send + Sync>).await;
