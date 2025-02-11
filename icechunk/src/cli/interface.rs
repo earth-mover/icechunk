@@ -14,21 +14,26 @@ use crate::{Repository, Storage};
 #[derive(Debug, Parser)]
 #[clap()]
 pub struct IcechunkCLI {
-    #[clap(subcommand)]
+    #[command(subcommand)]
     cmd: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create an empty IceChunk repository.
-    Init(InitCommand),
+    #[command(subcommand)]
+    Repo(RepoCommand),
+}
 
-    // List all the snapshots in the repository.
+#[derive(Debug, Subcommand)]
+enum RepoCommand {
+    #[clap(name = "create")]
+    Create(CreateCommand),
+    #[clap(name = "list")]
     List(ListCommand),
 }
 
 #[derive(Debug, Args)]
-struct InitCommand {
+struct CreateCommand {
     /// The path to the IceChunk repository.
     path: PathBuf,
 }
@@ -39,9 +44,10 @@ struct ListCommand {
     path: PathBuf,
 }
 
-async fn init(init_cmd: InitCommand) -> Result<()> {
+async fn repo_create(init_cmd: CreateCommand) -> Result<()> {
     let storage: Arc<dyn Storage + Send + Sync> =
         new_local_filesystem_storage(init_cmd.path.as_path())
+            .await
             .context(format!("❌ Failed to create storage at {:?}", init_cmd.path))?;
     Repository::create(None, Arc::clone(&storage), HashMap::new())
         .await
@@ -52,9 +58,10 @@ async fn init(init_cmd: InitCommand) -> Result<()> {
     Ok(())
 }
 
-async fn list(list_cmd: ListCommand) -> Result<()> {
+async fn repo_list(list_cmd: ListCommand) -> Result<()> {
     let storage: Arc<dyn Storage + Send + Sync> =
         new_local_filesystem_storage(list_cmd.path.as_path())
+            .await
             .context(format!("❌ Failed to create storage at {:?}", list_cmd.path))?;
     let repository =
         Repository::open(None, Arc::clone(&storage), HashMap::new())
@@ -73,7 +80,7 @@ async fn list(list_cmd: ListCommand) -> Result<()> {
 
 pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
     match args.cmd {
-        Command::Init(init_cmd) => init(init_cmd).await,
-        Command::List(list_cmd) => list(list_cmd).await,
+        Command::Repo(RepoCommand::Create(init_cmd)) => repo_create(init_cmd).await,
+        Command::Repo(RepoCommand::List(list_cmd)) => repo_list(list_cmd).await,
     }
 }
