@@ -1,5 +1,4 @@
 import datetime
-import logging
 import time
 import warnings
 from collections.abc import Callable
@@ -14,6 +13,7 @@ import platformdirs
 import icechunk as ic
 import xarray as xr
 import zarr
+from benchmarks.helpers import get_coiled_kwargs, setup_logger
 
 rng = np.random.default_rng(seed=123)
 
@@ -26,11 +26,7 @@ CONSTRUCTORS = {
     "local": ic.local_filesystem_storage,
 }
 
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-logger.addHandler(console_handler)
+logger = setup_logger()
 
 
 def tigris_credentials() -> tuple[str, str]:
@@ -121,15 +117,7 @@ class StorageConfig:
             return f"{self.protocol}://{self.bucket}/{self.prefix}"
 
     def get_coiled_kwargs(self) -> str:
-        BACKENDS = {
-            "s3": "earthmover-devs",
-            "tigris": "earthmover-devs",
-            "gcs": "earthmover-devs-gcp",
-            "az": "earthmover-devs-azure",
-        }
-        TIGRIS_REGIONS = {"iad": "us-east-1"}
-        region = TIGRIS_REGIONS[self.region] if self.store == "tigris" else self.region
-        return {"workspace": BACKENDS[self.store], "region": region}
+        return get_coiled_kwargs(store=self.store, region=self.region)
 
 
 @dataclass
@@ -267,10 +255,7 @@ def setup_era5_single(dataset: Dataset):
 
 
 ERA5 = BenchmarkDataset(
-    storage_config=StorageConfig(
-        bucket="icechunk-test",
-        prefix="era5-weatherbench",
-    ),
+    storage_config=StorageConfig(bucket="icechunk-test", prefix="era5-weatherbench"),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
     first_byte_variable="latitude",

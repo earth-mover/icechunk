@@ -12,13 +12,22 @@ from functools import partial
 
 import tqdm
 import tqdm.contrib.concurrent
-from helpers import assert_cwd_is_icechunk_python, get_commit
+from helpers import (
+    assert_cwd_is_icechunk_python,
+    get_coiled_kwargs,
+    get_commit,
+    setup_logger,
+)
 
 import icechunk as ic
 
+logger = setup_logger()
+
 PIP_OPTIONS = "--disable-pip-version-check -q"
+PYTEST_OPTIONS = "-q --durations 10"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
+
 
 assert_cwd_is_icechunk_python()
 
@@ -39,6 +48,8 @@ def get_benchmark_deps(filepath: str) -> str:
 
 
 class Runner:
+    bench_store_dir = None
+
     def __init__(self, *, ref: str, where: str) -> None:
         self.ref = ref
         self.commit = get_commit(ref)
@@ -57,89 +68,159 @@ class Runner:
         except AttributeError:
             return f"{self.ref}_{self.commit}"
 
+    @property
+    def ref_commit(self) -> str:
+        return f"{self.ref}_{self.commit}"
 
-class LocalRunner(Runner):
-    activate: str = "source .venv/bin/activate"
+    def sync_benchmarks_folder(self) -> None:
+        """Sync the benchmarks folder over to the cwd."""
+        raise NotImplementedError
 
-    def __init__(self, *, ref: str, where: str):
-        super().__init__(ref=ref, where=where)
-        suffix = f"{self.ref}_{self.commit}"
-        self.base = f"{TMP}/icechunk-bench-{suffix}"
-        self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
-        self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
+    def execute(cmd: str) -> None:
+        """Execute a command"""
+        raise NotImplementedError
 
     def initialize(self) -> None:
-        ref = self.ref
-
-        deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
-        pykwargs = dict(cwd=self.pycwd, check=True)
-
-        print(f"Running for {ref} in {self.base}")
-        subprocess.run(["mkdir", "-p", self.pycwd], check=False)
-        subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
-        subprocess.run(
-            f"{self.activate} "
-            f"&& pip install {PIP_OPTIONS} {self.pip_github_url} {deps}",
-            shell=True,
-            **pykwargs,
-        )
+        """Builds virtual envs etc."""
+        raise NotImplementedError
 
     def setup(self, *, force: bool):
-        print(f"setup_benchmarks for {self.ref} / {self.commit}")
-        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
+        """Creates datasets for read benchmarks."""
+        logger.info(f"setup_benchmarks for {self.ref} / {self.commit}")
+        self.sync_benchmarks_folder()
         cmd = (
-            f"pytest -q --durations 10 -nauto "
+            f"pytest {PYTEST_OPTIONS} -nauto "
             f"-m setup_benchmarks --force-setup={force} "
             f"--where={self.where} "
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             "benchmarks/"
         )
-        subprocess.run(
-            f"{self.activate} && {cmd}", cwd=self.pycwd, check=True, shell=True
-        )
+        logger.info(cmd)
+        self.execute(cmd, check=True)
 
     def run(self, *, pytest_extra: str = "") -> None:
-        print(f"running benchmarks for {self.ref} / {self.commit}")
+        """Actually runs the benchmarks."""
+        logger.info(f"running benchmarks for {self.ref} / {self.commit}")
 
-        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
+        self.sync_benchmarks_folder()
 
         # shorten the name so `pytest-benchmark compare` is readable
         clean_ref = self.ref.removeprefix("icechunk-v0.1.0-alph")
 
+        assert self.bench_store_dir is not None
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
-            f"pytest -q --durations 10 "
-            f"--benchmark-storage={CURRENTDIR}/.benchmarks "
-            f"--benchmark-save={clean_ref}_{self.commit} "
+            f"pytest {PYTEST_OPTIONS} "
+            "--tb=line "
+            f"--benchmark-storage={self.bench_store_dir}/.benchmarks "
+            f"--benchmark-save={clean_ref}_{self.commit}_{self.where} "
             f"--where={self.where} "
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             f"{pytest_extra} "
             "benchmarks/"
         )
-        print(cmd)
+        logger.info(cmd)
 
+        self.execute(cmd, check=False)
+
+
+class LocalRunner(Runner):
+    activate: str = "source .venv/bin/activate"
+    bench_store_dir = CURRENTDIR
+
+    def __init__(self, *, ref: str, where: str):
+        super().__init__(ref=ref, where=where)
+        suffix = self.ref_commit
+        self.base = f"{TMP}/icechunk-bench-{suffix}"
+        self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
+        self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
+
+    def sync_benchmarks_folder(self):
+        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
+
+    def execute(self, cmd: str, **kwargs) -> None:
         # don't stop if benchmarks fail
-        subprocess.run(
-            f"{self.activate} && {cmd}", shell=True, cwd=self.pycwd, check=False
-        )
+        subprocess.run(f"{self.activate} && {cmd}", cwd=self.pycwd, shell=True, **kwargs)
+
+    def initialize(self) -> None:
+        logger.info(f"Running initialize for {self.ref} in {self.base}")
+
+        deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
+        subprocess.run(["mkdir", "-p", self.pycwd], check=False)
+        subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
+        cmd = f"pip install {PIP_OPTIONS} {self.pip_github_url} {deps}"
+        self.execute(cmd, check=True)
 
 
 class CoiledRunner(Runner):
-    def __init__(self, *, ref: str, where: str):
-        super().__init__(ref=ref, where=where)
-        self.ref = ref
-        # self.commit = get_commit(ref)
-        # suffix = f"{self.ref}_{self.commit}"
-        # self.base = f"{TMP}/icechunk-bench-{suffix}"
-        # self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
-        # self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
-        raise NotImplementedError
+    bench_store_dir = "."
+
+    def get_coiled_kwargs(self):
+        COILED_VM_TYPES = {
+            "s3": "m5.4xlarge",
+            "gcs": None,
+            "tigris": None,
+        }
+        COILED_SOFTWARE = {
+            "icechunk-v0.1.0-alpha.1": "icechunk-alpha-release",
+            "icechunk-v0.1.0-alpha.12": "icechunk-alpha-12",
+        }
+
+        # using the default region here
+        kwargs = get_coiled_kwargs(store=self.where)
+        kwargs["software"] = COILED_SOFTWARE.get(
+            self.ref, f"icechunk-bench-{self.commit}"
+        )
+        kwargs["vm_type"] = COILED_VM_TYPES[self.where]
+        return kwargs
+
+    def initialize(self) -> None:
+        import coiled
+
+        deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml").split(" ")
+
+        # repeated calls are a no-op!
+        coiled.create_software_environment(
+            name=self.get_coiled_kwargs()["software"],
+            conda={
+                "channels": ["conda-forge"],
+                "dependencies": ["rust", "python=3.12", "pip"],
+            },
+            # FIXME: get this to work.
+            # pip=[self.pip_github_url, *deps],
+            pip=["icechunk==v0.1.2", *deps],
+        )
+
+    def execute(self, cmd, **kwargs) -> None:
+        ckwargs = self.get_coiled_kwargs()
+        subprocess.run(
+            [
+                "coiled",
+                "run",
+                "--name",
+                f"icebench-{self.commit}",  # cluster name
+                "--sync",
+                "--sync-ignore='python/ reports/ profiling/'",
+                "--keepalive",
+                "10m",
+                f"--workspace={ckwargs['workspace']}",  # cloud
+                f"--vm-type={ckwargs['vm_type']}",
+                f"--software={ckwargs['software']}",
+                f"--region={ckwargs['region']}",
+                cmd,
+            ],
+            **kwargs,
+        )
+
+    def sync_benchmarks_folder(self) -> None:
+        # uses command-line --sync option
+        pass
 
 
-def init_for_ref(runner: Runner, *, where: str, skip_setup: bool, force_setup: bool):
+def init_for_ref(runner: Runner, *, skip_setup: bool, force_setup: bool):
     runner.initialize()
     if not skip_setup:
-        runner.setup(force=force_setup, where=where)
+        runner.setup(force=force_setup)
 
 
 if __name__ == "__main__":
@@ -170,7 +251,6 @@ if __name__ == "__main__":
     tqdm.contrib.concurrent.process_map(
         partial(
             init_for_ref,
-            where=args.where,
             skip_setup=args.skip_setup,
             force_setup=args.force_setup,
         ),
@@ -180,7 +260,6 @@ if __name__ == "__main__":
     # for runner in runners:
     #     init_for_ref(
     #         runner=runner,
-    #         where=args.where,
     #         skip_setup=args.skip_setup,
     #         force_setup=args.force_setup,
     #     )

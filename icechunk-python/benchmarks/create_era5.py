@@ -6,7 +6,6 @@
 
 import argparse
 import datetime
-import logging
 import math
 import random
 import warnings
@@ -27,10 +26,7 @@ import zarr
 from dask.diagnostics import ProgressBar
 from icechunk.xarray import to_icechunk
 
-logger = logging.getLogger("icechunk-bench")
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-logger.addHandler(console_handler)
+logger = helpers.setup_loger()
 
 PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
