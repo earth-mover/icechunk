@@ -622,16 +622,24 @@ class S3StaticCredentials:
     ): ...
 
 class S3Credentials:
+    """Credentials for an S3 storage backend"""
     class FromEnv:
+        """Uses credentials from environment variables"""
         def __init__(self) -> None: ...
 
     class Anonymous:
+        """Does not sign requests, useful for public buckets"""
         def __init__(self) -> None: ...
 
     class Static:
+        """Uses s3 credentials without expiration"""
         def __init__(self, credentials: S3StaticCredentials) -> None: ...
 
     class Refreshable:
+        """Allows for an outside authority to pass in a function that can be used to provide credentials.
+
+        This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
+        """
         def __init__(self, pickled_function: bytes) -> None: ...
 
 AnyS3Credential = (
@@ -642,22 +650,52 @@ AnyS3Credential = (
 )
 
 class GcsBearerCredential:
+    """Credentials for a google cloud storage backend
+
+    This is a bearer token that has an expiration time.
+    """
+
     bearer: str
     expires_after: datetime.datetime | None
 
     def __init__(
         self, bearer: str, *, expires_after: datetime.datetime | None = None
-    ) -> None: ...
+    ) -> None:
+        """Create a GcsBearerCredential object
+
+        Parameters
+        ----------
+        bearer: str
+            The bearer token to use for authentication.
+        expires_after: datetime.datetime | None
+            The expiration time of the bearer token.
+        """
 
 class GcsStaticCredentials:
+    """Credentials for a google cloud storage backend"""
     class ServiceAccount:
+        """Credentials for a google cloud storage backend using a service account json file
+
+        Parameters
+        ----------
+        path: str
+            The path to the service account json file.
+        """
         def __init__(self, path: str) -> None: ...
 
     class ServiceAccountKey:
+        """Credentials for a google cloud storage backend using a a serailized service account key
+
+        Parameters
+        ----------
+        key: str
+            The serialized service account key.
+        """
         def __init__(self, key: str) -> None: ...
 
     class ApplicationCredentials:
-        def __init__(self, path: str) -> None: ...
+        """Credentials for a google cloud storage backend using application default credentials"""
+        def __init__(self) -> None: ...
 
 AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
@@ -666,13 +704,23 @@ AnyGcsStaticCredential = (
 )
 
 class GcsCredentials:
+    """Credentials for a google cloud storage backend
+
+    This can be used to authenticate with a google cloud storage backend.
+    """
     class FromEnv:
+        """Uses credentials from environment variables"""
         def __init__(self) -> None: ...
 
     class Static:
+        """Uses gcs credentials without expiration"""
         def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
 
     class Refreshable:
+        """Allows for an outside authority to pass in a function that can be used to provide credentials.
+
+        This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
+        """
         def __init__(self, pickled_function: bytes) -> None: ...
 
 AnyGcsCredential = (
@@ -680,13 +728,35 @@ AnyGcsCredential = (
 )
 
 class AzureStaticCredentials:
+    """Credentials for an azure storage backend"""
     class AccessKey:
+        """Credentials for an azure storage backend using an access key
+
+        Parameters
+        ----------
+        key: str
+            The access key to use for authentication.
+        """
         def __init__(self, key: str) -> None: ...
 
     class SasToken:
+        """Credentials for an azure storage backend using a shared access signature token
+
+        Parameters
+        ----------
+        token: str
+            The shared access signature token to use for authentication.
+        """
         def __init__(self, token: str) -> None: ...
 
     class BearerToken:
+        """Credentials for an azure storage backend using a bearer token
+
+        Parameters
+        ----------
+        token: str
+            The bearer token to use for authentication.
+        """
         def __init__(self, token: str) -> None: ...
 
 AnyAzureStaticCredential = (
@@ -696,22 +766,35 @@ AnyAzureStaticCredential = (
 )
 
 class AzureCredentials:
+    """Credentials for an azure storage backend
+
+    This can be used to authenticate with an azure storage backend.
+    """
     class FromEnv:
+        """Uses credentials from environment variables"""
         def __init__(self) -> None: ...
 
     class Static:
+        """Uses azure credentials without expiration"""
         def __init__(self, credentials: AnyAzureStaticCredential) -> None: ...
 
 AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
 
 class Credentials:
+    """Credentials for a storage backend
+
+    This can be used to authenticate with a storage backend.
+    """
     class S3:
+        """Credentials for an S3 storage backend"""
         def __init__(self, credentials: AnyS3Credential) -> None: ...
 
     class Gcs:
+        """Credentials for a google cloud storage backend"""
         def __init__(self, credentials: GcsCredentials) -> None: ...
 
     class Azure:
+        """Credentials for an azure storage backend"""
         def __init__(self, credentials: AzureCredentials) -> None: ...
 
 AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
