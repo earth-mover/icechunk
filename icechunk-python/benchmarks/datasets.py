@@ -68,7 +68,7 @@ class StorageConfig:
                 kwargs["bucket"] = self.bucket
             if self.prefix is not None:
                 kwargs["prefix"] = self.prefix
-            if self.region is not None and self.store not in ["gcs", "tigris"]:
+            if self.region is not None and self.store not in ["gcs"]:
                 kwargs["region"] = self.region
             if self.store == "tigris":
                 kwargs.update(tigris_credentials())
@@ -120,14 +120,16 @@ class StorageConfig:
         else:
             return f"{self.protocol}://{self.bucket}/{self.prefix}"
 
-    def get_coiled_workspace(self) -> str:
+    def get_coiled_kwargs(self) -> str:
         BACKENDS = {
             "s3": "earthmover-devs",
             "tigris": "earthmover-devs",
             "gcs": "earthmover-devs-gcp",
             "az": "earthmover-devs-azure",
         }
-        return BACKENDS[self.store]
+        TIGRIS_REGIONS = {"iad": "us-east-1"}
+        region = TIGRIS_REGIONS[self.region] if self.store == "tigris" else self.region
+        return {"workspace": BACKENDS[self.store], "region": region}
 
 
 @dataclass

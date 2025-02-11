@@ -36,7 +36,6 @@ PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
-# Note: this region is really a "compute" region, so `us-east-1` for AWS/Tigris
 DEBUG_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
@@ -48,9 +47,7 @@ DEBUG_BUCKETS = {
 BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
     "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
-    "tigris": dict(
-        store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="us-east-1"
-    ),
+    "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="iad"),
 }
 
 
@@ -195,8 +192,7 @@ def write(
         shutdown_on_close=False,
         n_workers=(4, 200),
         worker_cpu=2,
-        workspace=dataset.storage_config.get_coiled_workspace(),
-        region=dataset.storage_config.region,
+        **dataset.storage_config.get_coiled_kwargs(),
     ) as cluster:
         # https://docs.coiled.io/user_guide/clusters/environ.html
         cluster.send_private_envs(dataset.storage_config.env_vars)
@@ -322,7 +318,7 @@ if __name__ == "__main__":
     parser.add_argument("--arrays", help="arrays to write", nargs="+", default=[])
     parser.add_argument("--seed", help="random seed for verify", default=None, type=int)
     parser.add_argument(
-        "--debug", help="random seed for verify", default=False, action="store_true"
+        "--debug", help="write to debug bucket?", default=False, action="store_true"
     )
 
     args = parser.parse_args()
