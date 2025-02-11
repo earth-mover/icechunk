@@ -595,15 +595,13 @@ impl Repository {
     /// If `from` is not in the ancestry of `to`, `RepositoryErrorKind::BadSnapshotChainForDiff`
     /// will be returned.
     ///
-    /// Result includes the diffs in both `from` and `to` snapshots.
+    /// Result includes the diffs in `to` snapshot but not in `from`.
     pub async fn diff(
         &self,
         from: &VersionInfo,
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
         let from = self.resolve_version(from).await?;
-        let from_info =
-            SnapshotInfo::from(self.asset_manager.fetch_snapshot(&from).await?.as_ref());
         let all_snaps = self
             .ancestry(to)
             .await?
@@ -615,9 +613,9 @@ impl Repository {
             return Err(SessionErrorKind::BadSnapshotChainForDiff.into());
         }
 
+        // we don't include the changes in from
         let fut: FuturesOrdered<_> = all_snaps
             .iter()
-            .chain(std::iter::once(&from_info))
             .filter_map(|snap_info| {
                 if snap_info.is_initial() {
                     None

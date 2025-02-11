@@ -2358,6 +2358,32 @@ mod tests {
         );
         assert_eq!(&diff.updated_user_attributes, &[new_array_path.clone()].into());
         assert_eq!(&diff.updated_zarr_metadata, &[new_array_path.clone()].into());
+
+        let diff = repository
+            .diff(
+                &VersionInfo::SnapshotId(first_commit),
+                &VersionInfo::BranchTipRef("main".to_string()),
+            )
+            .await?;
+
+        // Diff should not include the changes in `from`
+        assert!(diff.deleted_groups.is_empty());
+        assert!(diff.deleted_arrays.is_empty());
+        assert_eq!(&diff.new_groups, &["/group".try_into().unwrap()].into());
+        assert_eq!(
+            &diff.new_arrays,
+            &[new_array_path.clone()].into() // we never committed array2
+        );
+        assert_eq!(
+            &diff.updated_chunks,
+            &[(
+                new_array_path.clone(),
+                [ChunkIndices(vec![0, 0, 0]), ChunkIndices(vec![0, 0, 1])].into()
+            )]
+            .into()
+        );
+        assert_eq!(&diff.updated_user_attributes, &[new_array_path.clone()].into());
+        assert_eq!(&diff.updated_zarr_metadata, &[new_array_path.clone()].into());
         Ok(())
     }
 
