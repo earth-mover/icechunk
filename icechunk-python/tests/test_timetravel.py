@@ -36,7 +36,10 @@ def test_timetravel() -> None:
     status = session.status()
     assert status.new_groups == {"/"}
     assert status.new_arrays == {"/air_temp"}
-    assert status.updated_chunks == {"/air_temp": 100}
+    assert list(status.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(status.updated_chunks["/air_temp"]) == sorted(
+        [[i, j] for i in range(10) for j in range(10)]
+    )
     assert status.deleted_groups == set()
     assert status.deleted_arrays == set()
     assert status.updated_user_attributes == {"/", "/air_temp"}  # why?
@@ -128,11 +131,42 @@ def test_timetravel() -> None:
     diff = repo.diff(to_tag="v1.0", from_snapshot=parents[-1].id)
     assert diff.new_groups == {"/"}
     assert diff.new_arrays == {"/air_temp"}
-    assert diff.updated_chunks == {"/air_temp": 100}
+    assert list(diff.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(diff.updated_chunks["/air_temp"]) == sorted(
+        [[i, j] for i in range(10) for j in range(10)]
+    )
     assert diff.deleted_groups == set()
     assert diff.deleted_arrays == set()
     assert diff.updated_user_attributes == {"/", "/air_temp"}  # why?
     assert diff.updated_zarr_metadata == set()
+    assert (
+        repr(diff)
+        == """\
+Groups created:
+    /
+
+Arrays created:
+    /air_temp
+
+User attributes updated:
+    /
+    /air_temp
+
+Number of chunks updated:
+    /air_temp:
+        [0, 0]
+        [0, 1]
+        [0, 2]
+        [0, 3]
+        [0, 4]
+        [0, 5]
+        [0, 6]
+        [0, 7]
+        [0, 8]
+        [0, 9]
+        ... 90 more
+"""
+    )
 
     with pytest.raises(ValueError, match="doesn't include"):
         # if we call diff in the wrong order it fails with a message
