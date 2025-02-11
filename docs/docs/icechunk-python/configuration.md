@@ -70,7 +70,7 @@ config.storage = icechunk.StorageSettings(
 
 ### [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers)
 
-Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you can configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a name, a url prefix, and a storage configuration. When a nncontainer is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
+Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you can configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a name, a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
 
 !!! note
 
@@ -118,7 +118,7 @@ The manifest configuration for the repository. [`ManifestConfig`](./reference.md
 
 #### Example
 
-For example, if we have a repo that contains an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
+For example, if we have a repo which contains data that we plan to open as an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
 
 ```python
 config.manifest = icechunk.ManifestConfig(

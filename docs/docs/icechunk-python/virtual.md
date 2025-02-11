@@ -16,10 +16,10 @@ To create virtual Icechunk datasets with Python, the community utilizes the [ker
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
-Before we get started, we need to install `virtualizarr`, `xarray`, and `icechunk`. We also need to install `fsspec` and `s3fs` for working with data on s3.
+Before we get started, we need to install `virtualizarr`, and `icechunk`. We also need to install `fsspec` and `s3fs` for working with data on s3.
 
 ```shell
-pip install virtualizarr xarray icechunk fsspec s3fs
+pip install virtualizarr icechunk fsspec s3fs
 ```
 
 First, we need to find all of the files we are interested in, we will do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
@@ -191,4 +191,9 @@ No extra configuration is necessary for local filesystem references.
 
 ### Virtual Reference File Format Support
 
-Currently, Icechunk supports `HDF5` and `netcdf4` files for use in virtual references with `VirtualiZarr`. Support for other filetypes such as TIFF or GRIB2 are on the roadmap.
+Currently, Icechunk supports `HDF5`, `netcdf4`, and `netcdf3` files for use in virtual references with `VirtualiZarr`. Support for other filetypes is under development in the VirtualiZarr project. Below are some relevant issues:
+
+- [meta issue for file format support](https://github.com/zarr-developers/VirtualiZarr/issues/218)
+- [Support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
+- [Support for GRIB2 files with datatree](https://github.com/zarr-developers/VirtualiZarr/issues/11)
+- [Support for TIFF files](https://github.com/zarr-developers/VirtualiZarr/issues/291)
