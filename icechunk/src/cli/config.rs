@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::config::{RepositoryConfig, ObjectStoreConfig, Credentials}
+use crate::config::{Credentials, ObjectStoreConfig, RepositoryConfig};
 
 pub struct RepoLocation {
     bucket: String,
