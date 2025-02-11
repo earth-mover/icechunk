@@ -1179,7 +1179,7 @@ class GcsStaticCredentials:
         def __init__(self, path: str) -> None: ...
 
     class ServiceAccountKey:
-        """Credentials for a google cloud storage backend using a a serailized service account key
+        """Credentials for a google cloud storage backend using a a serialized service account key
 
         Parameters
         ----------
