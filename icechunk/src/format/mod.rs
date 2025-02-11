@@ -20,7 +20,6 @@ use crate::{error::ICError, metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
-pub mod manifest_fb;
 pub mod manifest_generated;
 pub mod serializers;
 pub mod snapshot;

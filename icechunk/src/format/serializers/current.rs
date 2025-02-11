@@ -78,17 +78,17 @@ pub struct ManifestSerializer<'a> {
     chunks: &'a BTreeMap<NodeId, BTreeMap<ChunkIndices, ChunkPayload>>,
 }
 
-impl From<ManifestDeserializer> for Manifest {
-    fn from(value: ManifestDeserializer) -> Self {
-        Self { id: value.id, chunks: value.chunks }
-    }
-}
-
-impl<'a> From<&'a Manifest> for ManifestSerializer<'a> {
-    fn from(value: &'a Manifest) -> Self {
-        Self { id: &value.id, chunks: &value.chunks }
-    }
-}
+//impl From<ManifestDeserializer> for Manifest {
+//    fn from(value: ManifestDeserializer) -> Self {
+//        Self { id: value.id, chunks: value.chunks }
+//    }
+//}
+//
+//impl<'a> From<&'a Manifest> for ManifestSerializer<'a> {
+//    fn from(value: &'a Manifest) -> Self {
+//        Self { id: &value.id, chunks: &value.chunks }
+//    }
+//}
 
 #[derive(Debug, Deserialize)]
 pub struct TransactionLogDeserializer {
