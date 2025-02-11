@@ -14,6 +14,8 @@ import tqdm
 import tqdm.contrib.concurrent
 from helpers import assert_cwd_is_icechunk_python, get_commit
 
+import icechunk as ic
+
 PIP_OPTIONS = "--disable-pip-version-check -q"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
@@ -37,18 +39,29 @@ def get_benchmark_deps(filepath: str) -> str:
 
 
 class Runner:
-    def pip_github_url(self, ref: str) -> str:
+    def __init__(self, ref: str) -> None:
+        self.ref = ref
+        self.commit = get_commit(ref)
+
+    @property
+    def pip_github_url(self) -> str:
         # optional extras cannot be specified here, "not guaranteed to work"
         # https://pip.pypa.io/en/stable/topics/vcs-support/#url-fragments
-        return f"git+https://github.com/earth-mover/icechunk.git@{ref}#subdirectory=icechunk-python"
+        return f"git+https://github.com/earth-mover/icechunk.git@{self.ref}#subdirectory=icechunk-python"
+
+    @property
+    def prefix(self) -> str:
+        try:
+            return f"v{ic.spec_version():02d}"
+        except AttributeError:
+            return f"{self.ref}_{self.commit}"
 
 
 class LocalRunner(Runner):
     activate: str = "source .venv/bin/activate"
 
     def __init__(self, ref: str):
-        self.ref = ref
-        self.commit = get_commit(ref)
+        super().__init__(ref)
         suffix = f"{self.ref}_{self.commit}"
         self.base = f"{TMP}/icechunk-bench-{suffix}"
         self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
@@ -65,7 +78,7 @@ class LocalRunner(Runner):
         subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
         subprocess.run(
             f"{self.activate} "
-            f"&& pip install {PIP_OPTIONS} {self.pip_github_url(ref)} {deps}",
+            f"&& pip install {PIP_OPTIONS} {self.pip_github_url} {deps}",
             shell=True,
             **pykwargs,
         )
@@ -76,7 +89,7 @@ class LocalRunner(Runner):
         cmd = (
             f"pytest -q --durations 10 -nauto "
             "-m setup_benchmarks --force-setup={force} "
-            f"--icechunk-prefix=benchmarks/{self.ref}_{self.commit}/ "
+            f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             "benchmarks/"
         )
         subprocess.run(
@@ -142,18 +155,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     refs = args.refs
-    # refs = [
-    #     # "0.1.0-alpha.2-python",  # first release
-    #     "icechunk-v0.1.0-alpha.8",
-    #     # concurrent chunk fetch
-    #     # list_dir reimplemented
-    #     # "icechunk-v0.1.0-alpha.10",
-    #     # metadata file download performance
-    #     # "icechunk-v0.1.0-alpha.11",
-    #     # concurrently download bytes
-    #     "icechunk-v0.1.0-alpha.12",
-    #     # "main",
-    # ]
 
     if args.where == "local":
         runner_cls = LocalRunner
@@ -171,7 +172,7 @@ if __name__ == "__main__":
         runners,
     )
     # For debugging
-    # for ref in refs:
+    # for ref in args.refs:
     #     init_for_ref(ref, force_setup=args.force_setup)
 
     for ref in tqdm.tqdm(refs):
