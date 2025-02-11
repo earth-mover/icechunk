@@ -2,6 +2,8 @@ import time
 import warnings
 from typing import cast
 
+import pytest
+
 import dask.array
 import icechunk
 import zarr
@@ -19,7 +21,7 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-def mk_repo() -> icechunk.Repository:
+def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
     storage = icechunk.s3_storage(
         endpoint_url="http://localhost:9000",
         allow_http=True,
@@ -28,6 +30,7 @@ def mk_repo() -> icechunk.Repository:
         prefix="python-distributed-writers-test__" + str(time.time()),
         access_key_id="minio123",
         secret_access_key="minio123",
+        use_object_store=use_object_store,
     )
     repo_config = icechunk.RepositoryConfig.default()
     repo_config.inline_chunk_threshold_bytes = 5
@@ -39,7 +42,8 @@ def mk_repo() -> icechunk.Repository:
     return repo
 
 
-async def test_distributed_writers() -> None:
+@pytest.mark.parametrize("use_object_store", [False, True])
+async def test_distributed_writers(use_object_store: bool) -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -48,7 +52,7 @@ async def test_distributed_writers() -> None:
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
-    repo = mk_repo()
+    repo = mk_repo(use_object_store)
     session = repo.writable_session(branch="main")
     store = session.store
 

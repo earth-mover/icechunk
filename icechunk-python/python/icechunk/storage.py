@@ -69,6 +69,7 @@ def s3_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    use_object_store: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -98,7 +99,12 @@ def s3_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    use_object_store: bool
+        EXPERIMENTAL: If True, use the object_store API to create the storage instance instead of the AWS SDK. Warning this will not work with refreshable credentials.
     """
+    if use_object_store and get_credentials:
+        raise ValueError("use_object_store and get_credentials cannot both be set")
+
     credentials = s3_credentials(
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,
@@ -114,6 +120,7 @@ def s3_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        use_object_store=use_object_store,
     )
 
 

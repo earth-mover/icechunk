@@ -587,6 +587,17 @@ pub async fn new_local_filesystem_storage(
     Ok(Arc::new(st))
 }
 
+pub async fn new_s3_object_store_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let storage =
+        ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
+    Ok(Arc::new(storage))
+}
+
 pub async fn new_azure_blob_storage(
     account: String,
     container: String,
