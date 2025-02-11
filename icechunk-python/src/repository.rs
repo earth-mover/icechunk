@@ -299,7 +299,7 @@ impl PyDiff {
         }
 
         if !self.updated_chunks.is_empty() {
-            res.push_str("Number of chunks updated:\n");
+            res.push_str("Chunks updated:\n");
             for (path, chunks) in self.updated_chunks.iter() {
                 writeln!(res, "    {}:", path).unwrap();
                 let coords = chunks
