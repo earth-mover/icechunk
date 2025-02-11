@@ -1,5 +1,17 @@
 # Changelog
 
+## Python Icechunk Library 0.1.3
+
+### Features
+
+- Repositories can now evaluate the `diff` between two snapshots.
+- Sessions can show the current `status` of the working copy.
+- Adds the ability to specify bearer tokens for authenticating with Google Cloud Storage.
+
+### Fixes
+
+- Dont write `dimension_names` to the zarr metadata if no dimension names are set. Previously, `null` was written.
+
 ## Python Icechunk Library 0.1.2
 
 ### Features
