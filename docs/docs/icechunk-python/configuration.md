@@ -4,8 +4,26 @@ When creating and opening Icechunk repositories, there are many configuration op
 
 ## [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig)
 
-Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
+The `RepositoryConfig` object is used to configure the repository. Within, it allows you to configure the following:
 
+- [`inline_chunk_threshold_bytes`](./reference.md#icechunk.RepositoryConfig.inline_chunk_threshold_bytes): The threshold for when to inline a chunk into a manifest instead of storing it as a separate object in the storage backend.
+- [`unsafe_overwrite_refs`](./reference.md#icechunk.RepositoryConfig.unsafe_overwrite_refs): Whether to allow overwriting references in the repository.
+- [`get_partial_values_concurrency`](./reference.md#icechunk.RepositoryConfig.get_partial_values_concurrency): The number of concurrent requests to make when getting partial values from storage.
+- [`compression`](./reference.md#icechunk.RepositoryConfig.compression): The compression configuration for the repository.
+- [`caching`](./reference.md#icechunk.RepositoryConfig.caching): The caching configuration for the repository.
+- [`storage`](./reference.md#icechunk.RepositoryConfig.storage): The storage configuration for the repository.
+- [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers): The virtual chunk containers for the repository.
+- [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest): The manifest configuration for the repository.
+
+### [`CompressionConfig`](./reference.md#icechunk.CompressionConfig)
+
+### [`CachingConfig`](./reference.md#icechunk.CachingConfig)
+
+### [`StorageSettings`](./reference.md#icechunk.StorageSettings)
+
+### [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer)
+
+### [`ManifestConfig`](./reference.md#icechunk.ManifestConfig)
 
 ## Creating and Opening Repos
 
