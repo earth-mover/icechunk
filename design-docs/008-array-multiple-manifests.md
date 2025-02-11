@@ -18,6 +18,7 @@ Our next job is to split the manifest files for large arrays, while providing th
 How might we optimize the splitting of a manifest file?
 1. User: "I expect to only read the most recent data most of the time." Split along "time" so that N days of data are in a single manifest file. For ERA5 for example, we might split by a time frequency: a year's worth of references, or a month's worth of references, in a single manifest.
 2. User: "I expect to generally read a small number of vertical levels (<5) for a dataset with O(50) levels.". Split so that a single level's references are in a single file.
+3. User: "I have created a large (nominally) 20TB spatial datacube but have only populated relatively small geographical regions of it." Split in space, so that as new regions are populated, existing manifests don't need to be rewritten.
 
 As has been pointed out, this is similar to sharding, and we general want to align the manifest shards with expected read patterns.
 Some considerations
