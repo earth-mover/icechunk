@@ -25,6 +25,8 @@ The `RepositoryConfig` object is used to configure the repository. Within, it al
 
 ### [`ManifestConfig`](./reference.md#icechunk.ManifestConfig)
 
+Currently, the manifest configuration allows you to configure the preload behavior of the manifest.
+
 ## Creating and Opening Repos
 
 Now we can now create or open an Icechunk repo using our config.
