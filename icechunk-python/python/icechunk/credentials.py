@@ -24,6 +24,7 @@ AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
+    | GcsStaticCredentials.BearerToken
 )
 
 AnyGcsCredential = (
@@ -181,6 +182,7 @@ def gcs_static_credentials(
     service_account_file: str | None = None,
     service_account_key: str | None = None,
     application_credentials: str | None = None,
+    bearer_token: str | None = None,
 ) -> AnyGcsStaticCredential:
     """Create static credentials Google Cloud Storage object store."""
     if service_account_file is not None:
@@ -189,6 +191,8 @@ def gcs_static_credentials(
         return GcsStaticCredentials.ServiceAccountKey(service_account_key)
     if application_credentials is not None:
         return GcsStaticCredentials.ApplicationCredentials(application_credentials)
+    if bearer_token is not None:
+        return GcsStaticCredentials.BearerToken(bearer_token)
     raise ValueError("Conflicting arguments to gcs_static_credentials function")
 
 
@@ -209,6 +213,7 @@ def gcs_credentials(
     service_account_file: str | None = None,
     service_account_key: str | None = None,
     application_credentials: str | None = None,
+    bearer_token: str | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
 ) -> AnyGcsCredential:
@@ -220,6 +225,7 @@ def gcs_credentials(
         service_account_file is None
         and service_account_key is None
         and application_credentials is None
+        and bearer_token is None
     ):
         return gcs_from_env_credentials()
 
@@ -227,12 +233,14 @@ def gcs_credentials(
         service_account_file is not None
         or service_account_key is not None
         or application_credentials is not None
+        or bearer_token is not None
     ) and (from_env is None or not from_env):
         return GcsCredentials.Static(
             gcs_static_credentials(
                 service_account_file=service_account_file,
                 service_account_key=service_account_key,
                 application_credentials=application_credentials,
+                bearer_token=bearer_token,
             )
         )
 
