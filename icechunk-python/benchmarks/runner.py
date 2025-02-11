@@ -22,12 +22,28 @@ assert_cwd_is_icechunk_python()
 
 
 def get_benchmark_deps(filepath: str) -> str:
+    """needed since
+    1. benchmark deps may have changed in the meantime.
+    2. we can't specify optional extras when installing from a subdirectory
+       https://pip.pypa.io/en/stable/topics/vcs-support/#url-fragments
+    """
     with open(filepath, mode="rb") as f:
         data = tomllib.load(f)
-    return " ".join(data["project"]["optional-dependencies"].get("benchmark", ""))
+    return (
+        " ".join(data["project"]["optional-dependencies"].get("benchmark", ""))
+        + " "
+        + " ".join(data["project"]["optional-dependencies"].get("test", ""))
+    )
 
 
 class Runner:
+    def pip_github_url(self, ref: str) -> str:
+        # optional extras cannot be specified here, "not guaranteed to work"
+        # https://pip.pypa.io/en/stable/topics/vcs-support/#url-fragments
+        return f"git+https://github.com/earth-mover/icechunk.git@{ref}#subdirectory=icechunk-python"
+
+
+class LocalRunner(Runner):
     activate: str = "source .venv/bin/activate"
 
     def __init__(self, ref: str):
@@ -42,39 +58,14 @@ class Runner:
         ref = self.ref
 
         deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
-        kwargs = dict(cwd=self.cwd, check=True)
         pykwargs = dict(cwd=self.pycwd, check=True)
 
-        print(f"checking out {ref} to {self.base}")
-        subprocess.run(["mkdir", self.base], check=False)
-        # TODO: copy the local one instead to save time?
-        subprocess.run(
-            ["git", "clone", "-q", "git@github.com:earth-mover/icechunk"],
-            cwd=self.base,
-            check=False,
-        )
-        subprocess.run(["git", "checkout", "-q", ref], **kwargs)
+        print(f"Running for {ref} in {self.base}")
+        subprocess.run(["mkdir", "-p", self.pycwd], check=False)
         subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
         subprocess.run(
-            [
-                "maturin",
-                "build",
-                "-q",
-                "--release",
-                "--out",
-                "dist",
-                "--find-interpreter",
-            ],
-            **pykwargs,
-        )
-        # This is quite ugly but is the only way I can figure out to force pip
-        # to install the wheel we just built
-        subprocess.run(
             f"{self.activate} "
-            f"&& pip install {PIP_OPTIONS} icechunk[test]"
-            f"&& pip install {PIP_OPTIONS} {deps}"
-            f"&& pip uninstall -y icechunk"
-            f"&& pip install -v icechunk --no-index --find-links=dist",
+            f"&& pip install {PIP_OPTIONS} {self.pip_github_url(ref)} {deps}",
             shell=True,
             **pykwargs,
         )
@@ -117,8 +108,18 @@ class Runner:
         )
 
 
-def init_for_ref(ref: str, *, skip_setup: bool, force_setup: bool):
-    runner = Runner(ref)
+class CoiledRunner(Runner):
+    def __init__(self, ref: str):
+        self.ref = ref
+        # self.commit = get_commit(ref)
+        # suffix = f"{self.ref}_{self.commit}"
+        # self.base = f"{TMP}/icechunk-bench-{suffix}"
+        # self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
+        # self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
+        raise NotImplementedError
+
+
+def init_for_ref(runner: Runner, *, skip_setup: bool, force_setup: bool):
     runner.initialize()
     if not skip_setup:
         runner.setup(force=force_setup)
@@ -128,6 +129,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest", default="")
+    parser.add_argument("--where", help="where to run? [local]", default="local")
     parser.add_argument(
         "--skip-setup",
         help="skip setup step, useful for benchmarks that don't need data",
@@ -153,16 +155,27 @@ if __name__ == "__main__":
     #     # "main",
     # ]
 
+    if args.where == "local":
+        runner_cls = LocalRunner
+    else:
+        runner_cls = CoiledRunner
+
+    runners = tuple(runner_cls(ref) for ref in refs)
+
     tqdm.contrib.concurrent.process_map(
-        partial(init_for_ref, skip_setup=args.skip_setup, force_setup=args.force_setup),
-        refs,
+        partial(
+            init_for_ref,
+            skip_setup=args.skip_setup,
+            force_setup=args.force_setup,
+        ),
+        runners,
     )
     # For debugging
     # for ref in refs:
     #     init_for_ref(ref, force_setup=args.force_setup)
 
     for ref in tqdm.tqdm(refs):
-        runner = Runner(ref)
+        runner = runner_cls(ref)
         runner.run(pytest_extra=args.pytest)
 
     if len(refs) > 1:
