@@ -1,0 +1,39 @@
+namespace generated;
+
+struct ObjectId12 {
+  bytes:[uint8:12];
+}
+
+struct ObjectId8 {
+  bytes:[uint8:8];
+}
+
+table ChunkPayload {
+  inline: [uint8];
+
+  offset: uint64;
+  length: uint64;
+
+  chunk_id: ObjectId12;
+
+  location: string;
+  checksum_etag: string;
+  checksum_last_modified: uint32;
+}
+
+table ChunkRef {
+  index: [uint32] (required);
+  payload: ChunkPayload (required);
+}
+
+table ArrayManifest {
+  node_id: ObjectId8 (required);
+  refs: [ChunkRef] (required);
+}
+
+table Manifest {
+  id: ObjectId12 (required);
+  arrays: [ArrayManifest] (required);
+}
+
+root_type Manifest;
