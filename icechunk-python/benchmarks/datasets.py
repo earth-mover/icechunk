@@ -9,6 +9,7 @@ from typing import Any, Literal, Self, TypeAlias
 
 import fsspec
 import numpy as np
+import platformdirs
 
 import icechunk as ic
 import xarray as xr
@@ -22,6 +23,7 @@ CONSTRUCTORS = {
     "s3": ic.s3_storage,
     "gcs": ic.gcs_storage,
     "tigris": ic.tigris_storage,
+    "local": ic.local_filesystem_storage,
 }
 
 
@@ -43,29 +45,41 @@ def tigris_credentials() -> tuple[str, str]:
 class StorageConfig:
     """wrapper that allows us to config the prefix for a ref."""
 
-    store: str
+    store: str | None = None
     config: dict[str, Any] = field(default_factory=dict)
     bucket: str | None = None
     prefix: str | None = None
     region: str | None = None
-    path: str | None = None
+
+    @property
+    def path(self) -> str:
+        if self.store != "local":
+            raise ValueError(f"can't grab path for {self.store=!r}")
+        return f"{platformdirs.site_cache_dir()}/{self.bucket}/{self.prefix}"
 
     def create(self) -> ic.Storage:
+        if self.store is None:
+            raise ValueError("StorageConfig.store is None!")
         kwargs = {}
-        if self.bucket is not None:
-            kwargs["bucket"] = self.bucket
-        if self.prefix is not None:
-            kwargs["prefix"] = self.prefix
-        if self.path is not None:
+        if self.store == "local":
             kwargs["path"] = self.path
-        if self.region is not None and self.store not in ["gcs", "tigris"]:
-            kwargs["region"] = self.region
-        if self.store == "tigris":
-            kwargs.update(tigris_credentials())
+        else:
+            if self.bucket is not None:
+                kwargs["bucket"] = self.bucket
+            if self.prefix is not None:
+                kwargs["prefix"] = self.prefix
+            if self.region is not None and self.store not in ["gcs", "tigris"]:
+                kwargs["region"] = self.region
+            if self.store == "tigris":
+                kwargs.update(tigris_credentials())
         return CONSTRUCTORS[self.store](**self.config, **kwargs)
 
     def with_extra(
-        self, *, prefix: str | None = None, force_idempotent: bool = False
+        self,
+        *,
+        store: str | None = None,
+        prefix: str | None = None,
+        force_idempotent: bool = False,
     ) -> Self:
         if self.prefix is not None:
             if force_idempotent and self.prefix.startswith(prefix):
@@ -74,26 +88,19 @@ class StorageConfig:
         else:
             new_prefix = None
 
-        if self.path is not None:
-            if force_idempotent and self.path.startswith(prefix):
-                return self
-            new_path = (prefix or "") + self.path
-        else:
-            new_path = None
         return type(self)(
-            store=self.store,
+            store=store if store is not None else self.store,
             bucket=self.bucket,
             prefix=new_prefix,
-            path=new_path,
             region=self.region,
             config=self.config,
         )
 
     @property
     def env_vars(self) -> dict[str, str]:
-        if self.store == "tigris":
-            # https://www.tigrisdata.com/docs/iam/#create-an-access-key
-            return {"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}
+        # if self.store == "tigris":
+        #     # https://www.tigrisdata.com/docs/iam/#create-an-access-key
+        #     return {"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}
         return {}
 
     @property
@@ -103,17 +110,15 @@ class StorageConfig:
         elif self.store == "gcs":
             protocol = "gcs"
         else:
-            protocol = ""
+            protocol = "file"
         return protocol
 
     def clear_uri(self) -> str:
         """URI to clear when re-creating data from scratch."""
-        if self.bucket is not None:
-            return f"{self.protocol}://{self.bucket}/{self.prefix}"
-        elif self.path is not None:
-            return self.path
+        if self.store == "local":
+            return f"{self.protocol}://{self.path}"
         else:
-            raise NotImplementedError("I don't know what to do here.")
+            return f"{self.protocol}://{self.bucket}/{self.prefix}"
 
     def get_coiled_workspace(self) -> str:
         BACKENDS = {
@@ -147,7 +152,7 @@ class Dataset:
             clear_uri = self.storage_config.clear_uri()
             if clear_uri is None:
                 raise NotImplementedError
-            if self.storage_config.protocol not in ["s3", "gcs"]:
+            if self.storage_config.protocol not in ["file", "s3", "gcs"]:
                 warnings.warn(
                     f"Only clearing of GCS, S3-compatible URIs supported at the moment. Received {clear_uri!r}",
                     RuntimeWarning,
@@ -156,7 +161,7 @@ class Dataset:
             else:
                 fs = fsspec.filesystem(self.storage_config.protocol)
                 try:
-                    logger.info("Clearing prefix")
+                    logger.info(f"Clearing prefix: {clear_uri!r}")
                     fs.rm(clear_uri, recursive=True)
                 except FileNotFoundError:
                     pass
@@ -182,7 +187,7 @@ class BenchmarkDataset(Dataset):
     def create(self, clear: bool = True):
         if clear is not True:
             raise ValueError("clear *must* be true for benchmark datasets.")
-        super().create(clear=True)
+        return super().create(clear=True)
 
     def setup(self, force: bool = False) -> None:
         """
@@ -261,7 +266,6 @@ def setup_era5_single(dataset: Dataset):
 
 ERA5 = BenchmarkDataset(
     storage_config=StorageConfig(
-        store="s3",
         bucket="icechunk-test",
         prefix="era5-weatherbench",
     ),
@@ -275,9 +279,7 @@ ERA5 = BenchmarkDataset(
 
 ERA5_LARGE = BenchmarkDataset(
     storage_config=StorageConfig(
-        store="s3",
-        bucket="icechunk-public-data",
-        prefix="era5-weatherbench2",
+        bucket="icechunk-public-data", prefix="era5-weatherbench2"
     ),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
@@ -288,11 +290,7 @@ ERA5_LARGE = BenchmarkDataset(
 )
 
 ERA5_SINGLE = BenchmarkDataset(
-    storage_config=StorageConfig(
-        store="s3",
-        bucket="icechunk-test",
-        prefix="perf-era5-single",
-    ),
+    storage_config=StorageConfig(bucket="icechunk-test", prefix="perf-era5-single"),
     load_variables=["PV"],
     chunk_selector={"time": 1},
     first_byte_variable="latitude",
@@ -300,11 +298,7 @@ ERA5_SINGLE = BenchmarkDataset(
 )
 
 GB_128MB_CHUNKS = BenchmarkDataset(
-    storage_config=StorageConfig(
-        store="s3",
-        bucket="icechunk-test",
-        prefix="gb-128mb-chunks",
-    ),
+    storage_config=StorageConfig(bucket="icechunk-test", prefix="gb-128mb-chunks"),
     load_variables=["array"],
     chunk_selector={},
     first_byte_variable=None,
@@ -312,11 +306,7 @@ GB_128MB_CHUNKS = BenchmarkDataset(
 )
 
 GB_8MB_CHUNKS = BenchmarkDataset(
-    storage_config=StorageConfig(
-        store="s3",
-        bucket="icechunk-test",
-        prefix="gb-8mb-chunks",
-    ),
+    storage_config=StorageConfig(bucket="icechunk-test", prefix="gb-8mb-chunks"),
     load_variables=["array"],
     chunk_selector={},
     first_byte_variable=None,

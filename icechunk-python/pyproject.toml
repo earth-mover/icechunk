@@ -48,6 +48,7 @@ benchmark = [
   "pooch",
   "tqdm",
   "humanize",
+  "platformdirs",
 ]
 
 [tool.maturin]

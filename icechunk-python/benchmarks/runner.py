@@ -39,9 +39,10 @@ def get_benchmark_deps(filepath: str) -> str:
 
 
 class Runner:
-    def __init__(self, ref: str) -> None:
+    def __init__(self, *, ref: str, where: str) -> None:
         self.ref = ref
         self.commit = get_commit(ref)
+        self.where = where
 
     @property
     def pip_github_url(self) -> str:
@@ -60,8 +61,8 @@ class Runner:
 class LocalRunner(Runner):
     activate: str = "source .venv/bin/activate"
 
-    def __init__(self, ref: str):
-        super().__init__(ref)
+    def __init__(self, *, ref: str, where: str):
+        super().__init__(ref=ref, where=where)
         suffix = f"{self.ref}_{self.commit}"
         self.base = f"{TMP}/icechunk-bench-{suffix}"
         self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
@@ -83,12 +84,13 @@ class LocalRunner(Runner):
             **pykwargs,
         )
 
-    def setup(self, force: bool):
+    def setup(self, *, force: bool):
         print(f"setup_benchmarks for {self.ref} / {self.commit}")
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
         cmd = (
             f"pytest -q --durations 10 -nauto "
-            "-m setup_benchmarks --force-setup={force} "
+            f"-m setup_benchmarks --force-setup={force} "
+            f"--where={self.where} "
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             "benchmarks/"
         )
@@ -102,14 +104,15 @@ class LocalRunner(Runner):
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
 
         # shorten the name so `pytest-benchmark compare` is readable
-        clean_ref = ref.removeprefix("icechunk-v0.1.0-alph")
+        clean_ref = self.ref.removeprefix("icechunk-v0.1.0-alph")
 
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
             f"pytest -q --durations 10 "
             f"--benchmark-storage={CURRENTDIR}/.benchmarks "
             f"--benchmark-save={clean_ref}_{self.commit} "
-            f"--icechunk-prefix=benchmarks/{ref}_{self.commit}/ "
+            f"--where={self.where} "
+            f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             f"{pytest_extra} "
             "benchmarks/"
         )
@@ -122,7 +125,8 @@ class LocalRunner(Runner):
 
 
 class CoiledRunner(Runner):
-    def __init__(self, ref: str):
+    def __init__(self, *, ref: str, where: str):
+        super().__init__(ref=ref, where=where)
         self.ref = ref
         # self.commit = get_commit(ref)
         # suffix = f"{self.ref}_{self.commit}"
@@ -132,10 +136,10 @@ class CoiledRunner(Runner):
         raise NotImplementedError
 
 
-def init_for_ref(runner: Runner, *, skip_setup: bool, force_setup: bool):
+def init_for_ref(runner: Runner, *, where: str, skip_setup: bool, force_setup: bool):
     runner.initialize()
     if not skip_setup:
-        runner.setup(force=force_setup)
+        runner.setup(force=force_setup, where=where)
 
 
 if __name__ == "__main__":
@@ -161,22 +165,27 @@ if __name__ == "__main__":
     else:
         runner_cls = CoiledRunner
 
-    runners = tuple(runner_cls(ref) for ref in refs)
+    runners = tuple(runner_cls(ref=ref, where=args.where) for ref in refs)
 
     tqdm.contrib.concurrent.process_map(
         partial(
             init_for_ref,
+            where=args.where,
             skip_setup=args.skip_setup,
             force_setup=args.force_setup,
         ),
         runners,
     )
     # For debugging
-    # for ref in args.refs:
-    #     init_for_ref(ref, force_setup=args.force_setup)
+    # for runner in runners:
+    #     init_for_ref(
+    #         runner=runner,
+    #         where=args.where,
+    #         skip_setup=args.skip_setup,
+    #         force_setup=args.force_setup,
+    #     )
 
-    for ref in tqdm.tqdm(refs):
-        runner = runner_cls(ref)
+    for runner in tqdm.tqdm(runners):
         runner.run(pytest_extra=args.pytest)
 
     if len(refs) > 1:
