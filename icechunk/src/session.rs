@@ -1359,7 +1359,7 @@ impl<'a> FlushProcess<'a> {
             self.manifest_files.insert(file_info);
 
             let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+                ManifestRef { object_id: new_manifest.id().clone(), extents: from..to };
 
             self.manifest_refs
                 .entry(node_id.clone())
@@ -1399,7 +1399,7 @@ impl<'a> FlushProcess<'a> {
             self.manifest_files.insert(file_info);
 
             let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+                ManifestRef { object_id: new_manifest.id().clone(), extents: from..to };
             self.manifest_refs
                 .entry(node.id.clone())
                 .and_modify(|v| v.push(new_ref.clone()))
@@ -1878,7 +1878,7 @@ mod tests {
         let manifest =
             Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
         let manifest = Arc::new(manifest);
-        let manifest_id = &manifest.id;
+        let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {

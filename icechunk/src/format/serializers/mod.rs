@@ -74,8 +74,11 @@ pub fn serialize_manifest(
 ) -> Result<(), rmp_serde::encode::Error> {
     match version {
         SpecVersionBin::V0dot1 => {
-            let serializer = ManifestSerializer::from(manifest);
-            rmp_serde::encode::write(write, &serializer)
+            // FIXME:
+            write.write_all(manifest.bytes()).unwrap();
+            Ok(())
+            //let serializer = ManifestSerializer::from(manifest);
+            //rmp_serde::encode::write(write, &serializer)
         }
     }
 }
@@ -107,12 +110,13 @@ pub fn deserialize_snapshot(
 
 pub fn deserialize_manifest(
     version: SpecVersionBin,
-    read: Box<dyn Read>,
+    mut read: Box<dyn Read>,
 ) -> Result<Manifest, rmp_serde::decode::Error> {
     match version {
         SpecVersionBin::V0dot1 => {
-            let deserializer: ManifestDeserializer = rmp_serde::from_read(read)?;
-            Ok(deserializer.into())
+            Ok(Manifest::from_read(read.as_mut()))
+            //  let deserializer: ManifestDeserializer = rmp_serde::from_read(read)?;
+            //Ok(deserializer.into())
         }
     }
 }

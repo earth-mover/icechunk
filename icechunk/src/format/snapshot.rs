@@ -131,7 +131,7 @@ pub struct ManifestFileInfo {
 
 impl ManifestFileInfo {
     pub fn new(manifest: &Manifest, size_bytes: u64) -> Self {
-        Self { id: manifest.id.clone(), num_rows: manifest.len() as u32, size_bytes }
+        Self { id: manifest.id().clone(), num_rows: manifest.len() as u32, size_bytes }
     }
 }
 
