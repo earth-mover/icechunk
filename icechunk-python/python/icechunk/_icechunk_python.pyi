@@ -1189,10 +1189,23 @@ class GcsStaticCredentials:
         def __init__(self, key: str) -> None: ...
 
     class ApplicationCredentials:
-        """Credentials for a google cloud storage backend using application default credentials"""
-        def __init__(self) -> None: ...
+        """Credentials for a google cloud storage backend using application default credentials
+
+        Parameters
+        ----------
+        path: str
+            The path to the application default credentials (ADC) file.
+        """
+        def __init__(self, path: str) -> None: ...
 
     class BearerToken:
+        """Credentials for a google cloud storage backend using a bearer token
+
+        Parameters
+        ----------
+        token: str
+            The bearer token to use for authentication.
+        """
         def __init__(self, token: str) -> None: ...
 
 AnyGcsStaticCredential = (
@@ -1280,20 +1293,13 @@ class AzureCredentials:
 AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
 
 class Credentials:
-    """Credentials for a storage backend
-
-    This can be used to authenticate with a storage backend.
-    """
     class S3:
-        """Credentials for an S3 storage backend"""
         def __init__(self, credentials: AnyS3Credential) -> None: ...
 
     class Gcs:
-        """Credentials for a google cloud storage backend"""
         def __init__(self, credentials: GcsCredentials) -> None: ...
 
     class Azure:
-        """Credentials for an azure storage backend"""
         def __init__(self, credentials: AzureCredentials) -> None: ...
 
 AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
@@ -1356,7 +1362,17 @@ class Storage:
     def default_settings(self) -> StorageSettings: ...
 
 class VersionSelection(Enum):
-    """Enum for selecting the which version of a conflict"""
+    """Enum for selecting the which version of a conflict
+
+    Attributes
+    ----------
+    Fail: int
+        Fail the rebase operation
+    UseOurs: int
+        Use the version from the source store
+    UseTheirs: int
+        Use the version from the target store
+    """
 
     Fail = 0
     UseOurs = 1
