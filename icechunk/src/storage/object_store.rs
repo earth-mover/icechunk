@@ -21,7 +21,8 @@ use object_store::{
     memory::InMemory,
     path::Path as ObjectPath,
     Attribute, AttributeValue, Attributes, CredentialProvider, GetOptions, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion,
+    ObjectStore, PutMode, PutOptions, PutPayload, StaticCredentialProvider,
+    UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -899,6 +900,10 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                 })?;
                 builder.with_application_credentials(path)
             }
+            Some(GcsCredentials::Static(GcsStaticCredentials::BearerToken(token))) => {
+                let provider = StaticCredentialProvider::new(GcpCredential::from(token));
+                builder.with_credentials(Arc::new(provider))
+            }
             Some(GcsCredentials::Refreshable(fetcher)) => {
                 let credential_provider =
                     GcsRefreshableCredentialProvider::new(Arc::clone(fetcher));
@@ -971,7 +976,7 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
         let creds = self.get_or_update_credentials().await.map_err(|e| {
             object_store::Error::Generic { store: "gcp", source: Box::new(e) }
         })?;
-        Ok(Arc::new(creds.into()))
+        Ok(Arc::new(GcpCredential::from(&creds)))
     }
 }
 

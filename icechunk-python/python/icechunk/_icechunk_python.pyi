@@ -1192,10 +1192,14 @@ class GcsStaticCredentials:
         """Credentials for a google cloud storage backend using application default credentials"""
         def __init__(self) -> None: ...
 
+    class BearerToken:
+        def __init__(self, token: str) -> None: ...
+
 AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
+    | GcsStaticCredentials.BearerToken
 )
 
 class GcsCredentials:
