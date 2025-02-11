@@ -1,42 +1,20 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::change_set::ChangeSet;
 
 use super::{ChunkIndices, NodeId, Path};
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Changes<Id, Chunks>
-where
-    Id: Eq + Hash,
-{
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TransactionLog {
     // FIXME: better, more stable on-disk format
-    pub new_groups: HashSet<Id>,
-    pub new_arrays: HashSet<Id>,
-    pub deleted_groups: HashSet<Id>,
-    pub deleted_arrays: HashSet<Id>,
-    pub updated_user_attributes: HashSet<Id>,
-    pub updated_zarr_metadata: HashSet<Id>,
-    pub updated_chunks: HashMap<Id, Chunks>,
+    pub new_groups: HashSet<NodeId>,
+    pub new_arrays: HashSet<NodeId>,
+    pub deleted_groups: HashSet<NodeId>,
+    pub deleted_arrays: HashSet<NodeId>,
+    pub updated_user_attributes: HashSet<NodeId>,
+    pub updated_zarr_metadata: HashSet<NodeId>,
+    pub updated_chunks: HashMap<NodeId, HashSet<ChunkIndices>>,
 }
-
-impl<Id: Hash + Eq, Chunks> Default for Changes<Id, Chunks> {
-    fn default() -> Self {
-        Self {
-            new_groups: Default::default(),
-            new_arrays: Default::default(),
-            deleted_groups: Default::default(),
-            deleted_arrays: Default::default(),
-            updated_user_attributes: Default::default(),
-            updated_zarr_metadata: Default::default(),
-            updated_chunks: Default::default(),
-        }
-    }
-}
-
-pub type TransactionLog = Changes<NodeId, HashSet<ChunkIndices>>;
 
 impl TransactionLog {
     pub fn new(cs: &ChangeSet) -> Self {
@@ -96,7 +74,16 @@ impl TransactionLog {
     }
 }
 
-pub type Diff = Changes<Path, u64>;
+#[derive(Clone, Debug, PartialEq)]
+pub struct Diff {
+    pub new_groups: BTreeSet<Path>,
+    pub new_arrays: BTreeSet<Path>,
+    pub deleted_groups: BTreeSet<Path>,
+    pub deleted_arrays: BTreeSet<Path>,
+    pub updated_user_attributes: BTreeSet<Path>,
+    pub updated_zarr_metadata: BTreeSet<Path>,
+    pub updated_chunks: BTreeMap<Path, BTreeSet<ChunkIndices>>,
+}
 
 impl Diff {
     pub fn from_transaction_log(
@@ -143,7 +130,7 @@ impl Diff {
             .updated_chunks
             .iter()
             .flat_map(|(node_id, chunks)| {
-                nodes.get(node_id).map(|n| (n.clone(), chunks.len() as u64))
+                nodes.get(node_id).map(|n| (n.clone(), chunks.iter().cloned().collect()))
             })
             .collect();
         Self {
