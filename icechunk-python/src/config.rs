@@ -214,6 +214,7 @@ pub enum PyGcsStaticCredentials {
     ServiceAccount(String),
     ServiceAccountKey(String),
     ApplicationCredentials(String),
+    BearerToken(String),
 }
 
 impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
@@ -227,6 +228,12 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
             }
             PyGcsStaticCredentials::ApplicationCredentials(path) => {
                 GcsStaticCredentials::ApplicationCredentials(path.into())
+            }
+            PyGcsStaticCredentials::BearerToken(token) => {
+                GcsStaticCredentials::BearerToken(GcsBearerCredential {
+                    bearer: token,
+                    expires_after: None,
+                })
             }
         }
     }

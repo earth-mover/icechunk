@@ -539,10 +539,14 @@ class GcsStaticCredentials:
     class ApplicationCredentials:
         def __init__(self, path: str) -> None: ...
 
+    class BearerToken:
+        def __init__(self, token: str) -> None: ...
+
 AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
+    | GcsStaticCredentials.BearerToken
 )
 
 class GcsCredentials:

@@ -389,6 +389,7 @@ pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
     ServiceAccountKey(String),
     ApplicationCredentials(PathBuf),
+    BearerToken(GcsBearerCredential),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -399,9 +400,9 @@ pub struct GcsBearerCredential {
     pub expires_after: Option<DateTime<Utc>>,
 }
 
-impl From<GcsBearerCredential> for GcpCredential {
-    fn from(value: GcsBearerCredential) -> Self {
-        GcpCredential { bearer: value.bearer }
+impl From<&GcsBearerCredential> for GcpCredential {
+    fn from(value: &GcsBearerCredential) -> Self {
+        GcpCredential { bearer: value.bearer.clone() }
     }
 }
 
