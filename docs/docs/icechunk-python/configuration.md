@@ -4,28 +4,129 @@ When creating and opening Icechunk repositories, there are many configuration op
 
 ## [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig)
 
-The `RepositoryConfig` object is used to configure the repository. Within, it allows you to configure the following:
+The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
 
-- [`inline_chunk_threshold_bytes`](./reference.md#icechunk.RepositoryConfig.inline_chunk_threshold_bytes): The threshold for when to inline a chunk into a manifest instead of storing it as a separate object in the storage backend.
-- [`unsafe_overwrite_refs`](./reference.md#icechunk.RepositoryConfig.unsafe_overwrite_refs): Whether to allow overwriting references in the repository.
-- [`get_partial_values_concurrency`](./reference.md#icechunk.RepositoryConfig.get_partial_values_concurrency): The number of concurrent requests to make when getting partial values from storage.
-- [`compression`](./reference.md#icechunk.RepositoryConfig.compression): The compression configuration for the repository.
-- [`caching`](./reference.md#icechunk.RepositoryConfig.caching): The caching configuration for the repository.
-- [`storage`](./reference.md#icechunk.RepositoryConfig.storage): The storage configuration for the repository.
-- [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers): The virtual chunk containers for the repository.
-- [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest): The manifest configuration for the repository.
+```python
+config = icechunk.RepositoryConfig.default()
+```
 
-### [`CompressionConfig`](./reference.md#icechunk.CompressionConfig)
+or it can be optionally loaded from an existing repository:
 
-### [`CachingConfig`](./reference.md#icechunk.CachingConfig)
+```python
+config = icechunk.Repository.fetch_config(storage)
+```
 
-### [`StorageSettings`](./reference.md#icechunk.StorageSettings)
+It allows you to configure the following parameters:
 
-### [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer)
+### [`inline_chunk_threshold_bytes`](./reference.md#icechunk.RepositoryConfig.inline_chunk_threshold_bytes)
 
-### [`ManifestConfig`](./reference.md#icechunk.ManifestConfig)
+The threshold for when to inline a chunk into a manifest instead of storing it as a separate object in the storage backend.
 
-Currently, the manifest configuration allows you to configure the preload behavior of the manifest.
+### [`unsafe_overwrite_refs`](./reference.md#icechunk.RepositoryConfig.unsafe_overwrite_refs)
+
+Whether to allow overwriting references in the repository.
+
+### [`get_partial_values_concurrency`](./reference.md#icechunk.RepositoryConfig.get_partial_values_concurrency)
+
+The number of concurrent requests to make when getting partial values from storage.
+
+### [`compression`](./reference.md#icechunk.RepositoryConfig.compression)
+
+Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference.md#icechunk.CompressionConfig) allows you to configure the [compression level](./reference.md#icechunk.CompressionConfig.level) and [algorithm](./reference.md#icechunk.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
+
+```python
+config.compression = icechunk.CompressionConfig(
+    level=3,
+    algorithm=icechunk.CompressionAlgorithm.Zstd,
+)
+```
+
+### [`caching`](./reference.md#icechunk.RepositoryConfig.caching)
+
+Icechunk caches metadata files to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
+
+```python
+config.caching = icechunk.CachingConfig(
+    num_snapshot_nodes=100,
+    num_chunk_refs=100,
+    num_transaction_changes=100,
+    num_bytes_attributes=1e4,
+    num_bytes_chunks=1e6,
+)
+```
+
+### [`storage`](./reference.md#icechunk.RepositoryConfig.storage)
+
+This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings. Currently, the only setting available is the concurrency settings with [`StorageConcurrencySettings`](./reference.md#icechunk.StorageConcurrencySettings).
+
+```python
+config.storage = icechunk.StorageSettings(
+    concurrency=icechunk.StorageConcurrencySettings(
+        max_concurrent_requests_for_object=10,
+        ideal_concurrent_request_size=1e6,
+    ),
+)
+```
+
+### [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers)
+
+Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you can configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a name, a url prefix, and a storage configuration. When a nncontainer is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
+
+!!! note
+
+    Currently only `s3` compatible storage and `local_filesystem` storage are supported for virtual chunk containers. Other storage backends such as `gcs`, `azure`, and `https` are on the roadmap.
+
+#### Example
+
+For example, if we wanted to configure an icechunk repo to be able to contain virtual chunks from an `s3` bucket called `my-s3-bucket` in `us-east-1`, we would do the following:
+
+```python
+config.virtual_chunk_containers = [
+    icechunk.VirtualChunkContainer(
+        name="my-s3-bucket",
+        url_prefix="s3://my-s3-bucket/",
+        storage=icechunk.StorageSettings(
+            storage=icechunk.s3_storage(bucket="my-s3-bucket", region="us-east-1"),
+        ),
+    ),
+]
+```
+
+If we also wanted to configure the repo to be able to contain virtual chunks from another `s3` bucket called `my-other-s3-bucket` in `us-west-2`, we would do the following:
+
+```python
+config.set_virtual_chunk_container(
+    icechunk.VirtualChunkContainer(
+        name="my-other-s3-bucket",
+        url_prefix="s3://my-other-s3-bucket/",
+        storage=icechunk.StorageSettings(
+            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", region="us-west-2"),
+        ),
+    ),
+)
+```
+Now at read time, if icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
+
+!!! note
+
+    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter.
+
+### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
+
+The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. in particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
+
+#### Example
+
+For example, if we have a repo that contains an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
+
+```python
+config.manifest = icechunk.ManifestConfig(
+    preload=icechunk.ManifestPreloadConfig(
+        max_total_refs=1e8,
+        preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
+    ),
+)
+```
 
 ## Creating and Opening Repos
 
