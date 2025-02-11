@@ -230,68 +230,188 @@ class RepositoryConfig:
         manifest: ManifestConfig | None = None,
     ) -> None: ...
     @staticmethod
-    def default() -> RepositoryConfig: ...
+    def default() -> RepositoryConfig:
+        """Create a default repository config instance"""
+        ...
     @property
-    def inline_chunk_threshold_bytes(self) -> int | None: ...
+    def inline_chunk_threshold_bytes(self) -> int | None:
+        """
+        The maximum size of a chunk that will be stored inline in the repository. Chunks larger than this size will be written to storage.
+        """
+        ...
     @inline_chunk_threshold_bytes.setter
-    def inline_chunk_threshold_bytes(self, value: int | None) -> None: ...
+    def inline_chunk_threshold_bytes(self, value: int | None) -> None:
+        """
+        Set the maximum size of a chunk that will be stored inline in the repository. Chunks larger than this size will be written to storage.
+        """
+        ...
     @property
     def unsafe_overwrite_refs(self) -> bool | None: ...
     @unsafe_overwrite_refs.setter
     def unsafe_overwrite_refs(self, value: bool | None) -> None: ...
     @property
-    def get_partial_values_concurrency(self) -> int | None: ...
+    def get_partial_values_concurrency(self) -> int | None:
+        """
+        The number of concurrent requests to make when getting partial values from storage.
+        """
+        ...
     @get_partial_values_concurrency.setter
-    def get_partial_values_concurrency(self, value: int | None) -> None: ...
+    def get_partial_values_concurrency(self, value: int | None) -> None:
+        """
+        Set the number of concurrent requests to make when getting partial values from storage.
+        """
+        ...
     @property
-    def compression(self) -> CompressionConfig | None: ...
+    def compression(self) -> CompressionConfig | None:
+        """
+        The compression configuration for the repository.
+        """
+        ...
     @compression.setter
-    def compression(self, value: CompressionConfig | None) -> None: ...
+    def compression(self, value: CompressionConfig | None) -> None:
+        """
+        Set the compression configuration for the repository.
+        """
+        ...
     @property
-    def caching(self) -> CachingConfig | None: ...
+    def caching(self) -> CachingConfig | None:
+        """
+        The caching configuration for the repository.
+        """
+        ...
     @caching.setter
-    def caching(self, value: CachingConfig | None) -> None: ...
+    def caching(self, value: CachingConfig | None) -> None:
+        """
+        Set the caching configuration for the repository.
+        """
+        ...
     @property
-    def storage(self) -> StorageSettings | None: ...
+    def storage(self) -> StorageSettings | None:
+        """
+        The storage configuration for the repository.
+        """
+        ...
     @storage.setter
-    def storage(self, value: StorageSettings | None) -> None: ...
+    def storage(self, value: StorageSettings | None) -> None:
+        """
+        Set the storage configuration for the repository.
+        """
+        ...
     @property
-    def manifest(self) -> ManifestConfig | None: ...
+    def manifest(self) -> ManifestConfig | None:
+        """
+        The manifest configuration for the repository.
+        """
+        ...
     @manifest.setter
-    def manifest(self, value: ManifestConfig | None) -> None: ...
+    def manifest(self, value: ManifestConfig | None) -> None:
+        """
+        Set the manifest configuration for the repository.
+        """
+        ...
     @property
-    def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer] | None: ...
-    def get_virtual_chunk_container(self, name: str) -> VirtualChunkContainer | None: ...
-    def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
-    def clear_virtual_chunk_containers(self) -> None: ...
+    def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer] | None:
+        """
+        The virtual chunk containers for the repository.
+
+
+        Virtual chunk containers allow you to configure how Icechunk will read virtual references from
+        different storage backends.
+        """
+        ...
+    def get_virtual_chunk_container(self, name: str) -> VirtualChunkContainer | None:
+        """
+        Get the virtual chunk container for the repository associated with the given name.
+        """
+        ...
+    def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None:
+        """
+        Set the virtual chunk container for the repository.
+        """
+        ...
+    def clear_virtual_chunk_containers(self) -> None:
+        """
+        Clear all virtual chunk containers from the repository.
+        """
+        ...
 
 class Diff:
+    """The result of comparing two snapshots"""
     @property
-    def new_groups(self) -> set[str]: ...
+    def new_groups(self) -> set[str]:
+        """
+        The groups that were added to the target ref.
+        """
+        ...
     @property
-    def new_arrays(self) -> set[str]: ...
+    def new_arrays(self) -> set[str]:
+        """
+        The arrays that were added to the target ref.
+        """
+        ...
     @property
-    def deleted_groups(self) -> set[str]: ...
+    def deleted_groups(self) -> set[str]:
+        """
+        The groups that were deleted in the target ref.
+        """
+        ...
     @property
-    def deleted_arrays(self) -> set[str]: ...
+    def deleted_arrays(self) -> set[str]:
+        """
+        The arrays that were deleted in the target ref.
+        """
+        ...
     @property
-    def updated_user_attributes(self) -> set[str]: ...
+    def updated_user_attributes(self) -> set[str]:
+        """
+        The nodes that had user attributes updated in the target ref.
+        """
+        ...
     @property
-    def updated_zarr_metadata(self) -> set[str]: ...
+    def updated_zarr_metadata(self) -> set[str]:
+        """
+        The nodes that had zarr metadata updated in the target ref.
+        """
+        ...
     @property
-    def updated_chunks(self) -> dict[str, int]: ...
+    def updated_chunks(self) -> dict[str, int]:
+        """
+        The chunks that had data updated in the target ref.
+        """
+        ...
 
 class GCSummary:
+    """Summarizes the results of a garbage collection operation on an icechunk repo"""
     @property
-    def chunks_deleted(self) -> int: ...
+    def chunks_deleted(self) -> int:
+        """
+        How many chunks were deleted.
+        """
+        ...
     @property
-    def manifests_deleted(self) -> int: ...
+    def manifests_deleted(self) -> int:
+        """
+        How many manifests were deleted.
+        """
+        ...
     @property
-    def snapshots_deleted(self) -> int: ...
+    def snapshots_deleted(self) -> int:
+        """
+        How many snapshots were deleted.
+        """
+        ...
     @property
-    def attributes_deleted(self) -> int: ...
+    def attributes_deleted(self) -> int:
+        """
+        How many attributes were deleted.
+        """
+        ...
     @property
-    def transaction_logs_deleted(self) -> int: ...
+    def transaction_logs_deleted(self) -> int:
+        """
+        How many transaction logs were deleted.
+        """
+        ...
 
 class PyRepository:
     @classmethod
