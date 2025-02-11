@@ -105,11 +105,12 @@ config.set_virtual_chunk_container(
     ),
 )
 ```
+
 Now at read time, if icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
 
 !!! note
 
-    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter.
+    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter. See the [Virtual Chunk Credentials](#virtual-chunk-credentials) section for more information.
 
 ### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
 
@@ -128,11 +129,13 @@ config.manifest = icechunk.ManifestConfig(
 )
 ```
 
-## Creating and Opening Repos
+### Applying Configuration
 
 Now we can now create or open an Icechunk repo using our config.
 
-### Creating a new repo
+#### Creating a new repo
+
+If no config is provided, the repo will be created with the [default configuration](./reference.md#icechunk.RepositoryConfig.default).
 
 !!! note
 
@@ -150,6 +153,7 @@ Now we can now create or open an Icechunk repo using our config.
 
     repo = icechunk.Repository.create(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -164,6 +168,7 @@ Now we can now create or open an Icechunk repo using our config.
 
     repo = icechunk.Repository.create(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -178,6 +183,7 @@ Now we can now create or open an Icechunk repo using our config.
 
     repo = icechunk.Repository.create(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -186,63 +192,15 @@ Now we can now create or open an Icechunk repo using our config.
     ```python
     repo = icechunk.Repository.create(
         storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
+        config=config
     )
     ```
 
-If you are not sure if the repo exists yet, an `icechunk Repository` can created or opened if it already exists:
+#### Opening an existing repo
 
-=== "Open or creating with S3 storage"
+When opening an existing repo, the config will be loaded from the repo if it exists. If no config exists and no config was specified, the repo will be opened with the [default configuration](./reference.md#icechunk.RepositoryConfig.default).
 
-    ```python
-    storage = icechunk.s3_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        region='us-east-1',
-        from_env=True,
-    )
-
-    repo = icechunk.Repository.open_or_create(
-        storage=storage,
-    )
-    ```
-
-=== "Open or creating with Google Cloud Storage"
-
-    ```python
-    storage = icechunk.gcs_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        from_env=True,
-    )
-
-    repo = icechunk.Repository.open_or_create(
-        storage=storage,
-    )
-    ```
-
-=== "Open or creating with Azure Blob Storage"
-
-    ```python
-    storage = icechunk.azure_storage(
-        container='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        from_env=True,
-    )
-
-    repo = icechunk.Repository.open_or_create(
-        storage=storage,
-    )
-    ```
-
-=== "Open or creating with local filesystem"
-
-    ```python
-    repo = icechunk.Repository.open_or_create(
-        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
-    )
-    ```
-
-### Opening an existing repo
+However, if a config was specified when opening the repo AND a config was previously persisted in the repo, the two configurations will be merged. The config specified when opening the repo will take precedence over the persisted config.
 
 === "Opening from S3 Storage"
 
@@ -256,6 +214,7 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 
     repo = icechunk.Repository.open(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -270,6 +229,7 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 
     repo = icechunk.Repository.open(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -284,6 +244,7 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 
     repo = icechunk.Repository.open(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -293,5 +254,37 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
     storage = icechunk.local_filesystem_storage("/path/to/my/dataset")
     store = icechunk.IcechunkStore.open(
         storage=storage,
+        config=config,
     )
     ```
+
+### Persisting Configuration
+
+Once the repo is opened, the current config can be persisted to the repo by calling [`save_config`](./reference.md#icechunk.Repository.save_config).
+
+```python
+repo.save_config()
+```
+
+The next time this repo is opened, the persisted config will be loaded by default.
+
+## Virtual Chunk Credentials
+
+When using virtual chunk containers, the credentials for the storage backend must also be specified. This is done using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container names mapping to credential objects. A helper function, [`containers_credentials`](./reference.md#icechunk.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
+
+### Example
+
+Expanding on the example from the [Virtual Chunk Containers](#virtual-chunk-containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
+
+```python
+credentials = icechunk.containers_credentials(
+    my_s3_bucket=icechunk.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
+    my_other_s3_bucket=icechunk.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+)
+
+repo = icechunk.Repository.open(
+    storage=storage,
+    config=config,
+    virtual_chunk_credentials=credentials,
+)
+```
