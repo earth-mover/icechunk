@@ -6,8 +6,6 @@ When creating and opening Icechunk repositories, there are many configuration op
 
 Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
 
-!!! note
-    This section is under construction and coming soon.
 
 ## Creating and Opening Repos
 
