@@ -2,12 +2,15 @@ import time
 import warnings
 from typing import cast
 
+import pytest
+
 import dask.array
 import icechunk
 import zarr
 from dask.array.utils import assert_eq
 from dask.distributed import Client
 from icechunk.dask import store_dask
+from icechunk.storage import s3_object_store_storage, s3_storage
 
 # We create a 2-d array with this many chunks along each direction
 CHUNKS_PER_DIM = 10
@@ -19,16 +22,27 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-def mk_repo() -> icechunk.Repository:
-    storage = icechunk.s3_storage(
-        endpoint_url="http://localhost:9000",
-        allow_http=True,
-        region="us-east-1",
-        bucket="testbucket",
-        prefix="python-distributed-writers-test__" + str(time.time()),
-        access_key_id="minio123",
-        secret_access_key="minio123",
-    )
+def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
+    if use_object_store:
+        storage = s3_object_store_storage(
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            region="us-east-1",
+            bucket="testbucket",
+            prefix="python-distributed-writers-test__" + str(time.time()),
+            access_key_id="minio123",
+            secret_access_key="minio123",
+        )
+    else:
+        storage = s3_storage(
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            region="us-east-1",
+            bucket="testbucket",
+            prefix="python-distributed-writers-test__" + str(time.time()),
+            access_key_id="minio123",
+            secret_access_key="minio123",
+        )
     repo_config = icechunk.RepositoryConfig.default()
     repo_config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
@@ -39,7 +53,8 @@ def mk_repo() -> icechunk.Repository:
     return repo
 
 
-async def test_distributed_writers() -> None:
+@pytest.mark.parametrize("use_object_store", [False, True])
+async def test_distributed_writers(use_object_store: bool) -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -48,7 +63,7 @@ async def test_distributed_writers() -> None:
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
-    repo = mk_repo()
+    repo = mk_repo(use_object_store)
     session = repo.writable_session(branch="main")
     store = session.store
 

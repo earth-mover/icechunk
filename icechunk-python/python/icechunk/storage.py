@@ -99,6 +99,7 @@ def s3_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
     """
+
     credentials = s3_credentials(
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,
@@ -110,6 +111,38 @@ def s3_storage(
     )
     options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
     return Storage.new_s3(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
+    )
+
+
+def s3_object_store_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    region: str | None = None,
+    endpoint_url: str | None = None,
+    allow_http: bool = False,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    anonymous: bool | None = None,
+    from_env: bool | None = None,
+) -> Storage:
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        anonymous=anonymous,
+        from_env=from_env,
+        get_credentials=None,
+    )
+    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    return Storage.new_s3_object_store(
         config=options,
         bucket=bucket,
         prefix=prefix,
