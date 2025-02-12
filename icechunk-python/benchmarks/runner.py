@@ -182,9 +182,10 @@ class CoiledRunner(Runner):
                 "channels": ["conda-forge"],
                 "dependencies": ["rust", "python=3.12", "pip"],
             },
-            # FIXME: get this to work.
-            # pip=[self.pip_github_url, *deps],
-            pip=[f"icechunk=={self.ref}", *deps],
+            pip=[self.pip_github_url, *deps],
+            # needed for install from Github
+            # https://coiled-users.slack.com/archives/C0195GJKQ1G/p1739316521164099
+            use_uv_installer=False,
         )
 
     def execute(self, cmd, **kwargs) -> None:
