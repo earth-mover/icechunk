@@ -1170,6 +1170,32 @@ impl PyStorage {
 
     #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
     #[classmethod]
+    pub fn new_s3_object_store(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        config: &PyS3Options,
+        bucket: String,
+        prefix: Option<String>,
+        credentials: Option<PyS3Credentials>,
+    ) -> PyResult<Self> {
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_s3_object_store_storage(
+                    config.into(),
+                    bucket,
+                    prefix,
+                    credentials.map(|cred| cred.into()),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+
+                Ok(PyStorage(storage))
+            })
+        })
+    }
+
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[classmethod]
     pub fn new_tigris(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,

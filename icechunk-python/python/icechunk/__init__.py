@@ -131,7 +131,6 @@ __all__ = [
     "local_filesystem_storage",
     "s3_anonymous_credentials",
     "s3_credentials",
-    "s3_credentials",
     "s3_from_env_credentials",
     "s3_refreshable_credentials",
     "s3_static_credentials",
