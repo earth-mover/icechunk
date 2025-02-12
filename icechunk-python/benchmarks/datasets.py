@@ -280,6 +280,7 @@ def setup_era5_single(dataset: Dataset):
 
 
 ERA5 = BenchmarkDataset(
+    # weatherbench2 data - 5 years
     skip_local=True,
     storage_config=StorageConfig(prefix="era5-weatherbench"),
     load_variables=["2m_temperature"],
@@ -290,18 +291,21 @@ ERA5 = BenchmarkDataset(
     # by mistake
 )
 
-ERA5_LARGE = BenchmarkDataset(
-    skip_local=True,
-    storage_config=StorageConfig(prefix="era5-weatherbench2"),
-    load_variables=["2m_temperature"],
-    chunk_selector={"time": 1},
-    first_byte_variable="latitude",
-    group="1x721x1440",
-    # don't set setupfn here so we don't run a really expensive job
-    # by mistake
-)
+# ERA5_LARGE = BenchmarkDataset(
+#     skip_local=True,
+#     storage_config=StorageConfig(
+#         bucket="icechunk-public-data", prefix="era5-weatherbench2"
+#     ),
+#     load_variables=["2m_temperature"],
+#     chunk_selector={"time": 1},
+#     first_byte_variable="latitude",
+#     group="1x721x1440",
+#     # don't set setupfn here so we don't run a really expensive job
+#     # by mistake
+# )
 
 ERA5_SINGLE = BenchmarkDataset(
+    # Single NCAR AWS PDS ERA5 netCDF
     storage_config=StorageConfig(prefix="perf-era5-single"),
     load_variables=["PV"],
     chunk_selector={"time": 1},

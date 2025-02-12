@@ -108,6 +108,7 @@ def verify(dataset: Dataset, *, ingest: IngestDataset, seed: int | None = None):
     expected.attrs.clear()
     actual.attrs.clear()
 
+    # TODO: Parallelize the compare in `assert_identical` upstream
     with ProgressBar():
         actual, expected = dask.compute(actual, expected)
         # assert (expected == actual).all().to_array().all()
