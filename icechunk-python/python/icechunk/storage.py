@@ -186,6 +186,7 @@ def gcs_storage(
     service_account_file: str | None = None,
     service_account_key: str | None = None,
     application_credentials: str | None = None,
+    bearer_token: str | None = None,
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
 ) -> Storage:
@@ -199,11 +200,14 @@ def gcs_storage(
         The prefix within the bucket that is the root directory of the repository
     from_env: bool | None
         Fetch credentials from the operative system environment
+    bearer_token: str | None
+        The bearer token to use for the object store
     """
     credentials = gcs_credentials(
         service_account_file=service_account_file,
         service_account_key=service_account_key,
         application_credentials=application_credentials,
+        bearer_token=bearer_token,
         from_env=from_env,
     )
     return Storage.new_gcs(
@@ -216,6 +220,7 @@ def gcs_storage(
 
 def azure_storage(
     *,
+    account: str,
     container: str,
     prefix: str,
     access_key: str | None = None,
@@ -228,6 +233,8 @@ def azure_storage(
 
     Parameters
     ----------
+    account: str
+        The account to which the caller must have access privileges
     container: str
         The container where the repository will store its data
     prefix: str
@@ -248,6 +255,7 @@ def azure_storage(
         from_env=from_env,
     )
     return Storage.new_azure_blob(
+        account=account,
         container=container,
         prefix=prefix,
         credentials=credentials,

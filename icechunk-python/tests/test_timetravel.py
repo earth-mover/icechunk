@@ -21,6 +21,7 @@ def test_timetravel() -> None:
         storage=ic.in_memory_storage(),
         config=config,
     )
+
     session = repo.writable_session("main")
     store = session.store
 
@@ -32,7 +33,19 @@ def test_timetravel() -> None:
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
 
-    snapshot_id = session.commit("commit 1")
+    status = session.status()
+    assert status.new_groups == {"/"}
+    assert status.new_arrays == {"/air_temp"}
+    assert list(status.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(status.updated_chunks["/air_temp"]) == sorted(
+        [[i, j] for i in range(10) for j in range(10)]
+    )
+    assert status.deleted_groups == set()
+    assert status.deleted_arrays == set()
+    assert status.updated_user_attributes == {"/", "/air_temp"}  # why?
+    assert status.updated_zarr_metadata == set()
+
+    first_snapshot_id = session.commit("commit 1")
     assert session.read_only
 
     session = repo.writable_session("main")
@@ -45,7 +58,7 @@ def test_timetravel() -> None:
 
     new_snapshot_id = session.commit("commit 2")
 
-    session = repo.readonly_session(snapshot=snapshot_id)
+    session = repo.readonly_session(snapshot=first_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
@@ -114,6 +127,50 @@ def test_timetravel() -> None:
     assert len(set([snap.id for snap in parents])) == 4
     assert list(repo.ancestry(tag="v1.0")) == parents
     assert list(repo.ancestry(branch="feature-not-dead")) == parents
+
+    diff = repo.diff(to_tag="v1.0", from_snapshot=parents[-1].id)
+    assert diff.new_groups == {"/"}
+    assert diff.new_arrays == {"/air_temp"}
+    assert list(diff.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(diff.updated_chunks["/air_temp"]) == sorted(
+        [[i, j] for i in range(10) for j in range(10)]
+    )
+    assert diff.deleted_groups == set()
+    assert diff.deleted_arrays == set()
+    assert diff.updated_user_attributes == {"/", "/air_temp"}  # why?
+    assert diff.updated_zarr_metadata == set()
+    assert (
+        repr(diff)
+        == """\
+Groups created:
+    /
+
+Arrays created:
+    /air_temp
+
+User attributes updated:
+    /
+    /air_temp
+
+Chunks updated:
+    /air_temp:
+        [0, 0]
+        [0, 1]
+        [0, 2]
+        [0, 3]
+        [0, 4]
+        [0, 5]
+        [0, 6]
+        [0, 7]
+        [0, 8]
+        [0, 9]
+        ... 90 more
+"""
+    )
+
+    with pytest.raises(ValueError, match="doesn't include"):
+        # if we call diff in the wrong order it fails with a message
+        repo.diff(from_tag="v1.0", to_snapshot=parents[-1].id)
 
     # check async ancestry works
     assert list(repo.ancestry(snapshot=feature_snapshot_id)) == asyncio.run(

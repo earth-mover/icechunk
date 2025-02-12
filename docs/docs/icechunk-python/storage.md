@@ -175,6 +175,34 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
         )
         ```
 
+=== "Bearer Token"
+
+    With this option, you provide a bearer token to use for the object store. This is useful for short lived workflows where expiration is not relevant or when the bearer token will not expire [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        bearer_token="my-bearer-token"
+    )
+    ```
+
+=== "Refreshable Credentials"
+
+    With this option, you provide a callback function that will be called to obtain GCS credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from GCS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. This works at a lower level than the other methods, and accepts a bearer token and expiration time. These are the same credentials that are created for you when specifying the service account file, key, or ADC. [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    def get_credentials() -> GcsBearerCredential:
+        # In practice, you would use a function that actually fetches the credentials and returns them
+        # along with an optional expiration time which will trigger this callback to run again
+        return icechunk.GcsBearerCredential(bearer="my-bearer-token", expires_after=datetime.now(UTC) + timedelta(days=1))
+
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        get_credentials=get_credentials,
+    )
+    ```
 
 #### Limitations
 
@@ -192,6 +220,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
     ```python
     icechunk.azure_storage(
+        account="my-account-name",
         container="icechunk-test",
         prefix="quickstart-demo-1",
         from_env=True
@@ -204,9 +233,9 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
     ```python
     icechunk.azure_storage(
+        account_name='my-account-name',
         container="icechunk-test",
         prefix="quickstart-demo-1",
-        account_name='my-account-name',
         account_key='my-account-key',
         access_token=None,  # optional
         sas_token=None,  # optional

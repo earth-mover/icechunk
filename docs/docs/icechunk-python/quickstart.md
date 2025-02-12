@@ -34,6 +34,7 @@ However, you can also create a repo on your local filesystem.
 === "S3 Storage"
 
     ```python
+    import icechunk
     storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -41,6 +42,7 @@ However, you can also create a repo on your local filesystem.
 === "Google Cloud Storage"
 
     ```python
+    import icechunk
     storage = icechunk.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -48,6 +50,7 @@ However, you can also create a repo on your local filesystem.
 === "Azure Blob Storage"
 
     ```python
+    import icechunk
     storage = icechunk.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -55,6 +58,7 @@ However, you can also create a repo on your local filesystem.
 === "Local Storage"
 
     ```python
+    import icechunk
     storage = icechunk.local_filesystem_storage("./icechunk-local")
     repo = icechunk.Repository.create(storage)
     ```
@@ -80,6 +84,7 @@ We can now use our Icechunk `store` with Zarr.
 Let's first create a group and an array within it.
 
 ```python
+import zarr
 group = zarr.group(store)
 array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
 ```
@@ -146,12 +151,12 @@ for ancestor in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-earlier_session = repo.readonly_session(snapshot=snapshot_id=hist[1].id)
+earlier_session = repo.readonly_session(snapshot=hist[1].id)
 store = earlier_session.store
 
 # get the array
 group = zarr.open_group(store, mode="r")
-array = group["my_array]
+array = group["my_array"]
 
 # verify data matches first version
 assert array[0] == 1

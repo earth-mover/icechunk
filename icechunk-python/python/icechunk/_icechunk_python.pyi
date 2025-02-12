@@ -265,6 +265,22 @@ class RepositoryConfig:
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None: ...
     def clear_virtual_chunk_containers(self) -> None: ...
 
+class Diff:
+    @property
+    def new_groups(self) -> set[str]: ...
+    @property
+    def new_arrays(self) -> set[str]: ...
+    @property
+    def deleted_groups(self) -> set[str]: ...
+    @property
+    def deleted_arrays(self) -> set[str]: ...
+    @property
+    def updated_user_attributes(self) -> set[str]: ...
+    @property
+    def updated_zarr_metadata(self) -> set[str]: ...
+    @property
+    def updated_chunks(self) -> dict[str, int]: ...
+
 class GCSummary:
     @property
     def chunks_deleted(self) -> int: ...
@@ -332,6 +348,15 @@ class PyRepository:
     def create_tag(self, tag: str, snapshot_id: str) -> None: ...
     def list_tags(self) -> set[str]: ...
     def lookup_tag(self, tag: str) -> str: ...
+    def diff(
+        self,
+        from_branch: str | None = None,
+        from_tag: str | None = None,
+        from_snapshot: str | None = None,
+        to_branch: str | None = None,
+        to_tag: str | None = None,
+        to_snapshot: str | None = None,
+    ) -> Diff: ...
     def readonly_session(
         self,
         *,
@@ -364,6 +389,7 @@ class PySession:
     def branch(self) -> str | None: ...
     @property
     def has_uncommitted_changes(self) -> bool: ...
+    def status(self) -> Diff: ...
     def discard_changes(self) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
     def chunk_coordinates(
@@ -495,6 +521,14 @@ AnyS3Credential = (
     | S3Credentials.Refreshable
 )
 
+class GcsBearerCredential:
+    bearer: str
+    expires_after: datetime.datetime | None
+
+    def __init__(
+        self, bearer: str, *, expires_after: datetime.datetime | None = None
+    ) -> None: ...
+
 class GcsStaticCredentials:
     class ServiceAccount:
         def __init__(self, path: str) -> None: ...
@@ -505,10 +539,14 @@ class GcsStaticCredentials:
     class ApplicationCredentials:
         def __init__(self, path: str) -> None: ...
 
+    class BearerToken:
+        def __init__(self, token: str) -> None: ...
+
 AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
+    | GcsStaticCredentials.BearerToken
 )
 
 class GcsCredentials:
@@ -518,7 +556,12 @@ class GcsCredentials:
     class Static:
         def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
 
-AnyGcsCredential = GcsCredentials.FromEnv | GcsCredentials.Static
+    class Refreshable:
+        def __init__(self, pickled_function: bytes) -> None: ...
+
+AnyGcsCredential = (
+    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
+)
 
 class AzureStaticCredentials:
     class AccessKey:
@@ -605,6 +648,7 @@ class Storage:
     @classmethod
     def new_azure_blob(
         cls,
+        account: str,
         container: str,
         prefix: str,
         credentials: AnyAzureCredential | None = None,

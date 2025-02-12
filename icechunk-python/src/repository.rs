@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -11,6 +11,7 @@ use icechunk::{
     config::Credentials,
     format::{
         snapshot::{SnapshotInfo, SnapshotProperties},
+        transaction_log::Diff,
         SnapshotId,
     },
     ops::gc::{expire, garbage_collect, ExpiredRefAction, GCConfig, GCSummary},
@@ -179,6 +180,141 @@ impl PySnapshotInfo {
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
+    }
+}
+
+#[pyclass(name = "Diff", eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
+pub struct PyDiff {
+    #[pyo3(get)]
+    pub new_groups: BTreeSet<String>,
+    #[pyo3(get)]
+    pub new_arrays: BTreeSet<String>,
+    #[pyo3(get)]
+    pub deleted_groups: BTreeSet<String>,
+    #[pyo3(get)]
+    pub deleted_arrays: BTreeSet<String>,
+    #[pyo3(get)]
+    pub updated_user_attributes: BTreeSet<String>,
+    #[pyo3(get)]
+    pub updated_zarr_metadata: BTreeSet<String>,
+    #[pyo3(get)]
+    // A Vec instead of a set to avoid issues with list not being hashable in python
+    pub updated_chunks: BTreeMap<String, Vec<Vec<u32>>>,
+}
+
+impl From<Diff> for PyDiff {
+    fn from(value: Diff) -> Self {
+        let new_groups =
+            value.new_groups.into_iter().map(|path| path.to_string()).collect();
+        let new_arrays =
+            value.new_arrays.into_iter().map(|path| path.to_string()).collect();
+        let deleted_groups =
+            value.deleted_groups.into_iter().map(|path| path.to_string()).collect();
+        let deleted_arrays =
+            value.deleted_arrays.into_iter().map(|path| path.to_string()).collect();
+        let updated_user_attributes = value
+            .updated_user_attributes
+            .into_iter()
+            .map(|path| path.to_string())
+            .collect();
+        let updated_zarr_metadata = value
+            .updated_zarr_metadata
+            .into_iter()
+            .map(|path| path.to_string())
+            .collect();
+        let updated_chunks = value
+            .updated_chunks
+            .into_iter()
+            .map(|(k, v)| {
+                let path = k.to_string();
+                let map = v.into_iter().map(|idx| idx.0).collect();
+                (path, map)
+            })
+            .collect();
+
+        PyDiff {
+            new_groups,
+            new_arrays,
+            deleted_groups,
+            deleted_arrays,
+            updated_user_attributes,
+            updated_zarr_metadata,
+            updated_chunks,
+        }
+    }
+}
+
+#[pymethods]
+impl PyDiff {
+    pub fn __repr__(&self) -> String {
+        let mut res = String::new();
+        use std::fmt::Write;
+
+        if !self.new_groups.is_empty() {
+            res.push_str("Groups created:\n");
+            for g in self.new_groups.iter() {
+                writeln!(res, "    {}", g).unwrap();
+            }
+            res.push('\n');
+        }
+        if !self.new_arrays.is_empty() {
+            res.push_str("Arrays created:\n");
+            for g in self.new_arrays.iter() {
+                writeln!(res, "    {}", g).unwrap();
+            }
+            res.push('\n');
+        }
+
+        if !self.updated_zarr_metadata.is_empty() {
+            res.push_str("Zarr metadata updated:\n");
+            for g in self.updated_zarr_metadata.iter() {
+                writeln!(res, "    {}", g).unwrap();
+            }
+            res.push('\n');
+        }
+
+        if !self.updated_user_attributes.is_empty() {
+            res.push_str("User attributes updated:\n");
+            for g in self.updated_user_attributes.iter() {
+                writeln!(res, "    {}", g).unwrap();
+            }
+            res.push('\n');
+        }
+
+        if !self.deleted_groups.is_empty() {
+            res.push_str("Groups deleted:\n");
+            for g in self.deleted_groups.iter() {
+                writeln!(res, "    {}", g).unwrap();
+            }
+            res.push('\n');
+        }
+
+        if !self.deleted_arrays.is_empty() {
+            res.push_str("Arrays deleted:\n");
+            for g in self.deleted_arrays.iter() {
+                writeln!(res, "    {}", g).unwrap();
+            }
+            res.push('\n');
+        }
+
+        if !self.updated_chunks.is_empty() {
+            res.push_str("Chunks updated:\n");
+            for (path, chunks) in self.updated_chunks.iter() {
+                writeln!(res, "    {}:", path).unwrap();
+                let coords = chunks
+                    .iter()
+                    .map(|idx| format!("        [{}]", idx.iter().join(", ")))
+                    .take(10)
+                    .join("\n");
+                res.push_str(coords.as_str());
+                res.push('\n');
+                if chunks.len() > 10 {
+                    writeln!(res, "        ... {} more", chunks.len() - 10).unwrap();
+                }
+            }
+        }
+        res
     }
 }
 
@@ -582,6 +718,34 @@ impl PyRepository {
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(tag.to_string())
+            })
+        })
+    }
+
+    #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot=None, to_branch=None, to_tag=None, to_snapshot=None))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn diff(
+        &self,
+        py: Python<'_>,
+        from_branch: Option<String>,
+        from_tag: Option<String>,
+        from_snapshot: Option<String>,
+        to_branch: Option<String>,
+        to_tag: Option<String>,
+        to_snapshot: Option<String>,
+    ) -> PyResult<PyDiff> {
+        let from = args_to_version_info(from_branch, from_tag, from_snapshot)?;
+        let to = args_to_version_info(to_branch, to_tag, to_snapshot)?;
+
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let diff = self
+                    .0
+                    .diff(&from, &to)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(diff.into())
             })
         })
     }
