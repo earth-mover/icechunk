@@ -1,6 +1,12 @@
 import pytest
 
-from benchmarks.datasets import ERA5, ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
+from benchmarks.datasets import (
+    ERA5,
+    ERA5_SINGLE,
+    GB_8MB_CHUNKS,
+    GB_128MB_CHUNKS,
+    TEST_BUCKETS,
+)
 from icechunk import Repository, local_filesystem_storage
 from zarr.abc.store import Store
 
@@ -12,21 +18,24 @@ def repo(tmpdir: str) -> Repository:
 
 @pytest.fixture(
     params=[
-        pytest.param(ERA5, id="era5-weatherbench"),
-        pytest.param(ERA5_SINGLE, id="era5-single"),
-        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
         pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
+        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
+        pytest.param(ERA5_SINGLE, id="era5-single"),
+        pytest.param(ERA5, id="era5-weatherbench"),
     ],
 )
 def synth_dataset(request) -> Store:
     """For now, these are synthetic datasets stored in the cloud."""
     extra_prefix = request.config.getoption("--icechunk-prefix")
+    where = request.config.getoption("--where")
     ds = request.param
+    if where == "local" and ds.skip_local:
+        pytest.skip()
     # for some reason, this gets run multiple times so we apply the prefix repeatedly
     # if we don't catch that :(
-    ds.storage_config = ds.storage_config.with_extra(
-        prefix=extra_prefix, force_idempotent=True
-    )
+    ds.storage_config = ds.storage_config.with_overwrite(
+        **TEST_BUCKETS[where]
+    ).with_extra(prefix=extra_prefix, force_idempotent=True)
     return ds
 
 
@@ -60,4 +69,8 @@ def pytest_addoption(parser):
         Force running the setup_benchmarks code even if there is a valid repo
         for this icechunk version at that URI. True by default.
         """,
+    )
+
+    parser.addoption(
+        "--where", action="store", help="Where to run icechunk benchmarks? [local]."
     )

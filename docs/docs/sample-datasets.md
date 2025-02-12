@@ -9,6 +9,67 @@ title: Sample Datasets
 
 ## Native Datasets
 
+### Weatherbench2 ERA5
+
+=== "AWS"
+
+```python
+import icechunk as ic
+import xarray as xr
+
+storage = ic.s3_storage(
+    bucket="icechunk-public-data",
+    prefix="v01/era5_weatherbench2",
+    region="us-east-1",
+    anonymous=True,
+)
+
+repo = ic.Repository.open(storage=storage)
+session = repo.readonly_session(branch="main")
+ds = xr.open_dataset(
+    session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
+)
+```
+
+=== "Google Cloud"
+
+```python
+import icechunk as ic
+import xarray as xr
+
+storage = ic.gcs_storage(
+    bucket="icechunk-public-data-gcs",
+    prefix="v01/era5_weatherbench2",
+)
+
+repo = ic.Repository.open(storage=storage)
+session = repo.readonly_session(branch="main")
+ds = xr.open_dataset(
+    session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
+)
+```
+
+
+<!-- === "Tigris" -->
+
+<!-- ```python -->
+<!-- import icechunk as ic -->
+<!-- import xarray as xr -->
+
+<!-- storage = ic.tigris_storage( -->
+<!--     bucket="icechunk-public-data-tigris", -->
+<!--     prefix="v01/era5_weatherbench2", -->
+<!--     anonymous=True, -->
+<!-- ) -->
+
+<!-- repo = ic.Repository.open(storage=storage) -->
+<!-- session = repo.readonly_session(branch="main") -->
+<!-- ds = xr.open_dataset( -->
+<!--     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False -->
+<!-- ) -->
+<!-- ``` -->
+
+
 ## Virtual Datasets
 
 ### NOAA [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) Data
