@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # helper script to run and save benchmarks against named refs.
 # AKA a shitty version of asv's env management
+# FIXME:
+# 1. The Icechunk Spec Version is taken from the running env. This is wrong :(
 
 import argparse
 import glob
@@ -59,7 +61,7 @@ class Runner:
     def pip_github_url(self) -> str:
         # optional extras cannot be specified here, "not guaranteed to work"
         # https://pip.pypa.io/en/stable/topics/vcs-support/#url-fragments
-        return f"git+https://github.com/earth-mover/icechunk.git@{self.ref}#subdirectory=icechunk-python"
+        return f"git+https://github.com/earth-mover/icechunk.git@{self.commit}#subdirectory=icechunk-python"
 
     @property
     def prefix(self) -> str:
@@ -214,10 +216,8 @@ class CoiledRunner(Runner):
         pass
 
 
-def init_for_ref(runner: Runner, *, skip_setup: bool, force_setup: bool):
+def init_for_ref(runner: Runner):
     runner.initialize()
-    if not skip_setup:
-        runner.setup(force=force_setup)
 
 
 if __name__ == "__main__":
@@ -245,22 +245,12 @@ if __name__ == "__main__":
 
     runners = tuple(runner_cls(ref=ref, where=args.where) for ref in refs)
 
-    tqdm.contrib.concurrent.process_map(
-        partial(
-            init_for_ref,
-            skip_setup=args.skip_setup,
-            force_setup=args.force_setup,
-        ),
-        runners,
-    )
+    # we can only initialize in parallel since the two refs may have the same spec version.
+    tqdm.contrib.concurrent.process_map(partial(init_for_ref), runners)
 
-    # For debugging
-    # for runner in runners:
-    #     init_for_ref(
-    #         runner=runner,
-    #         skip_setup=args.skip_setup,
-    #         force_setup=args.force_setup,
-    #     )
+    if not args.skip_setup:
+        for runner in runners:
+            runner.setup(force=args.force_setup)
 
     for runner in tqdm.tqdm(runners):
         runner.run(pytest_extra=args.pytest)

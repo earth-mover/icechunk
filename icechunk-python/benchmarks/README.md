@@ -97,7 +97,7 @@ python benchmarks/runner.py --where gcs v0.1.2
 
 By default all benchmarks are run locally:
 1. A temporary directory is used as a staging area.
-2. A new virtual env is created there and the dev version is installed using `pip` and a github URI. This means that you can only benchmark commits that have been pushed to Github.
+2. A new virtual env is created there and the dev version is installed using `pip` and a github URI. *This means that you can only benchmark commits that have been pushed to Github.*
 
 It is possible to run the benchmarks in the cloud using Coiled. You will need to be a member of the Coiled workspaces: `earthmover-devs` (AWS), `earthmover-devs-gcp` (GCS) and `earthmover-devs-azure` (Azure).
 1. We create a new "coiled software environment" with a specific name.
