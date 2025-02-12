@@ -22,16 +22,26 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
-    storage = icechunk.s3_storage(
-        endpoint_url="http://localhost:9000",
-        allow_http=True,
-        region="us-east-1",
-        bucket="testbucket",
-        prefix="python-distributed-writers-test__" + str(time.time()),
-        access_key_id="minio123",
-        secret_access_key="minio123",
-        use_object_store=use_object_store,
-    )
+    if use_object_store:
+        storage = icechunk.s3_storage(
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            region="us-east-1",
+            bucket="testbucket",
+            prefix="python-distributed-writers-test__" + str(time.time()),
+            access_key_id="minio123",
+            secret_access_key="minio123",
+        )
+    else:
+        storage = icechunk.s3_storage(
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            region="us-east-1",
+            bucket="testbucket",
+            prefix="python-distributed-writers-test__" + str(time.time()),
+            access_key_id="minio123",
+            secret_access_key="minio123",
+        )
     repo_config = icechunk.RepositoryConfig.default()
     repo_config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(

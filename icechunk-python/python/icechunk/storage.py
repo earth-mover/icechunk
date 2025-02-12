@@ -69,7 +69,6 @@ def s3_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
-    use_object_store: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -99,11 +98,7 @@ def s3_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
-    use_object_store: bool
-        EXPERIMENTAL: If True, use the object_store API to create the storage instance instead of the AWS SDK. Warning this will not work with refreshable credentials.
     """
-    if use_object_store and get_credentials:
-        raise ValueError("use_object_store and get_credentials cannot both be set")
 
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -120,7 +115,38 @@ def s3_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
-        use_object_store=use_object_store,
+    )
+
+
+def s3_object_store_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    region: str | None = None,
+    endpoint_url: str | None = None,
+    allow_http: bool = False,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    anonymous: bool | None = None,
+    from_env: bool | None = None,
+) -> Storage:
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        anonymous=anonymous,
+        from_env=from_env,
+        get_credentials=None,
+    )
+    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    return Storage.new_s3_object_store(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
     )
 
 

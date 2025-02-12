@@ -623,8 +623,14 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: AnyS3Credential | None = None,
-        *,
-        use_object_store: bool = False,
+    ) -> Storage: ...
+    @classmethod
+    def new_s3_object_store(
+        cls,
+        config: S3Options,
+        bucket: str,
+        prefix: str | None,
+        credentials: AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_tigris(
