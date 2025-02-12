@@ -50,24 +50,24 @@ ds = xr.open_dataset(
 ```
 
 
-=== "Tigris"
+<!-- === "Tigris" -->
 
-```python
-import icechunk as ic
-import xarray as xr
+<!-- ```python -->
+<!-- import icechunk as ic -->
+<!-- import xarray as xr -->
 
-storage = ic.tigris_storage(
-    bucket="icechunk-public-data-tigris",
-    prefix="v01/era5_weatherbench2",
-    anonymous=True,
-)
+<!-- storage = ic.tigris_storage( -->
+<!--     bucket="icechunk-public-data-tigris", -->
+<!--     prefix="v01/era5_weatherbench2", -->
+<!--     anonymous=True, -->
+<!-- ) -->
 
-repo = ic.Repository.open(storage=storage)
-session = repo.readonly_session(branch="main")
-ds = xr.open_dataset(
-    session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
-)
-```
+<!-- repo = ic.Repository.open(storage=storage) -->
+<!-- session = repo.readonly_session(branch="main") -->
+<!-- ds = xr.open_dataset( -->
+<!--     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False -->
+<!-- ) -->
+<!-- ``` -->
 
 
 ## Virtual Datasets
