@@ -26,7 +26,7 @@ import zarr
 from dask.diagnostics import ProgressBar
 from icechunk.xarray import to_icechunk
 
-logger = helpers.setup_loger()
+logger = helpers.setup_logger()
 
 PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
@@ -63,7 +63,10 @@ class IngestDataset:
 
     def make_dataset(self, *, store: str, debug: bool) -> Dataset:
         buckets = BUCKETS if not debug else TEST_BUCKETS
-        storage_config = StorageConfig(prefix=self.prefix, **buckets[store])
+        extra_prefix = f"_{helpers.rdms()}" if debug else ""
+        storage_config = StorageConfig(
+            prefix=self.prefix + extra_prefix, **buckets[store]
+        )
         return Dataset(storage_config=storage_config, group=self.group)
 
 
@@ -178,14 +181,15 @@ def write(
         print("Dry run. Exiting")
         return
 
-    # FIXME: use name
+    ckwargs = dataset.storage_config.get_coiled_kwargs()
     session = repo.writable_session("main")
     with coiled.Cluster(
-        name="deepak-era5",
+        name=f"icechunk-ingest-{ICECHUNK_FORMAT}-{ingest.name}",
         shutdown_on_close=False,
         n_workers=(4, 200),
         worker_cpu=2,
-        **dataset.storage_config.get_coiled_kwargs(),
+        workspace=ckwargs["workspace"],
+        region=ckwargs["region"],
     ) as cluster:
         # https://docs.coiled.io/user_guide/clusters/environ.html
         cluster.send_private_envs(dataset.storage_config.env_vars)
@@ -345,8 +349,3 @@ if __name__ == "__main__":
             arrays_to_write=args.arrays or ingest.arrays,
             dry_run=args.dry_run,
         )
-
-
-# always same prefix; different constructor, bucket name
-# create_era5 --object_store tigris --nyears 20 --arrays ...
-# create_era5 --object_store s3 --nyears 20 --arrays ...

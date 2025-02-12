@@ -9,11 +9,11 @@ from typing import Any, Literal, Self, TypeAlias
 import fsspec
 import numpy as np
 import platformdirs
+from helpers import get_coiled_kwargs, setup_logger
 
 import icechunk as ic
 import xarray as xr
 import zarr
-from benchmarks.helpers import get_coiled_kwargs, setup_logger
 
 rng = np.random.default_rng(seed=123)
 
@@ -29,9 +29,10 @@ CONSTRUCTORS = {
 TEST_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
-    "tigris": dict(
-        store="tigris", bucket="icechunk-test" + "-tigris", region="us-east-1"
-    ),
+    # "tigris": dict(
+    #     store="tigris", bucket="deepak-private-bucket" + "-test", region="iad"
+    # ),
+    "tigris": dict(store="tigris", bucket="icechunk-test", region="iad"),
     "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
 }
 

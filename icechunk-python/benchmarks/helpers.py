@@ -8,6 +8,7 @@ def setup_logger():
     logger.setLevel(logging.INFO)
     console_handler = logging.StreamHandler()
     logger.addHandler(console_handler)
+    logger.handlers = logger.handlers[:1]  # make idempotent
     return logger
 
 
@@ -22,7 +23,7 @@ def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
         "s3": "us-east-1",
         "gcs": "us-east1",
         "tigris": "us-east-1",
-        "az": "FOO",
+        "az": "eastus",
     }
     WORKSPACES = {
         "s3": "earthmover-devs",
@@ -55,3 +56,10 @@ def get_commit(ref: str) -> str:
     return subprocess.run(
         ["git", "rev-parse", ref], capture_output=True, text=True, check=True
     ).stdout.strip()[:8]
+
+
+def rdms() -> str:
+    import random
+    import string
+
+    return "".join(random.sample(string.ascii_lowercase, k=8))
