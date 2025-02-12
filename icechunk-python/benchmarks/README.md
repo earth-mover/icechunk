@@ -25,7 +25,6 @@ pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
 ```
 Use `---icechunk-prefix` to add an extra prefix during both setup and running of benchmarks.
 
-
 ### ERA5
 
 `benchmarks/create_era5.py` creates an ERA5 dataset.
@@ -87,6 +86,28 @@ test_time_getsize_prefix[era5-single] (0034_main_3a)     68.8355 (31.10)
 test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
 --------------------------------------------------------------------------
 ```
+
+### Notes
+### Where to run the benchmarks?
+
+Pass the `--where [local|s3|gcs|tigris]` flag to control where benchmarks are run.
+```sh
+python benchmarks/runner.py --where gcs v0.1.2
+```
+
+By default all benchmarks are run locally:
+1. A temporary directory is used as a staging area.
+2. A new virtual env is created there and the dev version is installed using `pip` and a github URI. *This means that you can only benchmark commits that have been pushed to Github.*
+
+It is possible to run the benchmarks in the cloud using Coiled. You will need to be a member of the Coiled workspaces: `earthmover-devs` (AWS), `earthmover-devs-gcp` (GCS) and `earthmover-devs-azure` (Azure).
+1. We create a new "coiled software environment" with a specific name.
+2. We use `coiled run` targeting a specific machine type, with a specific software env.
+4. The VM stays alive for 10 minutes to allow for quick iteration.
+5. Coiled does not sync stdout until the pytest command is done, for some reason. See the logs on the Coiled platform for quick feedback.
+6. We use the `--sync` flag, so you will need [`mutagen`](https://mutagen.io/documentation/synchronization/) installed on your system. This will sync the benchmark JSON outputs between the VM and your machine.
+Downsides:
+1. At the moment, we can only benchmark released versions of icechunk. We may need a more complicated Docker container strategy in the future to support dev branch benchmarks.
+2. When a new env is created, the first run always fails :/. The second run works though, so just re-run.
 
 ### `runner.py`
 

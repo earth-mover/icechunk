@@ -8,7 +8,7 @@ from benchmarks import lib
 from benchmarks.tasks import Executor, write
 from icechunk import Repository, RepositoryConfig, local_filesystem_storage
 
-NUM_CHUNK_REFS = 20_000
+NUM_CHUNK_REFS = 10_000
 NUM_VIRTUAL_CHUNK_REFS = 100_000
 
 
