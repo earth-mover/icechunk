@@ -26,6 +26,15 @@ CONSTRUCTORS = {
     "local": ic.local_filesystem_storage,
 }
 
+TEST_BUCKETS = {
+    "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
+    "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
+    "tigris": dict(
+        store="tigris", bucket="icechunk-test" + "-tigris", region="us-east-1"
+    ),
+    "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
+}
+
 logger = setup_logger()
 
 
@@ -51,7 +60,7 @@ class StorageConfig:
     def path(self) -> str:
         if self.store != "local":
             raise ValueError(f"can't grab path for {self.store=!r}")
-        return f"{platformdirs.site_cache_dir()}/{self.bucket}/{self.prefix}"
+        return f"{self.bucket}/{self.prefix}"
 
     def create(self) -> ic.Storage:
         if self.store is None:
@@ -70,10 +79,24 @@ class StorageConfig:
                 kwargs.update(tigris_credentials())
         return CONSTRUCTORS[self.store](**self.config, **kwargs)
 
-    def with_extra(
+    def with_overwrite(
         self,
         *,
         store: str | None = None,
+        bucket: str | None = None,
+        region: str | None = None,
+    ) -> Self:
+        return type(self)(
+            store=store if store is not None else self.store,
+            bucket=bucket if bucket is not None else self.bucket,
+            region=region if region is not None else self.region,
+            prefix=self.prefix,
+            config=self.config,
+        )
+
+    def with_extra(
+        self,
+        *,
         prefix: str | None = None,
         force_idempotent: bool = False,
     ) -> Self:
@@ -85,7 +108,7 @@ class StorageConfig:
             new_prefix = None
 
         return type(self)(
-            store=store if store is not None else self.store,
+            store=self.store,
             bucket=self.bucket,
             prefix=new_prefix,
             region=self.region,
@@ -258,7 +281,7 @@ def setup_era5_single(dataset: Dataset):
 
 ERA5 = BenchmarkDataset(
     skip_local=True,
-    storage_config=StorageConfig(bucket="icechunk-test", prefix="era5-weatherbench"),
+    storage_config=StorageConfig(prefix="era5-weatherbench"),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
     first_byte_variable="latitude",
@@ -269,9 +292,7 @@ ERA5 = BenchmarkDataset(
 
 ERA5_LARGE = BenchmarkDataset(
     skip_local=True,
-    storage_config=StorageConfig(
-        bucket="icechunk-public-data", prefix="era5-weatherbench2"
-    ),
+    storage_config=StorageConfig(prefix="era5-weatherbench2"),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
     first_byte_variable="latitude",
@@ -281,7 +302,7 @@ ERA5_LARGE = BenchmarkDataset(
 )
 
 ERA5_SINGLE = BenchmarkDataset(
-    storage_config=StorageConfig(bucket="icechunk-test", prefix="perf-era5-single"),
+    storage_config=StorageConfig(prefix="perf-era5-single"),
     load_variables=["PV"],
     chunk_selector={"time": 1},
     first_byte_variable="latitude",
@@ -289,7 +310,7 @@ ERA5_SINGLE = BenchmarkDataset(
 )
 
 GB_128MB_CHUNKS = BenchmarkDataset(
-    storage_config=StorageConfig(bucket="icechunk-test", prefix="gb-128mb-chunks"),
+    storage_config=StorageConfig(prefix="gb-128mb-chunks"),
     load_variables=["array"],
     chunk_selector={},
     first_byte_variable=None,
@@ -297,7 +318,7 @@ GB_128MB_CHUNKS = BenchmarkDataset(
 )
 
 GB_8MB_CHUNKS = BenchmarkDataset(
-    storage_config=StorageConfig(bucket="icechunk-test", prefix="gb-8mb-chunks"),
+    storage_config=StorageConfig(prefix="gb-8mb-chunks"),
     load_variables=["array"],
     chunk_selector={},
     first_byte_variable=None,

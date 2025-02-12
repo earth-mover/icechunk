@@ -16,7 +16,7 @@ from typing import Any
 import helpers
 import humanize
 import pandas as pd
-from datasets import Dataset, StorageConfig
+from datasets import TEST_BUCKETS, Dataset, StorageConfig
 from packaging.version import Version
 
 import dask
@@ -32,13 +32,6 @@ PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
-DEBUG_BUCKETS = {
-    "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
-    "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
-    "tigris": dict(
-        store="tigris", bucket="icechunk-test" + "-tigris", region="us-east-1"
-    ),
-}
 
 BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
@@ -69,7 +62,7 @@ class IngestDataset:
             ).drop_encoding()
 
     def make_dataset(self, *, store: str, debug: bool) -> Dataset:
-        buckets = BUCKETS if not debug else DEBUG_BUCKETS
+        buckets = BUCKETS if not debug else TEST_BUCKETS
         storage_config = StorageConfig(prefix=self.prefix, **buckets[store])
         return Dataset(storage_config=storage_config, group=self.group)
 

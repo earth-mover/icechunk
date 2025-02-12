@@ -1,6 +1,12 @@
 import pytest
 
-from benchmarks.datasets import ERA5, ERA5_SINGLE, GB_8MB_CHUNKS, GB_128MB_CHUNKS
+from benchmarks.datasets import (
+    ERA5,
+    ERA5_SINGLE,
+    GB_8MB_CHUNKS,
+    GB_128MB_CHUNKS,
+    TEST_BUCKETS,
+)
 from icechunk import Repository, local_filesystem_storage
 from zarr.abc.store import Store
 
@@ -12,10 +18,10 @@ def repo(tmpdir: str) -> Repository:
 
 @pytest.fixture(
     params=[
-        pytest.param(ERA5, id="era5-weatherbench"),
-        pytest.param(ERA5_SINGLE, id="era5-single"),
-        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
         pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
+        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
+        pytest.param(ERA5_SINGLE, id="era5-single"),
+        pytest.param(ERA5, id="era5-weatherbench"),
     ],
 )
 def synth_dataset(request) -> Store:
@@ -27,9 +33,9 @@ def synth_dataset(request) -> Store:
         pytest.skip()
     # for some reason, this gets run multiple times so we apply the prefix repeatedly
     # if we don't catch that :(
-    ds.storage_config = ds.storage_config.with_extra(
-        store=where, prefix=extra_prefix, force_idempotent=True
-    )
+    ds.storage_config = ds.storage_config.with_overwrite(
+        **TEST_BUCKETS[where]
+    ).with_extra(prefix=extra_prefix, force_idempotent=True)
     return ds
 
 
