@@ -50,7 +50,7 @@ BUCKETS = {
 @dataclass(kw_only=True)
 class IngestDataset:
     name: str
-    uri: str
+    source_uri: str
     group: str
     prefix: str
     write_chunks: dict[str, int]
@@ -62,7 +62,10 @@ class IngestDataset:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             return xr.open_dataset(
-                self.uri, chunks=chunks or self.read_chunks, engine=self.engine, **kwargs
+                self.source_uri,
+                chunks=chunks or self.read_chunks,
+                engine=self.engine,
+                **kwargs,
             ).drop_encoding()
 
     def make_dataset(self, *, store: str, debug: bool) -> Dataset:
@@ -74,7 +77,7 @@ class IngestDataset:
 ERA5 = IngestDataset(
     name="ERA5",
     prefix="era5_weatherbench2",
-    uri="gs://weatherbench2/datasets/era5/1959-2023_01_10-full_37-1h-0p25deg-chunk-1.zarr",
+    source_uri="gs://weatherbench2/datasets/era5/1959-2023_01_10-full_37-1h-0p25deg-chunk-1.zarr",
     engine="zarr",
     read_chunks={"time": 24 * 3, "level": 1},
     write_chunks={"time": 1, "level": 1, "latitude": 721, "longitude": 1440},
