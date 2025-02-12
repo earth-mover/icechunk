@@ -12,6 +12,12 @@ def setup_logger():
 
 
 def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
+    COILED_VM_TYPES = {
+        # TODO: think about these
+        "s3": "m5.4xlarge",
+        "gcs": "n2-standard-16",
+        "tigris": "m5.4xlarge",
+    }
     DEFAULT_REGIONS = {
         "s3": "us-east-1",
         "gcs": "us-east1",
@@ -30,7 +36,11 @@ def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
         region = DEFAULT_REGIONS[store]
     else:
         region = TIGRIS_REGIONS[region] if store == "tigris" else region
-    return {"workspace": WORKSPACES[store], "region": region}
+    return {
+        "workspace": WORKSPACES[store],
+        "region": region,
+        "vm_type": COILED_VM_TYPES[store],
+    }
 
 
 def assert_cwd_is_icechunk_python():

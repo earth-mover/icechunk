@@ -156,11 +156,6 @@ class CoiledRunner(Runner):
     bench_store_dir = "."
 
     def get_coiled_kwargs(self):
-        COILED_VM_TYPES = {
-            "s3": "m5.4xlarge",
-            "gcs": None,
-            "tigris": None,
-        }
         COILED_SOFTWARE = {
             "icechunk-v0.1.0-alpha.1": "icechunk-alpha-release",
             "icechunk-v0.1.0-alpha.12": "icechunk-alpha-12",
@@ -171,7 +166,6 @@ class CoiledRunner(Runner):
         kwargs["software"] = COILED_SOFTWARE.get(
             self.ref, f"icechunk-bench-{self.commit}"
         )
-        kwargs["vm_type"] = COILED_VM_TYPES[self.where]
         return kwargs
 
     def initialize(self) -> None:
@@ -179,16 +173,18 @@ class CoiledRunner(Runner):
 
         deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml").split(" ")
 
+        ckwargs = self.get_coiled_kwargs()
         # repeated calls are a no-op!
         coiled.create_software_environment(
-            name=self.get_coiled_kwargs()["software"],
+            name=ckwargs["software"],
+            workspace=ckwargs["workspace"],
             conda={
                 "channels": ["conda-forge"],
                 "dependencies": ["rust", "python=3.12", "pip"],
             },
             # FIXME: get this to work.
             # pip=[self.pip_github_url, *deps],
-            pip=["icechunk==v0.1.2", *deps],
+            pip=[f"icechunk=={self.ref}", *deps],
         )
 
     def execute(self, cmd, **kwargs) -> None:
@@ -200,7 +196,7 @@ class CoiledRunner(Runner):
                 "--name",
                 f"icebench-{self.commit}",  # cluster name
                 "--sync",
-                "--sync-ignore='python/ reports/ profiling/'",
+                "--sync-ignore='python/ reports/ profiling/ tests/'",
                 "--keepalive",
                 "10m",
                 f"--workspace={ckwargs['workspace']}",  # cloud
