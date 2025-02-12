@@ -179,20 +179,15 @@ impl Manifest {
         // FIXME: do somewhere else
         let mut all = stream.try_collect::<Vec<_>>().await?;
 
-        all.sort_by(|a, b| (&a.coord).cmp(&b.coord));
+        all.sort_by(|a, b| (a.coord).cmp(&b.coord));
 
         // FIXME: more than one node id
         let mut node_id = None;
         let refs_vec: Vec<_> = all
             .into_iter()
             .map(|chunk| {
-                node_id = Some(chunk.node);
-                let payload = Some(mk_payload(&mut builder, chunk.payload));
-                let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
-                generated::ChunkRef::create(
-                    &mut builder,
-                    &generated::ChunkRefArgs { index, payload },
-                )
+                node_id = Some(chunk.node.clone());
+                mk_chunk_ref(&mut builder, chunk)
             })
             .collect();
 
@@ -284,8 +279,8 @@ impl Manifest {
                     },
                 )
             })?;
-        let payload = chunk_ref.payload();
-        payload_to_payload(payload)
+        //let payload = chunk_ref.payload();
+        ref_to_payload(chunk_ref)
     }
 
     pub fn iter(
@@ -331,16 +326,14 @@ impl Iterator for PayloadIterator {
         }
 
         let chunk_ref = array_man.refs().get(self.last_ref_index);
-        let payload = payload_to_payload(chunk_ref.payload()).unwrap();
+        let payload = ref_to_payload(chunk_ref).unwrap();
         let indices = ChunkIndices(chunk_ref.index().iter().collect());
         self.last_ref_index += 1;
         Some((indices, payload))
     }
 }
 
-fn payload_to_payload(
-    payload: generated::ChunkPayload<'_>,
-) -> IcechunkResult<ChunkPayload> {
+fn ref_to_payload(payload: generated::ChunkRef<'_>) -> IcechunkResult<ChunkPayload> {
     if let Some(chunk_id) = payload.chunk_id() {
         let id = ChunkId::new(chunk_id.0);
         Ok(ChunkPayload::Ref(ChunkRef {
@@ -362,7 +355,7 @@ fn payload_to_payload(
     }
 }
 
-fn checksum(payload: &generated::ChunkPayload<'_>) -> Option<Checksum> {
+fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
     if let Some(etag) = payload.checksum_etag() {
         Some(Checksum::ETag(etag.to_string()))
     } else if payload.checksum_last_modified() > 0 {
@@ -372,19 +365,30 @@ fn checksum(payload: &generated::ChunkPayload<'_>) -> Option<Checksum> {
     }
 }
 
-fn mk_payload<'bldr>(
+fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
-    chunk: ChunkPayload,
-) -> flatbuffers::WIPOffset<generated::ChunkPayload<'bldr>> {
-    match chunk {
+    chunk: ChunkInfo,
+) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
+    //                let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
+    //                generated::ChunkRef::create(
+    //                    &mut builder,
+    //                    &generated::ChunkRefArgs { index, payload },
+    //                )
+
+    let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
+    match chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
-            let args =
-                generated::ChunkPayloadArgs { inline: Some(bytes), ..Default::default() };
-            generated::ChunkPayload::create(builder, &args)
+            let args = generated::ChunkRefArgs {
+                inline: Some(bytes),
+                index,
+                ..Default::default()
+            };
+            generated::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Virtual(virtual_chunk_ref) => {
-            let args = generated::ChunkPayloadArgs {
+            let args = generated::ChunkRefArgs {
+                index,
                 location: Some(
                     builder.create_string(virtual_chunk_ref.location.0.as_str()),
                 ),
@@ -408,17 +412,18 @@ fn mk_payload<'bldr>(
                 },
                 ..Default::default()
             };
-            generated::ChunkPayload::create(builder, &args)
+            generated::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Ref(chunk_ref) => {
             let id = generated::ObjectId12::new(&chunk_ref.id.0);
-            let args = generated::ChunkPayloadArgs {
+            let args = generated::ChunkRefArgs {
+                index,
                 offset: chunk_ref.offset,
                 length: chunk_ref.length,
                 chunk_id: Some(&id),
                 ..Default::default()
             };
-            generated::ChunkPayload::create(builder, &args)
+            generated::ChunkRef::create(builder, &args)
         }
     }
 }

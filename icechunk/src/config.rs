@@ -55,7 +55,7 @@ impl CompressionConfig {
     }
 
     pub fn level(&self) -> u8 {
-        self.level.unwrap_or(1)
+        self.level.unwrap_or(3)
     }
 
     pub fn merge(&self, other: Self) -> Self {

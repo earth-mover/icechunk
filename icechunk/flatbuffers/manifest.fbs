@@ -8,22 +8,20 @@ struct ObjectId8 {
   bytes:[uint8:8];
 }
 
-table ChunkPayload {
+
+table ChunkRef {
+  index: [uint32] (required);
+
   inline: [uint8];
 
-  offset: uint64;
-  length: uint64;
+  offset: uint64 = 0;
+  length: uint64 = 0;
 
   chunk_id: ObjectId12;
 
   location: string;
   checksum_etag: string;
-  checksum_last_modified: uint32;
-}
-
-table ChunkRef {
-  index: [uint32] (required);
-  payload: ChunkPayload (required);
+  checksum_last_modified: uint32 = 0;
 }
 
 table ArrayManifest {
