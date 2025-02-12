@@ -12,7 +12,7 @@ def mk_repo(local: bool):
         # storage = icechunk.local_filesystem_storage("/tmp/testslow")
         # storage = icechunk.in_memory_storage()
         bucket = "testbucket"
-        prefix = "seba-tests/msgpack-manifest"
+        prefix = "seba-tests/flatbuffers-manifest-u16"
 
         storage = icechunk.s3_storage(
             bucket=bucket,
@@ -41,6 +41,7 @@ def mk_repo(local: bool):
     # conc_settings.ideal_concurrent_request_size = 1_000_000
     settings.concurrency = conc_settings
     config.storage = settings
+    config.compression = icechunk.CompressionConfig(level=3)
 
     return icechunk.Repository.open_or_create(
         storage=storage,
@@ -100,6 +101,10 @@ async def read(local: bool):
 
     print("Reading data")
     start = time()
+    #for idx in range(10_000):
+    #    if (idx + 1) % 1000 == 0:
+    #        print(f"{idx+1}/10_000")
+    #    group["array"][0]
     print(group["array"][0])
     end = time()
     print(end - start)
@@ -109,9 +114,14 @@ asyncio.run(prepare(mk_repo(True), 1_000_000))
 #asyncio.run(read(True))
 
 
-# New datastructure taking 2.65 sec
-# New datastructure with better object id serialization taking  sec
-# Old datastructure taking  3.2 sec
 #
 #
-# with flatbuffers writing 1M chunks took 1:15 , and the read of first item too 1.6 sec
+# with flatbuffers:
+#    manifest size: 14.4MB (compression 1)
+#    writing 1M chunks took 1:15 min,
+#    the read of first item took 1.6 sec
+#
+# with msgpack:
+#    manifest size:  6.5MB (copmression 1), 7MB (compression 3)
+#    writing 1M chunks took 1:19 min 
+#    the read of first item took  1.7 sec

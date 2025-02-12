@@ -180,205 +180,6 @@ impl<'a> ObjectId8 {
 
 }
 
-pub enum ChunkPayloadOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct ChunkPayload<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for ChunkPayload<'a> {
-  type Inner = ChunkPayload<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> ChunkPayload<'a> {
-  pub const VT_INLINE: flatbuffers::VOffsetT = 4;
-  pub const VT_OFFSET: flatbuffers::VOffsetT = 6;
-  pub const VT_LENGTH: flatbuffers::VOffsetT = 8;
-  pub const VT_CHUNK_ID: flatbuffers::VOffsetT = 10;
-  pub const VT_LOCATION: flatbuffers::VOffsetT = 12;
-  pub const VT_CHECKSUM_ETAG: flatbuffers::VOffsetT = 14;
-  pub const VT_CHECKSUM_LAST_MODIFIED: flatbuffers::VOffsetT = 16;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    ChunkPayload { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args ChunkPayloadArgs<'args>
-  ) -> flatbuffers::WIPOffset<ChunkPayload<'bldr>> {
-    let mut builder = ChunkPayloadBuilder::new(_fbb);
-    builder.add_length(args.length);
-    builder.add_offset(args.offset);
-    builder.add_checksum_last_modified(args.checksum_last_modified);
-    if let Some(x) = args.checksum_etag { builder.add_checksum_etag(x); }
-    if let Some(x) = args.location { builder.add_location(x); }
-    if let Some(x) = args.chunk_id { builder.add_chunk_id(x); }
-    if let Some(x) = args.inline { builder.add_inline(x); }
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn inline(&self) -> Option<flatbuffers::Vector<'a, u8>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(ChunkPayload::VT_INLINE, None)}
-  }
-  #[inline]
-  pub fn offset(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(ChunkPayload::VT_OFFSET, Some(0)).unwrap()}
-  }
-  #[inline]
-  pub fn length(&self) -> u64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(ChunkPayload::VT_LENGTH, Some(0)).unwrap()}
-  }
-  #[inline]
-  pub fn chunk_id(&self) -> Option<&'a ObjectId12> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<ObjectId12>(ChunkPayload::VT_CHUNK_ID, None)}
-  }
-  #[inline]
-  pub fn location(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ChunkPayload::VT_LOCATION, None)}
-  }
-  #[inline]
-  pub fn checksum_etag(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ChunkPayload::VT_CHECKSUM_ETAG, None)}
-  }
-  #[inline]
-  pub fn checksum_last_modified(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(ChunkPayload::VT_CHECKSUM_LAST_MODIFIED, Some(0)).unwrap()}
-  }
-}
-
-impl flatbuffers::Verifiable for ChunkPayload<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("inline", Self::VT_INLINE, false)?
-     .visit_field::<u64>("offset", Self::VT_OFFSET, false)?
-     .visit_field::<u64>("length", Self::VT_LENGTH, false)?
-     .visit_field::<ObjectId12>("chunk_id", Self::VT_CHUNK_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("checksum_etag", Self::VT_CHECKSUM_ETAG, false)?
-     .visit_field::<u32>("checksum_last_modified", Self::VT_CHECKSUM_LAST_MODIFIED, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct ChunkPayloadArgs<'a> {
-    pub inline: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
-    pub offset: u64,
-    pub length: u64,
-    pub chunk_id: Option<&'a ObjectId12>,
-    pub location: Option<flatbuffers::WIPOffset<&'a str>>,
-    pub checksum_etag: Option<flatbuffers::WIPOffset<&'a str>>,
-    pub checksum_last_modified: u32,
-}
-impl<'a> Default for ChunkPayloadArgs<'a> {
-  #[inline]
-  fn default() -> Self {
-    ChunkPayloadArgs {
-      inline: None,
-      offset: 0,
-      length: 0,
-      chunk_id: None,
-      location: None,
-      checksum_etag: None,
-      checksum_last_modified: 0,
-    }
-  }
-}
-
-pub struct ChunkPayloadBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ChunkPayloadBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_inline(&mut self, inline: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkPayload::VT_INLINE, inline);
-  }
-  #[inline]
-  pub fn add_offset(&mut self, offset: u64) {
-    self.fbb_.push_slot::<u64>(ChunkPayload::VT_OFFSET, offset, 0);
-  }
-  #[inline]
-  pub fn add_length(&mut self, length: u64) {
-    self.fbb_.push_slot::<u64>(ChunkPayload::VT_LENGTH, length, 0);
-  }
-  #[inline]
-  pub fn add_chunk_id(&mut self, chunk_id: &ObjectId12) {
-    self.fbb_.push_slot_always::<&ObjectId12>(ChunkPayload::VT_CHUNK_ID, chunk_id);
-  }
-  #[inline]
-  pub fn add_location(&mut self, location: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkPayload::VT_LOCATION, location);
-  }
-  #[inline]
-  pub fn add_checksum_etag(&mut self, checksum_etag: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkPayload::VT_CHECKSUM_ETAG, checksum_etag);
-  }
-  #[inline]
-  pub fn add_checksum_last_modified(&mut self, checksum_last_modified: u32) {
-    self.fbb_.push_slot::<u32>(ChunkPayload::VT_CHECKSUM_LAST_MODIFIED, checksum_last_modified, 0);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ChunkPayloadBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    ChunkPayloadBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<ChunkPayload<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for ChunkPayload<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("ChunkPayload");
-      ds.field("inline", &self.inline());
-      ds.field("offset", &self.offset());
-      ds.field("length", &self.length());
-      ds.field("chunk_id", &self.chunk_id());
-      ds.field("location", &self.location());
-      ds.field("checksum_etag", &self.checksum_etag());
-      ds.field("checksum_last_modified", &self.checksum_last_modified());
-      ds.finish()
-  }
-}
 pub enum ChunkRefOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -396,7 +197,13 @@ impl<'a> flatbuffers::Follow<'a> for ChunkRef<'a> {
 
 impl<'a> ChunkRef<'a> {
   pub const VT_INDEX: flatbuffers::VOffsetT = 4;
-  pub const VT_PAYLOAD: flatbuffers::VOffsetT = 6;
+  pub const VT_INLINE: flatbuffers::VOffsetT = 6;
+  pub const VT_OFFSET: flatbuffers::VOffsetT = 8;
+  pub const VT_LENGTH: flatbuffers::VOffsetT = 10;
+  pub const VT_CHUNK_ID: flatbuffers::VOffsetT = 12;
+  pub const VT_LOCATION: flatbuffers::VOffsetT = 14;
+  pub const VT_CHECKSUM_ETAG: flatbuffers::VOffsetT = 16;
+  pub const VT_CHECKSUM_LAST_MODIFIED: flatbuffers::VOffsetT = 18;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -408,7 +215,13 @@ impl<'a> ChunkRef<'a> {
     args: &'args ChunkRefArgs<'args>
   ) -> flatbuffers::WIPOffset<ChunkRef<'bldr>> {
     let mut builder = ChunkRefBuilder::new(_fbb);
-    if let Some(x) = args.payload { builder.add_payload(x); }
+    builder.add_length(args.length);
+    builder.add_offset(args.offset);
+    builder.add_checksum_last_modified(args.checksum_last_modified);
+    if let Some(x) = args.checksum_etag { builder.add_checksum_etag(x); }
+    if let Some(x) = args.location { builder.add_location(x); }
+    if let Some(x) = args.chunk_id { builder.add_chunk_id(x); }
+    if let Some(x) = args.inline { builder.add_inline(x); }
     if let Some(x) = args.index { builder.add_index(x); }
     builder.finish()
   }
@@ -422,11 +235,53 @@ impl<'a> ChunkRef<'a> {
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(ChunkRef::VT_INDEX, None).unwrap()}
   }
   #[inline]
-  pub fn payload(&self) -> ChunkPayload<'a> {
+  pub fn inline(&self) -> Option<flatbuffers::Vector<'a, u8>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<ChunkPayload>>(ChunkRef::VT_PAYLOAD, None).unwrap()}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(ChunkRef::VT_INLINE, None)}
+  }
+  #[inline]
+  pub fn offset(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(ChunkRef::VT_OFFSET, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn length(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(ChunkRef::VT_LENGTH, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn chunk_id(&self) -> Option<&'a ObjectId12> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ObjectId12>(ChunkRef::VT_CHUNK_ID, None)}
+  }
+  #[inline]
+  pub fn location(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ChunkRef::VT_LOCATION, None)}
+  }
+  #[inline]
+  pub fn checksum_etag(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ChunkRef::VT_CHECKSUM_ETAG, None)}
+  }
+  #[inline]
+  pub fn checksum_last_modified(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(ChunkRef::VT_CHECKSUM_LAST_MODIFIED, Some(0)).unwrap()}
   }
 }
 
@@ -438,21 +293,39 @@ impl flatbuffers::Verifiable for ChunkRef<'_> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("index", Self::VT_INDEX, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<ChunkPayload>>("payload", Self::VT_PAYLOAD, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("inline", Self::VT_INLINE, false)?
+     .visit_field::<u64>("offset", Self::VT_OFFSET, false)?
+     .visit_field::<u64>("length", Self::VT_LENGTH, false)?
+     .visit_field::<ObjectId12>("chunk_id", Self::VT_CHUNK_ID, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("checksum_etag", Self::VT_CHECKSUM_ETAG, false)?
+     .visit_field::<u32>("checksum_last_modified", Self::VT_CHECKSUM_LAST_MODIFIED, false)?
      .finish();
     Ok(())
   }
 }
 pub struct ChunkRefArgs<'a> {
     pub index: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
-    pub payload: Option<flatbuffers::WIPOffset<ChunkPayload<'a>>>,
+    pub inline: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    pub offset: u64,
+    pub length: u64,
+    pub chunk_id: Option<&'a ObjectId12>,
+    pub location: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub checksum_etag: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub checksum_last_modified: u32,
 }
 impl<'a> Default for ChunkRefArgs<'a> {
   #[inline]
   fn default() -> Self {
     ChunkRefArgs {
       index: None, // required field
-      payload: None, // required field
+      inline: None,
+      offset: 0,
+      length: 0,
+      chunk_id: None,
+      location: None,
+      checksum_etag: None,
+      checksum_last_modified: 0,
     }
   }
 }
@@ -467,8 +340,32 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ChunkRefBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_INDEX, index);
   }
   #[inline]
-  pub fn add_payload(&mut self, payload: flatbuffers::WIPOffset<ChunkPayload<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<ChunkPayload>>(ChunkRef::VT_PAYLOAD, payload);
+  pub fn add_inline(&mut self, inline: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_INLINE, inline);
+  }
+  #[inline]
+  pub fn add_offset(&mut self, offset: u64) {
+    self.fbb_.push_slot::<u64>(ChunkRef::VT_OFFSET, offset, 0);
+  }
+  #[inline]
+  pub fn add_length(&mut self, length: u64) {
+    self.fbb_.push_slot::<u64>(ChunkRef::VT_LENGTH, length, 0);
+  }
+  #[inline]
+  pub fn add_chunk_id(&mut self, chunk_id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(ChunkRef::VT_CHUNK_ID, chunk_id);
+  }
+  #[inline]
+  pub fn add_location(&mut self, location: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_LOCATION, location);
+  }
+  #[inline]
+  pub fn add_checksum_etag(&mut self, checksum_etag: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_CHECKSUM_ETAG, checksum_etag);
+  }
+  #[inline]
+  pub fn add_checksum_last_modified(&mut self, checksum_last_modified: u32) {
+    self.fbb_.push_slot::<u32>(ChunkRef::VT_CHECKSUM_LAST_MODIFIED, checksum_last_modified, 0);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ChunkRefBuilder<'a, 'b, A> {
@@ -482,7 +379,6 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ChunkRefBuilder<'a, 'b, A> {
   pub fn finish(self) -> flatbuffers::WIPOffset<ChunkRef<'a>> {
     let o = self.fbb_.end_table(self.start_);
     self.fbb_.required(o, ChunkRef::VT_INDEX,"index");
-    self.fbb_.required(o, ChunkRef::VT_PAYLOAD,"payload");
     flatbuffers::WIPOffset::new(o.value())
   }
 }
@@ -491,7 +387,13 @@ impl core::fmt::Debug for ChunkRef<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     let mut ds = f.debug_struct("ChunkRef");
       ds.field("index", &self.index());
-      ds.field("payload", &self.payload());
+      ds.field("inline", &self.inline());
+      ds.field("offset", &self.offset());
+      ds.field("length", &self.length());
+      ds.field("chunk_id", &self.chunk_id());
+      ds.field("location", &self.location());
+      ds.field("checksum_etag", &self.checksum_etag());
+      ds.field("checksum_last_modified", &self.checksum_last_modified());
       ds.finish()
   }
 }
