@@ -23,6 +23,8 @@ def synth_dataset(request) -> Store:
     extra_prefix = request.config.getoption("--icechunk-prefix")
     where = request.config.getoption("--where")
     ds = request.param
+    if where == "local" and ds.skip_local:
+        pytest.skip()
     # for some reason, this gets run multiple times so we apply the prefix repeatedly
     # if we don't catch that :(
     ds.storage_config = ds.storage_config.with_extra(

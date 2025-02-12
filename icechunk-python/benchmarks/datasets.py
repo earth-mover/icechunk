@@ -173,6 +173,8 @@ class BenchmarkDataset(Dataset):
     first_byte_variable: str | None
     # function used to construct the dataset prior to read benchmarks
     setupfn: Callable | None = None
+    # whether to skip this one on local runs
+    skip_local: bool = False
 
     def create(self, clear: bool = True):
         if clear is not True:
@@ -255,6 +257,7 @@ def setup_era5_single(dataset: Dataset):
 
 
 ERA5 = BenchmarkDataset(
+    skip_local=True,
     storage_config=StorageConfig(bucket="icechunk-test", prefix="era5-weatherbench"),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
@@ -265,6 +268,7 @@ ERA5 = BenchmarkDataset(
 )
 
 ERA5_LARGE = BenchmarkDataset(
+    skip_local=True,
     storage_config=StorageConfig(
         bucket="icechunk-public-data", prefix="era5-weatherbench2"
     ),
