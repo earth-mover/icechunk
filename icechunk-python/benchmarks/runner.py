@@ -252,6 +252,7 @@ if __name__ == "__main__":
         ),
         runners,
     )
+
     # For debugging
     # for runner in runners:
     #     init_for_ref(
@@ -264,7 +265,11 @@ if __name__ == "__main__":
         runner.run(pytest_extra=args.pytest)
 
     if len(refs) > 1:
-        files = sorted(glob.glob("./.benchmarks/**/*.json", recursive=True))[-len(refs) :]
+        files = sorted(
+            glob.glob("./.benchmarks/**/*.json", recursive=True),
+            key=os.path.getmtime,
+            reverse=True,
+        )[-len(refs) :]
         # TODO: Use `just` here when we figure that out.
         subprocess.run(
             [
@@ -277,3 +282,11 @@ if __name__ == "__main__":
                 *files,
             ]
         )
+
+
+# Compare wish-list:
+# 1. skip differences < X%
+# 2. groupby
+# 3. better names in summary table
+# 4. Compare across object stores; same object store & compare across versions
+# 5. Compare icechunk vs plain Zarr
