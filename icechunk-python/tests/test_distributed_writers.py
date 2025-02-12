@@ -10,6 +10,7 @@ import zarr
 from dask.array.utils import assert_eq
 from dask.distributed import Client
 from icechunk.dask import store_dask
+from icechunk.storage import s3_object_store_storage, s3_storage
 
 # We create a 2-d array with this many chunks along each direction
 CHUNKS_PER_DIM = 10
@@ -23,7 +24,7 @@ CHUNKS_PER_TASK = 2
 
 def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
     if use_object_store:
-        storage = icechunk.s3_storage(
+        storage = s3_object_store_storage(
             endpoint_url="http://localhost:9000",
             allow_http=True,
             region="us-east-1",
@@ -33,7 +34,7 @@ def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
             secret_access_key="minio123",
         )
     else:
-        storage = icechunk.s3_storage(
+        storage = s3_storage(
             endpoint_url="http://localhost:9000",
             allow_http=True,
             region="us-east-1",
