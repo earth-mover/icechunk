@@ -289,7 +289,7 @@ def setup_era5_single(dataset: Dataset):
 
     # FIXME: move to earthmover-sample-data
     url = "https://nsf-ncar-era5.s3.amazonaws.com/e5.oper.an.pl/194106/e5.oper.an.pl.128_060_pv.ll025sc.1941060100_1941060123.nc"
-    print(f"Reading {url}")
+    logger.info(f"Reading {url}")
     tic = time.time()
     ds = xr.open_dataset(
         # using pooch means we download only once on a local machine
@@ -300,7 +300,7 @@ def setup_era5_single(dataset: Dataset):
         engine="h5netcdf",
     )
     ds = ds.drop_encoding().load()
-    print(f"Loaded data in {time.time() - tic} seconds")
+    logger.info(f"Loaded data in {time.time() - tic} seconds")
 
     repo = dataset.create()
     session = repo.writable_session("main")
@@ -308,11 +308,11 @@ def setup_era5_single(dataset: Dataset):
     encoding = {
         "PV": {"compressors": [zarr.codecs.ZstdCodec()], "chunks": (1, 1, 721, 1440)}
     }
-    print("Writing data...")
+    logger.info("Writing data...")
     ds.to_zarr(
         session.store, mode="w", zarr_format=3, consolidated=False, encoding=encoding
     )
-    print(f"Wrote data in {time.time() - tic} seconds")
+    logger.info(f"Wrote data in {time.time() - tic} seconds")
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
 
