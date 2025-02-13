@@ -113,7 +113,7 @@ class Runner:
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
             f"pytest {PYTEST_OPTIONS} "
-            "--tb=line "
+            "--rootdir=benchmarks --tb=line "
             f"--benchmark-storage={self.bench_store_dir}/.benchmarks "
             f"--benchmark-save={clean_ref}_{self.commit}_{self.where} "
             f"--where={self.where} "
@@ -184,7 +184,7 @@ class CoiledRunner(Runner):
                 "channels": ["conda-forge"],
                 "dependencies": ["rust", "python=3.12", "pip"],
             },
-            pip=[self.pip_github_url, *deps],
+            pip=[self.pip_github_url, "coiled", *deps],
             # needed for install from Github
             # https://coiled-users.slack.com/archives/C0195GJKQ1G/p1739316521164099
             use_uv_installer=False,
@@ -192,6 +192,8 @@ class CoiledRunner(Runner):
 
     def execute(self, cmd, **kwargs) -> None:
         ckwargs = self.get_coiled_kwargs()
+        ls = [f for f in os.listdir(CURRENTDIR) if f != "benchmarks"]
+        toignore = " ".join(ls)
         subprocess.run(
             [
                 "coiled",
@@ -199,7 +201,7 @@ class CoiledRunner(Runner):
                 "--name",
                 f"icebench-{self.commit}",  # cluster name
                 "--sync",
-                "--sync-ignore='python/ reports/ profiling/ tests/'",
+                f"--sync-ignore={toignore!r}",
                 "--keepalive",
                 "10m",
                 f"--workspace={ckwargs['workspace']}",  # cloud
