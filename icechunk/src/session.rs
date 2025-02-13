@@ -27,7 +27,7 @@ use crate::{
     format::{
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+            ManifestShards, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
         snapshot::{
@@ -1376,14 +1376,28 @@ impl<'a> FlushProcess<'a> {
     ) -> SessionResult<()> {
         let mut from = vec![];
         let mut to = vec![];
+
+        // iterator of chunks for a single node
         let chunks = stream::iter(
             self.change_set
                 .new_array_chunk_iterator(node_id, node_path)
                 .map(Ok::<ChunkInfo, Infallible>),
         );
+
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20], vec![0, 10, 20]]);
+
+        // for it in chunks {}
+
+        // if manifest-split-size is set then we know extents, this is then duplicated between snapshot and config
+        //  1. Should we record the "real" extent or the theoretical-max extent (as set in the config).
+        //  2.
+        // if not, we aggregate_extents
+        // this is a choice, we could just always aggregate extents
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
+        // loop over streams and associated extents
+        if let Some(new_manifest) = Manifest::from_stream(chunks, &shards).await.unwrap()
+        {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
                 self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
@@ -1425,7 +1439,17 @@ impl<'a> FlushProcess<'a> {
         let updated_chunks =
             aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
+        // FIXME
+        let shards = {
+            if let NodeData::Array { shape, .. } = node.node_data.clone() {
+                ManifestShards::default(shape.len())
+            } else {
+                todo!()
+            }
+        };
+
+        if let Some(new_manifest) = Manifest::from_stream(updated_chunks, &shards).await?
+        {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
                 self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
@@ -1742,7 +1766,7 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::ManifestExtents,
+        format::manifest::{ManifestExtents, ManifestShards},
         refs::{fetch_tag, Ref},
         repository::VersionInfo,
         storage::new_in_memory_storage,
@@ -1938,6 +1962,24 @@ mod tests {
         prop_assert_eq!(to, expected_to);
     }
 
+    #[tokio::test]
+    async fn test_which_shard() -> Result<(), Box<dyn Error>> {
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
+
+        assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![11])).unwrap(), 1);
+
+        let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
+
+        let shards = ManifestShards::from_edges(edges);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
+        assert!(shards.which(&ChunkIndices(vec![21, 21])).is_err());
+
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -1946,6 +1988,7 @@ mod tests {
             AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
 
         let array_id = NodeId::random();
+        let shards = ManifestShards::default(2);
         let chunk1 = ChunkInfo {
             node: array_id.clone(),
             coord: ChunkIndices(vec![0, 0, 0]),
@@ -1963,7 +2006,7 @@ mod tests {
         };
 
         let manifest =
-            Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
+            Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()], &shards).await?.unwrap();
         let manifest = Arc::new(manifest);
         let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
