@@ -196,9 +196,9 @@ class Dataset:
 @dataclass(kw_only=True)
 class BenchmarkDataset(Dataset):
     # data variable to load in `time_xarray_read_chunks`
-    load_variables: list[str]
+    load_variables: list[str] | None = None
     # Passed to .isel for `time_xarray_read_chunks`
-    chunk_selector: dict[str, Any]
+    chunk_selector: dict[str, Any] | None = None
     # name of (coordinate) variable used for testing "time to first byte"
     first_byte_variable: str | None
     # function used to construct the dataset prior to read benchmarks
@@ -316,11 +316,55 @@ def setup_era5_single(dataset: Dataset):
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
 
+def setup_ingest_for_benchmarks(dataset: Dataset, *, ingest: IngestDataset) -> None:
+    """
+    For benchmarks, we
+    1. add a specific prefix.
+    2. always write the metadata for the WHOLE dataset
+    3. then append a small subset of data for a few arrays
+    """
+    from benchmarks.create_era5 import Mode, write
+
+    repo = dataset.create()
+    ds = ingest.open_dataset()
+    logger.info("Initializing dataset for benchmarks..")
+    session = repo.writable_session("main")
+    ds.to_zarr(
+        session.store, compute=False, mode="w-", group=dataset.group, **ZARR_KWARGS
+    )
+    session.commit("initialized dataset")
+    logger.info("Finished initializing dataset.")
+
+    if ingest.arrays:
+        attrs = {
+            "written_arrays": " ".join(ingest.arrays),
+        }
+        write(
+            dataset,
+            ingest=ingest,
+            mode=Mode.APPEND,
+            extra_attrs=attrs,
+            arrays_to_write=ingest.arrays,
+            initialize_all_vars=False,
+        )
+
+
 def setup_era5(*args, **kwargs):
     from benchmarks.create_era5 import setup_for_benchmarks
 
     return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
 
+
+ERA5_ARCO_INGEST = IngestDataset(
+    name="ERA5-ARCO",
+    prefix="era5_arco",
+    source_uri="gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
+    engine="zarr",
+    read_chunks={"time": 72 * 24, "level": 1},
+    write_chunks={"time": 1, "level": 1, "latitude": 721, "longitude": 1440},
+    group="1x721x1440",
+    arrays=[],
+)
 
 ERA5 = BenchmarkDataset(
     # weatherbench2 data - 5 years
@@ -332,6 +376,15 @@ ERA5 = BenchmarkDataset(
     group="1x721x1440",
     # don't set setupfn here so we don't run a really expensive job
     # by mistake
+    # setupfn=partial(setup_ingest_for_benchmarks, ingest=ERA5_WB),
+)
+
+ERA5_ARCO = BenchmarkDataset(
+    skip_local=False,
+    storage_config=StorageConfig(prefix="era5-arco"),
+    first_byte_variable="latitude",
+    group="1x721x1440",
+    setupfn=partial(setup_ingest_for_benchmarks, ingest=ERA5_ARCO_INGEST),
 )
 
 # ERA5_LARGE = BenchmarkDataset(
