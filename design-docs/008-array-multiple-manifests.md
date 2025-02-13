@@ -25,6 +25,8 @@ Some considerations
 1. Zarr does not enforce dimension names, so we must allow splitting by axes too. `dimension_names=null` and dimension_names=`['time', null]` are allowed.
 2. Manifest extents must form non-overlapping bounding boxes, so using a `dict` to specify shard sizes seems like the right API.
 3. There needs to be a priority order for dimensions. So for example, I may always want different vertical levels in different manifest files, and only split those files once there are many timesteps in that. Thus we use a sequence of key-value pairs in the YAML instead of a map (which is [not guaranteed to be ordered](https://yaml.org/spec/1.2.2/#3221-mapping-key-order)).
+4. Repeated dimension names are possible, the user can use axis numbers to set different splits for different axes if needed.
+5. We disallow combining dimension names and axis numbers in the same specification.
 
 ```yaml
 rules:
