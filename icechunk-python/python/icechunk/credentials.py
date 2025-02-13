@@ -39,6 +39,7 @@ AnyAzureStaticCredential = (
 
 AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
 
+
 AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 

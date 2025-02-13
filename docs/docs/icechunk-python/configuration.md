@@ -4,16 +4,138 @@ When creating and opening Icechunk repositories, there are many configuration op
 
 ## [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig)
 
-Separate from the storage config, the Repository can also be configured with options which control its runtime behavior.
+The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
+
+```python
+config = icechunk.RepositoryConfig.default()
+```
+
+or it can be optionally loaded from an existing repository:
+
+```python
+config = icechunk.Repository.fetch_config(storage)
+```
+
+It allows you to configure the following parameters:
+
+### [`inline_chunk_threshold_bytes`](./reference.md#icechunk.RepositoryConfig.inline_chunk_threshold_bytes)
+
+The threshold for when to inline a chunk into a manifest instead of storing it as a separate object in the storage backend.
+
+### [`unsafe_overwrite_refs`](./reference.md#icechunk.RepositoryConfig.unsafe_overwrite_refs)
+
+Whether to allow overwriting references in the repository.
+
+### [`get_partial_values_concurrency`](./reference.md#icechunk.RepositoryConfig.get_partial_values_concurrency)
+
+The number of concurrent requests to make when getting partial values from storage.
+
+### [`compression`](./reference.md#icechunk.RepositoryConfig.compression)
+
+Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference.md#icechunk.CompressionConfig) allows you to configure the [compression level](./reference.md#icechunk.CompressionConfig.level) and [algorithm](./reference.md#icechunk.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
+
+```python
+config.compression = icechunk.CompressionConfig(
+    level=3,
+    algorithm=icechunk.CompressionAlgorithm.Zstd,
+)
+```
+
+### [`caching`](./reference.md#icechunk.RepositoryConfig.caching)
+
+Icechunk caches metadata files to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
+
+```python
+config.caching = icechunk.CachingConfig(
+    num_snapshot_nodes=100,
+    num_chunk_refs=100,
+    num_transaction_changes=100,
+    num_bytes_attributes=1e4,
+    num_bytes_chunks=1e6,
+)
+```
+
+### [`storage`](./reference.md#icechunk.RepositoryConfig.storage)
+
+This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings. Currently, the only setting available is the concurrency settings with [`StorageConcurrencySettings`](./reference.md#icechunk.StorageConcurrencySettings).
+
+```python
+config.storage = icechunk.StorageSettings(
+    concurrency=icechunk.StorageConcurrencySettings(
+        max_concurrent_requests_for_object=10,
+        ideal_concurrent_request_size=1e6,
+    ),
+)
+```
+
+### [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers)
+
+Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you can configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a name, a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
 
 !!! note
-    This section is under construction and coming soon.
 
-## Creating and Opening Repos
+    Currently only `s3` compatible storage and `local_filesystem` storage are supported for virtual chunk containers. Other storage backends such as `gcs`, `azure`, and `https` are on the roadmap.
+
+#### Example
+
+For example, if we wanted to configure an icechunk repo to be able to contain virtual chunks from an `s3` bucket called `my-s3-bucket` in `us-east-1`, we would do the following:
+
+```python
+config.virtual_chunk_containers = [
+    icechunk.VirtualChunkContainer(
+        name="my-s3-bucket",
+        url_prefix="s3://my-s3-bucket/",
+        storage=icechunk.StorageSettings(
+            storage=icechunk.s3_storage(bucket="my-s3-bucket", region="us-east-1"),
+        ),
+    ),
+]
+```
+
+If we also wanted to configure the repo to be able to contain virtual chunks from another `s3` bucket called `my-other-s3-bucket` in `us-west-2`, we would do the following:
+
+```python
+config.set_virtual_chunk_container(
+    icechunk.VirtualChunkContainer(
+        name="my-other-s3-bucket",
+        url_prefix="s3://my-other-s3-bucket/",
+        storage=icechunk.StorageSettings(
+            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", region="us-west-2"),
+        ),
+    ),
+)
+```
+
+Now at read time, if icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
+
+!!! note
+
+    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter. See the [Virtual Chunk Credentials](#virtual-chunk-credentials) section for more information.
+
+### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
+
+The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. in particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
+
+#### Example
+
+For example, if we have a repo which contains data that we plan to open as an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
+
+```python
+config.manifest = icechunk.ManifestConfig(
+    preload=icechunk.ManifestPreloadConfig(
+        max_total_refs=1e8,
+        preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
+    ),
+)
+```
+
+### Applying Configuration
 
 Now we can now create or open an Icechunk repo using our config.
 
-### Creating a new repo
+#### Creating a new repo
+
+If no config is provided, the repo will be created with the [default configuration](./reference.md#icechunk.RepositoryConfig.default).
 
 !!! note
 
@@ -31,6 +153,7 @@ Now we can now create or open an Icechunk repo using our config.
 
     repo = icechunk.Repository.create(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -45,6 +168,7 @@ Now we can now create or open an Icechunk repo using our config.
 
     repo = icechunk.Repository.create(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -59,6 +183,7 @@ Now we can now create or open an Icechunk repo using our config.
 
     repo = icechunk.Repository.create(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -67,63 +192,15 @@ Now we can now create or open an Icechunk repo using our config.
     ```python
     repo = icechunk.Repository.create(
         storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
+        config=config
     )
     ```
 
-If you are not sure if the repo exists yet, an `icechunk Repository` can created or opened if it already exists:
+#### Opening an existing repo
 
-=== "Open or creating with S3 storage"
+When opening an existing repo, the config will be loaded from the repo if it exists. If no config exists and no config was specified, the repo will be opened with the [default configuration](./reference.md#icechunk.RepositoryConfig.default).
 
-    ```python
-    storage = icechunk.s3_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        region='us-east-1',
-        from_env=True,
-    )
-
-    repo = icechunk.Repository.open_or_create(
-        storage=storage,
-    )
-    ```
-
-=== "Open or creating with Google Cloud Storage"
-
-    ```python
-    storage = icechunk.gcs_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        from_env=True,
-    )
-
-    repo = icechunk.Repository.open_or_create(
-        storage=storage,
-    )
-    ```
-
-=== "Open or creating with Azure Blob Storage"
-
-    ```python
-    storage = icechunk.azure_storage(
-        container='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        from_env=True,
-    )
-
-    repo = icechunk.Repository.open_or_create(
-        storage=storage,
-    )
-    ```
-
-=== "Open or creating with local filesystem"
-
-    ```python
-    repo = icechunk.Repository.open_or_create(
-        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
-    )
-    ```
-
-### Opening an existing repo
+However, if a config was specified when opening the repo AND a config was previously persisted in the repo, the two configurations will be merged. The config specified when opening the repo will take precedence over the persisted config.
 
 === "Opening from S3 Storage"
 
@@ -137,6 +214,7 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 
     repo = icechunk.Repository.open(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -151,6 +229,7 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 
     repo = icechunk.Repository.open(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -165,6 +244,7 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
 
     repo = icechunk.Repository.open(
         storage=storage,
+        config=config,
     )
     ```
 
@@ -174,5 +254,37 @@ If you are not sure if the repo exists yet, an `icechunk Repository` can created
     storage = icechunk.local_filesystem_storage("/path/to/my/dataset")
     store = icechunk.IcechunkStore.open(
         storage=storage,
+        config=config,
     )
     ```
+
+### Persisting Configuration
+
+Once the repo is opened, the current config can be persisted to the repo by calling [`save_config`](./reference.md#icechunk.Repository.save_config).
+
+```python
+repo.save_config()
+```
+
+The next time this repo is opened, the persisted config will be loaded by default.
+
+## Virtual Chunk Credentials
+
+When using virtual chunk containers, the credentials for the storage backend must also be specified. This is done using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container names mapping to credential objects. A helper function, [`containers_credentials`](./reference.md#icechunk.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
+
+### Example
+
+Expanding on the example from the [Virtual Chunk Containers](#virtual-chunk-containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
+
+```python
+credentials = icechunk.containers_credentials(
+    my_s3_bucket=icechunk.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
+    my_other_s3_bucket=icechunk.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+)
+
+repo = icechunk.Repository.open(
+    storage=storage,
+    config=config,
+    virtual_chunk_credentials=credentials,
+)
+```
