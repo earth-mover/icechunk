@@ -38,6 +38,8 @@ async-trait = "0.1.85"
 typetag = "0.2.19"
 serde = { version = "1.0.217", features = ["derive", "rc"] }
 miette = { version = "7.5.0", features = ["fancy"] }
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0.95"
 
 [lints]
 workspace = true

@@ -19,6 +19,7 @@
 //!   These datastructures use Arrow RecordBatches for representation.
 pub mod asset_manager;
 pub mod change_set;
+pub mod cli;
 pub mod config;
 pub mod conflicts;
 pub mod error;
