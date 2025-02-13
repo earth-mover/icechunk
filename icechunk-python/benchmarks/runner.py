@@ -26,7 +26,7 @@ import icechunk as ic
 logger = setup_logger()
 
 PIP_OPTIONS = "--disable-pip-version-check -q"
-PYTEST_OPTIONS = "-q --durations 10"
+PYTEST_OPTIONS = "-v --durations 10 --rootdir=benchmarks --tb=line"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
 
@@ -113,7 +113,6 @@ class Runner:
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
             f"pytest {PYTEST_OPTIONS} "
-            "--rootdir=benchmarks --tb=line "
             f"--benchmark-storage={self.bench_store_dir}/.benchmarks "
             f"--benchmark-save={clean_ref}_{self.commit}_{self.where} "
             f"--where={self.where} "
@@ -198,6 +197,7 @@ class CoiledRunner(Runner):
             [
                 "coiled",
                 "run",
+                "--interactive",
                 "--name",
                 f"icebench-{self.commit}",  # cluster name
                 "--sync",
