@@ -28,10 +28,9 @@ Some considerations
 
 ```yaml
 rules:
-  - path: ./2m_temperature  # 3D variable: (null, latitude, longitude)
+  - path: ./2m_temperature  # regex, 3D variable: (null, latitude, longitude)
     manifest-split-sizes:
       - 0: 120
-    max-num-refs: null  # (default) must be null if manifest-split-dims is provided
   - path: ./temperature  # 4D variable: (time, level, latitude, longitude)
     manifest-split-sizes:
       - "level": 1  # alternatively 0: 1
@@ -42,6 +41,5 @@ rules:
       - "time": 8760  # ~1 year
       - "latitude": null  # for unspecified, default is null, which means never split.
   - path: ./*   # the default rules
-    manifest-split-sizes: null  # defer to max-num-refs
-    max-num-refs: 100_000  # split after at least this many references
+    manifest-split-sizes: null  # no splitting, just a single manifest per array
 ```
