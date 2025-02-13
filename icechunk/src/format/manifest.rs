@@ -1,4 +1,4 @@
-use std::{convert::Infallible, io::Read, ops::Range, sync::Arc};
+use std::{convert::Infallible, io::Read, ops::Range, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
@@ -235,11 +235,17 @@ impl Manifest {
     }
 
     fn root(&self) -> IcechunkResult<generated::Manifest> {
-        let res = flatbuffers::root_with_opts::<generated::Manifest>(
-            &ROOT_OPTIONS,
-            &self.buffer[self.offset..],
-        )
-        .unwrap();
+        let res = unsafe {
+            flatbuffers::root_unchecked::<generated::Manifest>(
+                &self.buffer[self.offset..],
+            )
+        };
+
+        //            ::<generated::Manifest>(
+        //            &ROOT_OPTIONS,
+        //            &self.buffer[self.offset..],
+        //        )
+        //        .unwrap();
         Ok(res)
     }
 
@@ -256,11 +262,12 @@ impl Manifest {
         array_manifest: generated::ArrayManifest<'a>,
         coord: &ChunkIndices,
     ) -> Option<generated::ChunkRef<'a>> {
-        array_manifest.refs().lookup_by_key(&coord.0, |chunk_ref, coords| {
+        let res = array_manifest.refs().lookup_by_key(&coord.0, |chunk_ref, coords| {
             // FIXME: we should be able to compare without building vecs
             let this = chunk_ref.index().iter().collect::<Vec<_>>();
             (&this).cmp(*coords)
-        })
+        });
+        res
     }
 
     pub fn get_chunk_payload(
@@ -280,7 +287,8 @@ impl Manifest {
                 )
             })?;
         //let payload = chunk_ref.payload();
-        ref_to_payload(chunk_ref)
+        let res = ref_to_payload(chunk_ref);
+        res
     }
 
     pub fn iter(
