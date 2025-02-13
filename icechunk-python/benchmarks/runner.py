@@ -184,9 +184,6 @@ class CoiledRunner(Runner):
                 "dependencies": ["rust", "python=3.12", "pip"],
             },
             pip=[self.pip_github_url, "coiled", *deps],
-            # needed for install from Github
-            # https://coiled-users.slack.com/archives/C0195GJKQ1G/p1739316521164099
-            use_uv_installer=False,
         )
 
     def execute(self, cmd, **kwargs) -> None:
