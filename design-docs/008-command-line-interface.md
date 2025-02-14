@@ -6,14 +6,18 @@ This document outlines the design of the Icechunk command line interface.
 
 Here is a list of tasks a user might want to do with Icechunk:
 
-- List my repositories
+- List repositories in the configuration
 - List a history of a repo
 - List branches in a repo
 - List tags in a repo
+- Print the zarr hierarchy
+- Get repo statistics (e.g. `getsize`)
 - Create a new repository
 - Check configuration
 - Diff between two commits
 - Invoke administrative tasks (garbage collection, compaction, etc)
+
+This is not an exhaustive list.
 
 ## Interface
 
@@ -131,10 +135,11 @@ The user can also install the Rust binary directly through `cargo install`.
 
 Implemented with
 
-- `clap` for the CLI
-  - `clap_complete` for shell completion
-- `anyhow` for error handling
-- `serde_yaml_ng` for configuration
+- [clap](https://crates.io/crates/clap) for the CLI
+  - [clap_complete](https://crates.io/crates/clap_complete) for shell completion
+- [anyhow](https://crates.io/crates/anyhow) for error handling
+- [serde_yaml_ng](https://crates.io/crates/serde_yaml_ng) for configuration
+- [dialoguer](https://crates.io/crates/dialoguer) for user input
 
 ## Optional features
 
