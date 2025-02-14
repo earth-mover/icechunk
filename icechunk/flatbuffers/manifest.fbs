@@ -1,14 +1,5 @@
 namespace generated;
 
-struct ObjectId12 {
-  bytes:[uint8:12];
-}
-
-struct ObjectId8 {
-  bytes:[uint8:8];
-}
-
-
 table ChunkRef {
   index: [uint32] (required);
 

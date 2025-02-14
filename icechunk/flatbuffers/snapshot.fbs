@@ -1,0 +1,70 @@
+include "objects.fbs";
+
+namespace generated;
+
+table MetadataItem {
+  name: string (required);
+  value: string (required);
+}
+
+struct ManifestFileInfo {
+    id: ObjectId12;
+    size_bytes: uint64;
+    num_rows: uint32;
+}
+
+struct AttributeFileInfo {
+    id: ObjectId12;
+}
+
+table UserAttributesRef {
+    object_id: ObjectId12 (required);
+    location: uint32;
+}
+
+table InlineUserAttributes {
+  data :string (required);
+}
+
+union UserAttributesSnapshot {
+  Inline :InlineUserAttributes,
+  Reference :UserAttributesRef,
+}
+
+table ManifestRef {
+    object_id: ObjectId12 (required);
+    extents_from: [uint32] (required);
+    extents_to: [uint32] (required);
+}
+
+table GroupNodeData {}
+
+table ArrayNodeData {
+  zarr_metadata: string (required);
+  manifests: [ManifestRef] (required);
+}
+
+union NodeData {
+  Array :ArrayNodeData,
+  Group :GroupNodeData,
+}
+
+table NodeSnapshot {
+    id: ObjectId8 (required);
+    path: string (required);
+    user_attributes: UserAttributesSnapshot (required);
+    node_data: NodeData (required);
+}
+
+
+table Snapshot {
+  id: ObjectId12 (required);
+  parent_id: ObjectId12;
+  flushed_at: uint64;
+  message: string (required);
+  metadata: [MetadataItem] (required);
+  manifest_files: [ManifestFileInfo] (required); 
+  attribute_files: [AttributeFileInfo] (required);
+}
+
+root_type Snapshot;

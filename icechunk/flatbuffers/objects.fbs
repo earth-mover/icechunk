@@ -1,0 +1,8 @@
+struct ObjectId12 {
+  bytes:[uint8:12];
+}
+
+struct ObjectId8 {
+  bytes:[uint8:8];
+}
+
