@@ -126,7 +126,7 @@ session.commit("append more data")
 To read data stored in Icechunk with Xarray, we'll use `xarray.open_zarr`:
 
 ```python
-xr.open_zarr(store, consolidated=False)
+xr.open_zarr(session.store, consolidated=False)
 # output: <xarray.Dataset> Size: 17MB
 # Dimensions:  (time: 36, y: 205, x: 275)
 # Coordinates:
