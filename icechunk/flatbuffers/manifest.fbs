@@ -1,4 +1,6 @@
-namespace generated;
+include "object_ids.fbs";
+
+namespace gen;
 
 table ChunkRef {
   index: [uint32] (required);
@@ -26,3 +28,5 @@ table Manifest {
 }
 
 root_type Manifest;
+
+// flatc --rust --rust-module-root-file -o ../src/format/flatbuffers/ manifest.fbs object_ids.fbs snapshot.fbs  

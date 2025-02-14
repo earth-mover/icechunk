@@ -7,9 +7,11 @@ use std::{
     ops::Range,
 };
 
+use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
 use format_constants::FileTypeBin;
 use itertools::Itertools;
+use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
 use rand::{rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -20,7 +22,11 @@ use crate::{error::ICError, metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
-pub mod manifest_generated;
+
+#[allow(dead_code, unused_imports)]
+#[path = "./flatbuffers/all_generated.rs"]
+pub mod flatbuffers;
+
 pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;
@@ -214,9 +220,12 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum IcechunkFormatErrorKind {
+    #[error(transparent)]
+    VirtualReferenceError(VirtualReferenceErrorKind),
+
     #[error("error decoding fill_value from array. Found size: {found_size}, target size: {target_size}, type: {target_type}")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
     #[error("error decoding fill_value from json. Type: {data_type}, value: {value}")]
@@ -235,6 +244,10 @@ pub enum IcechunkFormatErrorKind {
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
     InvalidCompressionAlgorithm, // TODO: add more info
+    #[error("Invalid Icechunk metadata file")]
+    InvalidFlatBuffer(#[from] InvalidFlatbuffer),
+    #[error("I/O error")]
+    IO(#[from] std::io::Error),
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -247,6 +260,15 @@ where
 {
     fn from(value: E) -> Self {
         Self::new(value.into())
+    }
+}
+
+impl From<VirtualReferenceError> for IcechunkFormatError {
+    fn from(value: VirtualReferenceError) -> Self {
+        Self::with_context(
+            IcechunkFormatErrorKind::VirtualReferenceError(value.kind),
+            value.context,
+        )
     }
 }
 

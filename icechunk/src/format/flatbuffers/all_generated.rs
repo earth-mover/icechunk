@@ -3,7 +3,6 @@
 
 // @generated
 
-use crate::objects_generated::*;
 use core::mem;
 use core::cmp::Ordering;
 
@@ -11,9 +10,8 @@ extern crate flatbuffers;
 use self::flatbuffers::{EndianScalar, Follow};
 
 #[allow(unused_imports, dead_code)]
-pub mod generated {
+pub mod gen {
 
-  use crate::objects_generated::*;
   use core::mem;
   use core::cmp::Ordering;
 
@@ -202,6 +200,168 @@ impl<'a> flatbuffers::Verifiable for NodeData {
 impl flatbuffers::SimpleToVerifyInSlice for NodeData {}
 pub struct NodeDataUnionTableOffset {}
 
+// struct ObjectId12, aligned to 1
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct ObjectId12(pub [u8; 12]);
+impl Default for ObjectId12 { 
+  fn default() -> Self { 
+    Self([0; 12])
+  }
+}
+impl core::fmt::Debug for ObjectId12 {
+  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    f.debug_struct("ObjectId12")
+      .field("bytes", &self.bytes())
+      .finish()
+  }
+}
+
+impl flatbuffers::SimpleToVerifyInSlice for ObjectId12 {}
+impl<'a> flatbuffers::Follow<'a> for ObjectId12 {
+  type Inner = &'a ObjectId12;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    <&'a ObjectId12>::follow(buf, loc)
+  }
+}
+impl<'a> flatbuffers::Follow<'a> for &'a ObjectId12 {
+  type Inner = &'a ObjectId12;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc)
+  }
+}
+impl<'b> flatbuffers::Push for ObjectId12 {
+    type Output = ObjectId12;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = ::core::slice::from_raw_parts(self as *const ObjectId12 as *const u8, <Self as flatbuffers::Push>::size());
+        dst.copy_from_slice(src);
+    }
+    #[inline]
+    fn alignment() -> flatbuffers::PushAlignment {
+        flatbuffers::PushAlignment::new(1)
+    }
+}
+
+impl<'a> flatbuffers::Verifiable for ObjectId12 {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.in_buffer::<Self>(pos)
+  }
+}
+
+impl<'a> ObjectId12 {
+  #[allow(clippy::too_many_arguments)]
+  pub fn new(
+    bytes: &[u8; 12],
+  ) -> Self {
+    let mut s = Self([0; 12]);
+    s.set_bytes(bytes);
+    s
+  }
+
+  pub fn bytes(&'a self) -> flatbuffers::Array<'a, u8, 12> {
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid array in this slot
+    unsafe { flatbuffers::Array::follow(&self.0, 0) }
+  }
+
+  pub fn set_bytes(&mut self, items: &[u8; 12]) {
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid array in this slot
+    unsafe { flatbuffers::emplace_scalar_array(&mut self.0, 0, items) };
+  }
+
+}
+
+// struct ObjectId8, aligned to 1
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct ObjectId8(pub [u8; 8]);
+impl Default for ObjectId8 { 
+  fn default() -> Self { 
+    Self([0; 8])
+  }
+}
+impl core::fmt::Debug for ObjectId8 {
+  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    f.debug_struct("ObjectId8")
+      .field("bytes", &self.bytes())
+      .finish()
+  }
+}
+
+impl flatbuffers::SimpleToVerifyInSlice for ObjectId8 {}
+impl<'a> flatbuffers::Follow<'a> for ObjectId8 {
+  type Inner = &'a ObjectId8;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    <&'a ObjectId8>::follow(buf, loc)
+  }
+}
+impl<'a> flatbuffers::Follow<'a> for &'a ObjectId8 {
+  type Inner = &'a ObjectId8;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc)
+  }
+}
+impl<'b> flatbuffers::Push for ObjectId8 {
+    type Output = ObjectId8;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = ::core::slice::from_raw_parts(self as *const ObjectId8 as *const u8, <Self as flatbuffers::Push>::size());
+        dst.copy_from_slice(src);
+    }
+    #[inline]
+    fn alignment() -> flatbuffers::PushAlignment {
+        flatbuffers::PushAlignment::new(1)
+    }
+}
+
+impl<'a> flatbuffers::Verifiable for ObjectId8 {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.in_buffer::<Self>(pos)
+  }
+}
+
+impl<'a> ObjectId8 {
+  #[allow(clippy::too_many_arguments)]
+  pub fn new(
+    bytes: &[u8; 8],
+  ) -> Self {
+    let mut s = Self([0; 8]);
+    s.set_bytes(bytes);
+    s
+  }
+
+  pub fn bytes(&'a self) -> flatbuffers::Array<'a, u8, 8> {
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid array in this slot
+    unsafe { flatbuffers::Array::follow(&self.0, 0) }
+  }
+
+  pub fn set_bytes(&mut self, items: &[u8; 8]) {
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid array in this slot
+    unsafe { flatbuffers::emplace_scalar_array(&mut self.0, 0, items) };
+  }
+
+}
+
 // struct ManifestFileInfo, aligned to 8
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq)]
@@ -262,7 +422,7 @@ impl<'a> flatbuffers::Verifiable for ManifestFileInfo {
 impl<'a> ManifestFileInfo {
   #[allow(clippy::too_many_arguments)]
   pub fn new(
-    id: &super::ObjectId12,
+    id: &ObjectId12,
     size_bytes: u64,
     num_rows: u32,
   ) -> Self {
@@ -273,15 +433,15 @@ impl<'a> ManifestFileInfo {
     s
   }
 
-  pub fn id(&self) -> &super::ObjectId12 {
+  pub fn id(&self) -> &ObjectId12 {
     // Safety:
     // Created from a valid Table for this object
     // Which contains a valid struct in this slot
-    unsafe { &*(self.0[0..].as_ptr() as *const super::ObjectId12) }
+    unsafe { &*(self.0[0..].as_ptr() as *const ObjectId12) }
   }
 
   #[allow(clippy::identity_op)]
-  pub fn set_id(&mut self, x: &super::ObjectId12) {
+  pub fn set_id(&mut self, x: &ObjectId12) {
     self.0[0..0 + 12].copy_from_slice(&x.0)
   }
 
@@ -403,27 +563,476 @@ impl<'a> flatbuffers::Verifiable for AttributeFileInfo {
 impl<'a> AttributeFileInfo {
   #[allow(clippy::too_many_arguments)]
   pub fn new(
-    id: &super::ObjectId12,
+    id: &ObjectId12,
   ) -> Self {
     let mut s = Self([0; 12]);
     s.set_id(id);
     s
   }
 
-  pub fn id(&self) -> &super::ObjectId12 {
+  pub fn id(&self) -> &ObjectId12 {
     // Safety:
     // Created from a valid Table for this object
     // Which contains a valid struct in this slot
-    unsafe { &*(self.0[0..].as_ptr() as *const super::ObjectId12) }
+    unsafe { &*(self.0[0..].as_ptr() as *const ObjectId12) }
   }
 
   #[allow(clippy::identity_op)]
-  pub fn set_id(&mut self, x: &super::ObjectId12) {
+  pub fn set_id(&mut self, x: &ObjectId12) {
     self.0[0..0 + 12].copy_from_slice(&x.0)
   }
 
 }
 
+pub enum ChunkRefOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ChunkRef<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ChunkRef<'a> {
+  type Inner = ChunkRef<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> ChunkRef<'a> {
+  pub const VT_INDEX: flatbuffers::VOffsetT = 4;
+  pub const VT_INLINE: flatbuffers::VOffsetT = 6;
+  pub const VT_OFFSET: flatbuffers::VOffsetT = 8;
+  pub const VT_LENGTH: flatbuffers::VOffsetT = 10;
+  pub const VT_CHUNK_ID: flatbuffers::VOffsetT = 12;
+  pub const VT_LOCATION: flatbuffers::VOffsetT = 14;
+  pub const VT_CHECKSUM_ETAG: flatbuffers::VOffsetT = 16;
+  pub const VT_CHECKSUM_LAST_MODIFIED: flatbuffers::VOffsetT = 18;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ChunkRef { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ChunkRefArgs<'args>
+  ) -> flatbuffers::WIPOffset<ChunkRef<'bldr>> {
+    let mut builder = ChunkRefBuilder::new(_fbb);
+    builder.add_length(args.length);
+    builder.add_offset(args.offset);
+    builder.add_checksum_last_modified(args.checksum_last_modified);
+    if let Some(x) = args.checksum_etag { builder.add_checksum_etag(x); }
+    if let Some(x) = args.location { builder.add_location(x); }
+    if let Some(x) = args.chunk_id { builder.add_chunk_id(x); }
+    if let Some(x) = args.inline { builder.add_inline(x); }
+    if let Some(x) = args.index { builder.add_index(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn index(&self) -> flatbuffers::Vector<'a, u32> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(ChunkRef::VT_INDEX, None).unwrap()}
+  }
+  #[inline]
+  pub fn inline(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(ChunkRef::VT_INLINE, None)}
+  }
+  #[inline]
+  pub fn offset(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(ChunkRef::VT_OFFSET, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn length(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(ChunkRef::VT_LENGTH, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn chunk_id(&self) -> Option<&'a ObjectId12> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ObjectId12>(ChunkRef::VT_CHUNK_ID, None)}
+  }
+  #[inline]
+  pub fn location(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ChunkRef::VT_LOCATION, None)}
+  }
+  #[inline]
+  pub fn checksum_etag(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ChunkRef::VT_CHECKSUM_ETAG, None)}
+  }
+  #[inline]
+  pub fn checksum_last_modified(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(ChunkRef::VT_CHECKSUM_LAST_MODIFIED, Some(0)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for ChunkRef<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("index", Self::VT_INDEX, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("inline", Self::VT_INLINE, false)?
+     .visit_field::<u64>("offset", Self::VT_OFFSET, false)?
+     .visit_field::<u64>("length", Self::VT_LENGTH, false)?
+     .visit_field::<ObjectId12>("chunk_id", Self::VT_CHUNK_ID, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("checksum_etag", Self::VT_CHECKSUM_ETAG, false)?
+     .visit_field::<u32>("checksum_last_modified", Self::VT_CHECKSUM_LAST_MODIFIED, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ChunkRefArgs<'a> {
+    pub index: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
+    pub inline: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    pub offset: u64,
+    pub length: u64,
+    pub chunk_id: Option<&'a ObjectId12>,
+    pub location: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub checksum_etag: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub checksum_last_modified: u32,
+}
+impl<'a> Default for ChunkRefArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ChunkRefArgs {
+      index: None, // required field
+      inline: None,
+      offset: 0,
+      length: 0,
+      chunk_id: None,
+      location: None,
+      checksum_etag: None,
+      checksum_last_modified: 0,
+    }
+  }
+}
+
+pub struct ChunkRefBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ChunkRefBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_index(&mut self, index: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u32>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_INDEX, index);
+  }
+  #[inline]
+  pub fn add_inline(&mut self, inline: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_INLINE, inline);
+  }
+  #[inline]
+  pub fn add_offset(&mut self, offset: u64) {
+    self.fbb_.push_slot::<u64>(ChunkRef::VT_OFFSET, offset, 0);
+  }
+  #[inline]
+  pub fn add_length(&mut self, length: u64) {
+    self.fbb_.push_slot::<u64>(ChunkRef::VT_LENGTH, length, 0);
+  }
+  #[inline]
+  pub fn add_chunk_id(&mut self, chunk_id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(ChunkRef::VT_CHUNK_ID, chunk_id);
+  }
+  #[inline]
+  pub fn add_location(&mut self, location: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_LOCATION, location);
+  }
+  #[inline]
+  pub fn add_checksum_etag(&mut self, checksum_etag: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_CHECKSUM_ETAG, checksum_etag);
+  }
+  #[inline]
+  pub fn add_checksum_last_modified(&mut self, checksum_last_modified: u32) {
+    self.fbb_.push_slot::<u32>(ChunkRef::VT_CHECKSUM_LAST_MODIFIED, checksum_last_modified, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ChunkRefBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ChunkRefBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ChunkRef<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, ChunkRef::VT_INDEX,"index");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ChunkRef<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ChunkRef");
+      ds.field("index", &self.index());
+      ds.field("inline", &self.inline());
+      ds.field("offset", &self.offset());
+      ds.field("length", &self.length());
+      ds.field("chunk_id", &self.chunk_id());
+      ds.field("location", &self.location());
+      ds.field("checksum_etag", &self.checksum_etag());
+      ds.field("checksum_last_modified", &self.checksum_last_modified());
+      ds.finish()
+  }
+}
+pub enum ArrayManifestOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ArrayManifest<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ArrayManifest<'a> {
+  type Inner = ArrayManifest<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> ArrayManifest<'a> {
+  pub const VT_NODE_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_REFS: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ArrayManifest { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ArrayManifestArgs<'args>
+  ) -> flatbuffers::WIPOffset<ArrayManifest<'bldr>> {
+    let mut builder = ArrayManifestBuilder::new(_fbb);
+    if let Some(x) = args.refs { builder.add_refs(x); }
+    if let Some(x) = args.node_id { builder.add_node_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn node_id(&self) -> &'a ObjectId8 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ObjectId8>(ArrayManifest::VT_NODE_ID, None).unwrap()}
+  }
+  #[inline]
+  pub fn refs(&self) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkRef<'a>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkRef>>>>(ArrayManifest::VT_REFS, None).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for ArrayManifest<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<ObjectId8>("node_id", Self::VT_NODE_ID, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ChunkRef>>>>("refs", Self::VT_REFS, true)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ArrayManifestArgs<'a> {
+    pub node_id: Option<&'a ObjectId8>,
+    pub refs: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkRef<'a>>>>>,
+}
+impl<'a> Default for ArrayManifestArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ArrayManifestArgs {
+      node_id: None, // required field
+      refs: None, // required field
+    }
+  }
+}
+
+pub struct ArrayManifestBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ArrayManifestBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_node_id(&mut self, node_id: &ObjectId8) {
+    self.fbb_.push_slot_always::<&ObjectId8>(ArrayManifest::VT_NODE_ID, node_id);
+  }
+  #[inline]
+  pub fn add_refs(&mut self, refs: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<ChunkRef<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ArrayManifest::VT_REFS, refs);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ArrayManifestBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ArrayManifestBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ArrayManifest<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, ArrayManifest::VT_NODE_ID,"node_id");
+    self.fbb_.required(o, ArrayManifest::VT_REFS,"refs");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ArrayManifest<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ArrayManifest");
+      ds.field("node_id", &self.node_id());
+      ds.field("refs", &self.refs());
+      ds.finish()
+  }
+}
+pub enum ManifestOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Manifest<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Manifest<'a> {
+  type Inner = Manifest<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> Manifest<'a> {
+  pub const VT_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_ARRAYS: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Manifest { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ManifestArgs<'args>
+  ) -> flatbuffers::WIPOffset<Manifest<'bldr>> {
+    let mut builder = ManifestBuilder::new(_fbb);
+    if let Some(x) = args.arrays { builder.add_arrays(x); }
+    if let Some(x) = args.id { builder.add_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn id(&self) -> &'a ObjectId12 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ObjectId12>(Manifest::VT_ID, None).unwrap()}
+  }
+  #[inline]
+  pub fn arrays(&self) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayManifest<'a>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayManifest>>>>(Manifest::VT_ARRAYS, None).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for Manifest<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayManifest>>>>("arrays", Self::VT_ARRAYS, true)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ManifestArgs<'a> {
+    pub id: Option<&'a ObjectId12>,
+    pub arrays: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayManifest<'a>>>>>,
+}
+impl<'a> Default for ManifestArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ManifestArgs {
+      id: None, // required field
+      arrays: None, // required field
+    }
+  }
+}
+
+pub struct ManifestBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_id(&mut self, id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(Manifest::VT_ID, id);
+  }
+  #[inline]
+  pub fn add_arrays(&mut self, arrays: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<ArrayManifest<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Manifest::VT_ARRAYS, arrays);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ManifestBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ManifestBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Manifest<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, Manifest::VT_ID,"id");
+    self.fbb_.required(o, Manifest::VT_ARRAYS,"arrays");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Manifest<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Manifest");
+      ds.field("id", &self.id());
+      ds.field("arrays", &self.arrays());
+      ds.finish()
+  }
+}
 pub enum MetadataItemOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -576,11 +1185,11 @@ impl<'a> UserAttributesRef<'a> {
 
 
   #[inline]
-  pub fn object_id(&self) -> &'a super::ObjectId12 {
+  pub fn object_id(&self) -> &'a ObjectId12 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::ObjectId12>(UserAttributesRef::VT_OBJECT_ID, None).unwrap()}
+    unsafe { self._tab.get::<ObjectId12>(UserAttributesRef::VT_OBJECT_ID, None).unwrap()}
   }
   #[inline]
   pub fn location(&self) -> u32 {
@@ -598,14 +1207,14 @@ impl flatbuffers::Verifiable for UserAttributesRef<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<super::ObjectId12>("object_id", Self::VT_OBJECT_ID, true)?
+     .visit_field::<ObjectId12>("object_id", Self::VT_OBJECT_ID, true)?
      .visit_field::<u32>("location", Self::VT_LOCATION, false)?
      .finish();
     Ok(())
   }
 }
 pub struct UserAttributesRefArgs<'a> {
-    pub object_id: Option<&'a super::ObjectId12>,
+    pub object_id: Option<&'a ObjectId12>,
     pub location: u32,
 }
 impl<'a> Default for UserAttributesRefArgs<'a> {
@@ -624,8 +1233,8 @@ pub struct UserAttributesRefBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> 
 }
 impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> UserAttributesRefBuilder<'a, 'b, A> {
   #[inline]
-  pub fn add_object_id(&mut self, object_id: &super::ObjectId12) {
-    self.fbb_.push_slot_always::<&super::ObjectId12>(UserAttributesRef::VT_OBJECT_ID, object_id);
+  pub fn add_object_id(&mut self, object_id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(UserAttributesRef::VT_OBJECT_ID, object_id);
   }
   #[inline]
   pub fn add_location(&mut self, location: u32) {
@@ -791,11 +1400,11 @@ impl<'a> ManifestRef<'a> {
 
 
   #[inline]
-  pub fn object_id(&self) -> &'a super::ObjectId12 {
+  pub fn object_id(&self) -> &'a ObjectId12 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::ObjectId12>(ManifestRef::VT_OBJECT_ID, None).unwrap()}
+    unsafe { self._tab.get::<ObjectId12>(ManifestRef::VT_OBJECT_ID, None).unwrap()}
   }
   #[inline]
   pub fn extents_from(&self) -> flatbuffers::Vector<'a, u32> {
@@ -820,7 +1429,7 @@ impl flatbuffers::Verifiable for ManifestRef<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<super::ObjectId12>("object_id", Self::VT_OBJECT_ID, true)?
+     .visit_field::<ObjectId12>("object_id", Self::VT_OBJECT_ID, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("extents_from", Self::VT_EXTENTS_FROM, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("extents_to", Self::VT_EXTENTS_TO, true)?
      .finish();
@@ -828,7 +1437,7 @@ impl flatbuffers::Verifiable for ManifestRef<'_> {
   }
 }
 pub struct ManifestRefArgs<'a> {
-    pub object_id: Option<&'a super::ObjectId12>,
+    pub object_id: Option<&'a ObjectId12>,
     pub extents_from: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
     pub extents_to: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
 }
@@ -849,8 +1458,8 @@ pub struct ManifestRefBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
 }
 impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestRefBuilder<'a, 'b, A> {
   #[inline]
-  pub fn add_object_id(&mut self, object_id: &super::ObjectId12) {
-    self.fbb_.push_slot_always::<&super::ObjectId12>(ManifestRef::VT_OBJECT_ID, object_id);
+  pub fn add_object_id(&mut self, object_id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(ManifestRef::VT_OBJECT_ID, object_id);
   }
   #[inline]
   pub fn add_extents_from(&mut self, extents_from: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u32>>) {
@@ -1126,11 +1735,11 @@ impl<'a> NodeSnapshot<'a> {
 
 
   #[inline]
-  pub fn id(&self) -> &'a super::ObjectId8 {
+  pub fn id(&self) -> &'a ObjectId8 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::ObjectId8>(NodeSnapshot::VT_ID, None).unwrap()}
+    unsafe { self._tab.get::<ObjectId8>(NodeSnapshot::VT_ID, None).unwrap()}
   }
   #[inline]
   pub fn path(&self) -> &'a str {
@@ -1232,7 +1841,7 @@ impl flatbuffers::Verifiable for NodeSnapshot<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<super::ObjectId8>("id", Self::VT_ID, true)?
+     .visit_field::<ObjectId8>("id", Self::VT_ID, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("path", Self::VT_PATH, true)?
      .visit_union::<UserAttributesSnapshot, _>("user_attributes_type", Self::VT_USER_ATTRIBUTES_TYPE, "user_attributes", Self::VT_USER_ATTRIBUTES, true, |key, v, pos| {
         match key {
@@ -1253,7 +1862,7 @@ impl flatbuffers::Verifiable for NodeSnapshot<'_> {
   }
 }
 pub struct NodeSnapshotArgs<'a> {
-    pub id: Option<&'a super::ObjectId8>,
+    pub id: Option<&'a ObjectId8>,
     pub path: Option<flatbuffers::WIPOffset<&'a str>>,
     pub user_attributes_type: UserAttributesSnapshot,
     pub user_attributes: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
@@ -1280,8 +1889,8 @@ pub struct NodeSnapshotBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
 }
 impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> NodeSnapshotBuilder<'a, 'b, A> {
   #[inline]
-  pub fn add_id(&mut self, id: &super::ObjectId8) {
-    self.fbb_.push_slot_always::<&super::ObjectId8>(NodeSnapshot::VT_ID, id);
+  pub fn add_id(&mut self, id: &ObjectId8) {
+    self.fbb_.push_slot_always::<&ObjectId8>(NodeSnapshot::VT_ID, id);
   }
   #[inline]
   pub fn add_path(&mut self, path: flatbuffers::WIPOffset<&'b  str>) {
@@ -1418,18 +2027,18 @@ impl<'a> Snapshot<'a> {
 
 
   #[inline]
-  pub fn id(&self) -> &'a super::ObjectId12 {
+  pub fn id(&self) -> &'a ObjectId12 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::ObjectId12>(Snapshot::VT_ID, None).unwrap()}
+    unsafe { self._tab.get::<ObjectId12>(Snapshot::VT_ID, None).unwrap()}
   }
   #[inline]
-  pub fn parent_id(&self) -> Option<&'a super::ObjectId12> {
+  pub fn parent_id(&self) -> Option<&'a ObjectId12> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::ObjectId12>(Snapshot::VT_PARENT_ID, None)}
+    unsafe { self._tab.get::<ObjectId12>(Snapshot::VT_PARENT_ID, None)}
   }
   #[inline]
   pub fn flushed_at(&self) -> u64 {
@@ -1475,8 +2084,8 @@ impl flatbuffers::Verifiable for Snapshot<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<super::ObjectId12>("id", Self::VT_ID, true)?
-     .visit_field::<super::ObjectId12>("parent_id", Self::VT_PARENT_ID, false)?
+     .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+     .visit_field::<ObjectId12>("parent_id", Self::VT_PARENT_ID, false)?
      .visit_field::<u64>("flushed_at", Self::VT_FLUSHED_AT, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("message", Self::VT_MESSAGE, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>>>("metadata", Self::VT_METADATA, true)?
@@ -1487,8 +2096,8 @@ impl flatbuffers::Verifiable for Snapshot<'_> {
   }
 }
 pub struct SnapshotArgs<'a> {
-    pub id: Option<&'a super::ObjectId12>,
-    pub parent_id: Option<&'a super::ObjectId12>,
+    pub id: Option<&'a ObjectId12>,
+    pub parent_id: Option<&'a ObjectId12>,
     pub flushed_at: u64,
     pub message: Option<flatbuffers::WIPOffset<&'a str>>,
     pub metadata: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>>>,
@@ -1516,12 +2125,12 @@ pub struct SnapshotBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
 }
 impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> SnapshotBuilder<'a, 'b, A> {
   #[inline]
-  pub fn add_id(&mut self, id: &super::ObjectId12) {
-    self.fbb_.push_slot_always::<&super::ObjectId12>(Snapshot::VT_ID, id);
+  pub fn add_id(&mut self, id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(Snapshot::VT_ID, id);
   }
   #[inline]
-  pub fn add_parent_id(&mut self, parent_id: &super::ObjectId12) {
-    self.fbb_.push_slot_always::<&super::ObjectId12>(Snapshot::VT_PARENT_ID, parent_id);
+  pub fn add_parent_id(&mut self, parent_id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(Snapshot::VT_PARENT_ID, parent_id);
   }
   #[inline]
   pub fn add_flushed_at(&mut self, flushed_at: u64) {
@@ -1576,76 +2185,5 @@ impl core::fmt::Debug for Snapshot<'_> {
       ds.finish()
   }
 }
-#[inline]
-/// Verifies that a buffer of bytes contains a `Snapshot`
-/// and returns it.
-/// Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `root_as_snapshot_unchecked`.
-pub fn root_as_snapshot(buf: &[u8]) -> Result<Snapshot, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::root::<Snapshot>(buf)
-}
-#[inline]
-/// Verifies that a buffer of bytes contains a size prefixed
-/// `Snapshot` and returns it.
-/// Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `size_prefixed_root_as_snapshot_unchecked`.
-pub fn size_prefixed_root_as_snapshot(buf: &[u8]) -> Result<Snapshot, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::size_prefixed_root::<Snapshot>(buf)
-}
-#[inline]
-/// Verifies, with the given options, that a buffer of bytes
-/// contains a `Snapshot` and returns it.
-/// Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `root_as_snapshot_unchecked`.
-pub fn root_as_snapshot_with_opts<'b, 'o>(
-  opts: &'o flatbuffers::VerifierOptions,
-  buf: &'b [u8],
-) -> Result<Snapshot<'b>, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::root_with_opts::<Snapshot<'b>>(opts, buf)
-}
-#[inline]
-/// Verifies, with the given verifier options, that a buffer of
-/// bytes contains a size prefixed `Snapshot` and returns
-/// it. Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `root_as_snapshot_unchecked`.
-pub fn size_prefixed_root_as_snapshot_with_opts<'b, 'o>(
-  opts: &'o flatbuffers::VerifierOptions,
-  buf: &'b [u8],
-) -> Result<Snapshot<'b>, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::size_prefixed_root_with_opts::<Snapshot<'b>>(opts, buf)
-}
-#[inline]
-/// Assumes, without verification, that a buffer of bytes contains a Snapshot and returns it.
-/// # Safety
-/// Callers must trust the given bytes do indeed contain a valid `Snapshot`.
-pub unsafe fn root_as_snapshot_unchecked(buf: &[u8]) -> Snapshot {
-  flatbuffers::root_unchecked::<Snapshot>(buf)
-}
-#[inline]
-/// Assumes, without verification, that a buffer of bytes contains a size prefixed Snapshot and returns it.
-/// # Safety
-/// Callers must trust the given bytes do indeed contain a valid size prefixed `Snapshot`.
-pub unsafe fn size_prefixed_root_as_snapshot_unchecked(buf: &[u8]) -> Snapshot {
-  flatbuffers::size_prefixed_root_unchecked::<Snapshot>(buf)
-}
-#[inline]
-pub fn finish_snapshot_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
-    fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-    root: flatbuffers::WIPOffset<Snapshot<'a>>) {
-  fbb.finish(root, None);
-}
-
-#[inline]
-pub fn finish_size_prefixed_snapshot_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>, root: flatbuffers::WIPOffset<Snapshot<'a>>) {
-  fbb.finish_size_prefixed(root, None);
-}
-}  // pub mod generated
+}  // pub mod gen
 

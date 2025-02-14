@@ -4,7 +4,7 @@ use std::{
     mem::take,
 };
 
-use itertools::Either;
+use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -302,12 +302,12 @@ impl ChangeSet {
         Ok(rmp_serde::from_slice(bytes)?)
     }
 
-    pub fn update_existing_chunks<'a>(
+    pub fn update_existing_chunks<'a, E>(
         &'a self,
         node: NodeId,
-        chunks: impl Iterator<Item = ChunkInfo> + 'a,
-    ) -> impl Iterator<Item = ChunkInfo> + 'a {
-        chunks.filter_map(move |chunk| match self.get_chunk_ref(&node, &chunk.coord) {
+        chunks: impl Iterator<Item = Result<ChunkInfo, E>> + 'a,
+    ) -> impl Iterator<Item = Result<ChunkInfo, E>> + 'a {
+        chunks.filter_map_ok(move |chunk| match self.get_chunk_ref(&node, &chunk.coord) {
             None => Some(chunk),
             Some(new_payload) => {
                 new_payload.clone().map(|pl| ChunkInfo { payload: pl, ..chunk })

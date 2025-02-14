@@ -1,0 +1,6 @@
+include "object_ids.fbs";
+include "manifest.fbs";
+include "snapshot.fbs";
+
+// run this command in the directory icechunk/flatbuffers
+// flatc --rust -o ../src/format/flatbuffers/ --gen-all all.fbs

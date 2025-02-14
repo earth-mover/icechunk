@@ -1,6 +1,6 @@
-include "objects.fbs";
+include "object_ids.fbs";
 
-namespace generated;
+namespace gen;
 
 table MetadataItem {
   name: string (required);

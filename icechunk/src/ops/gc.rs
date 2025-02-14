@@ -199,8 +199,15 @@ pub async fn garbage_collect(
                     .await?;
                 let chunk_ids =
                     manifest.chunk_payloads().filter_map(|payload| match payload {
-                        ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
-                        _ => None,
+                        Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                        Ok(_) => None,
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "Error in chunk payload iterator"
+                            );
+                            None
+                        }
                     });
                 keep_chunks.extend(chunk_ids);
             }

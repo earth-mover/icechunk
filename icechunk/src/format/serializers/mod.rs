@@ -43,13 +43,13 @@
 use std::io::{Read, Write};
 
 use current::{
-    ManifestDeserializer, ManifestSerializer, SnapshotDeserializer, SnapshotSerializer,
-    TransactionLogDeserializer, TransactionLogSerializer,
+    SnapshotDeserializer, SnapshotSerializer, TransactionLogDeserializer,
+    TransactionLogSerializer,
 };
 
 use super::{
     format_constants::SpecVersionBin, manifest::Manifest, snapshot::Snapshot,
-    transaction_log::TransactionLog,
+    transaction_log::TransactionLog, IcechunkFormatError,
 };
 
 pub mod current;
@@ -111,12 +111,14 @@ pub fn deserialize_snapshot(
 pub fn deserialize_manifest(
     version: SpecVersionBin,
     mut read: Box<dyn Read>,
-) -> Result<Manifest, rmp_serde::decode::Error> {
+) -> Result<Manifest, IcechunkFormatError> {
     match version {
         SpecVersionBin::V0dot1 => {
-            Ok(Manifest::from_read(read.as_mut()))
-            //  let deserializer: ManifestDeserializer = rmp_serde::from_read(read)?;
-            //Ok(deserializer.into())
+            // TODO: what's a good capacity?
+            let mut buffer = Vec::with_capacity(1024 * 1024);
+            read.read_to_end(&mut buffer)?;
+            buffer.shrink_to_fit();
+            Manifest::from_buffer(buffer)
         }
     }
 }
