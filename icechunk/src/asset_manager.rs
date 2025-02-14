@@ -477,9 +477,7 @@ async fn fetch_manifest(
         let _entered = span.entered();
         let (spec_version, decompressor) =
             check_and_get_decompressor(reader, FileTypeBin::Manifest)?;
-        deserialize_manifest(spec_version, decompressor).map_err(|err| {
-            RepositoryError::from(RepositoryErrorKind::DeserializationError(err))
-        })
+        deserialize_manifest(spec_version, decompressor).map_err(RepositoryError::from)
     })
     .await?
     .map(Arc::new)
@@ -677,7 +675,7 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
-    use itertools::Itertools;
+    use itertools::{assert_equal, Itertools};
 
     use super::*;
     use crate::{
@@ -728,9 +726,9 @@ mod test {
 
         let fetched = caching.fetch_manifest(id, size).await?;
         assert_eq!(fetched.len(), 1);
-        assert_eq!(
-            fetched.iter(node1.clone()).collect::<Vec<_>>(),
-            vec![(ci2.coord.clone(), ci2.payload.clone())]
+        assert_equal(
+            fetched.iter(node2.clone()).map(|x| x.unwrap()),
+            [(ci2.coord.clone(), ci2.payload.clone())],
         );
 
         // fetch again

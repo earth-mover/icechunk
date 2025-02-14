@@ -1,17 +1,16 @@
-use std::{convert::Infallible, io::Read, ops::Range, sync::Arc, time::Instant};
+use std::{borrow::Cow, convert::Infallible, ops::Range, sync::Arc};
 
+use crate::format::flatbuffers::gen;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::{Either, Itertools};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     error::ICError,
-    format::{
-        manifest_generated::generated, IcechunkFormatError, IcechunkFormatErrorKind,
-    },
+    format::{IcechunkFormatError, IcechunkFormatErrorKind},
     storage::ETag,
 };
 
@@ -141,7 +140,6 @@ pub struct ChunkInfo {
 #[derive(Debug)]
 pub struct Manifest {
     buffer: Vec<u8>,
-    offset: usize,
     len: usize,
     id: ManifestId,
 }
@@ -152,34 +150,32 @@ impl Manifest {
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.buffer.as_slice()[self.offset..]
+        self.buffer.as_slice()
     }
 
-    pub fn from_read(read: &mut dyn Read) -> Manifest {
-        // FIXME
-        let mut buffer = Vec::with_capacity(1024 * 1024);
-        read.read_to_end(&mut buffer).unwrap();
-        let manifest = flatbuffers::root_with_opts::<generated::Manifest>(
+    pub fn from_buffer(buffer: Vec<u8>) -> Result<Manifest, IcechunkFormatError> {
+        let manifest = flatbuffers::root_with_opts::<gen::Manifest>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )
-        .unwrap();
+        )?;
         let id = ManifestId::new(manifest.id().0);
-        // FIXME: first array
-        let len = manifest.arrays().get(0).refs().len();
-        Manifest { buffer, offset: 0, id, len }
+        let len = manifest.arrays().iter().map(|am| am.refs().len()).sum();
+        Ok(Manifest { buffer, len, id })
     }
 
     pub async fn from_stream<E>(
         stream: impl Stream<Item = Result<ChunkInfo, E>>,
     ) -> Result<Option<Self>, E> {
-        // TODO: capacity
-        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4096);
+        // TODO: what's a good capacity?
+        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
 
-        // FIXME: do somewhere else
+        // FIXME: should we sort here or can we sort outside?
         let mut all = stream.try_collect::<Vec<_>>().await?;
 
-        all.sort_by(|a, b| (a.coord).cmp(&b.coord));
+        all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
+        //let all = all.into_iter().peekable();
+
+        //all.into_iter().into_group_map_by(|chunk| &chunk.node);
 
         // FIXME: more than one node id
         let mut node_id = None;
@@ -196,26 +192,27 @@ impl Manifest {
             return Ok(None);
         }
 
-        let node_id = Some(generated::ObjectId8::new(&node_id.unwrap().0));
+        let node_id = Some(gen::ObjectId8::new(&node_id.unwrap().0));
         let refs = Some(builder.create_vector(refs_vec.as_slice()));
-        let array_manifest = generated::ArrayManifest::create(
+        let array_manifest = gen::ArrayManifest::create(
             &mut builder,
-            &generated::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
+            &gen::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
         );
         let arrays = builder.create_vector(&[array_manifest]);
 
         let manifest_id = ManifestId::random();
-        let bin_manifest_id = generated::ObjectId12::new(&manifest_id.0);
+        let bin_manifest_id = gen::ObjectId12::new(&manifest_id.0);
 
-        let manifest = generated::Manifest::create(
+        let manifest = gen::Manifest::create(
             &mut builder,
-            &generated::ManifestArgs { id: Some(&bin_manifest_id), arrays: Some(arrays) },
+            &gen::ManifestArgs { id: Some(&bin_manifest_id), arrays: Some(arrays) },
         );
 
         builder.finish(manifest, Some("Ichk"));
-        let (buffer, offset) = builder.collapse();
-
-        Ok(Some(Manifest { buffer, offset, len: refs_vec.len(), id: manifest_id }))
+        let (mut buffer, offset) = builder.collapse();
+        buffer.drain(0..offset);
+        buffer.shrink_to_fit();
+        Ok(Some(Manifest { buffer, len: refs_vec.len(), id: manifest_id }))
     }
 
     /// Used for tests
@@ -234,40 +231,10 @@ impl Manifest {
         self.len() == 0
     }
 
-    fn root(&self) -> IcechunkResult<generated::Manifest> {
-        let res = unsafe {
-            flatbuffers::root_unchecked::<generated::Manifest>(
-                &self.buffer[self.offset..],
-            )
-        };
-
-        //            ::<generated::Manifest>(
-        //            &ROOT_OPTIONS,
-        //            &self.buffer[self.offset..],
-        //        )
-        //        .unwrap();
-        Ok(res)
-    }
-
-    fn lookup_node<'a>(
-        &self,
-        manifest: generated::Manifest<'a>,
-        node: &NodeId,
-    ) -> Option<generated::ArrayManifest<'a>> {
-        manifest.arrays().lookup_by_key(node.0, |am, id| am.node_id().0.cmp(id))
-    }
-
-    fn lookup_ref<'a>(
-        &self,
-        array_manifest: generated::ArrayManifest<'a>,
-        coord: &ChunkIndices,
-    ) -> Option<generated::ChunkRef<'a>> {
-        let res = array_manifest.refs().lookup_by_key(&coord.0, |chunk_ref, coords| {
-            // FIXME: we should be able to compare without building vecs
-            let this = chunk_ref.index().iter().collect::<Vec<_>>();
-            (&this).cmp(*coords)
-        });
-        res
+    fn root(&self) -> gen::Manifest {
+        // without the unsafe version this is too slow
+        // if we try to keep the root in the Manifest struct, we would need a lifetime
+        unsafe { flatbuffers::root_unchecked::<gen::Manifest>(&self.buffer) }
     }
 
     pub fn get_chunk_payload(
@@ -275,10 +242,9 @@ impl Manifest {
         node: &NodeId,
         coord: &ChunkIndices,
     ) -> IcechunkResult<ChunkPayload> {
-        let manifest = self.root()?;
-        let chunk_ref = self
-            .lookup_node(manifest, node)
-            .and_then(|array_manifest| self.lookup_ref(array_manifest, coord))
+        let manifest = self.root();
+        let chunk_ref = lookup_node(manifest, node)
+            .and_then(|array_manifest| lookup_ref(array_manifest, coord))
             .ok_or_else(|| {
                 IcechunkFormatError::from(
                     IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
@@ -286,84 +252,110 @@ impl Manifest {
                     },
                 )
             })?;
-        //let payload = chunk_ref.payload();
-        let res = ref_to_payload(chunk_ref);
-        res
+        ref_to_payload(chunk_ref)
     }
 
     pub fn iter(
         self: Arc<Self>,
         node: NodeId,
-    ) -> impl Iterator<Item = (ChunkIndices, ChunkPayload)> {
-        PayloadIterator::new(self)
+    ) -> impl Iterator<Item = Result<(ChunkIndices, ChunkPayload), IcechunkFormatError>>
+    {
+        PayloadIterator::new(self, node)
     }
 
-    pub fn chunk_payloads(self: Arc<Self>) -> impl Iterator<Item = ChunkPayload> {
-        // FIXME: should go over all nodes
-        self.iter(NodeId::random()).map(|(_, p)| p)
+    pub fn chunk_payloads(
+        &self,
+    ) -> impl Iterator<Item = Result<ChunkPayload, IcechunkFormatError>> + '_ {
+        self.root().arrays().iter().flat_map(move |array_manifest| {
+            array_manifest.refs().iter().map(|r| ref_to_payload(r))
+        })
     }
+}
+
+fn lookup_node<'a>(
+    manifest: gen::Manifest<'a>,
+    node: &NodeId,
+) -> Option<gen::ArrayManifest<'a>> {
+    manifest.arrays().lookup_by_key(node.0, |am, id| am.node_id().0.cmp(id))
+}
+
+fn lookup_ref<'a>(
+    array_manifest: gen::ArrayManifest<'a>,
+    coord: &ChunkIndices,
+) -> Option<gen::ChunkRef<'a>> {
+    let res =
+        array_manifest.refs().lookup_by_key(coord.0.as_slice(), |chunk_ref, coords| {
+            chunk_ref.index().iter().cmp(coords.iter().copied())
+        });
+    res
 }
 
 struct PayloadIterator {
     manifest: Arc<Manifest>,
+    node_id: NodeId,
     last_ref_index: usize,
 }
 
 impl PayloadIterator {
-    fn new(manifest: Arc<Manifest>) -> Self {
-        Self { manifest, last_ref_index: 0 }
+    fn new(manifest: Arc<Manifest>, node_id: NodeId) -> Self {
+        Self { manifest, node_id, last_ref_index: 0 }
     }
 }
 
 impl Iterator for PayloadIterator {
-    type Item = (ChunkIndices, ChunkPayload);
+    type Item = Result<(ChunkIndices, ChunkPayload), IcechunkFormatError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let manifest = flatbuffers::root_with_opts::<generated::Manifest>(
-            &ROOT_OPTIONS,
-            &self.manifest.buffer[self.manifest.offset..],
-        )
-        .unwrap();
-        if manifest.arrays().is_empty() {
-            return None;
-        }
-        // FIXME: only one array
-        let array_man = manifest.arrays().get(0);
-        if self.last_ref_index >= array_man.refs().len() {
-            return None;
-        }
+        let manifest = self.manifest.root();
+        lookup_node(manifest, &self.node_id).and_then(|array_manifest| {
+            let refs = array_manifest.refs();
+            if self.last_ref_index >= refs.len() {
+                return None;
+            }
 
-        let chunk_ref = array_man.refs().get(self.last_ref_index);
-        let payload = ref_to_payload(chunk_ref).unwrap();
-        let indices = ChunkIndices(chunk_ref.index().iter().collect());
-        self.last_ref_index += 1;
-        Some((indices, payload))
+            let chunk_ref = refs.get(self.last_ref_index);
+            self.last_ref_index += 1;
+            Some(
+                ref_to_payload(chunk_ref)
+                    .map(|payl| (ChunkIndices(chunk_ref.index().iter().collect()), payl)),
+            )
+        })
     }
 }
 
-fn ref_to_payload(payload: generated::ChunkRef<'_>) -> IcechunkResult<ChunkPayload> {
-    if let Some(chunk_id) = payload.chunk_id() {
+fn ref_to_payload(
+    chunk_ref: gen::ChunkRef<'_>,
+) -> Result<ChunkPayload, IcechunkFormatError> {
+    if let Some(chunk_id) = chunk_ref.chunk_id() {
         let id = ChunkId::new(chunk_id.0);
         Ok(ChunkPayload::Ref(ChunkRef {
             id,
-            offset: payload.offset(),
-            length: payload.length(),
+            offset: chunk_ref.offset(),
+            length: chunk_ref.length(),
         }))
-    } else if let Some(location) = payload.location() {
+    } else if let Some(location) = chunk_ref.location() {
+        let location = VirtualChunkLocation::from_absolute_path(location)?;
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path(location).unwrap(),
-            checksum: checksum(&payload),
-            offset: payload.offset(),
-            length: payload.length(),
+            location,
+            checksum: checksum(&chunk_ref),
+            offset: chunk_ref.offset(),
+            length: chunk_ref.length(),
         }))
-    } else if let Some(data) = payload.inline() {
+    } else if let Some(data) = chunk_ref.inline() {
         Ok(ChunkPayload::Inline(Bytes::copy_from_slice(data.bytes())))
     } else {
-        panic!("invalid flatbuffer")
+        Err(IcechunkFormatErrorKind::InvalidFlatBuffer(
+            flatbuffers::InvalidFlatbuffer::InconsistentUnion {
+                field: Cow::Borrowed("chunk_id+location+inline"),
+                field_type: Cow::Borrowed("invalid"),
+                error_trace: Default::default(),
+            },
+        )
+        .into())
     }
 }
 
-fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
+fn checksum(payload: &gen::ChunkRef<'_>) -> Option<Checksum> {
     if let Some(etag) = payload.checksum_etag() {
         Some(Checksum::ETag(etag.to_string()))
     } else if payload.checksum_last_modified() > 0 {
@@ -376,26 +368,17 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     chunk: ChunkInfo,
-) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
-    //                let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
-    //                generated::ChunkRef::create(
-    //                    &mut builder,
-    //                    &generated::ChunkRefArgs { index, payload },
-    //                )
-
+) -> flatbuffers::WIPOffset<gen::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
     match chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
-            let args = generated::ChunkRefArgs {
-                inline: Some(bytes),
-                index,
-                ..Default::default()
-            };
-            generated::ChunkRef::create(builder, &args)
+            let args =
+                gen::ChunkRefArgs { inline: Some(bytes), index, ..Default::default() };
+            gen::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Virtual(virtual_chunk_ref) => {
-            let args = generated::ChunkRefArgs {
+            let args = gen::ChunkRefArgs {
                 index,
                 location: Some(
                     builder.create_string(virtual_chunk_ref.location.0.as_str()),
@@ -420,18 +403,18 @@ fn mk_chunk_ref<'bldr>(
                 },
                 ..Default::default()
             };
-            generated::ChunkRef::create(builder, &args)
+            gen::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Ref(chunk_ref) => {
-            let id = generated::ObjectId12::new(&chunk_ref.id.0);
-            let args = generated::ChunkRefArgs {
+            let id = gen::ObjectId12::new(&chunk_ref.id.0);
+            let args = gen::ChunkRefArgs {
                 index,
                 offset: chunk_ref.offset,
                 length: chunk_ref.length,
                 chunk_id: Some(&id),
                 ..Default::default()
             };
-            generated::ChunkRef::create(builder, &args)
+            gen::ChunkRef::create(builder, &args)
         }
     }
 }

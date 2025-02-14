@@ -13,6 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -1082,10 +1083,10 @@ async fn verified_node_chunk_iterator<'a>(
                                     Ok(manifest) => {
                                         let old_chunks = manifest
                                             .iter(node_id_c.clone())
-                                            .filter(move |(coord, _)| {
+                                            .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
-                                            .map(move |(coord, payload)| ChunkInfo {
+                                            .map_ok(move |(coord, payload)| ChunkInfo {
                                                 node: node_id_c2.clone(),
                                                 coord,
                                                 payload,
@@ -1096,7 +1097,8 @@ async fn verified_node_chunk_iterator<'a>(
                                                 node_id_c3, old_chunks,
                                             );
                                         futures::future::Either::Left(
-                                            futures::stream::iter(old_chunks.map(Ok)),
+                                            futures::stream::iter(old_chunks)
+                                                .map_err(|e| e.into()),
                                         )
                                     }
                                     // if we cannot even fetch the manifest, we generate a
