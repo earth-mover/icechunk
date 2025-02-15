@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde_yaml_ng as serde_yaml;
+use serde_yaml_ng;
 
 use crate::{
     cli::config::{
@@ -71,9 +71,9 @@ mod tests {
 
         let path = "default.yaml";
         let file = std::fs::File::create(path).unwrap();
-        serde_yaml::to_writer(file, &repos).unwrap();
+        serde_yaml_ng::to_writer(file, &repos).unwrap();
         let file = std::fs::File::open(path).unwrap();
-        let deserialized: Repositories = serde_yaml::from_reader(file).unwrap();
+        let deserialized: Repositories = serde_yaml_ng::from_reader(file).unwrap();
         assert_eq!(deserialized, repos);
     }
 }

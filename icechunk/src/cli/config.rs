@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use serde_yaml_ng as serde_yaml;
+use serde_yaml_ng;
 
 use crate::config::{ObjectStoreConfig, RepositoryConfig, S3StaticCredentials};
 
@@ -16,6 +16,19 @@ pub enum S3Credentials {
     Static(S3StaticCredentials),
 }
 
+impl From<S3Credentials> for crate::config::S3Credentials {
+    fn from(s3_credentials: S3Credentials) -> Self {
+        match s3_credentials {
+            S3Credentials::Anonymous => crate::config::S3Credentials::Anonymous,
+            S3Credentials::FromEnv => crate::config::S3Credentials::FromEnv,
+            S3Credentials::Static(credentials) => {
+                crate::config::S3Credentials::Static(credentials)
+            }
+        }
+    }
+}
+
+// TODO (Daniel): Add the rest of the fields
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Credentials {
     None,
@@ -28,6 +41,8 @@ pub struct RepoLocation {
     pub prefix: String,
 }
 
+// TODO (Daniel): Is there a way to restrict valid combinations (e.g. S3 with S3Credentials)?
+// TODO (Daniel): Have top-level object store type for easy matching?
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepositoryDefinition {
     // LocalFileSystem sets its root path in the object store config
@@ -53,22 +68,11 @@ pub struct Repositories {
     pub repos: HashMap<RepositoryAlias, RepositoryDefinition>,
 }
 
-// write a test
 #[cfg(test)]
 mod tests {
     use crate::config::S3Options;
 
     use super::*;
-
-    #[test]
-    fn test_repo_location() {
-        let location = RepoLocation {
-            bucket: "my-bucket".to_string(),
-            prefix: "my-prefix".to_string(),
-        };
-        assert_eq!(location.bucket, "my-bucket");
-        assert_eq!(location.prefix, "my-prefix");
-    }
 
     #[test]
     fn test_serialization() {
@@ -98,16 +102,16 @@ mod tests {
         repos.repos.insert(alias.clone(), repo_def);
 
         // Assert: serde round-trip
-        let serialized = serde_yaml::to_string(&repos).unwrap();
-        let deserialized: Repositories = serde_yaml::from_str(&serialized).unwrap();
+        let serialized = serde_yaml_ng::to_string(&repos).unwrap();
+        let deserialized: Repositories = serde_yaml_ng::from_str(&serialized).unwrap();
         assert_eq!(deserialized, repos);
 
         // Assert: file round-trip
         let path = "test.yaml";
         let file = std::fs::File::create(path).unwrap();
-        serde_yaml::to_writer(file, &repos).unwrap();
+        serde_yaml_ng::to_writer(file, &repos).unwrap();
         let file = std::fs::File::open(path).unwrap();
-        let deserialized: Repositories = serde_yaml::from_reader(file).unwrap();
+        let deserialized: Repositories = serde_yaml_ng::from_reader(file).unwrap();
         assert_eq!(deserialized, repos);
     }
 }

@@ -47,6 +47,7 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
             })?;
             Ok(())
         }),
+        // TODO (Daniel): Improve error handling & printout
         Err(e) => match e.kind() {
             ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
             | ErrorKind::MissingRequiredArgument => {

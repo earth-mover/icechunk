@@ -1,7 +1,7 @@
 use crate::repository::VersionInfo;
 use clap::{Args, Parser, Subcommand};
 use futures::stream::StreamExt;
-use serde_yaml_ng as serde_yaml;
+use serde_yaml_ng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,20 +50,8 @@ struct ListCommand {
 fn load_repositories() -> Result<Repositories> {
     let path = PathBuf::from("default.yaml");
     let file = std::fs::File::open(path)?;
-    let deserialized: Repositories = serde_yaml::from_reader(file)?;
+    let deserialized: Repositories = serde_yaml_ng::from_reader(file)?;
     Ok(deserialized)
-}
-
-impl From<S3Credentials> for crate::config::S3Credentials {
-    fn from(s3_credentials: S3Credentials) -> Self {
-        match s3_credentials {
-            S3Credentials::Anonymous => crate::config::S3Credentials::Anonymous,
-            S3Credentials::FromEnv => crate::config::S3Credentials::FromEnv,
-            S3Credentials::Static(credentials) => {
-                crate::config::S3Credentials::Static(credentials)
-            }
-        }
-    }
 }
 
 async fn get_storage(
