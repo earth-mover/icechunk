@@ -1,11 +1,8 @@
-use chrono::{DateTime, Utc};
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use serde_yaml_ng;
-
-use crate::config::{ObjectStoreConfig, RepositoryConfig, S3StaticCredentials};
+use crate::config::{RepositoryConfig, S3Options, S3StaticCredentials};
 
 // Redefine to remove the Refreshable field
 #[derive(Clone, Debug, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -28,28 +25,35 @@ impl From<S3Credentials> for crate::config::S3Credentials {
     }
 }
 
-// TODO (Daniel): Add the rest of the fields
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub enum Credentials {
-    None,
-    S3(S3Credentials),
-}
-
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoLocation {
     pub bucket: String,
     pub prefix: String,
 }
 
-// TODO (Daniel): Is there a way to restrict valid combinations (e.g. S3 with S3Credentials)?
-// TODO (Daniel): Have top-level object store type for easy matching?
+// TODO (Daniel): Add serde macros
+// TODO (Daniel): Add the rest of the object store types
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RepositoryDefinition {
-    // LocalFileSystem sets its root path in the object store config
-    pub location: Option<RepoLocation>,
-    pub object_store_config: ObjectStoreConfig,
-    pub credentials: Credentials,
-    pub config: RepositoryConfig,
+pub enum RepositoryDefinition {
+    LocalFileSystem {
+        path: PathBuf,
+        config: RepositoryConfig,
+    },
+    S3 {
+        location: RepoLocation,
+        object_store_config: S3Options,
+        credentials: S3Credentials,
+        config: RepositoryConfig,
+    },
+}
+
+impl RepositoryDefinition {
+    pub fn get_config(&self) -> &RepositoryConfig {
+        match self {
+            RepositoryDefinition::LocalFileSystem { config, .. } => config,
+            RepositoryDefinition::S3 { config, .. } => config,
+        }
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
@@ -70,26 +74,30 @@ pub struct Repositories {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
+    use serde_yaml_ng::{from_reader, to_writer};
+
     use crate::config::S3Options;
 
     use super::*;
 
     #[test]
     fn test_serialization() {
-        let location = Some(RepoLocation {
+        let location = RepoLocation {
             bucket: "my-bucket".to_string(),
             prefix: "my-prefix".to_string(),
-        });
-        let object_store_config = ObjectStoreConfig::S3(S3Options {
+        };
+        let object_store_config = S3Options {
             region: Some("us-west-2".to_string()),
             endpoint_url: None,
             anonymous: false,
             allow_http: false,
-        });
-        let credentials = Credentials::S3(S3Credentials::FromEnv);
+        };
+        let credentials = S3Credentials::FromEnv;
         let repo_config = RepositoryConfig::default();
 
-        let repo_def = RepositoryDefinition {
+        let repo_def = RepositoryDefinition::S3 {
             location,
             object_store_config,
             credentials,
@@ -108,10 +116,10 @@ mod tests {
 
         // Assert: file round-trip
         let path = "test.yaml";
-        let file = std::fs::File::create(path).unwrap();
-        serde_yaml_ng::to_writer(file, &repos).unwrap();
-        let file = std::fs::File::open(path).unwrap();
-        let deserialized: Repositories = serde_yaml_ng::from_reader(file).unwrap();
+        let file = File::create(path).unwrap();
+        to_writer(file, &repos).unwrap();
+        let file = File::open(path).unwrap();
+        let deserialized: Repositories = from_reader(file).unwrap();
         assert_eq!(deserialized, repos);
     }
 }

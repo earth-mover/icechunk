@@ -1,14 +1,6 @@
 repos:
-  s3repo:
-    location:
-      bucket: testbucket
-      prefix: testfolder/
-    object_store_config: !s3
-      region: eu-west-1
-      endpoint_url: null
-      anonymous: false
-      allow_http: false
-    credentials: !S3 FromEnv
+  localrepo: !LocalFileSystem
+    path: testfolder
     config:
       inline_chunk_threshold_bytes: null
       unsafe_overwrite_refs: null
@@ -18,10 +10,16 @@ repos:
       storage: null
       virtual_chunk_containers: null
       manifest: null
-  localrepo:
-    location: null
-    object_store_config: !local_file_system testfolder
-    credentials: None
+  s3repo: !S3
+    location:
+      bucket: testbucket
+      prefix: testfolder
+    object_store_config:
+      region: eu-west-1
+      endpoint_url: null
+      anonymous: false
+      allow_http: false
+    credentials: FromEnv
     config:
       inline_chunk_threshold_bytes: null
       unsafe_overwrite_refs: null
