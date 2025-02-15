@@ -8,6 +8,7 @@ mod streams;
 
 use std::env;
 
+use clap::error::ErrorKind;
 use clap::Parser;
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
@@ -46,7 +47,19 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
             })?;
             Ok(())
         }),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())),
+        Err(e) => match e.kind() {
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            | ErrorKind::MissingRequiredArgument => {
+                print!("{}", e);
+                return Ok(());
+            }
+            _ => {
+                println!("{:?}", e.kind());
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    e.to_string(),
+                ));
+            }
+        },
     }
 }
 
