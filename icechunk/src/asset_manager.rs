@@ -193,6 +193,8 @@ impl AssetManager {
         )
         .await?;
         let snapshot_id = snapshot.id().clone();
+        // This line is critical for expiration:
+        // When we edit snapshots in place, we need the cache to return the new version
         self.snapshot_cache.insert(snapshot_id, snapshot);
         Ok(())
     }
@@ -299,7 +301,7 @@ impl AssetManager {
         let stream = try_stream! {
             yield this.as_ref().into();
             while let Some(parent) = this.parent_id() {
-                let snap = self.fetch_snapshot(parent).await?;
+                let snap = self.fetch_snapshot(&parent).await?;
                 let info: SnapshotInfo = snap.as_ref().into();
                 yield info;
                 this = snap;
@@ -442,7 +444,7 @@ async fn write_new_manifest(
             new_manifest.as_ref(),
             SpecVersionBin::current(),
             &mut compressor,
-        )?;
+        );
 
         compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
@@ -535,7 +537,7 @@ async fn write_new_snapshot(
             new_snapshot.as_ref(),
             SpecVersionBin::current(),
             &mut compressor,
-        )?;
+        );
 
         compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
@@ -562,9 +564,7 @@ async fn fetch_snapshot(
             Reader::Asynchronous(read),
             FileTypeBin::Snapshot,
         )?;
-        deserialize_snapshot(spec_version, decompressor).map_err(|err| {
-            RepositoryError::from(RepositoryErrorKind::DeserializationError(err))
-        })
+        deserialize_snapshot(spec_version, decompressor).map_err(RepositoryError::from)
     })
     .await?
     .map(Arc::new)

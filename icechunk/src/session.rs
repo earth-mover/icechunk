@@ -926,7 +926,7 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             let ancestry = Arc::clone(&self.asset_manager)
-                .snapshot_ancestry(current_snapshot.id())
+                .snapshot_ancestry(&current_snapshot.id())
                 .await?
                 .map_ok(|meta| meta.id);
             let new_commits =
@@ -1464,13 +1464,13 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            flush_data.write_manifest_for_existing_node(node).await?;
+            flush_data.write_manifest_for_existing_node(&node).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
             // FIXME: deal with the case of metadata shrinking an existing array, we should clear
             // extra chunks that no longer fit in the array
-            flush_data.copy_previous_manifest(node, old_snapshot.as_ref());
+            flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
         }
     }
 
@@ -1505,7 +1505,8 @@ async fn flush(
     });
 
     let new_snapshot = Snapshot::from_iter(
-        old_snapshot.id().clone(),
+        None,
+        Some(old_snapshot.id().clone()),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
@@ -1520,8 +1521,8 @@ async fn flush(
             "Snapshot timestamp older than parent, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
-            parent: *old_snapshot.flushed_at(),
-            child: *new_snapshot.flushed_at(),
+            parent: old_snapshot.flushed_at(),
+            child: new_snapshot.flushed_at(),
         }
         .into());
     }
@@ -1532,7 +1533,7 @@ async fn flush(
     let snapshot_timestamp = tokio::spawn(
         async move {
             asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
-            asset_manager.get_snapshot_last_modified(new_snapshot_c.id()).await
+            asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
         }
         .in_current_span(),
     );
@@ -1562,7 +1563,7 @@ async fn flush(
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
-            snapshot_time: *new_snapshot.flushed_at(),
+            snapshot_time: new_snapshot.flushed_at(),
         }
         .into());
     }
@@ -1930,7 +1931,8 @@ mod tests {
         let initial = Snapshot::initial();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
-            initial.id().clone(),
+            None,
+            Some(initial.id().clone()),
             "message".to_string(),
             None,
             manifests,

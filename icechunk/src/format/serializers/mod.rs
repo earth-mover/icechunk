@@ -42,10 +42,7 @@
 //!   spec version number and use the right (de)-serializer to do the job.
 use std::io::{Read, Write};
 
-use current::{
-    SnapshotDeserializer, SnapshotSerializer, TransactionLogDeserializer,
-    TransactionLogSerializer,
-};
+use current::{TransactionLogDeserializer, TransactionLogSerializer};
 
 use super::{
     format_constants::SpecVersionBin, manifest::Manifest, snapshot::Snapshot,
@@ -58,11 +55,11 @@ pub fn serialize_snapshot(
     snapshot: &Snapshot,
     version: SpecVersionBin,
     write: &mut impl Write,
-) -> Result<(), rmp_serde::encode::Error> {
+) {
     match version {
         SpecVersionBin::V0dot1 => {
-            let serializer = SnapshotSerializer::from(snapshot);
-            rmp_serde::encode::write(write, &serializer)
+            // FIXME:
+            write.write_all(snapshot.bytes()).unwrap();
         }
     }
 }
@@ -71,14 +68,11 @@ pub fn serialize_manifest(
     manifest: &Manifest,
     version: SpecVersionBin,
     write: &mut impl Write,
-) -> Result<(), rmp_serde::encode::Error> {
+) {
     match version {
         SpecVersionBin::V0dot1 => {
             // FIXME:
             write.write_all(manifest.bytes()).unwrap();
-            Ok(())
-            //let serializer = ManifestSerializer::from(manifest);
-            //rmp_serde::encode::write(write, &serializer)
         }
     }
 }
@@ -98,12 +92,15 @@ pub fn serialize_transaction_log(
 
 pub fn deserialize_snapshot(
     version: SpecVersionBin,
-    read: Box<dyn Read>,
-) -> Result<Snapshot, rmp_serde::decode::Error> {
+    mut read: Box<dyn Read>,
+) -> Result<Snapshot, IcechunkFormatError> {
     match version {
         SpecVersionBin::V0dot1 => {
-            let deserializer: SnapshotDeserializer = rmp_serde::from_read(read)?;
-            Ok(deserializer.into())
+            // TODO: what's a good capacity?
+            let mut buffer = Vec::with_capacity(8_192);
+            read.read_to_end(&mut buffer)?;
+            buffer.shrink_to_fit();
+            Snapshot::from_buffer(buffer)
         }
     }
 }

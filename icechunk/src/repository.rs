@@ -717,7 +717,7 @@ impl Repository {
                                             <= preload_config.max_total_refs()
                                             && preload_config
                                                 .preload_if()
-                                                .matches(&node.path, manifest_info)
+                                                .matches(&node.path, &manifest_info)
                                         {
                                             let size_bytes = manifest_info.size_bytes;
                                             let asset_manager =

@@ -1,10 +1,7 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    ops::Bound,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
+use flatbuffers::{FlatBufferBuilder, VerifierOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,9 +11,10 @@ use crate::metadata::{
 };
 
 use super::{
+    flatbuffers::gen,
     manifest::{Manifest, ManifestRef},
-    AttributesId, ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, ManifestId,
-    NodeId, Path, SnapshotId, TableOffset,
+    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
+    IcechunkResult, ManifestId, NodeId, Path, SnapshotId, TableOffset,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +118,107 @@ impl NodeSnapshot {
     }
 }
 
+impl From<&gen::ObjectId8> for NodeId {
+    fn from(value: &gen::ObjectId8) -> Self {
+        NodeId::new(value.0)
+    }
+}
+
+impl From<&gen::ObjectId12> for ManifestId {
+    fn from(value: &gen::ObjectId12) -> Self {
+        ManifestId::new(value.0)
+    }
+}
+
+impl From<&gen::ObjectId12> for AttributesId {
+    fn from(value: &gen::ObjectId12) -> Self {
+        AttributesId::new(value.0)
+    }
+}
+
+impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
+    fn from(value: gen::ManifestRef<'a>) -> Self {
+        let extents = ChunkIndices(value.extents_from().iter().collect())
+            ..ChunkIndices(value.extents_to().iter().collect());
+        ManifestRef { object_id: value.object_id().into(), extents }
+    }
+}
+
+impl<'a> From<gen::ArrayNodeData<'a>> for NodeData {
+    fn from(value: gen::ArrayNodeData<'a>) -> Self {
+        // TODO: is it ok to call `bytes` here? Or do we need to collect an iterator
+        let meta = rmp_serde::from_slice(value.zarr_metadata().bytes()).unwrap();
+        let manifest_refs = value.manifests().iter().map(|m| m.into()).collect();
+        Self::Array(meta, manifest_refs)
+    }
+}
+
+impl<'a> From<gen::GroupNodeData<'a>> for NodeData {
+    fn from(_: gen::GroupNodeData<'a>) -> Self {
+        Self::Group
+    }
+}
+
+impl<'a> From<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
+    fn from(value: gen::InlineUserAttributes<'a>) -> Self {
+        Self::Inline(UserAttributes {
+            parsed: rmp_serde::from_slice(value.data().bytes()).unwrap(),
+        })
+    }
+}
+
+impl<'a> From<gen::UserAttributesRef<'a>> for UserAttributesSnapshot {
+    fn from(value: gen::UserAttributesRef<'a>) -> Self {
+        Self::Ref(UserAttributesRef {
+            object_id: value.object_id().into(),
+            location: value.location(),
+        })
+    }
+}
+
+impl<'a> From<gen::NodeSnapshot<'a>> for NodeSnapshot {
+    fn from(value: gen::NodeSnapshot<'a>) -> Self {
+        let node_data: NodeData = match value.node_data_type() {
+            gen::NodeData::Array => value.node_data_as_array().unwrap().into(),
+            gen::NodeData::Group => value.node_data_as_group().unwrap().into(),
+            _ => panic!("invalid node data"), //FIXME:
+        };
+        let user_attributes: Option<UserAttributesSnapshot> =
+            match value.user_attributes_type() {
+                gen::UserAttributesSnapshot::Inline => {
+                    Some(value.user_attributes_as_inline().unwrap().into())
+                }
+                gen::UserAttributesSnapshot::Reference => {
+                    Some(value.user_attributes_as_reference().unwrap().into())
+                }
+                gen::UserAttributesSnapshot::NONE => None,
+                _ => panic!("invalid user attributes"),
+            };
+        NodeSnapshot {
+            id: value.id().into(),
+            path: value.path().try_into().unwrap(),
+            user_attributes,
+            node_data,
+        }
+    }
+}
+
+impl<'a> From<&gen::ManifestFileInfo> for ManifestFileInfo {
+    fn from(value: &gen::ManifestFileInfo) -> Self {
+        Self {
+            id: value.id().into(),
+            size_bytes: value.size_bytes(),
+            num_rows: value.num_rows(),
+        }
+    }
+}
+
+impl<'a> From<&gen::AttributeFileInfo> for AttributeFileInfo {
+    fn from(value: &gen::AttributeFileInfo) -> Self {
+        Self { id: value.id().into() }
+    }
+}
+
 pub type SnapshotProperties = HashMap<String, Value>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
@@ -142,14 +241,7 @@ pub struct AttributeFileInfo {
 
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
-    id: SnapshotId,
-    parent_id: Option<SnapshotId>,
-    flushed_at: DateTime<Utc>,
-    message: String,
-    metadata: SnapshotProperties,
-    manifest_files: HashMap<ManifestId, ManifestFileInfo>,
-    attribute_files: Vec<AttributeFileInfo>,
-    nodes: BTreeMap<Path, NodeSnapshot>,
+    buffer: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +258,7 @@ impl From<&Snapshot> for SnapshotInfo {
         Self {
             id: value.id().clone(),
             parent_id: value.parent_id().clone(),
-            flushed_at: *value.flushed_at(),
+            flushed_at: value.flushed_at(),
             message: value.message().to_string(),
             metadata: value.metadata().clone(),
         }
@@ -175,159 +267,328 @@ impl From<&Snapshot> for SnapshotInfo {
 
 impl SnapshotInfo {
     pub fn is_initial(&self) -> bool {
-        // FIXME: add check for known initial id
         self.parent_id.is_none()
     }
 }
 
+static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
+    max_depth: 64,
+    max_tables: 500_000,
+    max_apparent_size: 1 << 31, // taken from the default
+    ignore_missing_null_terminator: true,
+};
+
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
-    fn new(
-        parent_id: Option<SnapshotId>,
-        message: String,
-        metadata: Option<SnapshotProperties>,
-        nodes: BTreeMap<Path, NodeSnapshot>,
-        manifest_files: Vec<ManifestFileInfo>,
-        attribute_files: Vec<AttributeFileInfo>,
-    ) -> Self {
-        let metadata = metadata.unwrap_or_default();
-        let flushed_at = Utc::now();
-        Self {
-            id: SnapshotId::random(),
-            parent_id,
-            flushed_at,
-            message,
-            manifest_files: manifest_files
-                .into_iter()
-                .map(|fi| (fi.id.clone(), fi))
-                .collect(),
-            attribute_files,
-            metadata,
-            nodes,
-        }
+    pub fn from_buffer(buffer: Vec<u8>) -> Result<Snapshot, IcechunkFormatError> {
+        let _ = flatbuffers::root_with_opts::<gen::Snapshot>(
+            &ROOT_OPTIONS,
+            buffer.as_slice(),
+        )?;
+        Ok(Snapshot { buffer })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_fields(
-        id: SnapshotId,
-        parent_id: Option<SnapshotId>,
-        flushed_at: DateTime<Utc>,
-        message: String,
-        metadata: SnapshotProperties,
-        manifest_files: HashMap<ManifestId, ManifestFileInfo>,
-        attribute_files: Vec<AttributeFileInfo>,
-        nodes: BTreeMap<Path, NodeSnapshot>,
-    ) -> Self {
-        Self {
-            id,
-            parent_id,
-            flushed_at,
-            message,
-            metadata,
-            manifest_files,
-            attribute_files,
-            nodes,
-        }
+    pub fn bytes(&self) -> &[u8] {
+        self.buffer.as_slice()
     }
+
+    // fn new(
+    //     parent_id: Option<SnapshotId>,
+    //     message: String,
+    //     metadata: Option<SnapshotProperties>,
+    //     nodes: BTreeMap<Path, NodeSnapshot>,
+    //     manifest_files: Vec<ManifestFileInfo>,
+    //     attribute_files: Vec<AttributeFileInfo>,
+    // ) -> Self {
+    //     let metadata = metadata.unwrap_or_default();
+    //     let flushed_at = Utc::now();
+    //     Self {
+    //         id: SnapshotId::random(),
+    //         parent_id,
+    //         flushed_at,
+    //         message,
+    //         manifest_files: manifest_files
+    //             .into_iter()
+    //             .map(|fi| (fi.id.clone(), fi))
+    //             .collect(),
+    //         attribute_files,
+    //         metadata,
+    //         nodes,
+    //     }
+    // }
+
+    // #[allow(clippy::too_many_arguments)]
+    // pub fn from_fields(
+    //     id: SnapshotId,
+    //     parent_id: Option<SnapshotId>,
+    //     flushed_at: DateTime<Utc>,
+    //     message: String,
+    //     metadata: SnapshotProperties,
+    //     manifest_files: HashMap<ManifestId, ManifestFileInfo>,
+    //     attribute_files: Vec<AttributeFileInfo>,
+    //     nodes: BTreeMap<Path, NodeSnapshot>,
+    // ) -> Self {
+    //     Self {
+    //         id,
+    //         parent_id,
+    //         flushed_at,
+    //         message,
+    //         metadata,
+    //         manifest_files,
+    //         attribute_files,
+    //         nodes,
+    //     }
+    // }
 
     pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        parent_id: SnapshotId,
+        id: Option<SnapshotId>,
+        parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
         manifest_files: Vec<ManifestFileInfo>,
         attribute_files: Vec<AttributeFileInfo>,
         iter: T,
     ) -> Self {
-        let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
+        // TODO: what's a good capacity?
+        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
 
-        Self::new(
-            Some(parent_id),
-            message,
-            properties,
-            nodes,
-            manifest_files,
-            attribute_files,
-        )
+        let manifest_files = manifest_files
+            .iter()
+            .map(|mfi| {
+                let id = gen::ObjectId12::new(&mfi.id.0);
+                gen::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_rows)
+            })
+            .collect::<Vec<_>>();
+        let manifest_files = builder.create_vector(&manifest_files);
+
+        let attribute_files = attribute_files
+            .iter()
+            .map(|att| {
+                let id = gen::ObjectId12::new(&att.id.0);
+                gen::AttributeFileInfo::new(&id)
+            })
+            .collect::<Vec<_>>();
+        let attribute_files = builder.create_vector(&attribute_files);
+
+        let metadata_items = properties
+            .unwrap_or_default()
+            .iter()
+            .map(|(k, v)| {
+                let name = builder.create_shared_string(k.as_str());
+                let value =
+                    builder.create_vector(rmp_serde::to_vec(v).unwrap().as_slice());
+                gen::MetadataItem::create(
+                    &mut builder,
+                    &gen::MetadataItemArgs { name: Some(name), value: Some(value) },
+                )
+            })
+            .collect::<Vec<_>>();
+        let metadata_items = builder.create_vector(&metadata_items);
+
+        let message = builder.create_string(&message);
+        let parent_id = parent_id.map(|oid| gen::ObjectId12::new(&oid.0));
+        let flushed_at = Utc::now().timestamp_micros() as u64;
+        let id = gen::ObjectId12::new(&id.unwrap_or_else(|| SnapshotId::random()).0);
+
+        // FIXME: should we sort here or can we sort outside?
+        let mut nodes = iter.into_iter().collect::<Vec<_>>();
+        nodes.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let nodes: Vec<_> =
+            nodes.iter().map(|node| mk_node(&mut builder, node)).collect();
+        let nodes = builder.create_vector(&nodes);
+
+        let snap = gen::Snapshot::create(
+            &mut builder,
+            &gen::SnapshotArgs {
+                id: Some(&id),
+                parent_id: parent_id.as_ref(),
+                nodes: Some(nodes),
+                flushed_at,
+                message: Some(message),
+                metadata: Some(metadata_items),
+                manifest_files: Some(manifest_files),
+                attribute_files: Some(attribute_files),
+            },
+        );
+
+        builder.finish(snap, Some("Ichk"));
+        let (mut buffer, offset) = builder.collapse();
+        buffer.drain(0..offset);
+        buffer.shrink_to_fit();
+        Snapshot { buffer }
     }
 
     pub fn initial() -> Self {
         let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
-        Self::new(
+        Self::from_iter(
+            None,
             None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
             Default::default(),
-            Default::default(),
+            [],
         )
     }
 
-    pub fn id(&self) -> &SnapshotId {
-        &self.id
+    fn root(&self) -> gen::Snapshot {
+        // without the unsafe version this is too slow
+        // if we try to keep the root in the Manifest struct, we would need a lifetime
+        unsafe { flatbuffers::root_unchecked::<gen::Snapshot>(&self.buffer) }
     }
 
-    pub fn parent_id(&self) -> &Option<SnapshotId> {
-        &self.parent_id
+    pub fn id(&self) -> SnapshotId {
+        SnapshotId::new(self.root().id().0)
     }
 
-    pub fn metadata(&self) -> &SnapshotProperties {
-        &self.metadata
+    pub fn parent_id(&self) -> Option<SnapshotId> {
+        self.root().parent_id().map(|pid| SnapshotId::new(pid.0))
     }
 
-    pub fn flushed_at(&self) -> &DateTime<Utc> {
-        &self.flushed_at
+    pub fn metadata(&self) -> SnapshotProperties {
+        self.root()
+            .metadata()
+            .iter()
+            .map(|item| {
+                let key = item.name().to_string();
+                let value = rmp_serde::from_slice(&item.value().bytes()).unwrap();
+                (key, value)
+            })
+            .collect()
     }
 
-    pub fn message(&self) -> &String {
-        &self.message
+    pub fn flushed_at(&self) -> DateTime<Utc> {
+        // FIXME: cast
+        DateTime::from_timestamp_micros(self.root().flushed_at() as i64).unwrap()
     }
 
-    pub fn nodes(&self) -> &BTreeMap<Path, NodeSnapshot> {
-        &self.nodes
+    pub fn message(&self) -> String {
+        self.root().message().to_string()
     }
 
-    pub fn get_manifest_file(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
-        self.manifest_files.get(id)
+    // pub fn nodes(&self) -> &BTreeMap<Path, NodeSnapshot> {
+    //     &self.nodes
+    // }
+
+    pub fn get_manifest_file(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
+        self.root().manifest_files().iter().find(|mf| mf.id().0 == id.0.as_slice()).map(
+            |mf| ManifestFileInfo {
+                id: ManifestId::new(mf.id().0),
+                size_bytes: mf.size_bytes(),
+                num_rows: mf.num_rows(),
+            },
+        )
     }
 
-    pub fn manifest_files(&self) -> &HashMap<ManifestId, ManifestFileInfo> {
-        &self.manifest_files
-    }
-    pub fn attribute_files(&self) -> &Vec<AttributeFileInfo> {
-        &self.attribute_files
+    pub fn manifest_files(&self) -> impl Iterator<Item = ManifestFileInfo> + '_ {
+        self.root().manifest_files().iter().map(|mf| mf.into())
     }
 
-    /// Cretase a new `Snapshot` with all the same data as `self` but a different parent
-    pub fn adopt(&self, parent: &Snapshot) -> Self {
-        Self {
-            id: self.id.clone(),
-            parent_id: Some(parent.id().clone()),
-            flushed_at: *self.flushed_at(),
-            message: self.message().clone(),
-            metadata: self.metadata().clone(),
-            manifest_files: self.manifest_files().clone(),
-            attribute_files: self.attribute_files().clone(),
-            nodes: self.nodes.clone(),
-        }
+    pub fn attribute_files(&self) -> impl Iterator<Item = AttributeFileInfo> + '_ {
+        self.root().attribute_files().iter().map(|f| f.into())
     }
 
-    pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
-        self.nodes
-            .get(path)
-            .ok_or(IcechunkFormatErrorKind::NodeNotFound { path: path.clone() }.into())
+    /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
+    pub fn adopt(&self, new_child: &Snapshot) -> Self {
+        // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
+        // create a whole new buffer and write to it in full
+        dbg!(self.message(), new_child.message());
+
+        Snapshot::from_iter(
+            Some(new_child.id()),
+            Some(self.id()),
+            new_child.message().clone(),
+            Some(new_child.metadata().clone()),
+            new_child.manifest_files().collect(),
+            new_child.attribute_files().collect(),
+            new_child.iter(),
+        )
+
+        //  let mut builder =
+        //      flatbuffers::FlatBufferBuilder::with_capacity(new_child.buffer.len());
+
+        //  // this is the only field that changes
+        //  let parent_id = self.root().parent_id();
+
+        //  let old_root = new_child.root();
+        //  let id = old_root.id();
+        //  let flushed_at = old_root.flushed_at();
+        //  let message = Some(builder.create_string(old_root.message()));
+        //  let metadata_items = old_root
+        //      .metadata()
+        //      .iter()
+        //      .map(|item| {
+        //          let name = Some(builder.create_shared_string(item.name()));
+        //          let value = Some(builder.create_vector(item.value().bytes()));
+        //          gen::MetadataItem::create(
+        //              &mut builder,
+        //              &gen::MetadataItemArgs { name, value },
+        //          )
+        //      })
+        //      .collect::<Vec<_>>();
+        //  let metadata = Some(builder.create_vector(metadata_items.as_slice()));
+        //  let manifest_files = old_root
+        //      .manifest_files()
+        //      .iter()
+        //      .map(|f| gen::ManifestFileInfo::new(f.id(), f.size_bytes(), f.num_rows()))
+        //      .collect::<Vec<_>>();
+        //  let manifest_files = Some(builder.create_vector(manifest_files.as_slice()));
+        //  let attribute_files = old_root
+        //      .attribute_files()
+        //      .iter()
+        //      .map(|f| gen::AttributeFileInfo::new(f.id()))
+        //      .collect::<Vec<_>>();
+        //  let attribute_files = Some(builder.create_vector(attribute_files.as_slice()));
+        //  let nodes = old_root.nodes().iter().map(|node| {
+        //      let id = gen::ObjectId8(node.id().0);
+
+        //  })
+
+        //  let snap = gen::Snapshot::create(
+        //      &mut builder,
+        //      &gen::SnapshotArgs {
+        //          id: Some(id),
+        //          parent_id,
+        //          flushed_at,
+        //          message,
+        //          metadata,
+        //          manifest_files,
+        //          attribute_files,
+        //          // FIXME:
+        //          nodes: None,
+        //      },
+        //  );
+
+        //  builder.finish(snap, Some("Ichk"));
+        //  let (mut buffer, offset) = builder.collapse();
+        //  buffer.drain(0..offset);
+        //  buffer.shrink_to_fit();
+        //  Snapshot { buffer }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &NodeSnapshot> + '_ {
-        self.nodes.values()
+    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
+        let res = self
+            .root()
+            .nodes()
+            .lookup_by_key(path.to_string().as_str(), |node, path| node.path().cmp(path))
+            .ok_or(IcechunkFormatError::from(IcechunkFormatErrorKind::NodeNotFound {
+                path: path.clone(),
+            }))?;
+        Ok(res.into())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = NodeSnapshot> + '_ {
+        self.root().nodes().iter().map(|node| node.into())
     }
 
     pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeSnapshot> {
-        NodeIterator { table: self, last_key: None }
+        NodeIterator { snapshot: self, last_index: 0 }
     }
 
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.root().nodes().len()
     }
 
     #[must_use]
@@ -335,45 +596,138 @@ impl Snapshot {
         self.len() == 0
     }
 
-    pub fn manifest_info(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
-        self.manifest_files.get(id)
+    pub fn manifest_info(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
+        self.root()
+            .manifest_files()
+            .iter()
+            .find(|mi| mi.id().0 == id.0)
+            .map(|man| man.into())
     }
 }
 
-// We need this complex dance because Rust makes it really hard to put together an object and a
-// reference to it (in the iterator) in a single self-referential struct
 struct NodeIterator {
-    table: Arc<Snapshot>,
-    last_key: Option<Path>,
+    snapshot: Arc<Snapshot>,
+    last_index: usize,
 }
 
 impl Iterator for NodeIterator {
     type Item = NodeSnapshot;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &self.last_key {
-            None => {
-                if let Some((k, v)) = self.table.nodes.first_key_value() {
-                    self.last_key = Some(k.clone());
-                    Some(v.clone())
-                } else {
-                    None
-                }
-            }
-            Some(last_key) => {
-                if let Some((k, v)) = self
-                    .table
-                    .nodes
-                    .range::<Path, _>((Bound::Excluded(last_key), Bound::Unbounded))
-                    .next()
-                {
-                    self.last_key = Some(k.clone());
-                    Some(v.clone())
-                } else {
-                    None
-                }
-            }
+        let nodes = self.snapshot.root().nodes();
+        if self.last_index < nodes.len() {
+            let res = Some(nodes.get(self.last_index).into());
+            self.last_index += 1;
+            res
+        } else {
+            None
         }
+    }
+}
+
+fn mk_node<'bldr>(
+    builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+    node: &NodeSnapshot,
+) -> flatbuffers::WIPOffset<gen::NodeSnapshot<'bldr>> {
+    let id = gen::ObjectId8::new(&node.id.0);
+    let path = builder.create_string(node.path.to_string().as_str());
+    let (user_attributes_type, user_attributes) =
+        mk_user_attributes(builder, node.user_attributes.as_ref());
+    let (node_data_type, node_data) = mk_node_data(builder, &node.node_data);
+    gen::NodeSnapshot::create(
+        builder,
+        &gen::NodeSnapshotArgs {
+            id: Some(&id),
+            path: Some(path),
+            user_attributes_type,
+            user_attributes,
+            node_data_type,
+            node_data,
+        },
+    )
+}
+
+fn mk_user_attributes<'bldr>(
+    builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+    atts: Option<&UserAttributesSnapshot>,
+) -> (
+    gen::UserAttributesSnapshot,
+    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+) {
+    match atts {
+        Some(UserAttributesSnapshot::Inline(user_attributes)) => {
+            let data = builder.create_vector(
+                &rmp_serde::to_vec(&user_attributes.parsed).unwrap().as_slice(),
+            );
+            let inl = gen::InlineUserAttributes::create(
+                builder,
+                &gen::InlineUserAttributesArgs { data: Some(data) },
+            );
+            (gen::UserAttributesSnapshot::Inline, Some(inl.as_union_value()))
+        }
+        Some(UserAttributesSnapshot::Ref(uatts)) => {
+            let id = gen::ObjectId12::new(&uatts.object_id.0);
+            let reference = gen::UserAttributesRef::create(
+                builder,
+                &gen::UserAttributesRefArgs {
+                    object_id: Some(&id),
+                    location: uatts.location,
+                },
+            );
+            (gen::UserAttributesSnapshot::Reference, Some(reference.as_union_value()))
+        }
+        None => (gen::UserAttributesSnapshot::NONE, None),
+    }
+}
+
+fn mk_node_data(
+    builder: &mut FlatBufferBuilder<'_>,
+    node_data: &NodeData,
+) -> (gen::NodeData, Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>) {
+    match node_data {
+        NodeData::Array(zarr, manifests) => {
+            let zarr_metadata =
+                Some(builder.create_vector(&rmp_serde::to_vec(zarr).unwrap().as_slice()));
+            let manifests = manifests
+                .iter()
+                .map(|manref| {
+                    let object_id = gen::ObjectId12::new(&manref.object_id.0);
+                    let extents_from =
+                        builder.create_vector(manref.extents.start.0.as_slice());
+                    let extents_to =
+                        builder.create_vector(manref.extents.end.0.as_slice());
+                    gen::ManifestRef::create(
+                        builder,
+                        &gen::ManifestRefArgs {
+                            object_id: Some(&object_id),
+                            extents_from: Some(extents_from),
+                            extents_to: Some(extents_to),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let manifests = builder.create_vector(manifests.as_slice());
+            (
+                gen::NodeData::Array,
+                Some(
+                    gen::ArrayNodeData::create(
+                        builder,
+                        &gen::ArrayNodeDataArgs {
+                            zarr_metadata,
+                            manifests: Some(manifests),
+                        },
+                    )
+                    .as_union_value(),
+                ),
+            )
+        }
+        NodeData::Group => (
+            gen::NodeData::Group,
+            Some(
+                gen::GroupNodeData::create(builder, &gen::GroupNodeDataArgs {})
+                    .as_union_value(),
+            ),
+        ),
     }
 }
 
@@ -509,7 +863,8 @@ mod tests {
             },
         ];
         let st = Snapshot::from_iter(
-            initial.id.clone(),
+            None,
+            Some(initial.id().clone()),
             String::default(),
             Default::default(),
             manifests,
@@ -530,7 +885,7 @@ mod tests {
         let node = st.get_node(&"/b/c".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Inline(
@@ -542,7 +897,7 @@ mod tests {
         let node = st.get_node(&Path::root()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
                 user_attributes: None,
@@ -552,7 +907,7 @@ mod tests {
         let node = st.get_node(&"/b/array1".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
                 user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
@@ -565,7 +920,7 @@ mod tests {
         let node = st.get_node(&"/array2".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
                 user_attributes: None,
@@ -575,7 +930,7 @@ mod tests {
         let node = st.get_node(&"/b/array3".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
                 user_attributes: None,
