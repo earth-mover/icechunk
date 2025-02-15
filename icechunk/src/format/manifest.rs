@@ -168,38 +168,37 @@ impl Manifest {
     ) -> Result<Option<Self>, E> {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
-
-        // FIXME: should we sort here or can we sort outside?
         let mut all = stream.try_collect::<Vec<_>>().await?;
-
+        // FIXME: should we sort here or can we sort outside?
         all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
-        //let all = all.into_iter().peekable();
 
-        //all.into_iter().into_group_map_by(|chunk| &chunk.node);
+        let mut all = all.iter().peekable();
 
-        // FIXME: more than one node id
-        let mut node_id = None;
-        let refs_vec: Vec<_> = all
-            .into_iter()
-            .map(|chunk| {
-                node_id = Some(chunk.node.clone());
-                mk_chunk_ref(&mut builder, chunk)
-            })
-            .collect();
+        let mut array_manifests = Vec::with_capacity(1);
+        let mut len = 0;
+        while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
+            // TODO: what is a good capacity
+            let mut refs = Vec::with_capacity(8_192);
+            while let Some(chunk) = all.next_if(|chunk| chunk.node == current_node) {
+                refs.push(mk_chunk_ref(&mut builder, chunk));
+            }
 
-        if node_id.is_none() {
+            len += refs.len();
+            let node_id = Some(gen::ObjectId8::new(&current_node.0));
+            let refs = Some(builder.create_vector(refs.as_slice()));
+            let array_manifest = gen::ArrayManifest::create(
+                &mut builder,
+                &gen::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
+            );
+            array_manifests.push(array_manifest);
+        }
+
+        if array_manifests.is_empty() {
             // empty manifet
             return Ok(None);
         }
 
-        let node_id = Some(gen::ObjectId8::new(&node_id.unwrap().0));
-        let refs = Some(builder.create_vector(refs_vec.as_slice()));
-        let array_manifest = gen::ArrayManifest::create(
-            &mut builder,
-            &gen::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
-        );
-        let arrays = builder.create_vector(&[array_manifest]);
-
+        let arrays = builder.create_vector(array_manifests.as_slice());
         let manifest_id = ManifestId::random();
         let bin_manifest_id = gen::ObjectId12::new(&manifest_id.0);
 
@@ -212,7 +211,7 @@ impl Manifest {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Some(Manifest { buffer, len: refs_vec.len(), id: manifest_id }))
+        Ok(Some(Manifest { buffer, len, id: manifest_id }))
     }
 
     /// Used for tests
@@ -367,10 +366,10 @@ fn checksum(payload: &gen::ChunkRef<'_>) -> Option<Checksum> {
 
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
-    chunk: ChunkInfo,
+    chunk: &ChunkInfo,
 ) -> flatbuffers::WIPOffset<gen::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
-    match chunk.payload {
+    match &chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
             let args =
