@@ -4,7 +4,7 @@ namespace gen;
 
 table MetadataItem {
   name: string (required);
-  value: string (required);
+  value: [uint8] (required);
 }
 
 struct ManifestFileInfo {
@@ -23,7 +23,7 @@ table UserAttributesRef {
 }
 
 table InlineUserAttributes {
-  data :string (required);
+  data :[uint8] (required);
 }
 
 union UserAttributesSnapshot {
@@ -40,7 +40,7 @@ table ManifestRef {
 table GroupNodeData {}
 
 table ArrayNodeData {
-  zarr_metadata: string (required);
+  zarr_metadata: [uint8] (required);
   manifests: [ManifestRef] (required);
 }
 
@@ -52,7 +52,7 @@ union NodeData {
 table NodeSnapshot {
     id: ObjectId8 (required);
     path: string (required);
-    user_attributes: UserAttributesSnapshot (required);
+    user_attributes: UserAttributesSnapshot;
     node_data: NodeData (required);
 }
 
@@ -60,6 +60,7 @@ table NodeSnapshot {
 table Snapshot {
   id: ObjectId12 (required);
   parent_id: ObjectId12;
+  nodes: [NodeSnapshot] (required);
   flushed_at: uint64;
   message: string (required);
   metadata: [MetadataItem] (required);

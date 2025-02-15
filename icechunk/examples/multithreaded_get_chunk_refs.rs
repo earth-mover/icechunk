@@ -137,7 +137,6 @@ async fn do_reads(path: &std::path::Path) -> Result<(), Box<dyn std::error::Erro
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().collect();
-    dbg!(&args);
     if args.len() != 3 {
         println!("Error: Pass either\n --write path/to/repo\n or\n --read path/to/repo\n as command line argument.");
         return Err("Invalid arguments".into());
