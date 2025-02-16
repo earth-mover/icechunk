@@ -2204,5 +2204,443 @@ impl core::fmt::Debug for Snapshot<'_> {
       ds.finish()
   }
 }
+pub enum ChunkIndicesOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ChunkIndices<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ChunkIndices<'a> {
+  type Inner = ChunkIndices<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> ChunkIndices<'a> {
+  pub const VT_COORDS: flatbuffers::VOffsetT = 4;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ChunkIndices { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ChunkIndicesArgs<'args>
+  ) -> flatbuffers::WIPOffset<ChunkIndices<'bldr>> {
+    let mut builder = ChunkIndicesBuilder::new(_fbb);
+    if let Some(x) = args.coords { builder.add_coords(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn coords(&self) -> flatbuffers::Vector<'a, u32> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(ChunkIndices::VT_COORDS, None).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for ChunkIndices<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("coords", Self::VT_COORDS, true)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ChunkIndicesArgs<'a> {
+    pub coords: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
+}
+impl<'a> Default for ChunkIndicesArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ChunkIndicesArgs {
+      coords: None, // required field
+    }
+  }
+}
+
+pub struct ChunkIndicesBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ChunkIndicesBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_coords(&mut self, coords: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u32>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkIndices::VT_COORDS, coords);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ChunkIndicesBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ChunkIndicesBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ChunkIndices<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, ChunkIndices::VT_COORDS,"coords");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ChunkIndices<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ChunkIndices");
+      ds.field("coords", &self.coords());
+      ds.finish()
+  }
+}
+pub enum ArrayUpdatedChunksOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ArrayUpdatedChunks<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ArrayUpdatedChunks<'a> {
+  type Inner = ArrayUpdatedChunks<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> ArrayUpdatedChunks<'a> {
+  pub const VT_NODE_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_CHUNKS: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ArrayUpdatedChunks { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ArrayUpdatedChunksArgs<'args>
+  ) -> flatbuffers::WIPOffset<ArrayUpdatedChunks<'bldr>> {
+    let mut builder = ArrayUpdatedChunksBuilder::new(_fbb);
+    if let Some(x) = args.chunks { builder.add_chunks(x); }
+    if let Some(x) = args.node_id { builder.add_node_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn node_id(&self) -> &'a ObjectId8 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ObjectId8>(ArrayUpdatedChunks::VT_NODE_ID, None).unwrap()}
+  }
+  #[inline]
+  pub fn chunks(&self) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkIndices<'a>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkIndices>>>>(ArrayUpdatedChunks::VT_CHUNKS, None).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for ArrayUpdatedChunks<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<ObjectId8>("node_id", Self::VT_NODE_ID, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ChunkIndices>>>>("chunks", Self::VT_CHUNKS, true)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ArrayUpdatedChunksArgs<'a> {
+    pub node_id: Option<&'a ObjectId8>,
+    pub chunks: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkIndices<'a>>>>>,
+}
+impl<'a> Default for ArrayUpdatedChunksArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ArrayUpdatedChunksArgs {
+      node_id: None, // required field
+      chunks: None, // required field
+    }
+  }
+}
+
+pub struct ArrayUpdatedChunksBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ArrayUpdatedChunksBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_node_id(&mut self, node_id: &ObjectId8) {
+    self.fbb_.push_slot_always::<&ObjectId8>(ArrayUpdatedChunks::VT_NODE_ID, node_id);
+  }
+  #[inline]
+  pub fn add_chunks(&mut self, chunks: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<ChunkIndices<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ArrayUpdatedChunks::VT_CHUNKS, chunks);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ArrayUpdatedChunksBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ArrayUpdatedChunksBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ArrayUpdatedChunks<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, ArrayUpdatedChunks::VT_NODE_ID,"node_id");
+    self.fbb_.required(o, ArrayUpdatedChunks::VT_CHUNKS,"chunks");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ArrayUpdatedChunks<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ArrayUpdatedChunks");
+      ds.field("node_id", &self.node_id());
+      ds.field("chunks", &self.chunks());
+      ds.finish()
+  }
+}
+pub enum TransactionLogOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct TransactionLog<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for TransactionLog<'a> {
+  type Inner = TransactionLog<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> TransactionLog<'a> {
+  pub const VT_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_NEW_GROUPS: flatbuffers::VOffsetT = 6;
+  pub const VT_NEW_ARRAYS: flatbuffers::VOffsetT = 8;
+  pub const VT_DELETED_GROUPS: flatbuffers::VOffsetT = 10;
+  pub const VT_DELETED_ARRAYS: flatbuffers::VOffsetT = 12;
+  pub const VT_UPDATED_USER_ATTRIBUTES: flatbuffers::VOffsetT = 14;
+  pub const VT_UPDATED_ZARR_METADATA: flatbuffers::VOffsetT = 16;
+  pub const VT_UPDATED_CHUNKS: flatbuffers::VOffsetT = 18;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    TransactionLog { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args TransactionLogArgs<'args>
+  ) -> flatbuffers::WIPOffset<TransactionLog<'bldr>> {
+    let mut builder = TransactionLogBuilder::new(_fbb);
+    if let Some(x) = args.updated_chunks { builder.add_updated_chunks(x); }
+    if let Some(x) = args.updated_zarr_metadata { builder.add_updated_zarr_metadata(x); }
+    if let Some(x) = args.updated_user_attributes { builder.add_updated_user_attributes(x); }
+    if let Some(x) = args.deleted_arrays { builder.add_deleted_arrays(x); }
+    if let Some(x) = args.deleted_groups { builder.add_deleted_groups(x); }
+    if let Some(x) = args.new_arrays { builder.add_new_arrays(x); }
+    if let Some(x) = args.new_groups { builder.add_new_groups(x); }
+    if let Some(x) = args.id { builder.add_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn id(&self) -> &'a ObjectId12 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ObjectId12>(TransactionLog::VT_ID, None).unwrap()}
+  }
+  #[inline]
+  pub fn new_groups(&self) -> flatbuffers::Vector<'a, ObjectId8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_NEW_GROUPS, None).unwrap()}
+  }
+  #[inline]
+  pub fn new_arrays(&self) -> flatbuffers::Vector<'a, ObjectId8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_NEW_ARRAYS, None).unwrap()}
+  }
+  #[inline]
+  pub fn deleted_groups(&self) -> flatbuffers::Vector<'a, ObjectId8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_DELETED_GROUPS, None).unwrap()}
+  }
+  #[inline]
+  pub fn deleted_arrays(&self) -> flatbuffers::Vector<'a, ObjectId8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_DELETED_ARRAYS, None).unwrap()}
+  }
+  #[inline]
+  pub fn updated_user_attributes(&self) -> flatbuffers::Vector<'a, ObjectId8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_UPDATED_USER_ATTRIBUTES, None).unwrap()}
+  }
+  #[inline]
+  pub fn updated_zarr_metadata(&self) -> flatbuffers::Vector<'a, ObjectId8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_UPDATED_ZARR_METADATA, None).unwrap()}
+  }
+  #[inline]
+  pub fn updated_chunks(&self) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks<'a>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>>>(TransactionLog::VT_UPDATED_CHUNKS, None).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for TransactionLog<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("new_groups", Self::VT_NEW_GROUPS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("new_arrays", Self::VT_NEW_ARRAYS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("deleted_groups", Self::VT_DELETED_GROUPS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("deleted_arrays", Self::VT_DELETED_ARRAYS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_user_attributes", Self::VT_UPDATED_USER_ATTRIBUTES, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_zarr_metadata", Self::VT_UPDATED_ZARR_METADATA, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>>>("updated_chunks", Self::VT_UPDATED_CHUNKS, true)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct TransactionLogArgs<'a> {
+    pub id: Option<&'a ObjectId12>,
+    pub new_groups: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+    pub new_arrays: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+    pub deleted_groups: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+    pub deleted_arrays: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+    pub updated_user_attributes: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+    pub updated_zarr_metadata: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+    pub updated_chunks: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks<'a>>>>>,
+}
+impl<'a> Default for TransactionLogArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    TransactionLogArgs {
+      id: None, // required field
+      new_groups: None, // required field
+      new_arrays: None, // required field
+      deleted_groups: None, // required field
+      deleted_arrays: None, // required field
+      updated_user_attributes: None, // required field
+      updated_zarr_metadata: None, // required field
+      updated_chunks: None, // required field
+    }
+  }
+}
+
+pub struct TransactionLogBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> TransactionLogBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_id(&mut self, id: &ObjectId12) {
+    self.fbb_.push_slot_always::<&ObjectId12>(TransactionLog::VT_ID, id);
+  }
+  #[inline]
+  pub fn add_new_groups(&mut self, new_groups: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ObjectId8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_NEW_GROUPS, new_groups);
+  }
+  #[inline]
+  pub fn add_new_arrays(&mut self, new_arrays: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ObjectId8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_NEW_ARRAYS, new_arrays);
+  }
+  #[inline]
+  pub fn add_deleted_groups(&mut self, deleted_groups: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ObjectId8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_DELETED_GROUPS, deleted_groups);
+  }
+  #[inline]
+  pub fn add_deleted_arrays(&mut self, deleted_arrays: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ObjectId8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_DELETED_ARRAYS, deleted_arrays);
+  }
+  #[inline]
+  pub fn add_updated_user_attributes(&mut self, updated_user_attributes: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ObjectId8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_UPDATED_USER_ATTRIBUTES, updated_user_attributes);
+  }
+  #[inline]
+  pub fn add_updated_zarr_metadata(&mut self, updated_zarr_metadata: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ObjectId8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_UPDATED_ZARR_METADATA, updated_zarr_metadata);
+  }
+  #[inline]
+  pub fn add_updated_chunks(&mut self, updated_chunks: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<ArrayUpdatedChunks<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(TransactionLog::VT_UPDATED_CHUNKS, updated_chunks);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> TransactionLogBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    TransactionLogBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<TransactionLog<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, TransactionLog::VT_ID,"id");
+    self.fbb_.required(o, TransactionLog::VT_NEW_GROUPS,"new_groups");
+    self.fbb_.required(o, TransactionLog::VT_NEW_ARRAYS,"new_arrays");
+    self.fbb_.required(o, TransactionLog::VT_DELETED_GROUPS,"deleted_groups");
+    self.fbb_.required(o, TransactionLog::VT_DELETED_ARRAYS,"deleted_arrays");
+    self.fbb_.required(o, TransactionLog::VT_UPDATED_USER_ATTRIBUTES,"updated_user_attributes");
+    self.fbb_.required(o, TransactionLog::VT_UPDATED_ZARR_METADATA,"updated_zarr_metadata");
+    self.fbb_.required(o, TransactionLog::VT_UPDATED_CHUNKS,"updated_chunks");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for TransactionLog<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("TransactionLog");
+      ds.field("id", &self.id());
+      ds.field("new_groups", &self.new_groups());
+      ds.field("new_arrays", &self.new_arrays());
+      ds.field("deleted_groups", &self.deleted_groups());
+      ds.field("deleted_arrays", &self.deleted_arrays());
+      ds.field("updated_user_attributes", &self.updated_user_attributes());
+      ds.field("updated_zarr_metadata", &self.updated_zarr_metadata());
+      ds.field("updated_chunks", &self.updated_chunks());
+      ds.finish()
+  }
+}
 }  // pub mod gen
 

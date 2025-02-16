@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     iter,
     mem::take,
 };
@@ -25,8 +25,8 @@ pub struct ChangeSet {
     // These paths may point to Arrays or Groups,
     // since both Groups and Arrays support UserAttributes
     updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
-    // FIXME: issue with too many inline chunks kept in mem
-    set_chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+    // It's important we keep these sorted, we use this fact in TransactionLog creation
+    set_chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
@@ -54,7 +54,7 @@ impl ChangeSet {
 
     pub fn chunk_changes(
         &self,
-    ) -> impl Iterator<Item = (&NodeId, &HashMap<ChunkIndices, Option<ChunkPayload>>)>
+    ) -> impl Iterator<Item = (&NodeId, &BTreeMap<ChunkIndices, Option<ChunkPayload>>)>
     {
         self.set_chunks.iter()
     }
@@ -167,7 +167,7 @@ impl ChangeSet {
             .and_modify(|h| {
                 h.insert(coord.clone(), data.clone());
             })
-            .or_insert(HashMap::from([(coord, data)]));
+            .or_insert(BTreeMap::from([(coord, data)]));
     }
 
     pub fn get_chunk_ref(
@@ -242,13 +242,13 @@ impl ChangeSet {
 
     pub fn take_chunks(
         &mut self,
-    ) -> HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>> {
+    ) -> BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>> {
         take(&mut self.set_chunks)
     }
 
     pub fn set_chunks(
         &mut self,
-        chunks: HashMap<NodeId, HashMap<ChunkIndices, Option<ChunkPayload>>>,
+        chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
     ) {
         self.set_chunks = chunks
     }

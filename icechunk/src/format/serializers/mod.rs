@@ -42,8 +42,6 @@
 //!   spec version number and use the right (de)-serializer to do the job.
 use std::io::{Read, Write};
 
-use current::{TransactionLogDeserializer, TransactionLogSerializer};
-
 use super::{
     format_constants::SpecVersionBin, manifest::Manifest, snapshot::Snapshot,
     transaction_log::TransactionLog, IcechunkFormatError,
@@ -81,11 +79,11 @@ pub fn serialize_transaction_log(
     transaction_log: &TransactionLog,
     version: SpecVersionBin,
     write: &mut impl Write,
-) -> Result<(), rmp_serde::encode::Error> {
+) {
     match version {
         SpecVersionBin::V0dot1 => {
-            let serializer = TransactionLogSerializer::from(transaction_log);
-            rmp_serde::encode::write(write, &serializer)
+            // FIXME:
+            write.write_all(transaction_log.bytes()).unwrap();
         }
     }
 }
@@ -122,12 +120,15 @@ pub fn deserialize_manifest(
 
 pub fn deserialize_transaction_log(
     version: SpecVersionBin,
-    read: Box<dyn Read>,
-) -> Result<TransactionLog, rmp_serde::decode::Error> {
+    mut read: Box<dyn Read>,
+) -> Result<TransactionLog, IcechunkFormatError> {
     match version {
         SpecVersionBin::V0dot1 => {
-            let deserializer: TransactionLogDeserializer = rmp_serde::from_read(read)?;
-            Ok(deserializer.into())
+            // TODO: what's a good capacity?
+            let mut buffer = Vec::with_capacity(1024 * 1024);
+            read.read_to_end(&mut buffer)?;
+            buffer.shrink_to_fit();
+            TransactionLog::from_buffer(buffer)
         }
     }
 }

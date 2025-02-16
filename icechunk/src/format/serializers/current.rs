@@ -109,30 +109,30 @@ pub struct TransactionLogSerializer<'a> {
     updated_chunks: &'a HashMap<NodeId, HashSet<ChunkIndices>>,
 }
 
-impl From<TransactionLogDeserializer> for TransactionLog {
-    fn from(value: TransactionLogDeserializer) -> Self {
-        Self {
-            new_groups: value.new_groups,
-            new_arrays: value.new_arrays,
-            deleted_groups: value.deleted_groups,
-            deleted_arrays: value.deleted_arrays,
-            updated_user_attributes: value.updated_user_attributes,
-            updated_zarr_metadata: value.updated_zarr_metadata,
-            updated_chunks: value.updated_chunks,
-        }
-    }
-}
-
-impl<'a> From<&'a TransactionLog> for TransactionLogSerializer<'a> {
-    fn from(value: &'a TransactionLog) -> Self {
-        Self {
-            new_groups: &value.new_groups,
-            new_arrays: &value.new_arrays,
-            deleted_groups: &value.deleted_groups,
-            deleted_arrays: &value.deleted_arrays,
-            updated_user_attributes: &value.updated_user_attributes,
-            updated_zarr_metadata: &value.updated_zarr_metadata,
-            updated_chunks: &value.updated_chunks,
-        }
-    }
-}
+//impl From<TransactionLogDeserializer> for TransactionLog {
+//    fn from(value: TransactionLogDeserializer) -> Self {
+//        Self {
+//            new_groups: value.new_groups,
+//            new_arrays: value.new_arrays,
+//            deleted_groups: value.deleted_groups,
+//            deleted_arrays: value.deleted_arrays,
+//            updated_user_attributes: value.updated_user_attributes,
+//            updated_zarr_metadata: value.updated_zarr_metadata,
+//            updated_chunks: value.updated_chunks,
+//        }
+//    }
+//}
+//
+//impl<'a> From<&'a TransactionLog> for TransactionLogSerializer<'a> {
+//    fn from(value: &'a TransactionLog) -> Self {
+//        Self {
+//            new_groups: &value.new_groups,
+//            new_arrays: &value.new_arrays,
+//            deleted_groups: &value.deleted_groups,
+//            deleted_arrays: &value.deleted_arrays,
+//            updated_user_attributes: &value.updated_user_attributes,
+//            updated_zarr_metadata: &value.updated_zarr_metadata,
+//            updated_chunks: &value.updated_chunks,
+//        }
+//    }
+//}
