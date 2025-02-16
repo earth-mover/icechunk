@@ -30,7 +30,7 @@ icechunk <object> <action> <args>
 Examples
 
 ```bash
-icechunk repo list
+icechunk repos list
 
 icechunk repo create <repo>
 icechunk repo info <repo>
