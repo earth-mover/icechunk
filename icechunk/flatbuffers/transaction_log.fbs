@@ -1,0 +1,29 @@
+include "object_ids.fbs";
+
+namespace gen;
+
+table ChunkIndices {
+  coords: [uint32] (required);
+}
+
+table ArrayUpdatedChunks {
+  node_id: ObjectId8 (required);
+  chunks: [ChunkIndices] (required);
+}
+
+table TransactionLog {
+  id: ObjectId12 (required);
+
+  new_groups: [ObjectId8] (required);
+  new_arrays: [ObjectId8] (required);
+
+  deleted_groups: [ObjectId8] (required);
+  deleted_arrays: [ObjectId8] (required);
+
+  updated_user_attributes: [ObjectId8] (required);
+  updated_zarr_metadata: [ObjectId8] (required);
+
+  updated_chunks: [ArrayUpdatedChunks] (required);
+}
+
+root_type TransactionLog;

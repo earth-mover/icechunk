@@ -1556,9 +1556,9 @@ async fn flush(
     );
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
-    // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(flush_data.change_set);
     let new_snapshot_id = new_snapshot.id();
+    // FIXME: this should execute in a non-blocking context
+    let tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
 
     flush_data
         .asset_manager

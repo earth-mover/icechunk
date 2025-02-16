@@ -9,6 +9,7 @@ use std::{
 
 use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
+use flatbuffers::gen;
 use format_constants::FileTypeBin;
 use itertools::Itertools;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
@@ -156,6 +157,12 @@ pub struct ChunkIndices(pub Vec<u32>);
 
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
+
+impl<'a> From<gen::ChunkIndices<'a>> for ChunkIndices {
+    fn from(value: gen::ChunkIndices<'a>) -> Self {
+        ChunkIndices(value.coords().iter().collect())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ByteRange {
