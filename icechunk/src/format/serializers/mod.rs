@@ -47,8 +47,6 @@ use super::{
     transaction_log::TransactionLog, IcechunkFormatError,
 };
 
-pub mod current;
-
 pub fn serialize_snapshot(
     snapshot: &Snapshot,
     version: SpecVersionBin,
@@ -65,10 +63,7 @@ pub fn serialize_manifest(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V0dot1 => {
-            // FIXME:
-            write.write_all(manifest.bytes())
-        }
+        SpecVersionBin::V0dot1 => write.write_all(manifest.bytes()),
     }
 }
 
@@ -78,10 +73,7 @@ pub fn serialize_transaction_log(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V0dot1 => {
-            // FIXME:
-            write.write_all(transaction_log.bytes())
-        }
+        SpecVersionBin::V0dot1 => write.write_all(transaction_log.bytes()),
     }
 }
 
