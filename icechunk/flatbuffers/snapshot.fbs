@@ -51,16 +51,22 @@ union UserAttributesSnapshot {
   Reference :UserAttributesRef,
 }
 
+// A range of chunk indexes
+struct ChunkIndexRange {
+  // inclusive
+  from: uint32;
+
+  // exclusive
+  to: uint32;
+}
+
 // a pointer to a manifest
 table ManifestRef {
     // id of the object in the repo's object store
     object_id: ObjectId12 (required);
 
-    // one corner of the bounding box for all refs in the manifest
-    extents_from: [uint32] (required);
-
-    // other corner of the bounding box for all refs in the manifest
-    extents_to: [uint32] (required);
+    // one element per dimension of the array, same order as in metadata
+    extents: [ChunkIndexRange] (required);
 }
 
 // a marker for a group node

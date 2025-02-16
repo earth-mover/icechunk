@@ -14,7 +14,7 @@ use crate::metadata::{
 
 use super::{
     flatbuffers::gen,
-    manifest::{Manifest, ManifestRef},
+    manifest::{Manifest, ManifestExtents, ManifestRef},
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId, TableOffset,
 };
@@ -140,8 +140,9 @@ impl From<&gen::ObjectId12> for AttributesId {
 
 impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
     fn from(value: gen::ManifestRef<'a>) -> Self {
-        let extents = ChunkIndices(value.extents_from().iter().collect())
-            ..ChunkIndices(value.extents_to().iter().collect());
+        let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
+        let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
+        let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
         ManifestRef { object_id: value.object_id().into(), extents }
     }
 }
@@ -622,16 +623,17 @@ fn mk_node_data(
                 .iter()
                 .map(|manref| {
                     let object_id = gen::ObjectId12::new(&manref.object_id.0);
-                    let extents_from =
-                        builder.create_vector(manref.extents.start.0.as_slice());
-                    let extents_to =
-                        builder.create_vector(manref.extents.end.0.as_slice());
+                    let extents = manref
+                        .extents
+                        .iter()
+                        .map(|range| gen::ChunkIndexRange::new(range.start, range.end))
+                        .collect::<Vec<_>>();
+                    let extents = builder.create_vector(&extents);
                     gen::ManifestRef::create(
                         builder,
                         &gen::ManifestRefArgs {
                             object_id: Some(&object_id),
-                            extents_from: Some(extents_from),
-                            extents_to: Some(extents_to),
+                            extents: Some(extents),
                         },
                     )
                 })
@@ -718,11 +720,11 @@ mod tests {
             ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[100, 100, 100]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[100, 100, 100]),
         };
 
         let oid = ObjectId::random();

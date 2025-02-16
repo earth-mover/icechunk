@@ -18,12 +18,28 @@ use super::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
 
-type ManifestExtents = Range<ChunkIndices>;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestExtents(Vec<Range<u32>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRef {
     pub object_id: ManifestId,
     pub extents: ManifestExtents,
+}
+
+impl ManifestExtents {
+    pub fn new(from: &[u32], to: &[u32]) -> Self {
+        let v = from
+            .iter()
+            .zip(to.iter())
+            .map(|(a, b)| Range { start: *a, end: *b })
+            .collect();
+        Self(v)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Range<u32>> {
+        self.0.iter()
+    }
 }
 
 #[derive(Debug, Error)]

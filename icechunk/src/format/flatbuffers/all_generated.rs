@@ -584,6 +584,134 @@ impl<'a> AttributeFileInfo {
 
 }
 
+// struct ChunkIndexRange, aligned to 4
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct ChunkIndexRange(pub [u8; 8]);
+impl Default for ChunkIndexRange { 
+  fn default() -> Self { 
+    Self([0; 8])
+  }
+}
+impl core::fmt::Debug for ChunkIndexRange {
+  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    f.debug_struct("ChunkIndexRange")
+      .field("from", &self.from())
+      .field("to", &self.to())
+      .finish()
+  }
+}
+
+impl flatbuffers::SimpleToVerifyInSlice for ChunkIndexRange {}
+impl<'a> flatbuffers::Follow<'a> for ChunkIndexRange {
+  type Inner = &'a ChunkIndexRange;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    <&'a ChunkIndexRange>::follow(buf, loc)
+  }
+}
+impl<'a> flatbuffers::Follow<'a> for &'a ChunkIndexRange {
+  type Inner = &'a ChunkIndexRange;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc)
+  }
+}
+impl<'b> flatbuffers::Push for ChunkIndexRange {
+    type Output = ChunkIndexRange;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = ::core::slice::from_raw_parts(self as *const ChunkIndexRange as *const u8, <Self as flatbuffers::Push>::size());
+        dst.copy_from_slice(src);
+    }
+    #[inline]
+    fn alignment() -> flatbuffers::PushAlignment {
+        flatbuffers::PushAlignment::new(4)
+    }
+}
+
+impl<'a> flatbuffers::Verifiable for ChunkIndexRange {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.in_buffer::<Self>(pos)
+  }
+}
+
+impl<'a> ChunkIndexRange {
+  #[allow(clippy::too_many_arguments)]
+  pub fn new(
+    from: u32,
+    to: u32,
+  ) -> Self {
+    let mut s = Self([0; 8]);
+    s.set_from(from);
+    s.set_to(to);
+    s
+  }
+
+  pub fn from(&self) -> u32 {
+    let mut mem = core::mem::MaybeUninit::<<u32 as EndianScalar>::Scalar>::uninit();
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid value in this slot
+    EndianScalar::from_little_endian(unsafe {
+      core::ptr::copy_nonoverlapping(
+        self.0[0..].as_ptr(),
+        mem.as_mut_ptr() as *mut u8,
+        core::mem::size_of::<<u32 as EndianScalar>::Scalar>(),
+      );
+      mem.assume_init()
+    })
+  }
+
+  pub fn set_from(&mut self, x: u32) {
+    let x_le = x.to_little_endian();
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid value in this slot
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        &x_le as *const _ as *const u8,
+        self.0[0..].as_mut_ptr(),
+        core::mem::size_of::<<u32 as EndianScalar>::Scalar>(),
+      );
+    }
+  }
+
+  pub fn to(&self) -> u32 {
+    let mut mem = core::mem::MaybeUninit::<<u32 as EndianScalar>::Scalar>::uninit();
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid value in this slot
+    EndianScalar::from_little_endian(unsafe {
+      core::ptr::copy_nonoverlapping(
+        self.0[4..].as_ptr(),
+        mem.as_mut_ptr() as *mut u8,
+        core::mem::size_of::<<u32 as EndianScalar>::Scalar>(),
+      );
+      mem.assume_init()
+    })
+  }
+
+  pub fn set_to(&mut self, x: u32) {
+    let x_le = x.to_little_endian();
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid value in this slot
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        &x_le as *const _ as *const u8,
+        self.0[4..].as_mut_ptr(),
+        core::mem::size_of::<<u32 as EndianScalar>::Scalar>(),
+      );
+    }
+  }
+
+}
+
 pub enum ChunkRefOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -1379,8 +1507,7 @@ impl<'a> flatbuffers::Follow<'a> for ManifestRef<'a> {
 
 impl<'a> ManifestRef<'a> {
   pub const VT_OBJECT_ID: flatbuffers::VOffsetT = 4;
-  pub const VT_EXTENTS_FROM: flatbuffers::VOffsetT = 6;
-  pub const VT_EXTENTS_TO: flatbuffers::VOffsetT = 8;
+  pub const VT_EXTENTS: flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -1392,8 +1519,7 @@ impl<'a> ManifestRef<'a> {
     args: &'args ManifestRefArgs<'args>
   ) -> flatbuffers::WIPOffset<ManifestRef<'bldr>> {
     let mut builder = ManifestRefBuilder::new(_fbb);
-    if let Some(x) = args.extents_to { builder.add_extents_to(x); }
-    if let Some(x) = args.extents_from { builder.add_extents_from(x); }
+    if let Some(x) = args.extents { builder.add_extents(x); }
     if let Some(x) = args.object_id { builder.add_object_id(x); }
     builder.finish()
   }
@@ -1407,18 +1533,11 @@ impl<'a> ManifestRef<'a> {
     unsafe { self._tab.get::<ObjectId12>(ManifestRef::VT_OBJECT_ID, None).unwrap()}
   }
   #[inline]
-  pub fn extents_from(&self) -> flatbuffers::Vector<'a, u32> {
+  pub fn extents(&self) -> flatbuffers::Vector<'a, ChunkIndexRange> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(ManifestRef::VT_EXTENTS_FROM, None).unwrap()}
-  }
-  #[inline]
-  pub fn extents_to(&self) -> flatbuffers::Vector<'a, u32> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(ManifestRef::VT_EXTENTS_TO, None).unwrap()}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ChunkIndexRange>>>(ManifestRef::VT_EXTENTS, None).unwrap()}
   }
 }
 
@@ -1430,24 +1549,21 @@ impl flatbuffers::Verifiable for ManifestRef<'_> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
      .visit_field::<ObjectId12>("object_id", Self::VT_OBJECT_ID, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("extents_from", Self::VT_EXTENTS_FROM, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("extents_to", Self::VT_EXTENTS_TO, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ChunkIndexRange>>>("extents", Self::VT_EXTENTS, true)?
      .finish();
     Ok(())
   }
 }
 pub struct ManifestRefArgs<'a> {
     pub object_id: Option<&'a ObjectId12>,
-    pub extents_from: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
-    pub extents_to: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
+    pub extents: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ChunkIndexRange>>>,
 }
 impl<'a> Default for ManifestRefArgs<'a> {
   #[inline]
   fn default() -> Self {
     ManifestRefArgs {
       object_id: None, // required field
-      extents_from: None, // required field
-      extents_to: None, // required field
+      extents: None, // required field
     }
   }
 }
@@ -1462,12 +1578,8 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestRefBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<&ObjectId12>(ManifestRef::VT_OBJECT_ID, object_id);
   }
   #[inline]
-  pub fn add_extents_from(&mut self, extents_from: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u32>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ManifestRef::VT_EXTENTS_FROM, extents_from);
-  }
-  #[inline]
-  pub fn add_extents_to(&mut self, extents_to: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u32>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ManifestRef::VT_EXTENTS_TO, extents_to);
+  pub fn add_extents(&mut self, extents: flatbuffers::WIPOffset<flatbuffers::Vector<'b , ChunkIndexRange>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ManifestRef::VT_EXTENTS, extents);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ManifestRefBuilder<'a, 'b, A> {
@@ -1481,8 +1593,7 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestRefBuilder<'a, 'b, A> {
   pub fn finish(self) -> flatbuffers::WIPOffset<ManifestRef<'a>> {
     let o = self.fbb_.end_table(self.start_);
     self.fbb_.required(o, ManifestRef::VT_OBJECT_ID,"object_id");
-    self.fbb_.required(o, ManifestRef::VT_EXTENTS_FROM,"extents_from");
-    self.fbb_.required(o, ManifestRef::VT_EXTENTS_TO,"extents_to");
+    self.fbb_.required(o, ManifestRef::VT_EXTENTS,"extents");
     flatbuffers::WIPOffset::new(o.value())
   }
 }
@@ -1491,8 +1602,7 @@ impl core::fmt::Debug for ManifestRef<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     let mut ds = f.debug_struct("ManifestRef");
       ds.field("object_id", &self.object_id());
-      ds.field("extents_from", &self.extents_from());
-      ds.field("extents_to", &self.extents_to());
+      ds.field("extents", &self.extents());
       ds.finish()
   }
 }

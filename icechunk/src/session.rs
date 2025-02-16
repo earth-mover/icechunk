@@ -26,7 +26,7 @@ use crate::{
     error::ICError,
     format::{
         manifest::{
-            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestRef,
+            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
@@ -1353,8 +1353,8 @@ impl<'a> FlushProcess<'a> {
         node_id: &NodeId,
         node_path: &Path,
     ) -> SessionResult<()> {
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
         let chunks = stream::iter(
             self.change_set
                 .new_array_chunk_iterator(node_id, node_path)
@@ -1371,8 +1371,10 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            let new_ref =
-                ManifestRef { object_id: new_manifest.id().clone(), extents: from..to };
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
 
             self.manifest_refs
                 .entry(node_id.clone())
@@ -1397,8 +1399,8 @@ impl<'a> FlushProcess<'a> {
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
         let updated_chunks =
             aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
 
@@ -1411,8 +1413,10 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            let new_ref =
-                ManifestRef { object_id: new_manifest.id().clone(), extents: from..to };
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
             self.manifest_refs
                 .entry(node.id.clone())
                 .and_modify(|v| v.push(new_ref.clone()))
@@ -1663,15 +1667,15 @@ async fn fetch_manifest(
 ///
 /// Yes, this is horrible.
 fn aggregate_extents<'a, T: std::fmt::Debug, E>(
-    from: &'a mut ChunkIndices,
-    to: &'a mut ChunkIndices,
+    from: &'a mut Vec<u32>,
+    to: &'a mut Vec<u32>,
     it: impl Stream<Item = Result<T, E>> + 'a,
     extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
 ) -> impl Stream<Item = Result<T, E>> + 'a {
     // we initialize the destination with an empty array, because we don't know
     // the dimensions of the array yet. On the first element we will re-initialize
-    from.0 = Vec::new();
-    to.0 = Vec::new();
+    *from = Vec::new();
+    *to = Vec::new();
     it.map_ok(move |t| {
         // these are the coordinates for the chunk
         let idx = extract_index(&t);
@@ -1680,20 +1684,20 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
         // we initialize with the value of the first element
         // this obviously doesn't work for empty streams
         // but we never generate manifests for them
-        if from.0.is_empty() {
-            from.0 = idx.0.clone();
+        if from.is_empty() {
+            *from = idx.0.clone();
             // important to remember that `to` is not inclusive, so we need +1
-            to.0 = idx.0.iter().map(|n| n + 1).collect();
+            *to = idx.0.iter().map(|n| n + 1).collect();
         } else {
             // We need to iterate over coordinates, and update the
             // minimum and maximum for each if needed
             for (coord_idx, value) in idx.0.iter().enumerate() {
-                if let Some(from_current) = from.0.get_mut(coord_idx) {
+                if let Some(from_current) = from.get_mut(coord_idx) {
                     if value < from_current {
                         *from_current = *value
                     }
                 }
-                if let Some(to_current) = to.0.get_mut(coord_idx) {
+                if let Some(to_current) = to.get_mut(coord_idx) {
                     let range_value = value + 1;
                     if range_value > *to_current {
                         *to_current = range_value
@@ -1715,6 +1719,7 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
+        format::manifest::ManifestExtents,
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
@@ -1847,19 +1852,19 @@ mod tests {
         #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
         indices: Vec<ChunkIndices>,
     ) {
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
 
-        let expected_from = ChunkIndices(vec![
+        let expected_from = vec![
             indices.iter().map(|i| i.0[0]).min().unwrap(),
             indices.iter().map(|i| i.0[1]).min().unwrap(),
             indices.iter().map(|i| i.0[2]).min().unwrap(),
-        ]);
-        let expected_to = ChunkIndices(vec![
+        ];
+        let expected_to = vec![
             indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
             indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
             indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
-        ]);
+        ];
 
         let _ = aggregate_extents(
             &mut from,
@@ -1927,7 +1932,7 @@ mod tests {
         };
         let manifest_ref = ManifestRef {
             object_id: manifest_id.clone(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[1, 1, 2]),
         };
         let array1_path: Path = "/array1".try_into().unwrap();
         let node_id = NodeId::random();
@@ -2265,7 +2270,7 @@ mod tests {
             NodeData::Array(_, manifests) => {
                 assert_eq!(
                     manifests.first().unwrap().extents,
-                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2])
+                    ManifestExtents::new(&[0, 0, 0], &[1, 1, 2])
                 );
             }
             NodeData::Group => {
@@ -2304,7 +2309,7 @@ mod tests {
             NodeData::Array(_, manifests) => {
                 assert_eq!(
                     manifests.first().unwrap().extents,
-                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 1])
+                    ManifestExtents::new(&[0, 0, 0], &[1, 1, 1])
                 );
             }
             NodeData::Group => {
