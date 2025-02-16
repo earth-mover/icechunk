@@ -1527,18 +1527,19 @@ async fn flush(
         flush_data.manifest_files.into_iter().collect(),
         vec![],
         all_nodes.into_iter().map(Ok::<_, Infallible>),
-    )
-    .unwrap();
+    )?;
 
-    if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+    let new_ts = new_snapshot.flushed_at()?;
+    let old_ts = old_snapshot.flushed_at()?;
+    if new_ts <= old_ts {
         tracing::error!(
-            new_timestamp = %new_snapshot.flushed_at(),
-            old_timestamp = %old_snapshot.flushed_at(),
+            new_timestamp = %new_ts,
+            old_timestamp = %old_ts,
             "Snapshot timestamp older than parent, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
-            parent: old_snapshot.flushed_at(),
-            child: new_snapshot.flushed_at(),
+            parent: old_ts,
+            child: new_ts,
         }
         .into());
     }
@@ -1571,15 +1572,15 @@ async fn flush(
 
     // Fail if there is too much clock difference with the object store
     // This is to prevent issues with snapshot ordering and expiration
-    if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+    if (snapshot_timestamp - new_ts).num_seconds().abs() > 600 {
         tracing::error!(
-            snapshot_timestamp = %new_snapshot.flushed_at(),
+            snapshot_timestamp = %new_ts,
             object_store_timestamp = %snapshot_timestamp,
             "Snapshot timestamp drifted from object store clock, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
-            snapshot_time: new_snapshot.flushed_at(),
+            snapshot_time: new_ts,
         }
         .into());
     }
@@ -1944,7 +1945,7 @@ mod tests {
             },
         ];
 
-        let initial = Snapshot::initial();
+        let initial = Snapshot::initial().unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
             None,
