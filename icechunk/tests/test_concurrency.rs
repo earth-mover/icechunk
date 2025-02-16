@@ -165,7 +165,7 @@ async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
             .list_nodes()
             .await
             .expect("list_nodes failed")
-            .map(|n| n.path.to_string())
+            .map(|n| n.unwrap().path.to_string())
             .collect::<HashSet<_>>();
         assert_eq!(expected_nodes, nodes);
 

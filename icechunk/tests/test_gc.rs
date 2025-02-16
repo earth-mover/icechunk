@@ -470,7 +470,6 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
 
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
-    dbg!(branch_commit_messages(&repo, "main").await);
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
         Vec::from(["14", "13", "12", "Repository initialized"])

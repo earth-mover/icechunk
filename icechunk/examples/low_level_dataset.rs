@@ -286,6 +286,7 @@ async fn print_nodes(ds: &Session) -> Result<(), SessionError> {
     let rows = ds
         .list_nodes()
         .await?
+        .map(|n| n.unwrap())
         .sorted_by_key(|n| n.path.clone())
         .map(|node| {
             format!(
