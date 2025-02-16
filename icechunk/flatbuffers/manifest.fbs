@@ -1,0 +1,32 @@
+include "object_ids.fbs";
+
+namespace gen;
+
+table ChunkRef {
+  index: [uint32] (required);
+
+  inline: [uint8];
+
+  offset: uint64 = 0;
+  length: uint64 = 0;
+
+  chunk_id: ObjectId12;
+
+  location: string;
+  checksum_etag: string;
+  checksum_last_modified: uint32 = 0;
+}
+
+table ArrayManifest {
+  node_id: ObjectId8 (required);
+  refs: [ChunkRef] (required);
+}
+
+table Manifest {
+  id: ObjectId12 (required);
+  arrays: [ArrayManifest] (required);
+}
+
+root_type Manifest;
+
+// flatc --rust --rust-module-root-file -o ../src/format/flatbuffers/ manifest.fbs object_ids.fbs snapshot.fbs  

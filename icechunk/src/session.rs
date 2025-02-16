@@ -13,6 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -306,8 +307,8 @@ impl Session {
                 let nodes_iter: Vec<NodeSnapshot> = self
                     .list_nodes()
                     .await?
-                    .filter(|node| node.path.starts_with(&parent.path))
-                    .collect();
+                    .filter_ok(|node| node.path.starts_with(&parent.path))
+                    .try_collect()?;
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
@@ -655,8 +656,11 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn clear(&mut self) -> SessionResult<()> {
         // TODO: can this be a delete_group("/") instead?
-        let to_delete: Vec<(NodeType, Path)> =
-            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
+        let to_delete: Vec<(NodeType, Path)> = self
+            .list_nodes()
+            .await?
+            .map_ok(|node| (node.node_type(), node.path))
+            .try_collect()?;
 
         for (t, p) in to_delete {
             match t {
@@ -697,7 +701,7 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn list_nodes(
         &self,
-    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
+    ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + '_> {
         updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id).await
     }
 
@@ -925,7 +929,7 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             let ancestry = Arc::clone(&self.asset_manager)
-                .snapshot_ancestry(current_snapshot.id())
+                .snapshot_ancestry(&current_snapshot.id())
                 .await?
                 .map_ok(|meta| meta.id);
             let new_commits =
@@ -989,10 +993,11 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node).await
+    let res = nodes.and_then(move |node| async move {
+        Ok(updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node)
+            .await)
     });
-    Ok(res.flatten())
+    Ok(res.try_flatten())
 }
 
 async fn updated_node_chunks_iterator<'a>(
@@ -1082,10 +1087,10 @@ async fn verified_node_chunk_iterator<'a>(
                                     Ok(manifest) => {
                                         let old_chunks = manifest
                                             .iter(node_id_c.clone())
-                                            .filter(move |(coord, _)| {
+                                            .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
-                                            .map(move |(coord, payload)| ChunkInfo {
+                                            .map_ok(move |(coord, payload)| ChunkInfo {
                                                 node: node_id_c2.clone(),
                                                 coord,
                                                 payload,
@@ -1096,7 +1101,8 @@ async fn verified_node_chunk_iterator<'a>(
                                                 node_id_c3, old_chunks,
                                             );
                                         futures::future::Either::Left(
-                                            futures::stream::iter(old_chunks.map(Ok)),
+                                            futures::stream::iter(old_chunks)
+                                                .map_err(|e| e.into()),
                                         )
                                     }
                                     // if we cannot even fetch the manifest, we generate a
@@ -1163,12 +1169,16 @@ async fn updated_existing_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
     let updated_nodes = asset_manager
         .fetch_snapshot(parent_id)
         .await?
         .iter_arc()
-        .filter_map(move |node| change_set.update_existing_node(node));
+        .filter_map_ok(move |node| change_set.update_existing_node(node))
+        .map(|n| match n {
+            Ok(n) => Ok(n),
+            Err(err) => Err(SessionError::from(err)),
+        });
 
     Ok(updated_nodes)
 }
@@ -1179,10 +1189,10 @@ async fn updated_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
     Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
         .await?
-        .chain(change_set.new_nodes_iterator()))
+        .chain(change_set.new_nodes_iterator().map(Ok)))
 }
 
 async fn get_node(
@@ -1359,7 +1369,7 @@ impl<'a> FlushProcess<'a> {
             self.manifest_files.insert(file_info);
 
             let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+                ManifestRef { object_id: new_manifest.id().clone(), extents: from..to };
 
             self.manifest_refs
                 .entry(node_id.clone())
@@ -1399,7 +1409,7 @@ impl<'a> FlushProcess<'a> {
             self.manifest_files.insert(file_info);
 
             let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+                ManifestRef { object_id: new_manifest.id().clone(), extents: from..to };
             self.manifest_refs
                 .entry(node.id.clone())
                 .and_modify(|v| v.push(new_ref.clone()))
@@ -1450,7 +1460,9 @@ async fn flush(
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
-    for node in old_snapshot.iter().filter(|node| node.node_type() == NodeType::Array) {
+    for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
+    {
+        let node = node?;
         trace!(path=%node.path, "Flushing node");
         let node_id = &node.id;
 
@@ -1462,13 +1474,13 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            flush_data.write_manifest_for_existing_node(node).await?;
+            flush_data.write_manifest_for_existing_node(&node).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
             // FIXME: deal with the case of metadata shrinking an existing array, we should clear
             // extra chunks that no longer fit in the array
-            flush_data.copy_previous_manifest(node, old_snapshot.as_ref());
+            flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
         }
     }
 
@@ -1480,13 +1492,15 @@ async fn flush(
     }
 
     trace!("Building new snapshot");
-    let all_nodes = updated_nodes(
+    // gather and sort nodes:
+    // this is a requirement for Snapshot::from_iter
+    let mut all_nodes: Vec<_> = updated_nodes(
         flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
     )
     .await?
-    .map(|node| {
+    .map_ok(|node| {
         let id = &node.id;
         // TODO: many clones
         if let NodeData::Array(meta, _) = node.node_data {
@@ -1500,26 +1514,32 @@ async fn flush(
         } else {
             node
         }
-    });
+    })
+    .try_collect()?;
+
+    all_nodes.sort_by(|a, b| a.path.cmp(&b.path));
 
     let new_snapshot = Snapshot::from_iter(
-        old_snapshot.id().clone(),
+        None,
+        Some(old_snapshot.id().clone()),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
         vec![],
-        all_nodes,
-    );
+        all_nodes.into_iter().map(Ok::<_, Infallible>),
+    )?;
 
-    if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+    let new_ts = new_snapshot.flushed_at()?;
+    let old_ts = old_snapshot.flushed_at()?;
+    if new_ts <= old_ts {
         tracing::error!(
-            new_timestamp = %new_snapshot.flushed_at(),
-            old_timestamp = %old_snapshot.flushed_at(),
+            new_timestamp = %new_ts,
+            old_timestamp = %old_ts,
             "Snapshot timestamp older than parent, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
-            parent: *old_snapshot.flushed_at(),
-            child: *new_snapshot.flushed_at(),
+            parent: old_ts,
+            child: new_ts,
         }
         .into());
     }
@@ -1530,15 +1550,15 @@ async fn flush(
     let snapshot_timestamp = tokio::spawn(
         async move {
             asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
-            asset_manager.get_snapshot_last_modified(new_snapshot_c.id()).await
+            asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
         }
         .in_current_span(),
     );
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
-    // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(flush_data.change_set);
     let new_snapshot_id = new_snapshot.id();
+    // FIXME: this should execute in a non-blocking context
+    let tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
 
     flush_data
         .asset_manager
@@ -1552,15 +1572,15 @@ async fn flush(
 
     // Fail if there is too much clock difference with the object store
     // This is to prevent issues with snapshot ordering and expiration
-    if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+    if (snapshot_timestamp - new_ts).num_seconds().abs() > 600 {
         tracing::error!(
-            snapshot_timestamp = %new_snapshot.flushed_at(),
+            snapshot_timestamp = %new_ts,
             object_store_timestamp = %snapshot_timestamp,
             "Snapshot timestamp drifted from object store clock, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
-            snapshot_time: *new_snapshot.flushed_at(),
+            snapshot_time: new_ts,
         }
         .into());
     }
@@ -1878,7 +1898,7 @@ mod tests {
         let manifest =
             Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
         let manifest = Arc::new(manifest);
-        let manifest_id = &manifest.id;
+        let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
@@ -1925,16 +1945,17 @@ mod tests {
             },
         ];
 
-        let initial = Snapshot::initial();
+        let initial = Snapshot::initial().unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
-            initial.id().clone(),
+            None,
+            Some(initial.id().clone()),
             "message".to_string(),
             None,
             manifests,
             vec![],
-            nodes.iter().cloned(),
-        ));
+            nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
+        )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
         update_branch(
             storage.as_ref(),

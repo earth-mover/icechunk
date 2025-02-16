@@ -700,7 +700,7 @@ impl Store {
             let repository = Arc::clone(&self.session).read_owned().await;
             for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
-                let meta_key = Key::Metadata { node_path: node.path }.to_string();
+                let meta_key = Key::Metadata { node_path: node?.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
                     if strip_prefix {
                         yield meta_key.trim_start_matches(prefix).trim_start_matches("/").to_string();

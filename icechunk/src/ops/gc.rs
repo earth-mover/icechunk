@@ -182,25 +182,33 @@ pub async fn garbage_collect(
         }
 
         if config.deletes_manifests() {
-            keep_manifests.extend(snap.manifest_files().keys().cloned());
+            keep_manifests.extend(snap.manifest_files().map(|mf| mf.id));
         }
 
         if config.deletes_chunks() {
-            for manifest_id in snap.manifest_files().keys() {
-                let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
-                    IcechunkFormatError::from(
-                        IcechunkFormatErrorKind::ManifestInfoNotFound {
-                            manifest_id: manifest_id.clone(),
-                        },
-                    )
-                })?;
+            for manifest_id in snap.manifest_files().map(|mf| mf.id) {
+                let manifest_info =
+                    snap.manifest_info(&manifest_id).ok_or_else(|| {
+                        IcechunkFormatError::from(
+                            IcechunkFormatErrorKind::ManifestInfoNotFound {
+                                manifest_id: manifest_id.clone(),
+                            },
+                        )
+                    })?;
                 let manifest = asset_manager
-                    .fetch_manifest(manifest_id, manifest_info.size_bytes)
+                    .fetch_manifest(&manifest_id, manifest_info.size_bytes)
                     .await?;
                 let chunk_ids =
                     manifest.chunk_payloads().filter_map(|payload| match payload {
-                        ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
-                        _ => None,
+                        Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                        Ok(_) => None,
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "Error in chunk payload iterator"
+                            );
+                            None
+                        }
                     });
                 keep_chunks.extend(chunk_ids);
             }
@@ -260,7 +268,7 @@ async fn pointed_snapshots<'a>(
             async move {
                 let snap = asset_manager.fetch_snapshot(&snap_id).await?;
                 let parents = Arc::clone(&asset_manager)
-                    .snapshot_ancestry(snap.id())
+                    .snapshot_ancestry(&snap.id())
                     .await?
                     .map_ok(|parent| parent.id)
                     .err_into();
@@ -440,7 +448,7 @@ pub async fn expire_ref(
 
     let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
     let parent_id = editable_snap.parent_id();
-    if editable_snap.id() == &root || Some(&root) == parent_id.as_ref() {
+    if editable_snap.id() == root || Some(&root) == parent_id.as_ref() {
         // Either the reference is the root, or it is pointing to the root as first parent
         // Nothing to do
         return Ok(ExpireRefResult::NothingToDo);
@@ -448,7 +456,7 @@ pub async fn expire_ref(
 
     let root = asset_manager.fetch_snapshot(&root).await?;
     // TODO: add properties to the snapshot that tell us it was history edited
-    let new_snapshot = Arc::new(editable_snap.adopt(root.as_ref()));
+    let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
     asset_manager.write_snapshot(new_snapshot).await?;
 
     Ok(ExpireRefResult::Done {

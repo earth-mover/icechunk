@@ -55,6 +55,7 @@ tracing-subscriber = { version = "0.3.19", features = [
 tracing = "0.1.41"
 err-into = "1.0.1"
 serde_yaml_ng = "0.10.0"
+flatbuffers = "25.2.10"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
