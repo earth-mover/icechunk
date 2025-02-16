@@ -140,13 +140,11 @@ pub struct ChunkInfo {
 #[derive(Debug)]
 pub struct Manifest {
     buffer: Vec<u8>,
-    len: usize,
-    id: ManifestId,
 }
 
 impl Manifest {
-    pub fn id(&self) -> &ManifestId {
-        &self.id
+    pub fn id(&self) -> ManifestId {
+        ManifestId::new(self.root().id().0)
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -154,13 +152,11 @@ impl Manifest {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Manifest, IcechunkFormatError> {
-        let manifest = flatbuffers::root_with_opts::<gen::Manifest>(
+        let _ = flatbuffers::root_with_opts::<gen::Manifest>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
-        let id = ManifestId::new(manifest.id().0);
-        let len = manifest.arrays().iter().map(|am| am.refs().len()).sum();
-        Ok(Manifest { buffer, len, id })
+        Ok(Manifest { buffer })
     }
 
     pub async fn from_stream<E>(
@@ -175,7 +171,6 @@ impl Manifest {
         let mut all = all.iter().peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
-        let mut len = 0;
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
             // TODO: what is a good capacity
             let mut refs = Vec::with_capacity(8_192);
@@ -183,7 +178,6 @@ impl Manifest {
                 refs.push(mk_chunk_ref(&mut builder, chunk));
             }
 
-            len += refs.len();
             let node_id = Some(gen::ObjectId8::new(&current_node.0));
             let refs = Some(builder.create_vector(refs.as_slice()));
             let array_manifest = gen::ArrayManifest::create(
@@ -211,7 +205,7 @@ impl Manifest {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Some(Manifest { buffer, len, id: manifest_id }))
+        Ok(Some(Manifest { buffer }))
     }
 
     /// Used for tests
@@ -222,7 +216,7 @@ impl Manifest {
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        self.root().arrays().iter().map(|am| am.refs().len()).sum()
     }
 
     #[must_use]

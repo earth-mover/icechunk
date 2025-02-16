@@ -34,13 +34,13 @@ use crate::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, Snapshot,
             SnapshotProperties, UserAttributesSnapshot, ZarrArrayMetadata,
         },
-        transaction_log::{Diff, TransactionLog},
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError, RefErrorKind},
-    repository::{tx_to_diff, RepositoryError, RepositoryErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     RepositoryConfig, Storage, StorageError,
@@ -254,7 +254,8 @@ impl Session {
 
     /// Compute an overview of the current session changes
     pub async fn status(&self) -> SessionResult<Diff> {
-        let tx_log = TransactionLog::new(&self.change_set);
+        // it doesn't really matter what Id we give to the tx log, it's not going to be persisted
+        let tx_log = TransactionLog::new(&SnapshotId::random(), &self.change_set);
         let from_session = Self::create_readonly_session(
             self.config().clone(),
             self.storage_settings.as_ref().clone(),
@@ -263,7 +264,9 @@ impl Session {
             Arc::clone(&self.virtual_resolver),
             self.snapshot_id.clone(),
         );
-        tx_to_diff(&tx_log, &from_session, self).await
+        let mut builder = DiffBuilder::default();
+        builder.add_changes(&tx_log);
+        builder.to_diff(&from_session, self).await
     }
 
     /// Add a group to the store.

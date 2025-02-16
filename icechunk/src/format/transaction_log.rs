@@ -1,12 +1,16 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     iter,
 };
 
 use flatbuffers::VerifierOptions;
-use itertools::Either;
+use itertools::{Either, Itertools as _};
 
-use crate::{change_set::ChangeSet, format::flatbuffers::gen::ObjectId12};
+use crate::{
+    change_set::ChangeSet,
+    format::flatbuffers::gen::ObjectId12,
+    session::{Session, SessionResult},
+};
 
 use super::{flatbuffers::gen, ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId};
 
@@ -246,6 +250,50 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     ignore_missing_null_terminator: true,
 };
 
+#[derive(Debug, Default)]
+pub struct DiffBuilder {
+    new_groups: HashSet<NodeId>,
+    new_arrays: HashSet<NodeId>,
+    deleted_groups: HashSet<NodeId>,
+    deleted_arrays: HashSet<NodeId>,
+    updated_user_attributes: HashSet<NodeId>,
+    updated_zarr_metadata: HashSet<NodeId>,
+    // we use sorted set here to simply move it to a diff without having to rebuild
+    updated_chunks: HashMap<NodeId, BTreeSet<ChunkIndices>>,
+}
+
+impl DiffBuilder {
+    pub fn add_changes(&mut self, tx: &TransactionLog) {
+        self.new_groups.extend(tx.new_groups());
+        self.new_arrays.extend(tx.new_arrays());
+        self.deleted_groups.extend(tx.deleted_groups());
+        self.deleted_arrays.extend(tx.deleted_arrays());
+        self.updated_user_attributes.extend(tx.updated_user_attributes());
+        self.updated_zarr_metadata.extend(tx.updated_zarr_metadata());
+
+        for (node, chunks) in tx.updated_chunks() {
+            match self.updated_chunks.get_mut(&node) {
+                Some(all_chunks) => {
+                    all_chunks.extend(chunks);
+                }
+                None => {
+                    self.updated_chunks.insert(node, BTreeSet::from_iter(chunks));
+                }
+            }
+        }
+    }
+
+    pub async fn to_diff(self, from: &Session, to: &Session) -> SessionResult<Diff> {
+        let nodes: HashMap<NodeId, Path> = from
+            .list_nodes()
+            .await?
+            .chain(to.list_nodes().await?)
+            .map_ok(|n| (n.id, n.path))
+            .try_collect()?;
+        Ok(Diff::from_diff_builder(self, nodes))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Diff {
     pub new_groups: BTreeSet<Path>,
@@ -258,39 +306,48 @@ pub struct Diff {
 }
 
 impl Diff {
-    pub fn from_transaction_log(
-        tx: &TransactionLog,
-        nodes: HashMap<NodeId, Path>,
-    ) -> Self {
-        let new_groups =
-            tx.new_groups().flat_map(|node_id| nodes.get(&node_id)).cloned().collect();
-        let new_arrays =
-            tx.new_arrays().flat_map(|node_id| nodes.get(&node_id)).cloned().collect();
+    fn from_diff_builder(tx: DiffBuilder, nodes: HashMap<NodeId, Path>) -> Self {
+        let new_groups = tx
+            .new_groups
+            .iter()
+            .flat_map(|node_id| nodes.get(node_id))
+            .cloned()
+            .collect();
+        let new_arrays = tx
+            .new_arrays
+            .iter()
+            .flat_map(|node_id| nodes.get(node_id))
+            .cloned()
+            .collect();
         let deleted_groups = tx
-            .deleted_groups()
-            .flat_map(|node_id| nodes.get(&node_id))
+            .deleted_groups
+            .iter()
+            .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
         let deleted_arrays = tx
-            .deleted_arrays()
-            .flat_map(|node_id| nodes.get(&node_id))
+            .deleted_arrays
+            .iter()
+            .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
         let updated_user_attributes = tx
-            .updated_user_attributes()
-            .flat_map(|node_id| nodes.get(&node_id))
+            .updated_user_attributes
+            .iter()
+            .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
         let updated_zarr_metadata = tx
-            .updated_zarr_metadata()
-            .flat_map(|node_id| nodes.get(&node_id))
+            .updated_zarr_metadata
+            .iter()
+            .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
         let updated_chunks = tx
-            .updated_chunks()
-            .flat_map(|(node_id, chunks_iter)| {
+            .updated_chunks
+            .into_iter()
+            .flat_map(|(node_id, chunks)| {
                 let path = nodes.get(&node_id).cloned()?;
-                let chunks = chunks_iter.collect();
                 Some((path, chunks))
             })
             .collect();

@@ -609,7 +609,7 @@ async fn write_new_tx_log(
             new_log.as_ref(),
             SpecVersionBin::current(),
             &mut compressor,
-        )?;
+        );
         compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
@@ -637,9 +637,8 @@ async fn fetch_transaction_log(
             Reader::Asynchronous(read),
             FileTypeBin::TransactionLog,
         )?;
-        deserialize_transaction_log(spec_version, decompressor).map_err(|err| {
-            RepositoryError::from(RepositoryErrorKind::DeserializationError(err))
-        })
+        deserialize_transaction_log(spec_version, decompressor)
+            .map_err(RepositoryError::from)
     })
     .await?
     .map(Arc::new)
@@ -725,7 +724,7 @@ mod test {
         let id = manifest.id();
         let size = caching.write_manifest(Arc::clone(&manifest)).await?;
 
-        let fetched = caching.fetch_manifest(id, size).await?;
+        let fetched = caching.fetch_manifest(&id, size).await?;
         assert_eq!(fetched.len(), 1);
         assert_equal(
             fetched.iter(node2.clone()).map(|x| x.unwrap()),
@@ -733,26 +732,26 @@ mod test {
         );
 
         // fetch again
-        caching.fetch_manifest(id, size).await?;
+        caching.fetch_manifest(&id, size).await?;
         // when we insert we cache, so no fetches
         assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
-        caching.fetch_manifest(pre_existing_id, pre_size).await?;
+        caching.fetch_manifest(&pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
 
         // only calls backend once
-        caching.fetch_manifest(pre_existing_id, pre_size).await?;
+        caching.fetch_manifest(&pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
 
         // other walues still cached
-        caching.fetch_manifest(id, size).await?;
+        caching.fetch_manifest(&id, size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
@@ -811,9 +810,9 @@ mod test {
 
         // we keep asking for all 3 items, but the cache can only fit 2
         for _ in 0..20 {
-            caching.fetch_manifest(id1, size1).await?;
-            caching.fetch_manifest(id2, size2).await?;
-            caching.fetch_manifest(id3, size3).await?;
+            caching.fetch_manifest(&id1, size1).await?;
+            caching.fetch_manifest(&id2, size2).await?;
+            caching.fetch_manifest(&id3, size3).await?;
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);

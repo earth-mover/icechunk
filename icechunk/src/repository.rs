@@ -10,7 +10,6 @@ use futures::{
     stream::{FuturesOrdered, FuturesUnordered},
     Stream, StreamExt, TryStreamExt,
 };
-use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -23,7 +22,7 @@ use crate::{
     error::ICError,
     format::{
         snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
-        transaction_log::{Diff, TransactionLog},
+        transaction_log::{Diff, DiffBuilder},
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
     },
@@ -630,9 +629,9 @@ impl Repository {
             })
             .collect();
 
-        let full_log = fut
-            .try_fold(TransactionLog::default(), |mut res, log| {
-                res.merge(log.as_ref());
+        let builder = fut
+            .try_fold(DiffBuilder::default(), |mut res, log| {
+                res.add_changes(log.as_ref());
                 ready(Ok(res))
             })
             .await?;
@@ -642,7 +641,7 @@ impl Repository {
                 self.readonly_session(&VersionInfo::SnapshotId(from)).await?;
             let to_session =
                 self.readonly_session(&VersionInfo::SnapshotId(to_snap)).await?;
-            tx_to_diff(&full_log, &from_session, &to_session).await
+            builder.to_diff(&from_session, &to_session).await
         } else {
             Err(SessionErrorKind::BadSnapshotChainForDiff.into())
         }
@@ -817,20 +816,6 @@ pub async fn raise_if_invalid_snapshot_id(
         .await
         .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
-}
-
-pub async fn tx_to_diff(
-    tx: &TransactionLog,
-    from: &Session,
-    to: &Session,
-) -> SessionResult<Diff> {
-    let nodes: HashMap<NodeId, Path> = from
-        .list_nodes()
-        .await?
-        .chain(to.list_nodes().await?)
-        .map_ok(|n| (n.id, n.path))
-        .try_collect()?;
-    Ok(Diff::from_transaction_log(tx, nodes))
 }
 
 #[cfg(test)]
