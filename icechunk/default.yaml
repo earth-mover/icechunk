@@ -1,0 +1,31 @@
+repos:
+  localrepo: !LocalFileSystem
+    path: testfolder
+    config:
+      inline_chunk_threshold_bytes: null
+      unsafe_overwrite_refs: null
+      get_partial_values_concurrency: null
+      compression: null
+      caching: null
+      storage: null
+      virtual_chunk_containers: null
+      manifest: null
+  s3repo: !S3
+    location:
+      bucket: testbucket
+      prefix: testfolder
+    object_store_config:
+      region: eu-west-1
+      endpoint_url: null
+      anonymous: false
+      allow_http: false
+    credentials: FromEnv
+    config:
+      inline_chunk_threshold_bytes: null
+      unsafe_overwrite_refs: null
+      get_partial_values_concurrency: null
+      compression: null
+      caching: null
+      storage: null
+      virtual_chunk_containers: null
+      manifest: null
