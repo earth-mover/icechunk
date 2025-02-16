@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{collections::BTreeMap, convert::Infallible, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
@@ -229,7 +229,7 @@ impl From<&gen::ManifestFileInfo> for ManifestFileInfo {
         Self {
             id: value.id().into(),
             size_bytes: value.size_bytes(),
-            num_rows: value.num_rows(),
+            num_chunk_refs: value.num_chunk_refs(),
         }
     }
 }
@@ -240,18 +240,22 @@ impl From<&gen::AttributeFileInfo> for AttributeFileInfo {
     }
 }
 
-pub type SnapshotProperties = HashMap<String, Value>;
+pub type SnapshotProperties = BTreeMap<String, Value>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
     pub size_bytes: u64,
-    pub num_rows: u32,
+    pub num_chunk_refs: u32,
 }
 
 impl ManifestFileInfo {
     pub fn new(manifest: &Manifest, size_bytes: u64) -> Self {
-        Self { id: manifest.id().clone(), num_rows: manifest.len() as u32, size_bytes }
+        Self {
+            id: manifest.id().clone(),
+            num_chunk_refs: manifest.len() as u32,
+            size_bytes,
+        }
     }
 }
 
@@ -321,8 +325,8 @@ impl Snapshot {
         parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
-        manifest_files: Vec<ManifestFileInfo>,
-        attribute_files: Vec<AttributeFileInfo>,
+        mut manifest_files: Vec<ManifestFileInfo>,
+        mut attribute_files: Vec<AttributeFileInfo>,
         sorted_iter: I,
     ) -> IcechunkResult<Self>
     where
@@ -332,15 +336,17 @@ impl Snapshot {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
 
+        manifest_files.sort_by(|a, b| a.id.cmp(&b.id));
         let manifest_files = manifest_files
             .iter()
             .map(|mfi| {
                 let id = gen::ObjectId12::new(&mfi.id.0);
-                gen::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_rows)
+                gen::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_chunk_refs)
             })
             .collect::<Vec<_>>();
         let manifest_files = builder.create_vector(&manifest_files);
 
+        attribute_files.sort_by(|a, b| a.id.cmp(&b.id));
         let attribute_files = attribute_files
             .iter()
             .map(|att| {
@@ -459,7 +465,7 @@ impl Snapshot {
             |mf| ManifestFileInfo {
                 id: ManifestId::new(mf.id().0),
                 size_bytes: mf.size_bytes(),
-                num_rows: mf.num_rows(),
+                num_chunk_refs: mf.num_chunk_refs(),
             },
         )
     }
@@ -779,12 +785,12 @@ mod tests {
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
                 size_bytes: 1_000_000,
-                num_rows: 100_000,
+                num_chunk_refs: 100_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
                 size_bytes: 1_000_000,
-                num_rows: 100_000,
+                num_chunk_refs: 100_000,
             },
         ];
         let st = Snapshot::from_iter(

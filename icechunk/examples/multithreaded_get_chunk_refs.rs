@@ -1,3 +1,13 @@
+//! This example is used to benchmark multithreaded reads and writes of manifest files
+//!
+//! It launches hundreds of thousands of tasks to writes and then read refs.
+//! It generates a manifest with 1M refs and executes 1M random reads.
+//! Local filesystem storage is used to try to measure times without depending
+//! on bandwidith.
+//!
+//! Run the example passing --write /path/to/repo
+//! and then passing --read /path/to/repo
+
 #![allow(clippy::unwrap_used)]
 
 use std::{

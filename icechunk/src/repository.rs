@@ -717,7 +717,7 @@ impl Repository {
                                         if let Some(manifest_info) =
                                             snap_c.manifest_info(&manifest_id)
                                         {
-                                            if loaded_refs + manifest_info.num_rows
+                                            if loaded_refs + manifest_info.num_chunk_refs
                                                 <= preload_config.max_total_refs()
                                                 && preload_config
                                                     .preload_if()
@@ -744,7 +744,8 @@ impl Repository {
                                                     }
                                                 });
                                                 loaded_manifests.insert(manifest_id);
-                                                loaded_refs += manifest_info.num_rows;
+                                                loaded_refs +=
+                                                    manifest_info.num_chunk_refs;
                                             }
                                         }
                                     }
@@ -782,7 +783,7 @@ impl ManifestPreloadCondition {
                 })
                 .unwrap_or(false),
             ManifestPreloadCondition::NumRefs { from, to } => {
-                (*from, *to).contains(&info.num_rows)
+                (*from, *to).contains(&info.num_chunk_refs)
             }
             ManifestPreloadCondition::True => true,
             ManifestPreloadCondition::False => false,
@@ -988,12 +989,20 @@ mod tests {
         // no name match
         assert!(!condition.matches(
             &"/array".try_into().unwrap(),
-            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+            &ManifestFileInfo {
+                id: ManifestId::random(),
+                size_bytes: 1,
+                num_chunk_refs: 1
+            }
         ));
         // partial match only
         assert!(!condition.matches(
             &"/nottime".try_into().unwrap(),
-            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+            &ManifestFileInfo {
+                id: ManifestId::random(),
+                size_bytes: 1,
+                num_chunk_refs: 1
+            }
         ));
         // too large to match
         assert!(!condition.matches(
@@ -1001,7 +1010,7 @@ mod tests {
             &ManifestFileInfo {
                 id: ManifestId::random(),
                 size_bytes: 1,
-                num_rows: 1_000_000
+                num_chunk_refs: 1_000_000
             }
         ));
     }

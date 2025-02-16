@@ -376,7 +376,7 @@ impl core::fmt::Debug for ManifestFileInfo {
     f.debug_struct("ManifestFileInfo")
       .field("id", &self.id())
       .field("size_bytes", &self.size_bytes())
-      .field("num_rows", &self.num_rows())
+      .field("num_chunk_refs", &self.num_chunk_refs())
       .finish()
   }
 }
@@ -424,12 +424,12 @@ impl<'a> ManifestFileInfo {
   pub fn new(
     id: &ObjectId12,
     size_bytes: u64,
-    num_rows: u32,
+    num_chunk_refs: u32,
   ) -> Self {
     let mut s = Self([0; 32]);
     s.set_id(id);
     s.set_size_bytes(size_bytes);
-    s.set_num_rows(num_rows);
+    s.set_num_chunk_refs(num_chunk_refs);
     s
   }
 
@@ -474,7 +474,7 @@ impl<'a> ManifestFileInfo {
     }
   }
 
-  pub fn num_rows(&self) -> u32 {
+  pub fn num_chunk_refs(&self) -> u32 {
     let mut mem = core::mem::MaybeUninit::<<u32 as EndianScalar>::Scalar>::uninit();
     // Safety:
     // Created from a valid Table for this object
@@ -489,7 +489,7 @@ impl<'a> ManifestFileInfo {
     })
   }
 
-  pub fn set_num_rows(&mut self, x: u32) {
+  pub fn set_num_chunk_refs(&mut self, x: u32) {
     let x_le = x.to_little_endian();
     // Safety:
     // Created from a valid Table for this object
