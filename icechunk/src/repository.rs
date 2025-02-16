@@ -705,56 +705,57 @@ impl Repository {
                 let snap_c = Arc::clone(&snap);
                 for node in snap.iter_arc() {
                     match node {
-                        Err(err) => {error!(error=%err, "Error retrieving snapshot nodes");}
-                        Ok(node) => {
-                    match node.node_data {
-                        NodeData::Group => {}
-                        NodeData::Array(_, manifests) => {
-                            for manifest in manifests {
-                                if !loaded_manifests.contains(&manifest.object_id) {
-                                    let manifest_id = manifest.object_id;
-                                    if let Some(manifest_info) =
-                                        snap_c.manifest_info(&manifest_id)
-                                    {
-                                        if loaded_refs + manifest_info.num_rows
-                                            <= preload_config.max_total_refs()
-                                            && preload_config
-                                                .preload_if()
-                                                .matches(&node.path, &manifest_info)
+                        Err(err) => {
+                            error!(error=%err, "Error retrieving snapshot nodes");
+                        }
+                        Ok(node) => match node.node_data {
+                            NodeData::Group => {}
+                            NodeData::Array(_, manifests) => {
+                                for manifest in manifests {
+                                    if !loaded_manifests.contains(&manifest.object_id) {
+                                        let manifest_id = manifest.object_id;
+                                        if let Some(manifest_info) =
+                                            snap_c.manifest_info(&manifest_id)
                                         {
-                                            let size_bytes = manifest_info.size_bytes;
-                                            let asset_manager =
-                                                Arc::clone(&asset_manager);
-                                            let manifest_id_c = manifest_id.clone();
-                                            let path = node.path.clone();
-                                            futures.push(async move {
-                                                trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
-                                                if let Err(err) = asset_manager
-                                                    .fetch_manifest(
-                                                        &manifest_id_c,
-                                                        size_bytes,
-                                                    )
-                                                    .await
-                                                {
-                                                    error!(
-                                                        "Failure pre-loading manifest {}: {}",
-                                                        &manifest_id_c, err
-                                                    );
-                                                }
-                                            });
-                                            loaded_manifests.insert(manifest_id);
-                                            loaded_refs += manifest_info.num_rows;
+                                            if loaded_refs + manifest_info.num_rows
+                                                <= preload_config.max_total_refs()
+                                                && preload_config
+                                                    .preload_if()
+                                                    .matches(&node.path, &manifest_info)
+                                            {
+                                                let size_bytes = manifest_info.size_bytes;
+                                                let asset_manager =
+                                                    Arc::clone(&asset_manager);
+                                                let manifest_id_c = manifest_id.clone();
+                                                let path = node.path.clone();
+                                                futures.push(async move {
+                                                    trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
+                                                    if let Err(err) = asset_manager
+                                                        .fetch_manifest(
+                                                            &manifest_id_c,
+                                                            size_bytes,
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!(
+                                                            "Failure pre-loading manifest {}: {}",
+                                                            &manifest_id_c, err
+                                                        );
+                                                    }
+                                                });
+                                                loaded_manifests.insert(manifest_id);
+                                                loaded_refs += manifest_info.num_rows;
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
+                        },
                     }
-                        }
                 }
-            }
-            futures.collect::<()>().await;
-        }.in_current_span()
+                futures.collect::<()>().await;
+            };
+            ().in_current_span()
         });
     }
 }
