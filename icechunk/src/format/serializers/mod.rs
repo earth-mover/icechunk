@@ -53,12 +53,9 @@ pub fn serialize_snapshot(
     snapshot: &Snapshot,
     version: SpecVersionBin,
     write: &mut impl Write,
-) {
+) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V0dot1 => {
-            // FIXME:
-            write.write_all(snapshot.bytes()).unwrap();
-        }
+        SpecVersionBin::V0dot1 => write.write_all(snapshot.bytes()),
     }
 }
 
@@ -66,11 +63,11 @@ pub fn serialize_manifest(
     manifest: &Manifest,
     version: SpecVersionBin,
     write: &mut impl Write,
-) {
+) -> Result<(), std::io::Error> {
     match version {
         SpecVersionBin::V0dot1 => {
             // FIXME:
-            write.write_all(manifest.bytes()).unwrap();
+            write.write_all(manifest.bytes())
         }
     }
 }
@@ -79,11 +76,11 @@ pub fn serialize_transaction_log(
     transaction_log: &TransactionLog,
     version: SpecVersionBin,
     write: &mut impl Write,
-) {
+) -> Result<(), std::io::Error> {
     match version {
         SpecVersionBin::V0dot1 => {
             // FIXME:
-            write.write_all(transaction_log.bytes()).unwrap();
+            write.write_all(transaction_log.bytes())
         }
     }
 }

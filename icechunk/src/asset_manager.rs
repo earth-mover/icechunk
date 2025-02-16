@@ -445,7 +445,7 @@ async fn write_new_manifest(
             new_manifest.as_ref(),
             SpecVersionBin::current(),
             &mut compressor,
-        );
+        )?;
 
         compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
@@ -538,7 +538,7 @@ async fn write_new_snapshot(
             new_snapshot.as_ref(),
             SpecVersionBin::current(),
             &mut compressor,
-        );
+        )?;
 
         compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
@@ -609,7 +609,7 @@ async fn write_new_tx_log(
             new_log.as_ref(),
             SpecVersionBin::current(),
             &mut compressor,
-        );
+        )?;
         compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;

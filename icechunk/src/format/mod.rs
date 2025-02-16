@@ -24,7 +24,16 @@ use crate::{error::ICError, metadata::DataType, private};
 pub mod attributes;
 pub mod manifest;
 
-#[allow(dead_code, unused_imports)]
+#[allow(
+    dead_code,
+    unused_imports,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::needless_lifetimes,
+    clippy::extra_unused_lifetimes,
+    clippy::missing_safety_doc,
+    clippy::derivable_impls
+)]
 #[path = "./flatbuffers/all_generated.rs"]
 pub mod flatbuffers;
 
