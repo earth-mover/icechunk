@@ -225,22 +225,6 @@ impl TransactionLog {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    //pub fn merge(&mut self, other: &TransactionLog) {
-    //    self.new_groups.extend(other.new_groups.iter().cloned());
-    //    self.new_arrays.extend(other.new_arrays.iter().cloned());
-    //    self.deleted_groups.extend(other.deleted_groups.iter().cloned());
-    //    self.deleted_arrays.extend(other.deleted_arrays.iter().cloned());
-    //    self.updated_user_attributes
-    //        .extend(other.updated_user_attributes.iter().cloned());
-    //    self.updated_zarr_metadata.extend(other.updated_zarr_metadata.iter().cloned());
-    //    for (node, chunks) in other.updated_chunks.iter() {
-    //        self.updated_chunks
-    //            .entry(node.clone())
-    //            .and_modify(|set| set.extend(chunks.iter().cloned()))
-    //            .or_insert_with(|| chunks.clone());
-    //    }
-    //}
 }
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {

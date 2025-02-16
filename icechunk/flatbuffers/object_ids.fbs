@@ -9,4 +9,3 @@ struct ObjectId12 {
 struct ObjectId8 {
   bytes:[uint8:8];
 }
-

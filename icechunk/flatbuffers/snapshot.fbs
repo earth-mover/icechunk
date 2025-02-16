@@ -127,7 +127,7 @@ table Snapshot {
 
   // the list of all manifest files this snapshot points to
   // sorted in ascending order of ManifestFileInfo.id
-  manifest_files: [ManifestFileInfo] (required); 
+  manifest_files: [ManifestFileInfo] (required);
 
   // the list of all attribute files this snapshot points to
   // sorted in ascending order of AttributeFileInfo.id

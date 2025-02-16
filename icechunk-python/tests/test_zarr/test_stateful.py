@@ -1,9 +1,9 @@
+import json
 from typing import Any
 
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-import json
 from hypothesis import assume, note
 from hypothesis.stateful import (
     Settings,
@@ -74,11 +74,11 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         # if it's metadata, we need to compare the data parsed, not raw (because of map ordering)
         if path.endswith(".json"):
-            get_after=json.loads(get_after.to_bytes())
-            get_before=json.loads(get_before.to_bytes())
+            get_after = json.loads(get_after.to_bytes())
+            get_before = json.loads(get_before.to_bytes())
         else:
-            get_after=get_after.to_bytes()
-            get_before=get_before.to_bytes()
+            get_after = get_after.to_bytes()
+            get_before = get_before.to_bytes()
 
         if get_before != get_after:
             get_expect = self._sync(self.model.get(path, prototype=PROTOTYPE))
