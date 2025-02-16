@@ -256,7 +256,7 @@ impl ConflictSolver for ConflictDetector {
 
 struct PathFinder<It>(Mutex<(HashMap<NodeId, Path>, Option<It>)>);
 
-impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
+impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
     fn new(iter: It) -> Self {
         Self(Mutex::new((HashMap::new(), Some(iter))))
     }
@@ -272,6 +272,7 @@ impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
             Ok(cached.clone())
         } else if let Some(iterator) = iter {
             for node in iterator {
+                let node = node?;
                 if &node.id == node_id {
                     cache.insert(node.id, node.path.clone());
                     return Ok(node.path);

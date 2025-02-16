@@ -307,8 +307,8 @@ impl Session {
                 let nodes_iter: Vec<NodeSnapshot> = self
                     .list_nodes()
                     .await?
-                    .filter(|node| node.path.starts_with(&parent.path))
-                    .collect();
+                    .filter_ok(|node| node.path.starts_with(&parent.path))
+                    .try_collect()?;
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
@@ -656,8 +656,11 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn clear(&mut self) -> SessionResult<()> {
         // TODO: can this be a delete_group("/") instead?
-        let to_delete: Vec<(NodeType, Path)> =
-            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
+        let to_delete: Vec<(NodeType, Path)> = self
+            .list_nodes()
+            .await?
+            .map_ok(|node| (node.node_type(), node.path))
+            .try_collect()?;
 
         for (t, p) in to_delete {
             match t {
@@ -698,7 +701,7 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn list_nodes(
         &self,
-    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
+    ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + '_> {
         updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id).await
     }
 
@@ -990,10 +993,11 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node).await
+    let res = nodes.and_then(move |node| async move {
+        Ok(updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node)
+            .await)
     });
-    Ok(res.flatten())
+    Ok(res.try_flatten())
 }
 
 async fn updated_node_chunks_iterator<'a>(
@@ -1165,12 +1169,16 @@ async fn updated_existing_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
     let updated_nodes = asset_manager
         .fetch_snapshot(parent_id)
         .await?
         .iter_arc()
-        .filter_map(move |node| change_set.update_existing_node(node));
+        .filter_map_ok(move |node| change_set.update_existing_node(node))
+        .map(|n| match n {
+            Ok(n) => Ok(n),
+            Err(err) => Err(SessionError::from(err)),
+        });
 
     Ok(updated_nodes)
 }
@@ -1181,10 +1189,10 @@ async fn updated_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
     Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
         .await?
-        .chain(change_set.new_nodes_iterator()))
+        .chain(change_set.new_nodes_iterator().map(Ok)))
 }
 
 async fn get_node(
@@ -1452,7 +1460,9 @@ async fn flush(
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
-    for node in old_snapshot.iter().filter(|node| node.node_type() == NodeType::Array) {
+    for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
+    {
+        let node = node?;
         trace!(path=%node.path, "Flushing node");
         let node_id = &node.id;
 
@@ -1482,13 +1492,15 @@ async fn flush(
     }
 
     trace!("Building new snapshot");
-    let all_nodes = updated_nodes(
+    // gather and sort nodes:
+    // this is a requirement for Snapshot::from_iter
+    let mut all_nodes: Vec<_> = updated_nodes(
         flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
     )
     .await?
-    .map(|node| {
+    .map_ok(|node| {
         let id = &node.id;
         // TODO: many clones
         if let NodeData::Array(meta, _) = node.node_data {
@@ -1502,7 +1514,10 @@ async fn flush(
         } else {
             node
         }
-    });
+    })
+    .try_collect()?;
+
+    all_nodes.sort_by(|a, b| a.path.cmp(&b.path));
 
     let new_snapshot = Snapshot::from_iter(
         None,
@@ -1511,8 +1526,9 @@ async fn flush(
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
         vec![],
-        all_nodes,
-    );
+        all_nodes.into_iter().map(Ok::<_, Infallible>),
+    )
+    .unwrap();
 
     if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
         tracing::error!(
@@ -1937,8 +1953,8 @@ mod tests {
             None,
             manifests,
             vec![],
-            nodes.iter().cloned(),
-        ));
+            nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
+        )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
         update_branch(
             storage.as_ref(),

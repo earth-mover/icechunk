@@ -246,6 +246,8 @@ pub enum IcechunkFormatErrorKind {
     InvalidCompressionAlgorithm, // TODO: add more info
     #[error("Invalid Icechunk metadata file")]
     InvalidFlatBuffer(#[from] InvalidFlatbuffer),
+    #[error("error during metadata file deserialization")]
+    DeserializationError(#[from] rmp_serde::decode::Error),
     #[error("I/O error")]
     IO(#[from] std::io::Error),
 }

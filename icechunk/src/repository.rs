@@ -10,6 +10,7 @@ use futures::{
     stream::{FuturesOrdered, FuturesUnordered},
     Stream, StreamExt, TryStreamExt,
 };
+use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -704,6 +705,9 @@ impl Repository {
             if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
                 let snap_c = Arc::clone(&snap);
                 for node in snap.iter_arc() {
+                    match node {
+                        Err(err) => {error!(error=%err, "Error retrieving snapshot nodes");}
+                        Ok(node) => {
                     match node.node_data {
                         NodeData::Group => {}
                         NodeData::Array(_, manifests) => {
@@ -747,10 +751,12 @@ impl Repository {
                             }
                         }
                     }
+                        }
                 }
             }
             futures.collect::<()>().await;
-        }.in_current_span());
+        }.in_current_span()
+        });
     }
 }
 
@@ -822,8 +828,8 @@ pub async fn tx_to_diff(
         .list_nodes()
         .await?
         .chain(to.list_nodes().await?)
-        .map(|n| (n.id, n.path))
-        .collect();
+        .map_ok(|n| (n.id, n.path))
+        .try_collect()?;
     Ok(Diff::from_transaction_log(tx, nodes))
 }
 

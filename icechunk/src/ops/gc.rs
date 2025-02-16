@@ -456,10 +456,7 @@ pub async fn expire_ref(
 
     let root = asset_manager.fetch_snapshot(&root).await?;
     // TODO: add properties to the snapshot that tell us it was history edited
-    dbg!(editable_snap.parent_id());
-    dbg!(root.id());
-    let new_snapshot = Arc::new(root.adopt(&editable_snap));
-    dbg!(new_snapshot.parent_id());
+    let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
     asset_manager.write_snapshot(new_snapshot).await?;
 
     Ok(ExpireRefResult::Done {

@@ -1,7 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 use chrono::{DateTime, Utc};
+use err_into::ErrorInto;
 use flatbuffers::{FlatBufferBuilder, VerifierOptions};
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -159,13 +161,22 @@ impl<'a> From<gen::GroupNodeData<'a>> for NodeData {
     }
 }
 
-impl<'a> From<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
-    fn from(value: gen::InlineUserAttributes<'a>) -> Self {
-        Self::Inline(UserAttributes {
-            parsed: rmp_serde::from_slice(value.data().bytes()).unwrap(),
-        })
+impl<'a> TryFrom<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
+    type Error = rmp_serde::decode::Error;
+
+    fn try_from(value: gen::InlineUserAttributes<'a>) -> Result<Self, Self::Error> {
+        let parsed = rmp_serde::from_slice(value.data().bytes())?;
+        Ok(Self::Inline(UserAttributes { parsed }))
     }
 }
+
+//impl<'a> From<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
+//    fn from(value: gen::InlineUserAttributes<'a>) -> Self {
+//        Self::Inline(UserAttributes {
+//            parsed: rmp_serde::from_slice(value.data().bytes()).unwrap(),
+//        })
+//    }
+//}
 
 impl<'a> From<gen::UserAttributesRef<'a>> for UserAttributesSnapshot {
     fn from(value: gen::UserAttributesRef<'a>) -> Self {
@@ -176,8 +187,10 @@ impl<'a> From<gen::UserAttributesRef<'a>> for UserAttributesSnapshot {
     }
 }
 
-impl<'a> From<gen::NodeSnapshot<'a>> for NodeSnapshot {
-    fn from(value: gen::NodeSnapshot<'a>) -> Self {
+impl<'a> TryFrom<gen::NodeSnapshot<'a>> for NodeSnapshot {
+    type Error = rmp_serde::decode::Error;
+
+    fn try_from(value: gen::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
         let node_data: NodeData = match value.node_data_type() {
             gen::NodeData::Array => value.node_data_as_array().unwrap().into(),
             gen::NodeData::Group => value.node_data_as_group().unwrap().into(),
@@ -186,7 +199,7 @@ impl<'a> From<gen::NodeSnapshot<'a>> for NodeSnapshot {
         let user_attributes: Option<UserAttributesSnapshot> =
             match value.user_attributes_type() {
                 gen::UserAttributesSnapshot::Inline => {
-                    Some(value.user_attributes_as_inline().unwrap().into())
+                    Some(value.user_attributes_as_inline().unwrap().try_into()?)
                 }
                 gen::UserAttributesSnapshot::Reference => {
                     Some(value.user_attributes_as_reference().unwrap().into())
@@ -194,14 +207,42 @@ impl<'a> From<gen::NodeSnapshot<'a>> for NodeSnapshot {
                 gen::UserAttributesSnapshot::NONE => None,
                 _ => panic!("invalid user attributes"),
             };
-        NodeSnapshot {
+        let res = NodeSnapshot {
             id: value.id().into(),
             path: value.path().try_into().unwrap(),
             user_attributes,
             node_data,
-        }
+        };
+        Ok(res)
     }
 }
+
+// impl<'a> From<gen::NodeSnapshot<'a>> for NodeSnapshot {
+//     fn from(value: gen::NodeSnapshot<'a>) -> Self {
+//         let node_data: NodeData = match value.node_data_type() {
+//             gen::NodeData::Array => value.node_data_as_array().unwrap().into(),
+//             gen::NodeData::Group => value.node_data_as_group().unwrap().into(),
+//             _ => panic!("invalid node data"), //FIXME:
+//         };
+//         let user_attributes: Option<UserAttributesSnapshot> =
+//             match value.user_attributes_type() {
+//                 gen::UserAttributesSnapshot::Inline => {
+//                     Some(value.user_attributes_as_inline().unwrap().try_into())
+//                 }
+//                 gen::UserAttributesSnapshot::Reference => {
+//                     Some(value.user_attributes_as_reference().unwrap().into())
+//                 }
+//                 gen::UserAttributesSnapshot::NONE => None,
+//                 _ => panic!("invalid user attributes"),
+//             };
+//         NodeSnapshot {
+//             id: value.id().into(),
+//             path: value.path().try_into().unwrap(),
+//             user_attributes,
+//             node_data,
+//         }
+//     }
+// }
 
 impl<'a> From<&gen::ManifestFileInfo> for ManifestFileInfo {
     fn from(value: &gen::ManifestFileInfo) -> Self {
@@ -293,63 +334,15 @@ impl Snapshot {
         self.buffer.as_slice()
     }
 
-    // fn new(
-    //     parent_id: Option<SnapshotId>,
-    //     message: String,
-    //     metadata: Option<SnapshotProperties>,
-    //     nodes: BTreeMap<Path, NodeSnapshot>,
-    //     manifest_files: Vec<ManifestFileInfo>,
-    //     attribute_files: Vec<AttributeFileInfo>,
-    // ) -> Self {
-    //     let metadata = metadata.unwrap_or_default();
-    //     let flushed_at = Utc::now();
-    //     Self {
-    //         id: SnapshotId::random(),
-    //         parent_id,
-    //         flushed_at,
-    //         message,
-    //         manifest_files: manifest_files
-    //             .into_iter()
-    //             .map(|fi| (fi.id.clone(), fi))
-    //             .collect(),
-    //         attribute_files,
-    //         metadata,
-    //         nodes,
-    //     }
-    // }
-
-    // #[allow(clippy::too_many_arguments)]
-    // pub fn from_fields(
-    //     id: SnapshotId,
-    //     parent_id: Option<SnapshotId>,
-    //     flushed_at: DateTime<Utc>,
-    //     message: String,
-    //     metadata: SnapshotProperties,
-    //     manifest_files: HashMap<ManifestId, ManifestFileInfo>,
-    //     attribute_files: Vec<AttributeFileInfo>,
-    //     nodes: BTreeMap<Path, NodeSnapshot>,
-    // ) -> Self {
-    //     Self {
-    //         id,
-    //         parent_id,
-    //         flushed_at,
-    //         message,
-    //         metadata,
-    //         manifest_files,
-    //         attribute_files,
-    //         nodes,
-    //     }
-    // }
-
-    pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
+    pub fn from_iter<E, I: IntoIterator<Item = Result<NodeSnapshot, E>>>(
         id: Option<SnapshotId>,
         parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
         manifest_files: Vec<ManifestFileInfo>,
         attribute_files: Vec<AttributeFileInfo>,
-        iter: T,
-    ) -> Self {
+        sorted_iter: I,
+    ) -> Result<Self, E> {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
 
@@ -391,12 +384,10 @@ impl Snapshot {
         let flushed_at = Utc::now().timestamp_micros() as u64;
         let id = gen::ObjectId12::new(&id.unwrap_or_else(|| SnapshotId::random()).0);
 
-        // FIXME: should we sort here or can we sort outside?
-        let mut nodes = iter.into_iter().collect::<Vec<_>>();
-        nodes.sort_by(|a, b| a.path.cmp(&b.path));
-
-        let nodes: Vec<_> =
-            nodes.iter().map(|node| mk_node(&mut builder, node)).collect();
+        let nodes: Vec<_> = sorted_iter
+            .into_iter()
+            .map_ok(|node| mk_node(&mut builder, &node))
+            .try_collect()?;
         let nodes = builder.create_vector(&nodes);
 
         let snap = gen::Snapshot::create(
@@ -417,11 +408,12 @@ impl Snapshot {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Snapshot { buffer }
+        Ok(Snapshot { buffer })
     }
 
     pub fn initial() -> Self {
         let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
+        let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             None,
             None,
@@ -429,8 +421,9 @@ impl Snapshot {
             Some(properties),
             Default::default(),
             Default::default(),
-            [],
+            nodes,
         )
+        .unwrap()
     }
 
     fn root(&self) -> gen::Snapshot {
@@ -491,10 +484,9 @@ impl Snapshot {
     }
 
     /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
-    pub fn adopt(&self, new_child: &Snapshot) -> Self {
+    pub fn adopt(&self, new_child: &Snapshot) -> IcechunkResult<Self> {
         // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
         // create a whole new buffer and write to it in full
-        dbg!(self.message(), new_child.message());
 
         Snapshot::from_iter(
             Some(new_child.id()),
@@ -505,67 +497,6 @@ impl Snapshot {
             new_child.attribute_files().collect(),
             new_child.iter(),
         )
-
-        //  let mut builder =
-        //      flatbuffers::FlatBufferBuilder::with_capacity(new_child.buffer.len());
-
-        //  // this is the only field that changes
-        //  let parent_id = self.root().parent_id();
-
-        //  let old_root = new_child.root();
-        //  let id = old_root.id();
-        //  let flushed_at = old_root.flushed_at();
-        //  let message = Some(builder.create_string(old_root.message()));
-        //  let metadata_items = old_root
-        //      .metadata()
-        //      .iter()
-        //      .map(|item| {
-        //          let name = Some(builder.create_shared_string(item.name()));
-        //          let value = Some(builder.create_vector(item.value().bytes()));
-        //          gen::MetadataItem::create(
-        //              &mut builder,
-        //              &gen::MetadataItemArgs { name, value },
-        //          )
-        //      })
-        //      .collect::<Vec<_>>();
-        //  let metadata = Some(builder.create_vector(metadata_items.as_slice()));
-        //  let manifest_files = old_root
-        //      .manifest_files()
-        //      .iter()
-        //      .map(|f| gen::ManifestFileInfo::new(f.id(), f.size_bytes(), f.num_rows()))
-        //      .collect::<Vec<_>>();
-        //  let manifest_files = Some(builder.create_vector(manifest_files.as_slice()));
-        //  let attribute_files = old_root
-        //      .attribute_files()
-        //      .iter()
-        //      .map(|f| gen::AttributeFileInfo::new(f.id()))
-        //      .collect::<Vec<_>>();
-        //  let attribute_files = Some(builder.create_vector(attribute_files.as_slice()));
-        //  let nodes = old_root.nodes().iter().map(|node| {
-        //      let id = gen::ObjectId8(node.id().0);
-
-        //  })
-
-        //  let snap = gen::Snapshot::create(
-        //      &mut builder,
-        //      &gen::SnapshotArgs {
-        //          id: Some(id),
-        //          parent_id,
-        //          flushed_at,
-        //          message,
-        //          metadata,
-        //          manifest_files,
-        //          attribute_files,
-        //          // FIXME:
-        //          nodes: None,
-        //      },
-        //  );
-
-        //  builder.finish(snap, Some("Ichk"));
-        //  let (mut buffer, offset) = builder.collapse();
-        //  buffer.drain(0..offset);
-        //  buffer.shrink_to_fit();
-        //  Snapshot { buffer }
     }
 
     pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
@@ -576,14 +507,16 @@ impl Snapshot {
             .ok_or(IcechunkFormatError::from(IcechunkFormatErrorKind::NodeNotFound {
                 path: path.clone(),
             }))?;
-        Ok(res.into())
+        Ok(res.try_into()?)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = NodeSnapshot> + '_ {
-        self.root().nodes().iter().map(|node| node.into())
+    pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + '_ {
+        self.root().nodes().iter().map(|node| node.try_into().err_into())
     }
 
-    pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeSnapshot> {
+    pub fn iter_arc(
+        self: Arc<Self>,
+    ) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> {
         NodeIterator { snapshot: self, last_index: 0 }
     }
 
@@ -611,12 +544,12 @@ struct NodeIterator {
 }
 
 impl Iterator for NodeIterator {
-    type Item = NodeSnapshot;
+    type Item = IcechunkResult<NodeSnapshot>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let nodes = self.snapshot.root().nodes();
         if self.last_index < nodes.len() {
-            let res = Some(nodes.get(self.last_index).into());
+            let res = Some(nodes.get(self.last_index).try_into().err_into());
             self.last_index += 1;
             res
         } else {
@@ -797,6 +730,7 @@ mod tests {
 
         let oid = ObjectId::random();
         let node_ids = iter::repeat_with(NodeId::random).take(7).collect::<Vec<_>>();
+        // nodes must be sorted by path
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
@@ -811,17 +745,15 @@ mod tests {
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
+                path: "/array2".try_into().unwrap(),
+                id: node_ids[5].clone(),
+                user_attributes: None,
+                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+            },
+            NodeSnapshot {
                 path: "/b".try_into().unwrap(),
                 id: node_ids[2].clone(),
                 user_attributes: None,
-                node_data: NodeData::Group,
-            },
-            NodeSnapshot {
-                path: "/b/c".try_into().unwrap(),
-                id: node_ids[3].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
-                )),
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
@@ -837,16 +769,18 @@ mod tests {
                 ),
             },
             NodeSnapshot {
-                path: "/array2".try_into().unwrap(),
-                id: node_ids[5].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
-            },
-            NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
                 user_attributes: None,
                 node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
+            },
+            NodeSnapshot {
+                path: "/b/c".try_into().unwrap(),
+                id: node_ids[3].clone(),
+                user_attributes: Some(UserAttributesSnapshot::Inline(
+                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
+                )),
+                node_data: NodeData::Group,
             },
         ];
         let initial = Snapshot::initial();
@@ -869,8 +803,9 @@ mod tests {
             Default::default(),
             manifests,
             vec![],
-            nodes,
-        );
+            nodes.into_iter().map(Ok::<NodeSnapshot, Infallible>),
+        )
+        .unwrap();
 
         assert!(matches!(
             st.get_node(&"/nonexistent".try_into().unwrap()),
