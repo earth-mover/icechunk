@@ -25,12 +25,18 @@ pub struct IcechunkCLI {
 enum Command {
     #[command(subcommand)]
     Repo(RepoCommand),
+    #[command(subcommand)]
+    Snapshot(SnapshotCommand),
 }
 
 #[derive(Debug, Subcommand)]
 enum RepoCommand {
     #[clap(name = "create")]
     Create(CreateCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum SnapshotCommand {
     #[clap(name = "list")]
     List(ListCommand),
 }
@@ -92,7 +98,7 @@ async fn repo_create(init_cmd: CreateCommand) -> Result<()> {
     Ok(())
 }
 
-async fn repo_list(list_cmd: ListCommand) -> Result<()> {
+async fn snapshot_list(list_cmd: ListCommand) -> Result<()> {
     let repos = load_repositories()?;
     let repo = repos.repos.get(&list_cmd.repo).context("❌ Repository not found")?;
     let storage = get_storage(repo).await?;
@@ -116,7 +122,9 @@ async fn repo_list(list_cmd: ListCommand) -> Result<()> {
 pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
     match args.cmd {
         Command::Repo(RepoCommand::Create(init_cmd)) => repo_create(init_cmd).await,
-        Command::Repo(RepoCommand::List(list_cmd)) => repo_list(list_cmd).await,
+        Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
+            snapshot_list(list_cmd).await
+        }
     }
     .map_err(|e| {
         eprintln!("❌ CLI Error: {:#}", e);
