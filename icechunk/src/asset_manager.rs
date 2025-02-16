@@ -299,10 +299,11 @@ impl AssetManager {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
         let mut this = self.fetch_snapshot(snapshot_id).await?;
         let stream = try_stream! {
-            yield this.as_ref().into();
+            let info: SnapshotInfo = this.as_ref().try_into()?;
+            yield info;
             while let Some(parent) = this.parent_id() {
                 let snap = self.fetch_snapshot(&parent).await?;
-                let info: SnapshotInfo = snap.as_ref().into();
+                let info: SnapshotInfo = snap.as_ref().try_into()?;
                 yield info;
                 this = snap;
             }

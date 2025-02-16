@@ -146,12 +146,14 @@ impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
     }
 }
 
-impl<'a> From<gen::ArrayNodeData<'a>> for NodeData {
-    fn from(value: gen::ArrayNodeData<'a>) -> Self {
+impl<'a> TryFrom<gen::ArrayNodeData<'a>> for NodeData {
+    type Error = rmp_serde::decode::Error;
+
+    fn try_from(value: gen::ArrayNodeData<'a>) -> Result<Self, Self::Error> {
         // TODO: is it ok to call `bytes` here? Or do we need to collect an iterator
-        let meta = rmp_serde::from_slice(value.zarr_metadata().bytes()).unwrap();
+        let meta = rmp_serde::from_slice(value.zarr_metadata().bytes())?;
         let manifest_refs = value.manifests().iter().map(|m| m.into()).collect();
-        Self::Array(meta, manifest_refs)
+        Ok(Self::Array(meta, manifest_refs))
     }
 }
 
@@ -170,14 +172,6 @@ impl<'a> TryFrom<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
     }
 }
 
-//impl<'a> From<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
-//    fn from(value: gen::InlineUserAttributes<'a>) -> Self {
-//        Self::Inline(UserAttributes {
-//            parsed: rmp_serde::from_slice(value.data().bytes()).unwrap(),
-//        })
-//    }
-//}
-
 impl<'a> From<gen::UserAttributesRef<'a>> for UserAttributesSnapshot {
     fn from(value: gen::UserAttributesRef<'a>) -> Self {
         Self::Ref(UserAttributesRef {
@@ -188,28 +182,41 @@ impl<'a> From<gen::UserAttributesRef<'a>> for UserAttributesSnapshot {
 }
 
 impl<'a> TryFrom<gen::NodeSnapshot<'a>> for NodeSnapshot {
-    type Error = rmp_serde::decode::Error;
+    type Error = IcechunkFormatError;
 
     fn try_from(value: gen::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
+        #[allow(clippy::expect_used, clippy::panic)]
         let node_data: NodeData = match value.node_data_type() {
-            gen::NodeData::Array => value.node_data_as_array().unwrap().into(),
-            gen::NodeData::Group => value.node_data_as_group().unwrap().into(),
-            _ => panic!("invalid node data"), //FIXME:
+            gen::NodeData::Array => value
+                .node_data_as_array()
+                .expect("Bug in flatbuffers library")
+                .try_into()?,
+            gen::NodeData::Group => {
+                value.node_data_as_group().expect("Bug in flatbuffers library").into()
+            }
+            x => panic!("Invalid node data type in flatbuffers file {:?}", x),
         };
+        #[allow(clippy::expect_used, clippy::panic)]
         let user_attributes: Option<UserAttributesSnapshot> =
             match value.user_attributes_type() {
-                gen::UserAttributesSnapshot::Inline => {
-                    Some(value.user_attributes_as_inline().unwrap().try_into()?)
-                }
-                gen::UserAttributesSnapshot::Reference => {
-                    Some(value.user_attributes_as_reference().unwrap().into())
-                }
+                gen::UserAttributesSnapshot::Inline => Some(
+                    value
+                        .user_attributes_as_inline()
+                        .expect("Bug in flatbuffers library")
+                        .try_into()?,
+                ),
+                gen::UserAttributesSnapshot::Reference => Some(
+                    value
+                        .user_attributes_as_reference()
+                        .expect("Bug in flatbuffers library")
+                        .into(),
+                ),
                 gen::UserAttributesSnapshot::NONE => None,
-                _ => panic!("invalid user attributes"),
+                x => panic!("Invalid user attributes type in flatbuffers file {:?}", x),
             };
         let res = NodeSnapshot {
             id: value.id().into(),
-            path: value.path().try_into().unwrap(),
+            path: value.path().to_string().try_into()?,
             user_attributes,
             node_data,
         };
@@ -217,34 +224,7 @@ impl<'a> TryFrom<gen::NodeSnapshot<'a>> for NodeSnapshot {
     }
 }
 
-// impl<'a> From<gen::NodeSnapshot<'a>> for NodeSnapshot {
-//     fn from(value: gen::NodeSnapshot<'a>) -> Self {
-//         let node_data: NodeData = match value.node_data_type() {
-//             gen::NodeData::Array => value.node_data_as_array().unwrap().into(),
-//             gen::NodeData::Group => value.node_data_as_group().unwrap().into(),
-//             _ => panic!("invalid node data"), //FIXME:
-//         };
-//         let user_attributes: Option<UserAttributesSnapshot> =
-//             match value.user_attributes_type() {
-//                 gen::UserAttributesSnapshot::Inline => {
-//                     Some(value.user_attributes_as_inline().unwrap().try_into())
-//                 }
-//                 gen::UserAttributesSnapshot::Reference => {
-//                     Some(value.user_attributes_as_reference().unwrap().into())
-//                 }
-//                 gen::UserAttributesSnapshot::NONE => None,
-//                 _ => panic!("invalid user attributes"),
-//             };
-//         NodeSnapshot {
-//             id: value.id().into(),
-//             path: value.path().try_into().unwrap(),
-//             user_attributes,
-//             node_data,
-//         }
-//     }
-// }
-
-impl<'a> From<&gen::ManifestFileInfo> for ManifestFileInfo {
+impl From<&gen::ManifestFileInfo> for ManifestFileInfo {
     fn from(value: &gen::ManifestFileInfo) -> Self {
         Self {
             id: value.id().into(),
@@ -254,7 +234,7 @@ impl<'a> From<&gen::ManifestFileInfo> for ManifestFileInfo {
     }
 }
 
-impl<'a> From<&gen::AttributeFileInfo> for AttributeFileInfo {
+impl From<&gen::AttributeFileInfo> for AttributeFileInfo {
     fn from(value: &gen::AttributeFileInfo) -> Self {
         Self { id: value.id().into() }
     }
@@ -294,15 +274,17 @@ pub struct SnapshotInfo {
     pub metadata: SnapshotProperties,
 }
 
-impl From<&Snapshot> for SnapshotInfo {
-    fn from(value: &Snapshot) -> Self {
-        Self {
+impl TryFrom<&Snapshot> for SnapshotInfo {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: &Snapshot) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: value.id().clone(),
             parent_id: value.parent_id().clone(),
-            flushed_at: value.flushed_at(),
+            flushed_at: value.flushed_at()?,
             message: value.message().to_string(),
-            metadata: value.metadata().clone(),
-        }
+            metadata: value.metadata()?.clone(),
+        })
     }
 }
 
@@ -322,7 +304,7 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
-    pub fn from_buffer(buffer: Vec<u8>) -> Result<Snapshot, IcechunkFormatError> {
+    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
         let _ = flatbuffers::root_with_opts::<gen::Snapshot>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
@@ -334,7 +316,7 @@ impl Snapshot {
         self.buffer.as_slice()
     }
 
-    pub fn from_iter<E, I: IntoIterator<Item = Result<NodeSnapshot, E>>>(
+    pub fn from_iter<E, I>(
         id: Option<SnapshotId>,
         parent_id: Option<SnapshotId>,
         message: String,
@@ -342,7 +324,11 @@ impl Snapshot {
         manifest_files: Vec<ManifestFileInfo>,
         attribute_files: Vec<AttributeFileInfo>,
         sorted_iter: I,
-    ) -> Result<Self, E> {
+    ) -> IcechunkResult<Self>
+    where
+        IcechunkFormatError: From<E>,
+        I: IntoIterator<Item = Result<NodeSnapshot, E>>,
+    {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
 
@@ -364,29 +350,29 @@ impl Snapshot {
             .collect::<Vec<_>>();
         let attribute_files = builder.create_vector(&attribute_files);
 
-        let metadata_items = properties
+        let metadata_items: Vec<_> = properties
             .unwrap_or_default()
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let value =
-                    builder.create_vector(rmp_serde::to_vec(v).unwrap().as_slice());
-                gen::MetadataItem::create(
+                let serialized = rmp_serde::to_vec(v)?;
+                let value = builder.create_vector(serialized.as_slice());
+                Ok::<_, IcechunkFormatError>(gen::MetadataItem::create(
                     &mut builder,
                     &gen::MetadataItemArgs { name: Some(name), value: Some(value) },
-                )
+                ))
             })
-            .collect::<Vec<_>>();
-        let metadata_items = builder.create_vector(&metadata_items);
+            .try_collect()?;
+        let metadata_items = builder.create_vector(metadata_items.as_slice());
 
         let message = builder.create_string(&message);
         let parent_id = parent_id.map(|oid| gen::ObjectId12::new(&oid.0));
         let flushed_at = Utc::now().timestamp_micros() as u64;
-        let id = gen::ObjectId12::new(&id.unwrap_or_else(|| SnapshotId::random()).0);
+        let id = gen::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
 
         let nodes: Vec<_> = sorted_iter
             .into_iter()
-            .map_ok(|node| mk_node(&mut builder, &node))
+            .map(|node| node.err_into().and_then(|node| mk_node(&mut builder, &node)))
             .try_collect()?;
         let nodes = builder.create_vector(&nodes);
 
@@ -411,7 +397,7 @@ impl Snapshot {
         Ok(Snapshot { buffer })
     }
 
-    pub fn initial() -> Self {
+    pub fn initial() -> IcechunkResult<Self> {
         let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
@@ -423,7 +409,6 @@ impl Snapshot {
             Default::default(),
             nodes,
         )
-        .unwrap()
     }
 
     fn root(&self) -> gen::Snapshot {
@@ -440,21 +425,25 @@ impl Snapshot {
         self.root().parent_id().map(|pid| SnapshotId::new(pid.0))
     }
 
-    pub fn metadata(&self) -> SnapshotProperties {
+    pub fn metadata(&self) -> IcechunkResult<SnapshotProperties> {
         self.root()
             .metadata()
             .iter()
             .map(|item| {
                 let key = item.name().to_string();
-                let value = rmp_serde::from_slice(&item.value().bytes()).unwrap();
-                (key, value)
+                let value = rmp_serde::from_slice(item.value().bytes())?;
+                Ok((key, value))
             })
-            .collect()
+            .try_collect()
     }
 
-    pub fn flushed_at(&self) -> DateTime<Utc> {
-        // FIXME: cast
-        DateTime::from_timestamp_micros(self.root().flushed_at() as i64).unwrap()
+    pub fn flushed_at(&self) -> IcechunkResult<DateTime<Utc>> {
+        let ts = self.root().flushed_at();
+        let ts: i64 = ts.try_into().map_err(|_| {
+            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
+        })?;
+        DateTime::from_timestamp_micros(ts)
+            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp.into())
     }
 
     pub fn message(&self) -> String {
@@ -492,7 +481,7 @@ impl Snapshot {
             Some(new_child.id()),
             Some(self.id()),
             new_child.message().clone(),
-            Some(new_child.metadata().clone()),
+            Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
             new_child.attribute_files().collect(),
             new_child.iter(),
@@ -507,7 +496,7 @@ impl Snapshot {
             .ok_or(IcechunkFormatError::from(IcechunkFormatErrorKind::NodeNotFound {
                 path: path.clone(),
             }))?;
-        Ok(res.try_into()?)
+        res.try_into()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + '_ {
@@ -561,13 +550,13 @@ impl Iterator for NodeIterator {
 fn mk_node<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     node: &NodeSnapshot,
-) -> flatbuffers::WIPOffset<gen::NodeSnapshot<'bldr>> {
+) -> IcechunkResult<flatbuffers::WIPOffset<gen::NodeSnapshot<'bldr>>> {
     let id = gen::ObjectId8::new(&node.id.0);
     let path = builder.create_string(node.path.to_string().as_str());
     let (user_attributes_type, user_attributes) =
-        mk_user_attributes(builder, node.user_attributes.as_ref());
-    let (node_data_type, node_data) = mk_node_data(builder, &node.node_data);
-    gen::NodeSnapshot::create(
+        mk_user_attributes(builder, node.user_attributes.as_ref())?;
+    let (node_data_type, node_data) = mk_node_data(builder, &node.node_data)?;
+    Ok(gen::NodeSnapshot::create(
         builder,
         &gen::NodeSnapshotArgs {
             id: Some(&id),
@@ -577,26 +566,25 @@ fn mk_node<'bldr>(
             node_data_type,
             node_data,
         },
-    )
+    ))
 }
 
-fn mk_user_attributes<'bldr>(
-    builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+fn mk_user_attributes(
+    builder: &mut flatbuffers::FlatBufferBuilder<'_>,
     atts: Option<&UserAttributesSnapshot>,
-) -> (
+) -> IcechunkResult<(
     gen::UserAttributesSnapshot,
     Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
-) {
+)> {
     match atts {
         Some(UserAttributesSnapshot::Inline(user_attributes)) => {
-            let data = builder.create_vector(
-                &rmp_serde::to_vec(&user_attributes.parsed).unwrap().as_slice(),
-            );
+            let data = builder
+                .create_vector(rmp_serde::to_vec(&user_attributes.parsed)?.as_slice());
             let inl = gen::InlineUserAttributes::create(
                 builder,
                 &gen::InlineUserAttributesArgs { data: Some(data) },
             );
-            (gen::UserAttributesSnapshot::Inline, Some(inl.as_union_value()))
+            Ok((gen::UserAttributesSnapshot::Inline, Some(inl.as_union_value())))
         }
         Some(UserAttributesSnapshot::Ref(uatts)) => {
             let id = gen::ObjectId12::new(&uatts.object_id.0);
@@ -607,20 +595,23 @@ fn mk_user_attributes<'bldr>(
                     location: uatts.location,
                 },
             );
-            (gen::UserAttributesSnapshot::Reference, Some(reference.as_union_value()))
+            Ok((gen::UserAttributesSnapshot::Reference, Some(reference.as_union_value())))
         }
-        None => (gen::UserAttributesSnapshot::NONE, None),
+        None => Ok((gen::UserAttributesSnapshot::NONE, None)),
     }
 }
 
 fn mk_node_data(
     builder: &mut FlatBufferBuilder<'_>,
     node_data: &NodeData,
-) -> (gen::NodeData, Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>) {
+) -> IcechunkResult<(
+    gen::NodeData,
+    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+)> {
     match node_data {
         NodeData::Array(zarr, manifests) => {
             let zarr_metadata =
-                Some(builder.create_vector(&rmp_serde::to_vec(zarr).unwrap().as_slice()));
+                Some(builder.create_vector(rmp_serde::to_vec(zarr)?.as_slice()));
             let manifests = manifests
                 .iter()
                 .map(|manref| {
@@ -640,7 +631,7 @@ fn mk_node_data(
                 })
                 .collect::<Vec<_>>();
             let manifests = builder.create_vector(manifests.as_slice());
-            (
+            Ok((
                 gen::NodeData::Array,
                 Some(
                     gen::ArrayNodeData::create(
@@ -652,15 +643,15 @@ fn mk_node_data(
                     )
                     .as_union_value(),
                 ),
-            )
+            ))
         }
-        NodeData::Group => (
+        NodeData::Group => Ok((
             gen::NodeData::Group,
             Some(
                 gen::GroupNodeData::create(builder, &gen::GroupNodeDataArgs {})
                     .as_union_value(),
             ),
-        ),
+        )),
     }
 }
 
@@ -783,7 +774,7 @@ mod tests {
                 node_data: NodeData::Group,
             },
         ];
-        let initial = Snapshot::initial();
+        let initial = Snapshot::initial().unwrap();
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),

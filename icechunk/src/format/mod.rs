@@ -248,8 +248,14 @@ pub enum IcechunkFormatErrorKind {
     InvalidFlatBuffer(#[from] InvalidFlatbuffer),
     #[error("error during metadata file deserialization")]
     DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("error during metadata file serialization")]
+    SerializationError(#[from] rmp_serde::encode::Error),
     #[error("I/O error")]
     IO(#[from] std::io::Error),
+    #[error("path error")]
+    Path(#[from] PathError),
+    #[error("invalid timestamp in file")]
+    InvalidTimestamp,
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -271,6 +277,12 @@ impl From<VirtualReferenceError> for IcechunkFormatError {
             IcechunkFormatErrorKind::VirtualReferenceError(value.kind),
             value.context,
         )
+    }
+}
+
+impl From<Infallible> for IcechunkFormatErrorKind {
+    fn from(value: Infallible) -> Self {
+        match value {}
     }
 }
 

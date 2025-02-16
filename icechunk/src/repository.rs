@@ -166,7 +166,7 @@ impl Repository {
                     compression,
                 );
                 // On create we need to create the default branch
-                let new_snapshot = Arc::new(Snapshot::initial());
+                let new_snapshot = Arc::new(Snapshot::initial()?);
                 asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
                 update_branch(
