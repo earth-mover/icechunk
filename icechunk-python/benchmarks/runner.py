@@ -26,7 +26,7 @@ import icechunk as ic
 logger = setup_logger()
 
 PIP_OPTIONS = "--disable-pip-version-check -q"
-PYTEST_OPTIONS = "-q --durations 10"
+PYTEST_OPTIONS = "-v --durations 10 --rootdir=benchmarks --tb=line"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
 
@@ -113,7 +113,6 @@ class Runner:
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
             f"pytest {PYTEST_OPTIONS} "
-            "--tb=line "
             f"--benchmark-storage={self.bench_store_dir}/.benchmarks "
             f"--benchmark-save={clean_ref}_{self.commit}_{self.where} "
             f"--where={self.where} "
@@ -184,22 +183,22 @@ class CoiledRunner(Runner):
                 "channels": ["conda-forge"],
                 "dependencies": ["rust", "python=3.12", "pip"],
             },
-            pip=[self.pip_github_url, *deps],
-            # needed for install from Github
-            # https://coiled-users.slack.com/archives/C0195GJKQ1G/p1739316521164099
-            use_uv_installer=False,
+            pip=[self.pip_github_url, "coiled", *deps],
         )
 
     def execute(self, cmd, **kwargs) -> None:
         ckwargs = self.get_coiled_kwargs()
+        ls = [f for f in os.listdir(CURRENTDIR) if f not in [".benchmarks", "benchmarks"]]
+        toignore = " ".join(ls)
         subprocess.run(
             [
                 "coiled",
                 "run",
+                "--interactive",
                 "--name",
                 f"icebench-{self.commit}",  # cluster name
                 "--sync",
-                "--sync-ignore='python/ reports/ profiling/ tests/'",
+                f"--sync-ignore={toignore!r}",
                 "--keepalive",
                 "10m",
                 f"--workspace={ckwargs['workspace']}",  # cloud

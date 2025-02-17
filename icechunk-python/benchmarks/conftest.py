@@ -2,6 +2,7 @@ import pytest
 
 from benchmarks.datasets import (
     ERA5,
+    ERA5_ARCO,
     ERA5_SINGLE,
     GB_8MB_CHUNKS,
     GB_128MB_CHUNKS,
@@ -22,6 +23,7 @@ def repo(tmpdir: str) -> Repository:
         pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
         pytest.param(ERA5_SINGLE, id="era5-single"),
         pytest.param(ERA5, id="era5-weatherbench"),
+        pytest.param(ERA5_ARCO, id="era5-arco"),
     ],
 )
 def synth_dataset(request) -> Store:
@@ -72,5 +74,8 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
-        "--where", action="store", help="Where to run icechunk benchmarks? [local]."
+        "--where",
+        action="store",
+        help="Where to run icechunk benchmarks? [local|s3|gcs].",
+        default="local",
     )

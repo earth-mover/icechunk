@@ -9,15 +9,17 @@ from typing import Any, Literal, Self, TypeAlias
 import fsspec
 import numpy as np
 import platformdirs
-from helpers import get_coiled_kwargs, setup_logger
 
 import icechunk as ic
 import xarray as xr
 import zarr
+from benchmarks.helpers import get_coiled_kwargs, rdms, setup_logger
 
 rng = np.random.default_rng(seed=123)
 
 Store: TypeAlias = Literal["s3", "gcs", "az", "tigris"]
+PUBLIC_DATA_BUCKET = "icechunk-public-data"
+ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 CONSTRUCTORS = {
     "s3": ic.s3_storage,
@@ -25,7 +27,6 @@ CONSTRUCTORS = {
     "tigris": ic.tigris_storage,
     "local": ic.local_filesystem_storage,
 }
-
 TEST_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
@@ -34,6 +35,11 @@ TEST_BUCKETS = {
     # ),
     "tigris": dict(store="tigris", bucket="icechunk-test", region="iad"),
     "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
+}
+BUCKETS = {
+    "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
+    "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
+    "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="iad"),
 }
 
 logger = setup_logger()
@@ -190,9 +196,9 @@ class Dataset:
 @dataclass(kw_only=True)
 class BenchmarkDataset(Dataset):
     # data variable to load in `time_xarray_read_chunks`
-    load_variables: list[str]
+    load_variables: list[str] | None = None
     # Passed to .isel for `time_xarray_read_chunks`
-    chunk_selector: dict[str, Any]
+    chunk_selector: dict[str, Any] | None = None
     # name of (coordinate) variable used for testing "time to first byte"
     first_byte_variable: str | None
     # function used to construct the dataset prior to read benchmarks
@@ -226,6 +232,36 @@ class BenchmarkDataset(Dataset):
             self.setupfn(self)
 
 
+@dataclass(kw_only=True)
+class IngestDataset:
+    name: str
+    source_uri: str
+    group: str
+    prefix: str
+    write_chunks: dict[str, int]
+    arrays: list[str]
+    engine: str | None = None
+    read_chunks: dict[str, int] | None = None
+
+    def open_dataset(self, chunks=None, **kwargs: Any) -> xr.Dataset:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            return xr.open_dataset(
+                self.source_uri,
+                chunks=chunks or self.read_chunks,
+                engine=self.engine,
+                **kwargs,
+            ).drop_encoding()
+
+    def make_dataset(self, *, store: str, debug: bool) -> Dataset:
+        buckets = BUCKETS if not debug else TEST_BUCKETS
+        extra_prefix = f"_{rdms()}" if debug else ""
+        storage_config = StorageConfig(
+            prefix=self.prefix + extra_prefix, **buckets[store]
+        )
+        return Dataset(storage_config=storage_config, group=self.group)
+
+
 def setup_synthetic_gb_dataset(
     dataset: Dataset,
     chunk_shape: tuple[int, ...],
@@ -253,7 +289,7 @@ def setup_era5_single(dataset: Dataset):
 
     # FIXME: move to earthmover-sample-data
     url = "https://nsf-ncar-era5.s3.amazonaws.com/e5.oper.an.pl/194106/e5.oper.an.pl.128_060_pv.ll025sc.1941060100_1941060123.nc"
-    print(f"Reading {url}")
+    logger.info(f"Reading {url}")
     tic = time.time()
     ds = xr.open_dataset(
         # using pooch means we download only once on a local machine
@@ -264,7 +300,7 @@ def setup_era5_single(dataset: Dataset):
         engine="h5netcdf",
     )
     ds = ds.drop_encoding().load()
-    print(f"Loaded data in {time.time() - tic} seconds")
+    logger.info(f"Loaded data in {time.time() - tic} seconds")
 
     repo = dataset.create()
     session = repo.writable_session("main")
@@ -272,17 +308,67 @@ def setup_era5_single(dataset: Dataset):
     encoding = {
         "PV": {"compressors": [zarr.codecs.ZstdCodec()], "chunks": (1, 1, 721, 1440)}
     }
-    print("Writing data...")
+    logger.info("Writing data...")
     ds.to_zarr(
         session.store, mode="w", zarr_format=3, consolidated=False, encoding=encoding
     )
-    print(f"Wrote data in {time.time() - tic} seconds")
+    logger.info(f"Wrote data in {time.time() - tic} seconds")
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
 
+def setup_ingest_for_benchmarks(dataset: Dataset, *, ingest: IngestDataset) -> None:
+    """
+    For benchmarks, we
+    1. add a specific prefix.
+    2. always write the metadata for the WHOLE dataset
+    3. then append a small subset of data for a few arrays
+    """
+    from benchmarks.create_era5 import Mode, write
+
+    repo = dataset.create()
+    ds = ingest.open_dataset()
+    logger.info("Initializing dataset for benchmarks..")
+    session = repo.writable_session("main")
+    ds.to_zarr(
+        session.store, compute=False, mode="w-", group=dataset.group, **ZARR_KWARGS
+    )
+    session.commit("initialized dataset")
+    logger.info("Finished initializing dataset.")
+
+    if ingest.arrays:
+        attrs = {
+            "written_arrays": " ".join(ingest.arrays),
+        }
+        write(
+            dataset,
+            ingest=ingest,
+            mode=Mode.APPEND,
+            extra_attrs=attrs,
+            arrays_to_write=ingest.arrays,
+            initialize_all_vars=False,
+        )
+
+
+def setup_era5(*args, **kwargs):
+    from benchmarks.create_era5 import setup_for_benchmarks
+
+    return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
+
+
+ERA5_ARCO_INGEST = IngestDataset(
+    name="ERA5-ARCO",
+    prefix="era5_arco",
+    source_uri="gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
+    engine="zarr",
+    read_chunks={"time": 72 * 24, "level": 1},
+    write_chunks={"time": 1, "level": 1, "latitude": 721, "longitude": 1440},
+    group="1x721x1440",
+    arrays=[],
+)
+
 ERA5 = BenchmarkDataset(
     # weatherbench2 data - 5 years
-    skip_local=True,
+    skip_local=False,
     storage_config=StorageConfig(prefix="era5-weatherbench"),
     load_variables=["2m_temperature"],
     chunk_selector={"time": 1},
@@ -290,6 +376,15 @@ ERA5 = BenchmarkDataset(
     group="1x721x1440",
     # don't set setupfn here so we don't run a really expensive job
     # by mistake
+    # setupfn=partial(setup_ingest_for_benchmarks, ingest=ERA5_WB),
+)
+
+ERA5_ARCO = BenchmarkDataset(
+    skip_local=False,
+    storage_config=StorageConfig(prefix="era5-arco"),
+    first_byte_variable="latitude",
+    group="1x721x1440",
+    setupfn=partial(setup_ingest_for_benchmarks, ingest=ERA5_ARCO_INGEST),
 )
 
 # ERA5_LARGE = BenchmarkDataset(
