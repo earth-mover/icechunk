@@ -151,6 +151,24 @@ class LocalRunner(Runner):
 
     def run(self, *, pytest_extra: str = "") -> None:
         super().run(pytest_extra=pytest_extra)
+        if len(refs) > 1:
+            files = sorted(
+                glob.glob("./.benchmarks/**/*.json", recursive=True),
+                key=os.path.getmtime,
+                reverse=True,
+            )[-len(refs) :]
+            # TODO: Use `just` here when we figure that out.
+            subprocess.run(
+                [
+                    "pytest-benchmark",
+                    "compare",
+                    "--group=group,func,param",
+                    "--sort=fullname",
+                    "--columns=median",
+                    "--name=normal",
+                    *files,
+                ]
+            )
 
 
 class CoiledRunner(Runner):
@@ -261,25 +279,6 @@ if __name__ == "__main__":
 
     for runner in tqdm.tqdm(runners):
         runner.run(pytest_extra=args.pytest)
-
-    if len(refs) > 1:
-        files = sorted(
-            glob.glob("./.benchmarks/**/*.json", recursive=True),
-            key=os.path.getmtime,
-            reverse=True,
-        )[-len(refs) :]
-        # TODO: Use `just` here when we figure that out.
-        subprocess.run(
-            [
-                "pytest-benchmark",
-                "compare",
-                "--group=group,func,param",
-                "--sort=fullname",
-                "--columns=median",
-                "--name=normal",
-                *files,
-            ]
-        )
 
 
 # Compare wish-list:
