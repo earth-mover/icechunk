@@ -17,11 +17,7 @@ pub enum Conflict {
     NewNodeInInvalidGroup(Path),
     ZarrMetadataDoubleUpdate(Path),
     ZarrMetadataUpdateOfDeletedArray(Path),
-    UserAttributesDoubleUpdate {
-        path: Path,
-        node_id: NodeId,
-    },
-    UserAttributesUpdateOfDeletedNode(Path),
+    ZarrMetadataUpdateOfDeletedGroup(Path),
     ChunkDoubleUpdate {
         path: Path,
         node_id: NodeId,

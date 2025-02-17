@@ -36,13 +36,13 @@ table TransactionLog {
   // sorted in ascending order
   deleted_arrays: [ObjectId8] (required);
 
-  // node ids of the nodes that had user attributes modified in this transaction
+  // node ids of the groups that had user definitions modified in this transaction
   // sorted in ascending order
-  updated_user_attributes: [ObjectId8] (required);
+  updated_arrays: [ObjectId8] (required);
 
-  // node ids of the nodes that had zarr metadata modified in this transaction
+  // node ids of the arrays that had user definitions modified in this transaction
   // sorted in ascending order
-  updated_zarr_metadata: [ObjectId8] (required);
+  updated_groups: [ObjectId8] (required);
 
   // chunk ref changes made in this transaction
   // sorted in ascending order of the node_id of the ArrayUpdatedChunks

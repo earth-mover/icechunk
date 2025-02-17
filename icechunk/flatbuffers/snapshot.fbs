@@ -24,33 +24,6 @@ struct ManifestFileInfo {
     num_chunk_refs: uint32;
 }
 
-// a pointer to a user attributes file
-struct AttributeFileInfo {
-    // id of the object in the repo's object store
-    id: ObjectId12;
-}
-
-// a pointer to a user attributes file
-table UserAttributesRef {
-    // id of the object in the repo's object store
-    object_id: ObjectId12 (required);
-
-    // index where the user attributes for the array start
-    location: uint32;
-}
-
-// user attributes written inline
-table InlineUserAttributes {
-  // user attributes data, serialized as rmp_serde of the json value
-  // TODO: better serialization format
-  data :[uint8] (required);
-}
-
-union UserAttributesSnapshot {
-  Inline :InlineUserAttributes,
-  Reference :UserAttributesRef,
-}
-
 // A range of chunk indexes
 struct ChunkIndexRange {
   // inclusive
@@ -69,15 +42,25 @@ table ManifestRef {
     extents: [ChunkIndexRange] (required);
 }
 
+// the shape of the array along a given dimension
+struct DimensionShape {
+    array_length: uint64;
+    chunk_length: uint64;
+}
+
+table DimensionName {
+  // optional
+  name: string;
+}
+
 // a marker for a group node
 table GroupNodeData {}
 
 // data for an array node
 table ArrayNodeData {
-  // the zarr metadata for the array
-  // serialized as rmp_serde of the json value
-  // TODO: better serialization format
-  zarr_metadata: [uint8] (required);
+  shape: [DimensionShape] (required);
+
+  dimension_names: [DimensionName];
 
   // pointers to all the manifests where this array has chunk references
   manifests: [ManifestRef] (required);
@@ -97,8 +80,9 @@ table NodeSnapshot {
     // absolute path of the node within the repo
     path: string (required);
 
-    // pointer to the user attributes for the node
-    user_attributes: UserAttributesSnapshot;
+    // the metadata for the node according to what the user passed
+    // this will generally be the full zarr metadata for the node
+    user_data: [uint8] (required);
 
     // node's data
     node_data: NodeData (required);
@@ -128,10 +112,6 @@ table Snapshot {
   // the list of all manifest files this snapshot points to
   // sorted in ascending order of ManifestFileInfo.id
   manifest_files: [ManifestFileInfo] (required);
-
-  // the list of all attribute files this snapshot points to
-  // sorted in ascending order of AttributeFileInfo.id
-  attribute_files: [AttributeFileInfo] (required);
 }
 
 root_type Snapshot;

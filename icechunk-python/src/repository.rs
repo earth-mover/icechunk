@@ -195,9 +195,9 @@ pub struct PyDiff {
     #[pyo3(get)]
     pub deleted_arrays: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_user_attributes: BTreeSet<String>,
+    pub updated_groups: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_zarr_metadata: BTreeSet<String>,
+    pub updated_arrays: BTreeSet<String>,
     #[pyo3(get)]
     // A Vec instead of a set to avoid issues with list not being hashable in python
     pub updated_chunks: BTreeMap<String, Vec<Vec<u32>>>,
@@ -213,16 +213,10 @@ impl From<Diff> for PyDiff {
             value.deleted_groups.into_iter().map(|path| path.to_string()).collect();
         let deleted_arrays =
             value.deleted_arrays.into_iter().map(|path| path.to_string()).collect();
-        let updated_user_attributes = value
-            .updated_user_attributes
-            .into_iter()
-            .map(|path| path.to_string())
-            .collect();
-        let updated_zarr_metadata = value
-            .updated_zarr_metadata
-            .into_iter()
-            .map(|path| path.to_string())
-            .collect();
+        let updated_groups =
+            value.updated_groups.into_iter().map(|path| path.to_string()).collect();
+        let updated_arrays =
+            value.updated_arrays.into_iter().map(|path| path.to_string()).collect();
         let updated_chunks = value
             .updated_chunks
             .into_iter()
@@ -238,8 +232,8 @@ impl From<Diff> for PyDiff {
             new_arrays,
             deleted_groups,
             deleted_arrays,
-            updated_user_attributes,
-            updated_zarr_metadata,
+            updated_groups,
+            updated_arrays,
             updated_chunks,
         }
     }
@@ -266,17 +260,17 @@ impl PyDiff {
             res.push('\n');
         }
 
-        if !self.updated_zarr_metadata.is_empty() {
-            res.push_str("Zarr metadata updated:\n");
-            for g in self.updated_zarr_metadata.iter() {
+        if !self.updated_groups.is_empty() {
+            res.push_str("Group definitions updated:\n");
+            for g in self.updated_groups.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
             res.push('\n');
         }
 
-        if !self.updated_user_attributes.is_empty() {
-            res.push_str("User attributes updated:\n");
-            for g in self.updated_user_attributes.iter() {
+        if !self.updated_arrays.is_empty() {
+            res.push_str("Array definitions updated:\n");
+            for g in self.updated_arrays.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
             res.push('\n');

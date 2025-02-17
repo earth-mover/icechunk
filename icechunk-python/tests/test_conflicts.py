@@ -48,18 +48,22 @@ def test_detect_conflicts(repo: icechunk.Repository) -> None:
         try:
             session_b.rebase(icechunk.ConflictDetector())
         except icechunk.RebaseFailedError as e:
-            assert len(e.conflicts) == 2
+            assert len(e.conflicts) == 3
+            assert e.conflicts[0].path == "/foo/bar/some-array"
             assert e.conflicts[0].path == "/foo/bar/some-array"
             assert (
                 e.conflicts[0].conflict_type
-                == icechunk.ConflictType.UserAttributesDoubleUpdate
+                == icechunk.ConflictType.ZarrMetadataDoubleUpdate
             )
-            assert e.conflicts[0].conflicted_chunks is None
-
             assert e.conflicts[1].path == "/foo/bar/some-array"
-            assert e.conflicts[1].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
-            assert e.conflicts[1].conflicted_chunks
-            assert len(e.conflicts[1].conflicted_chunks) == 100
+            assert (
+                e.conflicts[1].conflict_type
+                == icechunk.ConflictType.ChunksUpdatedInUpdatedArray
+            )
+            assert e.conflicts[2].path == "/foo/bar/some-array"
+            assert e.conflicts[2].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
+            assert e.conflicts[2].conflicted_chunks
+            assert len(e.conflicts[2].conflicted_chunks) == 100
 
             raise e
 
@@ -94,7 +98,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     "on_chunk_conflict",
     [icechunk.VersionSelection.UseOurs, icechunk.VersionSelection.UseTheirs],
 )
-def test_rebase_user_attrs_with_ours(
+def test_rebase_fails_on_user_atts_double_edit(
     repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
 ) -> None:
     session_a = repo.writable_session("main")
@@ -116,24 +120,7 @@ def test_rebase_user_attrs_with_ours(
 
     # Make sure it fails if the resolver is not set
     with pytest.raises(icechunk.RebaseFailedError):
-        session_b.rebase(
-            icechunk.BasicConflictSolver(
-                on_user_attributes_conflict=icechunk.VersionSelection.Fail
-            )
-        )
-
-    solver = icechunk.BasicConflictSolver(
-        on_user_attributes_conflict=icechunk.VersionSelection.UseOurs,
-    )
-
-    session_b.rebase(solver)
-    session_b.commit("after conflict")
-
-    assert (
-        array_b.attrs["repo"] == 2
-        if on_chunk_conflict == icechunk.VersionSelection.UseOurs
-        else 1
-    )
+        session_b.rebase(icechunk.BasicConflictSolver())
 
 
 @pytest.mark.parametrize(

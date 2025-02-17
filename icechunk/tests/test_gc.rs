@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -8,8 +8,7 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkId, ChunkIndices, Path},
-    metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+    format::{snapshot::ArrayShape, ByteRange, ChunkId, ChunkIndices, Path},
     new_in_memory_storage,
     ops::gc::{
         expire, expire_ref, garbage_collect, ExpireRefResult, ExpiredRefAction, GCConfig,
@@ -69,20 +68,13 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut ds = repo.writable_session("main").await?;
 
-    ds.add_group(Path::root()).await?;
-    let zarr_meta = ZarrArrayMetadata {
-        shape: vec![1100],
-        data_type: DataType::Int8,
-        chunk_shape: ChunkShape(vec![NonZeroU64::new(1).expect("Cannot create NonZero")]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Int8(0),
-        codecs: vec![],
-        storage_transformers: None,
-        dimension_names: None,
-    };
+    let user_data = Bytes::new();
+    ds.add_group(Path::root(), user_data.clone()).await?;
+
+    let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
 
     let array_path: Path = "/array".try_into().unwrap();
-    ds.add_array(array_path.clone(), zarr_meta.clone()).await?;
+    ds.add_array(array_path.clone(), shape, None, user_data.clone()).await?;
     // we write more than 1k chunks to go beyond the chunk size for object listing and delete
     for idx in 0..1100 {
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
@@ -200,56 +192,57 @@ async fn make_design_doc_repo(
     repo: &mut Repository,
 ) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::root()).await?;
+    let user_data = Bytes::new();
+    session.add_group(Path::root(), user_data.clone()).await?;
     session.commit("1", None).await?;
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/2").unwrap()).await?;
+    session.add_group(Path::try_from("/2").unwrap(), user_data.clone()).await?;
     let commit_2 = session.commit("2", None).await?;
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/4").unwrap()).await?;
+    session.add_group(Path::try_from("/4").unwrap(), user_data.clone()).await?;
     session.commit("4", None).await?;
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/5").unwrap()).await?;
+    session.add_group(Path::try_from("/5").unwrap(), user_data.clone()).await?;
     let snap_id = session.commit("5", None).await?;
     repo.create_tag("tag2", &snap_id).await?;
 
     repo.create_branch("develop", &commit_2).await?;
     let mut session = repo.writable_session("develop").await?;
-    session.add_group(Path::try_from("/3").unwrap()).await?;
+    session.add_group(Path::try_from("/3").unwrap(), user_data.clone()).await?;
     let snap_id = session.commit("3", None).await?;
     repo.create_tag("tag1", &snap_id).await?;
     let mut session = repo.writable_session("develop").await?;
-    session.add_group(Path::try_from("/6").unwrap()).await?;
+    session.add_group(Path::try_from("/6").unwrap(), user_data.clone()).await?;
     let commit_6 = session.commit("6", None).await?;
 
     repo.create_branch("test", &commit_6).await?;
     let mut session = repo.writable_session("test").await?;
-    session.add_group(Path::try_from("/7").unwrap()).await?;
+    session.add_group(Path::try_from("/7").unwrap(), user_data.clone()).await?;
     let commit_7 = session.commit("7", None).await?;
 
     let expire_older_than = Utc::now();
 
     repo.create_branch("qa", &commit_7).await?;
     let mut session = repo.writable_session("qa").await?;
-    session.add_group(Path::try_from("/8").unwrap()).await?;
+    session.add_group(Path::try_from("/8").unwrap(), user_data.clone()).await?;
     session.commit("8", None).await?;
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/12").unwrap()).await?;
+    session.add_group(Path::try_from("/12").unwrap(), user_data.clone()).await?;
     session.commit("12", None).await?;
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/13").unwrap()).await?;
+    session.add_group(Path::try_from("/13").unwrap(), user_data.clone()).await?;
     session.commit("13", None).await?;
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/14").unwrap()).await?;
+    session.add_group(Path::try_from("/14").unwrap(), user_data.clone()).await?;
     session.commit("14", None).await?;
     let mut session = repo.writable_session("develop").await?;
-    session.add_group(Path::try_from("/10").unwrap()).await?;
+    session.add_group(Path::try_from("/10").unwrap(), user_data.clone()).await?;
     session.commit("10", None).await?;
     let mut session = repo.writable_session("develop").await?;
-    session.add_group(Path::try_from("/11").unwrap()).await?;
+    session.add_group(Path::try_from("/11").unwrap(), user_data.clone()).await?;
     session.commit("11", None).await?;
     let mut session = repo.writable_session("test").await?;
-    session.add_group(Path::try_from("/9").unwrap()).await?;
+    session.add_group(Path::try_from("/9").unwrap(), user_data.clone()).await?;
     session.commit("9", None).await?;
 
     // let's double check the structuer of the commit tree
