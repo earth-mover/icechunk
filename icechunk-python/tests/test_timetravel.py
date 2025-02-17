@@ -217,7 +217,7 @@ async def test_branch_reset() -> None:
 
     repo.reset_branch("main", prev_snapshot_id)
 
-    session = repo.readonly_session(branch="main")
+    session = repo.readonly_session("main")
     store = session.store
 
     keys = {k async for k in store.list()}

@@ -935,8 +935,8 @@ class PyRepository:
     ) -> Diff: ...
     def readonly_session(
         self,
-        *,
         branch: str | None = None,
+        *,
         tag: str | None = None,
         snapshot: str | None = None,
     ) -> PySession: ...
