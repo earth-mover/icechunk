@@ -52,10 +52,10 @@ def assert_cwd_is_icechunk_python():
         )
 
 
-def get_commit(ref: str) -> str:
+def get_full_commit(ref: str) -> str:
     return subprocess.run(
         ["git", "rev-parse", ref], capture_output=True, text=True, check=True
-    ).stdout.strip()[:8]
+    ).stdout.strip()
 
 
 def rdms() -> str:

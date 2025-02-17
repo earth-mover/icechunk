@@ -38,6 +38,13 @@ def synth_dataset(request) -> Store:
     ds.storage_config = ds.storage_config.with_overwrite(
         **TEST_BUCKETS[where]
     ).with_extra(prefix=extra_prefix, force_idempotent=True)
+    if ds.setupfn is None:
+        # these datasets aren't automatically set up
+        # so skip if the data haven't been written yet.
+        try:
+            ds.store()
+        except ValueError as e:
+            pytest.skip(reason=str(e))
     return ds
 
 
