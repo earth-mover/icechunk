@@ -17,11 +17,9 @@ import tqdm.contrib.concurrent
 from helpers import (
     assert_cwd_is_icechunk_python,
     get_coiled_kwargs,
-    get_commit,
+    get_full_commit,
     setup_logger,
 )
-
-import icechunk as ic
 
 logger = setup_logger()
 
@@ -54,21 +52,22 @@ class Runner:
 
     def __init__(self, *, ref: str, where: str) -> None:
         self.ref = ref
-        self.commit = get_commit(ref)
+        self.full_commit = get_full_commit(ref)
+        self.commit = self.full_commit[:8]
         self.where = where
 
     @property
     def pip_github_url(self) -> str:
         # optional extras cannot be specified here, "not guaranteed to work"
         # https://pip.pypa.io/en/stable/topics/vcs-support/#url-fragments
-        return f"git+https://github.com/earth-mover/icechunk.git@{self.commit}#subdirectory=icechunk-python"
+        return f"git+https://github.com/earth-mover/icechunk.git@{self.full_commit}#subdirectory=icechunk-python"
 
     @property
     def prefix(self) -> str:
-        try:
-            return f"v{ic.spec_version():02d}"
-        except AttributeError:
-            return f"{self.ref}_{self.commit}"
+        # try:
+        #     return f"v{ic.spec_version():02d}"
+        # except AttributeError:
+        return f"{self.ref}_{self.commit}"
 
     @property
     def ref_commit(self) -> str:
@@ -84,12 +83,11 @@ class Runner:
 
     def initialize(self) -> None:
         """Builds virtual envs etc."""
-        raise NotImplementedError
+        self.sync_benchmarks_folder()
 
     def setup(self, *, force: bool):
         """Creates datasets for read benchmarks."""
         logger.info(f"setup_benchmarks for {self.ref} / {self.commit}")
-        self.sync_benchmarks_folder()
         cmd = (
             f"pytest {PYTEST_OPTIONS} -nauto "
             f"-m setup_benchmarks --force-setup={force} "
@@ -104,23 +102,21 @@ class Runner:
         """Actually runs the benchmarks."""
         logger.info(f"running benchmarks for {self.ref} / {self.commit}")
 
-        self.sync_benchmarks_folder()
-
         # shorten the name so `pytest-benchmark compare` is readable
         clean_ref = self.ref.removeprefix("icechunk-v0.1.0-alph")
 
         assert self.bench_store_dir is not None
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
-            f"pytest {PYTEST_OPTIONS} "
+            f"pytest {pytest_extra} "
             f"--benchmark-storage={self.bench_store_dir}/.benchmarks "
             f"--benchmark-save={clean_ref}_{self.commit}_{self.where} "
             f"--where={self.where} "
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
-            f"{pytest_extra} "
+            f"{PYTEST_OPTIONS} "
             "benchmarks/"
         )
-        logger.info(cmd)
+        print(cmd)
 
         self.execute(cmd, check=False)
 
@@ -151,10 +147,30 @@ class LocalRunner(Runner):
         subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
         cmd = f"pip install {PIP_OPTIONS} {self.pip_github_url} {deps}"
         self.execute(cmd, check=True)
+        super().initialize()
+
+    def run(self, *, pytest_extra: str = "") -> None:
+        super().run(pytest_extra=pytest_extra)
 
 
 class CoiledRunner(Runner):
     bench_store_dir = "."
+
+    def get_coiled_run_args(self) -> tuple[str]:
+        ckwargs = self.get_coiled_kwargs()
+        return (
+            "coiled",
+            "run",
+            "--interactive",
+            "--name",
+            f"icebench-{self.commit}",  # cluster name
+            "--keepalive",
+            "10m",
+            f"--workspace={ckwargs['workspace']}",  # cloud
+            f"--vm-type={ckwargs['vm_type']}",
+            f"--software={ckwargs['software']}",
+            f"--region={ckwargs['region']}",
+        )
 
     def get_coiled_kwargs(self):
         COILED_SOFTWARE = {
@@ -185,34 +201,26 @@ class CoiledRunner(Runner):
             },
             pip=[self.pip_github_url, "coiled", *deps],
         )
+        super().initialize()
 
     def execute(self, cmd, **kwargs) -> None:
-        ckwargs = self.get_coiled_kwargs()
-        ls = [f for f in os.listdir(CURRENTDIR) if f not in [".benchmarks", "benchmarks"]]
-        toignore = " ".join(ls)
-        subprocess.run(
-            [
-                "coiled",
-                "run",
-                "--interactive",
-                "--name",
-                f"icebench-{self.commit}",  # cluster name
-                "--sync",
-                f"--sync-ignore={toignore!r}",
-                "--keepalive",
-                "10m",
-                f"--workspace={ckwargs['workspace']}",  # cloud
-                f"--vm-type={ckwargs['vm_type']}",
-                f"--software={ckwargs['software']}",
-                f"--region={ckwargs['region']}",
-                cmd,
-            ],
-            **kwargs,
-        )
+        subprocess.run([*self.get_coiled_run_args(), cmd], **kwargs)
 
     def sync_benchmarks_folder(self) -> None:
-        # uses command-line --sync option
-        pass
+        subprocess.run(
+            [
+                *self.get_coiled_run_args(),
+                "--file",
+                "benchmarks/",
+                "ls -alh ./.benchmarks/",
+            ],
+            check=True,
+        )
+
+    def run(self, *, pytest_extra: str = "") -> None:
+        super().run(pytest_extra=pytest_extra)
+        # This prints to screen but we could upload to a bucket in here.
+        self.execute("sh benchmarks/most_recent.sh")
 
 
 def init_for_ref(runner: Runner):
@@ -223,7 +231,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest", default="")
-    parser.add_argument("--where", help="where to run? [local]", default="local")
+    parser.add_argument("--where", help="where to run? [local|s3|gcs]", default="local")
     parser.add_argument(
         "--skip-setup",
         help="skip setup step, useful for benchmarks that don't need data",
