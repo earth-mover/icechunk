@@ -188,7 +188,7 @@ class CoiledRunner(Runner):
 
     def execute(self, cmd, **kwargs) -> None:
         ckwargs = self.get_coiled_kwargs()
-        ls = [f for f in os.listdir(CURRENTDIR) if f != "benchmarks"]
+        ls = [f for f in os.listdir(CURRENTDIR) if f not in [".benchmarks", "benchmarks"]]
         toignore = " ".join(ls)
         subprocess.run(
             [
