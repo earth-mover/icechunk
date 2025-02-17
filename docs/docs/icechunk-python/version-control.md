@@ -38,7 +38,6 @@ repo.ancestry(branch="main")
 
 We get back a list of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
 
-
 ## Creating a snapshot
 
 Now that we have a `Repository` with a `main` branch, we can modify the data in the repository and create a new snapshot. First we need to create a writable from the `main` branch.
@@ -48,7 +47,7 @@ Now that we have a `Repository` with a `main` branch, we can modify the data in 
     Writable `Session` objects are required to create new snapshots, and can only be created from the tip of a branch. Checking out tags or other snapshots is read-only.
 
 ```python
-session = repo.writable_session(branch="main")
+session = repo.writable_session("main")
 ```
 
 We can now access the `zarr.Store` from the `Session` and create a new root group. Then we can modify the attributes of the root group and create a new snapshot.
@@ -68,7 +67,7 @@ Success! We've created a new snapshot with a new attribute on the root group.
 Once we've committed the snapshot, the `Session` will become read-only, and we can no longer modify the data using our existing `Session`. If we want to modify the data again, we need to create a new writable `Session` from the branch. Notice that we don't have to refresh the `Repository` to get the updates from the `main` branch. Instead, the `Repository` will automatically fetch the latest snapshot from the branch when we create a new writable `Session` from it.
 
 ```python
-session = repo.writable_session(branch="main")
+session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "baz"
 session.commit(message="Update foo attribute on root group")
@@ -123,7 +122,7 @@ repo.create_branch("dev", snapshot_id=main_branch_snapshot_id)
 We can now create a new writable `Session` from the `dev` branch and modify the data.
 
 ```python
-session = repo.writable_session(branch="dev")
+session = repo.writable_session("dev")
 root = zarr.group(session.store)
 root.attrs["foo"] = "balogna"
 session.commit(message="Update foo attribute on root group")
@@ -137,7 +136,7 @@ We can also create a new branch from the tip of the `main` branch if we want to 
 main_branch_snapshot_id = repo.lookup_branch("main")
 repo.create_branch("feature", snapshot_id=main_branch_snapshot_id)
 
-session = repo.writable_session(branch="feature")
+session = repo.writable_session("feature")
 root = zarr.group(session.store)
 root.attrs["foo"] = "cherry"
 session.commit(message="Update foo attribute on root group")
@@ -254,7 +253,7 @@ import numpy as np
 import zarr
 
 repo = icechunk.Repository.create(icechunk.in_memory_storage())
-session = repo.writable_session(branch="main")
+session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "bar"
 root.create_dataset("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
@@ -266,8 +265,8 @@ session.commit(message="Add foo attribute and data array")
 Lets try to modify the `data` array in two different sessions, created from the `main` branch.
 
 ```python
-session1 = repo.writable_session(branch="main")
-session2 = repo.writable_session(branch="main")
+session1 = repo.writable_session("main")
+session2 = repo.writable_session("main")
 
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
@@ -356,8 +355,8 @@ session2.commit(message="Update foo attribute on root group")
 This same process can be used to resolve conflicts with arrays. Let's try to modify the `data` array from both sessions.
 
 ```python
-session1 = repo.writable_session(branch="main")
-session2 = repo.writable_session(branch="main")
+session1 = repo.writable_session("main")
+session2 = repo.writable_session("main")
 
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
@@ -367,7 +366,6 @@ root2["data"][0,:] = 2
 ```
 
 We have now created a conflict, because the first session modified the first element of the `data` array, and the second session modified the first row of the `data` array. Let's commit the changes from the second session first, then see what conflicts are reported when we try to commit the changes from the first session.
-
 
 ```python
 print(session2.commit(message="Update first row of data array"))
@@ -413,18 +411,24 @@ Success! We have now resolved the conflict and committed the changes.
 Let's look at the value of the `data` array to confirm that the conflict was resolved correctly.
 
 ```python
-session = repo.readonly_session(branch="main")
+session = repo.readonly_session("main")
 root = zarr.open_group(session.store, mode="r")
 root["data"][0,:]
 
 # array([1, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=int32)
 ```
 
+As you can see, `readonly_session` accepts a string for a branch name, or you can also write:
+
+```python
+session = repo.readonly_session(branch="main")
+```
+
 Lastly, if you make changes to non-conflicting chunks or attributes, you can rebase without having to resolve any conflicts.
 
 ```python
-session1 = repo.writable_session(branch="main")
-session2 = repo.writable_session(branch="main")
+session1 = repo.writable_session("main")
+session2 = repo.writable_session("main")
 
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)

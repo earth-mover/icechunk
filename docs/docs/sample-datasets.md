@@ -6,7 +6,6 @@ title: Sample Datasets
 !!! warning
     This page is under construction. The listed datasets are outdated and will not work until the icechunk format is more stable.
 
-
 ## Native Datasets
 
 ### Weatherbench2 ERA5
@@ -25,7 +24,7 @@ storage = ic.s3_storage(
 )
 
 repo = ic.Repository.open(storage=storage)
-session = repo.readonly_session(branch="main")
+session = repo.readonly_session("main")
 ds = xr.open_dataset(
     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
 )
@@ -43,12 +42,11 @@ storage = ic.gcs_storage(
 )
 
 repo = ic.Repository.open(storage=storage)
-session = repo.readonly_session(branch="main")
+session = repo.readonly_session("main")
 ds = xr.open_dataset(
     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
 )
 ```
-
 
 <!-- === "Tigris" -->
 
@@ -68,7 +66,6 @@ ds = xr.open_dataset(
 <!--     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False -->
 <!-- ) -->
 <!-- ``` -->
-
 
 ## Virtual Datasets
 

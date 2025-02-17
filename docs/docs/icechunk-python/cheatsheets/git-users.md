@@ -54,6 +54,8 @@ We can either check out a branch for [read-only access](../reference/#icechunk.R
 ```python
 # check out a branch for read-only access
 session = repo.readonly_session(branch="my-new-branch")
+# readonly_session accepts a branch name by default
+session = repo.readonly_session("my-new-branch")
 # check out a branch for read-write access
 session = repo.writable_session("my-new-branch")
 ```
