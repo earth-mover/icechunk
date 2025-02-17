@@ -21,8 +21,8 @@ client = Client()
 # initialize the icechunk store
 import icechunk
 
-storage = icechunk.local_filesystem_storage("./icechunk-xarray")
-icechunk_repo = icechunk.Repository.create(storage_config)
+storage = icechunk.local_filesystem_storage("./icechunk-dask")
+icechunk_repo = icechunk.Repository.create(storage)
 icechunk_session = icechunk_repo.writable_session("main")
 ```
 
@@ -34,6 +34,7 @@ support for the `compute` kwarg.
 
 First create a dask array to write:
 ```python
+import dask.array as da
 shape = (100, 100)
 dask_chunks = (20, 20)
 dask_array = dask.array.random.random(shape, chunks=dask_chunks)
@@ -41,8 +42,10 @@ dask_array = dask.array.random.random(shape, chunks=dask_chunks)
 
 Now create the Zarr array you will write to.
 ```python
+import zarr
+
 zarr_chunks = (10, 10)
-group = zarr.group(store=icechunk_sesion.store, overwrite=True)
+group = zarr.group(store=icechunk_session.store, overwrite=True)
 
 zarray = group.create_array(
     "array",

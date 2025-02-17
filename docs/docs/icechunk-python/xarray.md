@@ -99,7 +99,8 @@ to_icechunk(ds, session)
 After writing, we commit the changes using the session:
 
 ```python
-session.commit("add RASM data to store")
+first_snapshot = session.commit("add RASM data to store")
+first_snapshot
 # output: 'ME4VKFPA5QAY0B2YSG8G'
 ```
 
@@ -153,7 +154,7 @@ xr.open_zarr(session.store, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-session = repo.readable_session(snapshot_id='ME4VKFPA5QAY0B2YSG8G')
+session = repo.readonly_session(snapshot=first_snapshot)
 
 xr.open_zarr(session.store, consolidated=False)
 # <xarray.Dataset> Size: 9MB
