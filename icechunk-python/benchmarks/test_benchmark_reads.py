@@ -40,6 +40,9 @@ def test_time_create_store(synth_dataset: Dataset, benchmark) -> None:
 def test_time_getsize_key(synth_dataset: Dataset, benchmark) -> None:
     from zarr.core.sync import sync
 
+    if synth_dataset.load_variables is None:
+        pytest.skip()
+
     store = synth_dataset.store
 
     @benchmark
@@ -98,6 +101,8 @@ def test_time_xarray_open(synth_dataset: Dataset, benchmark) -> None:
 @pytest.mark.benchmark(group="xarray-read", min_rounds=2)
 def test_time_xarray_read_chunks(synth_dataset: Dataset, benchmark) -> None:
     """128MB vs 8MB chunks. should see a difference."""
+    if synth_dataset.load_variables is None:
+        pytest.skip()
     # TODO: switch out concurrency "ideal_request_size"
     ds = xr.open_zarr(
         synth_dataset.store, group=synth_dataset.group, chunks=None, consolidated=False

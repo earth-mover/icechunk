@@ -8,70 +8,37 @@ import argparse
 import datetime
 import math
 import random
-import warnings
-from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any
 
-import helpers
 import humanize
 import pandas as pd
-from datasets import TEST_BUCKETS, Dataset, StorageConfig
 from packaging.version import Version
 
 import dask
 import icechunk as ic
 import xarray as xr
 import zarr
+from benchmarks import helpers
+from benchmarks.datasets import Dataset, IngestDataset
 from dask.diagnostics import ProgressBar
 from icechunk.xarray import to_icechunk
 
 logger = helpers.setup_logger()
 
-PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 
-BUCKETS = {
-    "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
-    "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
-    "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="iad"),
-}
+class Mode(StrEnum):
+    APPEND = auto()
+    CREATE = auto()
+    OVERWRITE = auto()
+    VERIFY = auto()
 
 
-@dataclass(kw_only=True)
-class IngestDataset:
-    name: str
-    source_uri: str
-    group: str
-    prefix: str
-    write_chunks: dict[str, int]
-    arrays: list[str]
-    engine: str | None = None
-    read_chunks: dict[str, int] | None = None
-
-    def open_dataset(self, chunks=None, **kwargs: Any) -> xr.Dataset:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=UserWarning)
-            return xr.open_dataset(
-                self.source_uri,
-                chunks=chunks or self.read_chunks,
-                engine=self.engine,
-                **kwargs,
-            ).drop_encoding()
-
-    def make_dataset(self, *, store: str, debug: bool) -> Dataset:
-        buckets = BUCKETS if not debug else TEST_BUCKETS
-        extra_prefix = f"_{helpers.rdms()}" if debug else ""
-        storage_config = StorageConfig(
-            prefix=self.prefix + extra_prefix, **buckets[store]
-        )
-        return Dataset(storage_config=storage_config, group=self.group)
-
-
-ERA5 = IngestDataset(
-    name="ERA5",
+ERA5_WB = IngestDataset(
+    name="ERA5-WB",
     prefix="era5_weatherbench2",
     source_uri="gs://weatherbench2/datasets/era5/1959-2023_01_10-full_37-1h-0p25deg-chunk-1.zarr",
     engine="zarr",
@@ -80,13 +47,6 @@ ERA5 = IngestDataset(
     group="1x721x1440",
     arrays=["2m_temperature", "10m_u_component_of_wind", "10m_v_component_of_wind"],
 )
-
-
-class Mode(StrEnum):
-    APPEND = auto()
-    CREATE = auto()
-    OVERWRITE = auto()
-    VERIFY = auto()
 
 
 def verify(dataset: Dataset, *, ingest: IngestDataset, seed: int | None = None):
@@ -205,58 +165,6 @@ def write(
     logger.info(f"Finished writing {tuple(towrite.data_vars)}.")
 
 
-def setup_for_benchmarks(
-    dataset: Dataset,
-    *,
-    ingest: IngestDataset,
-    mode: Mode,
-    ref: str,
-    arrays_to_write: list[str],
-) -> None:
-    """
-    FIXME: set the right bucket.
-    For benchmarks, we
-    1. add a specific prefix.
-    2. always write the metadata for the WHOLE dataset
-    3. then append a small subset of data for a few arrays
-    """
-    ref = helpers.get_version()
-
-    commit = helpers.get_commit(ref)
-    logger.info(
-        f"Benchmarks: Writing {ingest.name} for {ref=}, {commit=}, {arrays_to_write=}"
-    )
-    prefix = f"benchmarks/{ref}_{commit}/"
-    dataset.storage_config = dataset.storage_config.with_extra(prefix=prefix)
-    dataset.create()
-    attrs = {
-        "icechunk_commit": helpers.get_commit(ref),
-        "icechunk_ref": ref,
-        "written_arrays": " ".join(arrays_to_write),
-    }
-
-    repo = ic.Repository.open(dataset.storage)
-    ds = ingest.open_dataset()
-
-    if mode is Mode.CREATE:
-        logger.info("Initializing dataset for benchmarks..")
-        session = repo.writable_session("main")
-        ds.to_zarr(
-            session.store, compute=False, mode="w-", group=dataset.group, **ZARR_KWARGS
-        )
-        session.commit("initialized dataset")
-        logger.info("Finished initializing dataset.")
-
-    write(
-        dataset,
-        ingest=ingest,
-        mode=Mode.APPEND,
-        extra_attrs=attrs,
-        arrays_to_write=arrays_to_write,
-        initialize_all_vars=False,
-    )
-
-
 def setup_dataset(
     dataset: Dataset,
     *,
@@ -332,7 +240,7 @@ if __name__ == "__main__":
             f"mode must be one of ['create', 'overwrite', 'append', 'verify']. Received {args.mode=!r}"
         )
 
-    ingest = ERA5
+    ingest = ERA5_WB
     dataset = ingest.make_dataset(store=args.store, debug=args.debug)
     logger.info(ingest)
     logger.info(dataset)
