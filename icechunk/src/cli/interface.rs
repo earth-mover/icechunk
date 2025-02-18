@@ -49,6 +49,15 @@ struct CreateCommand {
 #[derive(Debug, Args)]
 struct ListCommand {
     repo: RepositoryAlias,
+    #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
+    n: usize,
+    #[arg(
+        short = 'b',
+        long = "branch",
+        default_value = "main",
+        help = "Branch to list snapshots from"
+    )]
+    branch: String,
 }
 
 fn load_repositories() -> Result<Repositories> {
@@ -108,13 +117,15 @@ async fn snapshot_list(list_cmd: ListCommand) -> Result<()> {
         .await
         .context(format!("❌ Failed to open repository {:?}", list_cmd.repo))?;
 
-    let snapshot_id =
-        repository.lookup_branch("main").await.context("❌ Failed to lookup branch")?;
-    let ancestry = repository.ancestry(&VersionInfo::SnapshotId(snapshot_id)).await?;
+    let branch_ref = VersionInfo::BranchTipRef(list_cmd.branch.clone());
+    let ancestry = repository.ancestry(&branch_ref).await?;
     pin!(ancestry);
-    while let Some(snapshot_info) = ancestry.next().await {
-        println!("{:?}", snapshot_info?);
-    }
+    ancestry
+        .take(list_cmd.n)
+        .for_each(|snapshot| async move {
+            println!("{:?}", snapshot);
+        })
+        .await;
 
     Ok(())
 }
