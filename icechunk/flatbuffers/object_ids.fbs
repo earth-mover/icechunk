@@ -1,0 +1,11 @@
+namespace gen;
+
+// used for SnapshotIds, ChunkIds, etc
+struct ObjectId12 {
+  bytes:[uint8:12];
+}
+
+// used for NodeIds
+struct ObjectId8 {
+  bytes:[uint8:8];
+}

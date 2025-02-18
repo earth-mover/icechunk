@@ -7,9 +7,12 @@ use std::{
     ops::Range,
 };
 
+use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
+use flatbuffers::gen;
 use format_constants::FileTypeBin;
 use itertools::Itertools;
+use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
 use rand::{rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -20,6 +23,20 @@ use crate::{error::ICError, metadata::DataType, private};
 
 pub mod attributes;
 pub mod manifest;
+
+#[allow(
+    dead_code,
+    unused_imports,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::needless_lifetimes,
+    clippy::extra_unused_lifetimes,
+    clippy::missing_safety_doc,
+    clippy::derivable_impls
+)]
+#[path = "./flatbuffers/all_generated.rs"]
+pub mod flatbuffers;
+
 pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;
@@ -150,6 +167,12 @@ pub struct ChunkIndices(pub Vec<u32>);
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
+impl<'a> From<gen::ChunkIndices<'a>> for ChunkIndices {
+    fn from(value: gen::ChunkIndices<'a>) -> Self {
+        ChunkIndices(value.coords().iter().collect())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ByteRange {
     /// The fixed length range represented by the given `Range`
@@ -213,9 +236,12 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum IcechunkFormatErrorKind {
+    #[error(transparent)]
+    VirtualReferenceError(VirtualReferenceErrorKind),
+
     #[error("error decoding fill_value from array. Found size: {found_size}, target size: {target_size}, type: {target_type}")]
     FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
     #[error("error decoding fill_value from json. Type: {data_type}, value: {value}")]
@@ -234,6 +260,18 @@ pub enum IcechunkFormatErrorKind {
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
     InvalidCompressionAlgorithm, // TODO: add more info
+    #[error("Invalid Icechunk metadata file")]
+    InvalidFlatBuffer(#[from] InvalidFlatbuffer),
+    #[error("error during metadata file deserialization")]
+    DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("error during metadata file serialization")]
+    SerializationError(#[from] rmp_serde::encode::Error),
+    #[error("I/O error")]
+    IO(#[from] std::io::Error),
+    #[error("path error")]
+    Path(#[from] PathError),
+    #[error("invalid timestamp in file")]
+    InvalidTimestamp,
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -246,6 +284,21 @@ where
 {
     fn from(value: E) -> Self {
         Self::new(value.into())
+    }
+}
+
+impl From<VirtualReferenceError> for IcechunkFormatError {
+    fn from(value: VirtualReferenceError) -> Self {
+        Self::with_context(
+            IcechunkFormatErrorKind::VirtualReferenceError(value.kind),
+            value.context,
+        )
+    }
+}
+
+impl From<Infallible> for IcechunkFormatErrorKind {
+    fn from(value: Infallible) -> Self {
+        match value {}
     }
 }
 

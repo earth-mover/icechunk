@@ -67,7 +67,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_arrays_already_updated = current_changes
             .zarr_updated_arrays()
-            .filter(|node_id| previous_change.updated_zarr_metadata.contains(node_id))
+            .filter(|node_id| previous_change.zarr_metadata_updated(node_id))
             .map(Ok);
 
         let updated_arrays_already_updated = stream::iter(updated_arrays_already_updated)
@@ -78,7 +78,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_arrays_were_deleted = current_changes
             .zarr_updated_arrays()
-            .filter(|node_id| previous_change.deleted_arrays.contains(node_id))
+            .filter(|node_id| previous_change.array_deleted(node_id))
             .map(Ok);
 
         let updated_arrays_were_deleted = stream::iter(updated_arrays_were_deleted)
@@ -89,7 +89,7 @@ impl ConflictSolver for ConflictDetector {
 
         let updated_attributes_already_updated = current_changes
             .user_attributes_updated_nodes()
-            .filter(|node_id| previous_change.updated_user_attributes.contains(node_id))
+            .filter(|node_id| previous_change.user_attributes_updated(node_id))
             .map(Ok);
 
         let updated_attributes_already_updated =
@@ -104,8 +104,8 @@ impl ConflictSolver for ConflictDetector {
         let updated_attributes_on_deleted_node = current_changes
             .user_attributes_updated_nodes()
             .filter(|node_id| {
-                previous_change.deleted_arrays.contains(node_id)
-                    || previous_change.deleted_groups.contains(node_id)
+                previous_change.array_deleted(node_id)
+                    || previous_change.group_deleted(node_id)
             })
             .map(Ok);
 
@@ -117,7 +117,7 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_updated_in_deleted_array = current_changes
             .arrays_with_chunk_changes()
-            .filter(|node_id| previous_change.deleted_arrays.contains(node_id))
+            .filter(|node_id| previous_change.array_deleted(node_id))
             .map(Ok);
 
         let chunks_updated_in_deleted_array =
@@ -131,7 +131,7 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_updated_in_updated_array = current_changes
             .arrays_with_chunk_changes()
-            .filter(|node_id| previous_change.updated_zarr_metadata.contains(node_id))
+            .filter(|node_id| previous_change.zarr_metadata_updated(node_id))
             .map(Ok);
 
         let chunks_updated_in_updated_array =
@@ -145,9 +145,11 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_double_updated =
             current_changes.chunk_changes().filter_map(|(node_id, changes)| {
-                if let Some(previous_changes) =
-                    previous_change.updated_chunks.get(node_id)
-                {
+                let previous_changes: HashSet<_> =
+                    previous_change.updated_chunks_for(node_id).collect();
+                if previous_changes.is_empty() {
+                    None
+                } else {
                     let conflicting: HashSet<_> = changes
                         .keys()
                         .filter(|coord| previous_changes.contains(coord))
@@ -158,8 +160,6 @@ impl ConflictSolver for ConflictDetector {
                     } else {
                         Some(Ok((node_id, conflicting)))
                     }
-                } else {
-                    None
                 }
             });
 
@@ -187,9 +187,9 @@ impl ConflictSolver for ConflictDetector {
             };
 
             if let Some(node_id) = id {
-                if previous_change.updated_zarr_metadata.contains(&node_id)
-                    || previous_change.updated_user_attributes.contains(&node_id)
-                    || previous_change.updated_chunks.contains_key(&node_id)
+                if previous_change.zarr_metadata_updated(&node_id)
+                    || previous_change.user_attributes_updated(&node_id)
+                    || previous_change.chunks_updated(&node_id)
                 {
                     Ok(Some(Conflict::DeleteOfUpdatedArray {
                         path: path.clone(),
@@ -216,7 +216,7 @@ impl ConflictSolver for ConflictDetector {
             };
 
             if let Some(node_id) = id {
-                if previous_change.updated_user_attributes.contains(&node_id) {
+                if previous_change.user_attributes_updated(&node_id) {
                     Ok(Some(Conflict::DeleteOfUpdatedGroup {
                         path: path.clone(),
                         node_id: node_id.clone(),
@@ -256,7 +256,7 @@ impl ConflictSolver for ConflictDetector {
 
 struct PathFinder<It>(Mutex<(HashMap<NodeId, Path>, Option<It>)>);
 
-impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
+impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
     fn new(iter: It) -> Self {
         Self(Mutex::new((HashMap::new(), Some(iter))))
     }
@@ -272,6 +272,7 @@ impl<It: Iterator<Item = NodeSnapshot>> PathFinder<It> {
             Ok(cached.clone())
         } else if let Some(iterator) = iter {
             for node in iterator {
+                let node = node?;
                 if &node.id == node_id {
                     cache.insert(node.id, node.path.clone());
                     return Ok(node.path);
