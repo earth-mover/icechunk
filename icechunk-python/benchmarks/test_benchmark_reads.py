@@ -48,7 +48,11 @@ def test_time_getsize_key(synth_dataset: Dataset, benchmark) -> None:
     @benchmark
     def fn():
         for array in synth_dataset.load_variables:
-            key = f"{synth_dataset.group + '/' or ''}{array}/zarr.json"
+            if group := synth_dataset.group is not None:
+                prefix = f"{group}/"
+            else:
+                prefix = ""
+            key = f"{prefix}{array}/zarr.json"
             sync(store.getsize(key))
 
 
