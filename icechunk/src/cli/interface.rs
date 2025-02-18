@@ -107,6 +107,7 @@ async fn get_storage(
     }
 }
 
+// TODO (Daniel): Consider writing this as a library to make it easily testable
 async fn repo_create(init_cmd: CreateCommand) -> Result<()> {
     let repos = load_repositories()?;
     let repo = repos.repos.get(&init_cmd.repo).context("❌ Repository not found")?;
