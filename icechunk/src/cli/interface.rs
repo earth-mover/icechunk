@@ -90,7 +90,7 @@ async fn get_storage(
         RepositoryDefinition::LocalFileSystem { path, .. } => {
             let storage = new_local_filesystem_storage(&path)
                 .await
-                .context(format!("❌ Failed to create storage at {:?}", path))?;
+                .context(format!("❌ Failed to create storage at {}", path))?;
             Ok(storage)
         }
         RepositoryDefinition::S3 {
