@@ -1,6 +1,6 @@
 repos:
-  localrepo: !LocalFileSystem
-    path: testfolder
+  testrepo: !LocalFileSystem
+    path: testpath
     config:
       inline_chunk_threshold_bytes: null
       unsafe_overwrite_refs: null
@@ -13,9 +13,9 @@ repos:
   s3repo: !S3
     location:
       bucket: testbucket
-      prefix: testfolder
+      prefix: testprefix
     object_store_config:
-      region: eu-west-1
+      region: testregion
       endpoint_url: null
       anonymous: false
       allow_http: false

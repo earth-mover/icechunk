@@ -1,5 +1,7 @@
+use crate::config::S3Options;
 use crate::repository::VersionInfo;
 use clap::{Args, Parser, Subcommand};
+use dialoguer::{Input, Select};
 use futures::stream::StreamExt;
 use serde_yaml_ng;
 use std::collections::HashMap;
@@ -7,12 +9,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::pin;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Ok, Result};
 
 use crate::storage::new_local_filesystem_storage;
-use crate::{new_s3_storage, Repository, Storage};
+use crate::{new_s3_storage, Repository, RepositoryConfig, Storage};
 
 use crate::cli::config::{Repositories, RepositoryAlias, RepositoryDefinition};
+
+use super::config::{RepoLocation, S3Credentials};
 
 #[derive(Debug, Parser)]
 #[clap()]
@@ -27,6 +31,8 @@ enum Command {
     Repo(RepoCommand),
     #[command(subcommand)]
     Snapshot(SnapshotCommand),
+    #[command(subcommand)]
+    Config(ConfigCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -39,6 +45,14 @@ enum RepoCommand {
 enum SnapshotCommand {
     #[clap(name = "list")]
     List(ListCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    #[clap(name = "init")]
+    Init,
+    #[clap(name = "list")]
+    List,
 }
 
 #[derive(Debug, Args)]
@@ -60,8 +74,10 @@ struct ListCommand {
     branch: String,
 }
 
+const CONFIG_PATH: &str = "default.yaml";
+
 fn load_repositories() -> Result<Repositories> {
-    let path = PathBuf::from("default.yaml");
+    let path = PathBuf::from(CONFIG_PATH);
     let file = std::fs::File::open(path).context("❌ Failed to open config")?;
     let deserialized: Repositories = serde_yaml_ng::from_reader(file)?;
     Ok(deserialized)
@@ -130,12 +146,96 @@ async fn snapshot_list(list_cmd: ListCommand) -> Result<()> {
     Ok(())
 }
 
+async fn config_init() -> Result<()> {
+    let mut repositories =
+        load_repositories().unwrap_or(Repositories { repos: HashMap::new() });
+
+    let alias: String = Input::new()
+        .with_prompt("Enter alias")
+        .validate_with(|input: &String| {
+            if repositories.repos.contains_key(&RepositoryAlias(input.clone())) {
+                Err(anyhow::anyhow!("Alias already exists"))
+            } else {
+                Ok(())
+            }
+        })
+        .interact()
+        .context("❌ Failed to get alias")?;
+
+    let repo_types = vec!["Local", "S3"];
+
+    let repo_type = Select::new()
+        .with_prompt("Select repository type")
+        .items(&repo_types)
+        .default(0)
+        .interact()
+        .context("❌ Failed to select repository type")?;
+
+    let repo = match repo_type {
+        0 => {
+            let path: String = Input::new()
+                .with_prompt("Enter path")
+                .interact()
+                .context("❌ Failed to get path")?;
+            RepositoryDefinition::LocalFileSystem {
+                path: std::path::PathBuf::from(path),
+                config: RepositoryConfig::default(),
+            }
+        }
+        1 => {
+            let bucket: String = Input::new()
+                .with_prompt("Enter bucket")
+                .interact()
+                .context("❌ Failed to get bucket")?;
+            let prefix: String = Input::new()
+                .with_prompt("Enter prefix")
+                .interact()
+                .context("❌ Failed to get prefix")?;
+            let region: String = Input::new()
+                .with_prompt("Enter region")
+                .interact()
+                .context("❌ Failed to get region")?;
+
+            RepositoryDefinition::S3 {
+                location: RepoLocation { bucket, prefix },
+                object_store_config: S3Options {
+                    region: Some(region),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                },
+                credentials: S3Credentials::FromEnv,
+                config: RepositoryConfig::default(),
+            }
+        }
+        _ => unreachable!(),
+    };
+
+    repositories.repos.insert(RepositoryAlias(alias), repo);
+
+    let path = PathBuf::from(CONFIG_PATH);
+    let file = std::fs::File::create(path).context("❌ Failed to create config file")?;
+    serde_yaml_ng::to_writer(file, &repositories)?;
+
+    Ok(())
+}
+
+async fn config_list() -> Result<()> {
+    let repositories = load_repositories()?;
+    let serialized = serde_yaml_ng::to_string(&repositories)?;
+    println!("{}", serialized);
+
+    Ok(())
+}
+
 pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
     match args.cmd {
         Command::Repo(RepoCommand::Create(init_cmd)) => repo_create(init_cmd).await,
         Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
             snapshot_list(list_cmd).await
         }
+        Command::Config(ConfigCommand::Init) => config_init().await,
+        Command::Config(ConfigCommand::List) => config_list().await,
     }
     .map_err(|e| {
         eprintln!("❌ CLI Error: {:#}", e);
