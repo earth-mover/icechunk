@@ -511,34 +511,7 @@ impl PyRepository {
         PyStorage(Arc::clone(self.0.storage()))
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
-    pub fn ancestry(
-        &self,
-        py: Python<'_>,
-        branch: Option<String>,
-        tag: Option<String>,
-        snapshot: Option<String>,
-    ) -> PyResult<Vec<PySnapshotInfo>> {
-        // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot)?;
-
-            // TODO: this holds everything in memory
-            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let ancestry = self
-                    .0
-                    .ancestry(&version)
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?
-                    .map_ok(Into::<PySnapshotInfo>::into)
-                    .try_collect::<Vec<_>>()
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(ancestry)
-            })
-        })
-    }
-
+    /// Returns an object that is both a sync and an async iterator
     #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
     pub fn async_ancestry(
         &self,
