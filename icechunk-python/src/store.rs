@@ -8,6 +8,7 @@ use icechunk::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
         ChunkLength, ChunkOffset,
     },
+    storage::ETag,
     store::{StoreError, StoreErrorKind},
     Store,
 };
@@ -37,7 +38,7 @@ enum ChecksumArgument {
 impl From<ChecksumArgument> for Checksum {
     fn from(value: ChecksumArgument) -> Self {
         match value {
-            ChecksumArgument::String(etag) => Checksum::ETag(etag),
+            ChecksumArgument::String(etag) => Checksum::ETag(ETag(etag)),
             ChecksumArgument::Datetime(date_time) => {
                 Checksum::LastModified(SecondsSinceEpoch(date_time.timestamp() as u32))
             }

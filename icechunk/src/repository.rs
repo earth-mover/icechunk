@@ -6,6 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use err_into::ErrorInto as _;
 use futures::{
     stream::{FuturesOrdered, FuturesUnordered},
     Stream, StreamExt, TryStreamExt,
@@ -28,11 +29,10 @@ use crate::{
     },
     refs::{
         create_tag, delete_branch, delete_tag, fetch_branch_tip, fetch_tag,
-        list_branches, list_tags, update_branch, BranchVersion, Ref, RefError,
-        RefErrorKind,
+        list_branches, list_tags, update_branch, Ref, RefError, RefErrorKind,
     },
     session::{Session, SessionErrorKind, SessionResult},
-    storage::{self, ETag, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
+    storage::{self, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
     virtual_chunks::{ContainerName, VirtualChunkResolver},
     Storage, StorageError,
 };
@@ -125,7 +125,7 @@ pub type RepositoryResult<T> = Result<T, RepositoryError>;
 pub struct Repository {
     config: RepositoryConfig,
     storage_settings: storage::Settings,
-    config_etag: Option<ETag>,
+    config_version: storage::VersionInfo,
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
@@ -147,7 +147,6 @@ impl Repository {
         let config =
             config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
         let compression = config.compression().level();
-        let overwrite_refs = config.unsafe_overwrite_refs();
         let storage_c = Arc::clone(&storage);
         let storage_settings =
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
@@ -174,7 +173,6 @@ impl Repository {
                     Ref::DEFAULT_BRANCH,
                     new_snapshot.id().clone(),
                     None,
-                    overwrite_refs,
                 )
                 .await?;
                 Ok::<(), RepositoryError>(())
@@ -187,23 +185,26 @@ impl Repository {
         let handle2 = tokio::spawn(
             async move {
                 if has_overriden_config {
-                    let etag =
-                        Repository::store_config(storage_c.as_ref(), &config_c, None)
-                            .await?;
-                    Ok::<_, RepositoryError>(Some(etag))
+                    let version = Repository::store_config(
+                        storage_c.as_ref(),
+                        &config_c,
+                        &storage::VersionInfo::for_creation(),
+                    )
+                    .await?;
+                    Ok::<_, RepositoryError>(version)
                 } else {
-                    Ok(None)
+                    Ok(storage::VersionInfo::for_creation())
                 }
             }
             .in_current_span(),
         );
 
         handle1.await??;
-        let config_etag = handle2.await??;
+        let config_version = handle2.await??;
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        Self::new(config, config_etag, storage, virtual_chunk_credentials)
+        Self::new(config, config_version, storage, virtual_chunk_credentials)
     }
 
     #[instrument(skip_all)]
@@ -233,17 +234,22 @@ impl Repository {
         #[allow(clippy::expect_used)]
         handle2.await.expect("Error checking if repo exists")?;
         #[allow(clippy::expect_used)]
-        if let Some((default_config, config_etag)) =
+        if let Some((default_config, config_version)) =
             handle1.await.expect("Error fetching repo config")?
         {
             // Merge the given config with the defaults
             let config =
                 config.map(|c| default_config.merge(c)).unwrap_or(default_config);
 
-            Self::new(config, Some(config_etag), storage, virtual_chunk_credentials)
+            Self::new(config, config_version, storage, virtual_chunk_credentials)
         } else {
             let config = config.unwrap_or_default();
-            Self::new(config, None, storage, virtual_chunk_credentials)
+            Self::new(
+                config,
+                storage::VersionInfo::for_creation(),
+                storage,
+                virtual_chunk_credentials,
+            )
         }
     }
 
@@ -261,7 +267,7 @@ impl Repository {
 
     fn new(
         config: RepositoryConfig,
-        config_etag: Option<ETag>,
+        config_version: storage::VersionInfo,
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
@@ -282,7 +288,7 @@ impl Repository {
         ));
         Ok(Self {
             config,
-            config_etag,
+            config_version,
             storage,
             storage_settings,
             virtual_resolver,
@@ -316,7 +322,7 @@ impl Repository {
 
         Self::new(
             config,
-            self.config_etag.clone(),
+            self.config_version.clone(),
             Arc::clone(&self.storage),
             virtual_chunk_credentials
                 .unwrap_or_else(|| self.virtual_chunk_credentials.clone()),
@@ -326,22 +332,22 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn fetch_config(
         storage: &(dyn Storage + Send + Sync),
-    ) -> RepositoryResult<Option<(RepositoryConfig, ETag)>> {
+    ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         match storage.fetch_config(&storage.default_settings()).await? {
-            FetchConfigResult::Found { bytes, etag } => {
+            FetchConfigResult::Found { bytes, version } => {
                 let config = serde_yaml_ng::from_slice(&bytes)?;
-                Ok(Some((config, etag)))
+                Ok(Some((config, version)))
             }
             FetchConfigResult::NotFound => Ok(None),
         }
     }
 
     #[instrument(skip_all)]
-    pub async fn save_config(&self) -> RepositoryResult<ETag> {
+    pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
         Repository::store_config(
             self.storage().as_ref(),
             self.config(),
-            self.config_etag.as_ref(),
+            &self.config_version,
         )
         .await
     }
@@ -350,18 +356,14 @@ impl Repository {
     pub(crate) async fn store_config(
         storage: &(dyn Storage + Send + Sync),
         config: &RepositoryConfig,
-        config_etag: Option<&ETag>,
-    ) -> RepositoryResult<ETag> {
+        previous_version: &storage::VersionInfo,
+    ) -> RepositoryResult<storage::VersionInfo> {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         match storage
-            .update_config(
-                &storage.default_settings(),
-                bytes,
-                config_etag.map(|e| e.as_str()),
-            )
+            .update_config(&storage.default_settings(), bytes, previous_version)
             .await?
         {
-            UpdateConfigResult::Updated { new_etag } => Ok(new_etag),
+            UpdateConfigResult::Updated { new_version } => Ok(new_version),
             UpdateConfigResult::NotOnLatestVersion => {
                 Err(RepositoryErrorKind::ConfigWasUpdated.into())
             }
@@ -426,30 +428,23 @@ impl Repository {
         &self,
         branch_name: &str,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<BranchVersion> {
+    ) -> RepositoryResult<()> {
         // TODO: The parent snapshot should exist?
-        let version = match update_branch(
+        update_branch(
             self.storage.as_ref(),
             &self.storage_settings,
             branch_name,
             snapshot_id.clone(),
             None,
-            self.config().unsafe_overwrite_refs(),
         )
         .await
-        {
-            Ok(branch_version) => Ok::<_, RepositoryError>(branch_version),
-            Err(RefError {
+        .map_err(|e| match e {
+            RefError {
                 kind: RefErrorKind::Conflict { expected_parent, actual_parent },
                 ..
-            }) => {
-                Err(RepositoryErrorKind::Conflict { expected_parent, actual_parent }
-                    .into())
-            }
-            Err(err) => Err(err.into()),
-        }?;
-
-        Ok(version)
+            } => RepositoryErrorKind::Conflict { expected_parent, actual_parent }.into(),
+            err => err.into(),
+        })
     }
 
     /// List all branches in the repository.
@@ -477,7 +472,7 @@ impl Repository {
         &self,
         branch: &str,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<BranchVersion> {
+    ) -> RepositoryResult<()> {
         raise_if_invalid_snapshot_id(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -485,17 +480,15 @@ impl Repository {
         )
         .await?;
         let branch_tip = self.lookup_branch(branch).await?;
-        let version = update_branch(
+        update_branch(
             self.storage.as_ref(),
             &self.storage_settings,
             branch,
             snapshot_id.clone(),
             Some(&branch_tip),
-            self.config().unsafe_overwrite_refs(),
         )
-        .await?;
-
-        Ok(version)
+        .await
+        .err_into()
     }
 
     /// Delete a branch from the repository.
@@ -516,13 +509,7 @@ impl Repository {
     /// chunks or snapshots associated with the tag.
     #[instrument(skip(self))]
     pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
-        Ok(delete_tag(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            tag,
-            self.config().unsafe_overwrite_refs(),
-        )
-        .await?)
+        Ok(delete_tag(self.storage.as_ref(), &self.storage_settings, tag).await?)
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -537,7 +524,6 @@ impl Repository {
             &self.storage_settings,
             tag_name,
             snapshot_id.clone(),
-            self.config().unsafe_overwrite_refs(),
         )
         .await?;
         Ok(())
@@ -851,8 +837,8 @@ mod tests {
         // it inits with the default config
         assert_eq!(repo.config(), &RepositoryConfig::default());
         // updating the persistent config create a new file with default values
-        let etag = repo.save_config().await?;
-        assert_ne!(etag, "");
+        let version = repo.save_config().await?;
+        assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(
             Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
             RepositoryConfig::default()
@@ -872,8 +858,8 @@ mod tests {
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
         // update the persistent config
-        let etag = repo.save_config().await?;
-        assert_ne!(etag, "");
+        let version = repo.save_config().await?;
+        assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(
             Repository::fetch_config(storage.as_ref())
                 .await?
@@ -915,8 +901,8 @@ mod tests {
         assert_eq!(repo.config().caching().num_chunk_refs(), 100);
 
         // and we can save the merge
-        let etag = repo.save_config().await?;
-        assert_ne!(etag, "");
+        let version = repo.save_config().await?;
+        assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(
             &Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
             repo.config()

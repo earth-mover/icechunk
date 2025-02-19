@@ -527,7 +527,7 @@ pub async fn expire(
                 ExpireRefResult::RefIsExpired => match &r {
                     Ref::Tag(name) => {
                         if expired_tags == ExpiredRefAction::Delete {
-                            delete_tag(storage, storage_settings, name.as_str(), false)
+                            delete_tag(storage, storage_settings, name.as_str())
                                 .await
                                 .map_err(GCError::Ref)?;
                             result.deleted_refs.insert(r);

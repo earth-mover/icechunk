@@ -366,7 +366,7 @@ fn ref_to_payload(
 
 fn checksum(payload: &gen::ChunkRef<'_>) -> Option<Checksum> {
     if let Some(etag) = payload.checksum_etag() {
-        Some(Checksum::ETag(etag.to_string()))
+        Some(Checksum::ETag(ETag(etag.to_string())))
     } else if payload.checksum_last_modified() > 0 {
         Some(Checksum::LastModified(SecondsSinceEpoch(payload.checksum_last_modified())))
     } else {
@@ -398,7 +398,7 @@ fn mk_chunk_ref<'bldr>(
                     Some(cs) => match cs {
                         Checksum::LastModified(_) => None,
                         Checksum::ETag(etag) => {
-                            Some(builder.create_string(etag.as_str()))
+                            Some(builder.create_string(etag.0.as_str()))
                         }
                     },
                     None => None,

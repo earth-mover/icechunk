@@ -205,11 +205,6 @@ impl ManifestConfig {
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifst
     pub inline_chunk_threshold_bytes: Option<u16>,
-    /// Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    /// own risk in object stores for which we don't support write-object-if-not-exists. There is
-    /// the possibility of race conditions if this variable is set to true and there are concurrent
-    /// commit attempts.
-    pub unsafe_overwrite_refs: Option<bool>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
     pub get_partial_values_concurrency: Option<u16>,
@@ -235,9 +230,6 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
         self.inline_chunk_threshold_bytes.unwrap_or(512)
-    }
-    pub fn unsafe_overwrite_refs(&self) -> bool {
-        self.unsafe_overwrite_refs.unwrap_or(false)
     }
     pub fn get_partial_values_concurrency(&self) -> u16 {
         self.get_partial_values_concurrency.unwrap_or(10)
@@ -268,9 +260,6 @@ impl RepositoryConfig {
             inline_chunk_threshold_bytes: other
                 .inline_chunk_threshold_bytes
                 .or(self.inline_chunk_threshold_bytes),
-            unsafe_overwrite_refs: other
-                .unsafe_overwrite_refs
-                .or(self.unsafe_overwrite_refs),
             get_partial_values_concurrency: other
                 .get_partial_values_concurrency
                 .or(self.get_partial_values_concurrency),
