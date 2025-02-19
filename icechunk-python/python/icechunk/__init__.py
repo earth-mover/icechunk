@@ -141,7 +141,7 @@ __all__ = [
     "tigris_storage",
 ]
 
-def print_debug_info():
+def print_debug_info()->None:
     import platform
     from importlib import import_module
     print(f"platform:  {platform.platform()}")
