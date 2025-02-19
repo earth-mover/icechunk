@@ -1,6 +1,6 @@
 import datetime
-from collections.abc import AsyncIterator
-from typing import Self
+from collections.abc import AsyncIterator, Iterator
+from typing import Self, cast
 
 from icechunk._icechunk_python import (
     Diff,
@@ -197,7 +197,7 @@ class Repository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot: str | None = None,
-    ) -> list[SnapshotInfo]:
+    ) -> Iterator[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
 
@@ -219,7 +219,13 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        return self._repository.ancestry(branch=branch, tag=tag, snapshot=snapshot)
+
+        # the returned object is both an Async and Sync iterator
+        res = cast(
+            Iterator[SnapshotInfo],
+            self._repository.async_ancestry(branch=branch, tag=tag, snapshot=snapshot),
+        )
+        return res
 
     def async_ancestry(
         self,
