@@ -22,7 +22,7 @@ use crate::{
     error::ICError,
     format::{
         snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
-        transaction_log::{Diff, TransactionLog},
+        transaction_log::{Diff, DiffBuilder},
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
     },
@@ -165,7 +165,7 @@ impl Repository {
                     compression,
                 );
                 // On create we need to create the default branch
-                let new_snapshot = Arc::new(Snapshot::initial());
+                let new_snapshot = Arc::new(Snapshot::initial()?);
                 asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
                 update_branch(
@@ -629,9 +629,9 @@ impl Repository {
             })
             .collect();
 
-        let full_log = fut
-            .try_fold(TransactionLog::default(), |mut res, log| {
-                res.merge(log.as_ref());
+        let builder = fut
+            .try_fold(DiffBuilder::default(), |mut res, log| {
+                res.add_changes(log.as_ref());
                 ready(Ok(res))
             })
             .await?;
@@ -641,7 +641,7 @@ impl Repository {
                 self.readonly_session(&VersionInfo::SnapshotId(from)).await?;
             let to_session =
                 self.readonly_session(&VersionInfo::SnapshotId(to_snap)).await?;
-            tx_to_diff(&full_log, &from_session, &to_session).await
+            builder.to_diff(&from_session, &to_session).await
         } else {
             Err(SessionErrorKind::BadSnapshotChainForDiff.into())
         }
@@ -704,53 +704,60 @@ impl Repository {
             if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
                 let snap_c = Arc::clone(&snap);
                 for node in snap.iter_arc() {
-                    match node.node_data {
-                        NodeData::Group => {}
-                        NodeData::Array(_, manifests) => {
-                            for manifest in manifests {
-                                if !loaded_manifests.contains(&manifest.object_id) {
-                                    let manifest_id = manifest.object_id;
-                                    if let Some(manifest_info) =
-                                        snap_c.manifest_info(&manifest_id)
-                                    {
-                                        if loaded_refs + manifest_info.num_rows
-                                            <= preload_config.max_total_refs()
-                                            && preload_config
-                                                .preload_if()
-                                                .matches(&node.path, manifest_info)
+                    match node {
+                        Err(err) => {
+                            error!(error=%err, "Error retrieving snapshot nodes");
+                        }
+                        Ok(node) => match node.node_data {
+                            NodeData::Group => {}
+                            NodeData::Array(_, manifests) => {
+                                for manifest in manifests {
+                                    if !loaded_manifests.contains(&manifest.object_id) {
+                                        let manifest_id = manifest.object_id;
+                                        if let Some(manifest_info) =
+                                            snap_c.manifest_info(&manifest_id)
                                         {
-                                            let size_bytes = manifest_info.size_bytes;
-                                            let asset_manager =
-                                                Arc::clone(&asset_manager);
-                                            let manifest_id_c = manifest_id.clone();
-                                            let path = node.path.clone();
-                                            futures.push(async move {
-                                                trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
-                                                if let Err(err) = asset_manager
-                                                    .fetch_manifest(
-                                                        &manifest_id_c,
-                                                        size_bytes,
-                                                    )
-                                                    .await
-                                                {
-                                                    error!(
-                                                        "Failure pre-loading manifest {}: {}",
-                                                        &manifest_id_c, err
-                                                    );
-                                                }
-                                            });
-                                            loaded_manifests.insert(manifest_id);
-                                            loaded_refs += manifest_info.num_rows;
+                                            if loaded_refs + manifest_info.num_chunk_refs
+                                                <= preload_config.max_total_refs()
+                                                && preload_config
+                                                    .preload_if()
+                                                    .matches(&node.path, &manifest_info)
+                                            {
+                                                let size_bytes = manifest_info.size_bytes;
+                                                let asset_manager =
+                                                    Arc::clone(&asset_manager);
+                                                let manifest_id_c = manifest_id.clone();
+                                                let path = node.path.clone();
+                                                futures.push(async move {
+                                                    trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
+                                                    if let Err(err) = asset_manager
+                                                        .fetch_manifest(
+                                                            &manifest_id_c,
+                                                            size_bytes,
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!(
+                                                            "Failure pre-loading manifest {}: {}",
+                                                            &manifest_id_c, err
+                                                        );
+                                                    }
+                                                });
+                                                loaded_manifests.insert(manifest_id);
+                                                loaded_refs +=
+                                                    manifest_info.num_chunk_refs;
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
+                        },
                     }
                 }
-            }
-            futures.collect::<()>().await;
-        }.in_current_span());
+                futures.collect::<()>().await;
+            };
+            ().in_current_span()
+        });
     }
 }
 
@@ -776,7 +783,7 @@ impl ManifestPreloadCondition {
                 })
                 .unwrap_or(false),
             ManifestPreloadCondition::NumRefs { from, to } => {
-                (*from, *to).contains(&info.num_rows)
+                (*from, *to).contains(&info.num_chunk_refs)
             }
             ManifestPreloadCondition::True => true,
             ManifestPreloadCondition::False => false,
@@ -811,20 +818,6 @@ pub async fn raise_if_invalid_snapshot_id(
         .await
         .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
-}
-
-pub async fn tx_to_diff(
-    tx: &TransactionLog,
-    from: &Session,
-    to: &Session,
-) -> SessionResult<Diff> {
-    let nodes: HashMap<NodeId, Path> = from
-        .list_nodes()
-        .await?
-        .chain(to.list_nodes().await?)
-        .map(|n| (n.id, n.path))
-        .collect();
-    Ok(Diff::from_transaction_log(tx, nodes))
 }
 
 #[cfg(test)]
@@ -996,12 +989,20 @@ mod tests {
         // no name match
         assert!(!condition.matches(
             &"/array".try_into().unwrap(),
-            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+            &ManifestFileInfo {
+                id: ManifestId::random(),
+                size_bytes: 1,
+                num_chunk_refs: 1
+            }
         ));
         // partial match only
         assert!(!condition.matches(
             &"/nottime".try_into().unwrap(),
-            &ManifestFileInfo { id: ManifestId::random(), size_bytes: 1, num_rows: 1 }
+            &ManifestFileInfo {
+                id: ManifestId::random(),
+                size_bytes: 1,
+                num_chunk_refs: 1
+            }
         ));
         // too large to match
         assert!(!condition.matches(
@@ -1009,7 +1010,7 @@ mod tests {
             &ManifestFileInfo {
                 id: ManifestId::random(),
                 size_bytes: 1,
-                num_rows: 1_000_000
+                num_chunk_refs: 1_000_000
             }
         ));
     }

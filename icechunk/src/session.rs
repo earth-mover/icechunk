@@ -13,6 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -25,7 +26,7 @@ use crate::{
     error::ICError,
     format::{
         manifest::{
-            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestRef,
+            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
@@ -33,13 +34,13 @@ use crate::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, Snapshot,
             SnapshotProperties, UserAttributesSnapshot, ZarrArrayMetadata,
         },
-        transaction_log::{Diff, TransactionLog},
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
     },
     metadata::UserAttributes,
     refs::{fetch_branch_tip, update_branch, RefError, RefErrorKind},
-    repository::{tx_to_diff, RepositoryError, RepositoryErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     RepositoryConfig, Storage, StorageError,
@@ -253,7 +254,8 @@ impl Session {
 
     /// Compute an overview of the current session changes
     pub async fn status(&self) -> SessionResult<Diff> {
-        let tx_log = TransactionLog::new(&self.change_set);
+        // it doesn't really matter what Id we give to the tx log, it's not going to be persisted
+        let tx_log = TransactionLog::new(&SnapshotId::random(), &self.change_set);
         let from_session = Self::create_readonly_session(
             self.config().clone(),
             self.storage_settings.as_ref().clone(),
@@ -262,7 +264,9 @@ impl Session {
             Arc::clone(&self.virtual_resolver),
             self.snapshot_id.clone(),
         );
-        tx_to_diff(&tx_log, &from_session, self).await
+        let mut builder = DiffBuilder::default();
+        builder.add_changes(&tx_log);
+        builder.to_diff(&from_session, self).await
     }
 
     /// Add a group to the store.
@@ -306,8 +310,8 @@ impl Session {
                 let nodes_iter: Vec<NodeSnapshot> = self
                     .list_nodes()
                     .await?
-                    .filter(|node| node.path.starts_with(&parent.path))
-                    .collect();
+                    .filter_ok(|node| node.path.starts_with(&parent.path))
+                    .try_collect()?;
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
@@ -655,8 +659,11 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn clear(&mut self) -> SessionResult<()> {
         // TODO: can this be a delete_group("/") instead?
-        let to_delete: Vec<(NodeType, Path)> =
-            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
+        let to_delete: Vec<(NodeType, Path)> = self
+            .list_nodes()
+            .await?
+            .map_ok(|node| (node.node_type(), node.path))
+            .try_collect()?;
 
         for (t, p) in to_delete {
             match t {
@@ -697,7 +704,7 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn list_nodes(
         &self,
-    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
+    ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + '_> {
         updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id).await
     }
 
@@ -925,7 +932,7 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             let ancestry = Arc::clone(&self.asset_manager)
-                .snapshot_ancestry(current_snapshot.id())
+                .snapshot_ancestry(&current_snapshot.id())
                 .await?
                 .map_ok(|meta| meta.id);
             let new_commits =
@@ -989,10 +996,11 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node).await
+    let res = nodes.and_then(move |node| async move {
+        Ok(updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node)
+            .await)
     });
-    Ok(res.flatten())
+    Ok(res.try_flatten())
 }
 
 async fn updated_node_chunks_iterator<'a>(
@@ -1082,10 +1090,10 @@ async fn verified_node_chunk_iterator<'a>(
                                     Ok(manifest) => {
                                         let old_chunks = manifest
                                             .iter(node_id_c.clone())
-                                            .filter(move |(coord, _)| {
+                                            .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
-                                            .map(move |(coord, payload)| ChunkInfo {
+                                            .map_ok(move |(coord, payload)| ChunkInfo {
                                                 node: node_id_c2.clone(),
                                                 coord,
                                                 payload,
@@ -1096,7 +1104,8 @@ async fn verified_node_chunk_iterator<'a>(
                                                 node_id_c3, old_chunks,
                                             );
                                         futures::future::Either::Left(
-                                            futures::stream::iter(old_chunks.map(Ok)),
+                                            futures::stream::iter(old_chunks)
+                                                .map_err(|e| e.into()),
                                         )
                                     }
                                     // if we cannot even fetch the manifest, we generate a
@@ -1163,12 +1172,16 @@ async fn updated_existing_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
     let updated_nodes = asset_manager
         .fetch_snapshot(parent_id)
         .await?
         .iter_arc()
-        .filter_map(move |node| change_set.update_existing_node(node));
+        .filter_map_ok(move |node| change_set.update_existing_node(node))
+        .map(|n| match n {
+            Ok(n) => Ok(n),
+            Err(err) => Err(SessionError::from(err)),
+        });
 
     Ok(updated_nodes)
 }
@@ -1179,10 +1192,10 @@ async fn updated_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
     Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
         .await?
-        .chain(change_set.new_nodes_iterator()))
+        .chain(change_set.new_nodes_iterator().map(Ok)))
 }
 
 async fn get_node(
@@ -1340,8 +1353,8 @@ impl<'a> FlushProcess<'a> {
         node_id: &NodeId,
         node_path: &Path,
     ) -> SessionResult<()> {
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
         let chunks = stream::iter(
             self.change_set
                 .new_array_chunk_iterator(node_id, node_path)
@@ -1358,8 +1371,10 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
 
             self.manifest_refs
                 .entry(node_id.clone())
@@ -1384,8 +1399,8 @@ impl<'a> FlushProcess<'a> {
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
         let updated_chunks =
             aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
 
@@ -1398,8 +1413,10 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
             self.manifest_refs
                 .entry(node.id.clone())
                 .and_modify(|v| v.push(new_ref.clone()))
@@ -1450,7 +1467,9 @@ async fn flush(
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
-    for node in old_snapshot.iter().filter(|node| node.node_type() == NodeType::Array) {
+    for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
+    {
+        let node = node?;
         trace!(path=%node.path, "Flushing node");
         let node_id = &node.id;
 
@@ -1462,13 +1481,13 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            flush_data.write_manifest_for_existing_node(node).await?;
+            flush_data.write_manifest_for_existing_node(&node).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
             // FIXME: deal with the case of metadata shrinking an existing array, we should clear
             // extra chunks that no longer fit in the array
-            flush_data.copy_previous_manifest(node, old_snapshot.as_ref());
+            flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
         }
     }
 
@@ -1480,13 +1499,15 @@ async fn flush(
     }
 
     trace!("Building new snapshot");
-    let all_nodes = updated_nodes(
+    // gather and sort nodes:
+    // this is a requirement for Snapshot::from_iter
+    let mut all_nodes: Vec<_> = updated_nodes(
         flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
     )
     .await?
-    .map(|node| {
+    .map_ok(|node| {
         let id = &node.id;
         // TODO: many clones
         if let NodeData::Array(meta, _) = node.node_data {
@@ -1500,26 +1521,32 @@ async fn flush(
         } else {
             node
         }
-    });
+    })
+    .try_collect()?;
+
+    all_nodes.sort_by(|a, b| a.path.cmp(&b.path));
 
     let new_snapshot = Snapshot::from_iter(
-        old_snapshot.id().clone(),
+        None,
+        Some(old_snapshot.id().clone()),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
         vec![],
-        all_nodes,
-    );
+        all_nodes.into_iter().map(Ok::<_, Infallible>),
+    )?;
 
-    if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+    let new_ts = new_snapshot.flushed_at()?;
+    let old_ts = old_snapshot.flushed_at()?;
+    if new_ts <= old_ts {
         tracing::error!(
-            new_timestamp = %new_snapshot.flushed_at(),
-            old_timestamp = %old_snapshot.flushed_at(),
+            new_timestamp = %new_ts,
+            old_timestamp = %old_ts,
             "Snapshot timestamp older than parent, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
-            parent: *old_snapshot.flushed_at(),
-            child: *new_snapshot.flushed_at(),
+            parent: old_ts,
+            child: new_ts,
         }
         .into());
     }
@@ -1530,15 +1557,15 @@ async fn flush(
     let snapshot_timestamp = tokio::spawn(
         async move {
             asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
-            asset_manager.get_snapshot_last_modified(new_snapshot_c.id()).await
+            asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
         }
         .in_current_span(),
     );
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
-    // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(flush_data.change_set);
     let new_snapshot_id = new_snapshot.id();
+    // FIXME: this should execute in a non-blocking context
+    let tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
 
     flush_data
         .asset_manager
@@ -1552,15 +1579,15 @@ async fn flush(
 
     // Fail if there is too much clock difference with the object store
     // This is to prevent issues with snapshot ordering and expiration
-    if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+    if (snapshot_timestamp - new_ts).num_seconds().abs() > 600 {
         tracing::error!(
-            snapshot_timestamp = %new_snapshot.flushed_at(),
+            snapshot_timestamp = %new_ts,
             object_store_timestamp = %snapshot_timestamp,
             "Snapshot timestamp drifted from object store clock, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
-            snapshot_time: *new_snapshot.flushed_at(),
+            snapshot_time: new_ts,
         }
         .into());
     }
@@ -1640,15 +1667,15 @@ async fn fetch_manifest(
 ///
 /// Yes, this is horrible.
 fn aggregate_extents<'a, T: std::fmt::Debug, E>(
-    from: &'a mut ChunkIndices,
-    to: &'a mut ChunkIndices,
+    from: &'a mut Vec<u32>,
+    to: &'a mut Vec<u32>,
     it: impl Stream<Item = Result<T, E>> + 'a,
     extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
 ) -> impl Stream<Item = Result<T, E>> + 'a {
     // we initialize the destination with an empty array, because we don't know
     // the dimensions of the array yet. On the first element we will re-initialize
-    from.0 = Vec::new();
-    to.0 = Vec::new();
+    *from = Vec::new();
+    *to = Vec::new();
     it.map_ok(move |t| {
         // these are the coordinates for the chunk
         let idx = extract_index(&t);
@@ -1657,20 +1684,20 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
         // we initialize with the value of the first element
         // this obviously doesn't work for empty streams
         // but we never generate manifests for them
-        if from.0.is_empty() {
-            from.0 = idx.0.clone();
+        if from.is_empty() {
+            *from = idx.0.clone();
             // important to remember that `to` is not inclusive, so we need +1
-            to.0 = idx.0.iter().map(|n| n + 1).collect();
+            *to = idx.0.iter().map(|n| n + 1).collect();
         } else {
             // We need to iterate over coordinates, and update the
             // minimum and maximum for each if needed
             for (coord_idx, value) in idx.0.iter().enumerate() {
-                if let Some(from_current) = from.0.get_mut(coord_idx) {
+                if let Some(from_current) = from.get_mut(coord_idx) {
                     if value < from_current {
                         *from_current = *value
                     }
                 }
-                if let Some(to_current) = to.0.get_mut(coord_idx) {
+                if let Some(to_current) = to.get_mut(coord_idx) {
                     let range_value = value + 1;
                     if range_value > *to_current {
                         *to_current = range_value
@@ -1692,6 +1719,7 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
+        format::manifest::ManifestExtents,
         metadata::{
             ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
@@ -1824,19 +1852,19 @@ mod tests {
         #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
         indices: Vec<ChunkIndices>,
     ) {
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
 
-        let expected_from = ChunkIndices(vec![
+        let expected_from = vec![
             indices.iter().map(|i| i.0[0]).min().unwrap(),
             indices.iter().map(|i| i.0[1]).min().unwrap(),
             indices.iter().map(|i| i.0[2]).min().unwrap(),
-        ]);
-        let expected_to = ChunkIndices(vec![
+        ];
+        let expected_to = vec![
             indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
             indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
             indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
-        ]);
+        ];
 
         let _ = aggregate_extents(
             &mut from,
@@ -1878,7 +1906,7 @@ mod tests {
         let manifest =
             Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
         let manifest = Arc::new(manifest);
-        let manifest_id = &manifest.id;
+        let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
         let zarr_meta1 = ZarrArrayMetadata {
@@ -1904,7 +1932,7 @@ mod tests {
         };
         let manifest_ref = ManifestRef {
             object_id: manifest_id.clone(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[1, 1, 2]),
         };
         let array1_path: Path = "/array1".try_into().unwrap();
         let node_id = NodeId::random();
@@ -1925,16 +1953,17 @@ mod tests {
             },
         ];
 
-        let initial = Snapshot::initial();
+        let initial = Snapshot::initial().unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
-            initial.id().clone(),
+            None,
+            Some(initial.id().clone()),
             "message".to_string(),
             None,
             manifests,
             vec![],
-            nodes.iter().cloned(),
-        ));
+            nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
+        )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
         update_branch(
             storage.as_ref(),
@@ -2241,7 +2270,7 @@ mod tests {
             NodeData::Array(_, manifests) => {
                 assert_eq!(
                     manifests.first().unwrap().extents,
-                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2])
+                    ManifestExtents::new(&[0, 0, 0], &[1, 1, 2])
                 );
             }
             NodeData::Group => {
@@ -2280,7 +2309,7 @@ mod tests {
             NodeData::Array(_, manifests) => {
                 assert_eq!(
                     manifests.first().unwrap().extents,
-                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 1])
+                    ManifestExtents::new(&[0, 0, 0], &[1, 1, 1])
                 );
             }
             NodeData::Group => {

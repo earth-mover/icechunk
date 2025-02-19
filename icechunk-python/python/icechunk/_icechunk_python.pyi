@@ -901,13 +901,6 @@ class PyRepository:
     def save_config(self) -> None: ...
     def config(self) -> RepositoryConfig: ...
     def storage(self) -> Storage: ...
-    def ancestry(
-        self,
-        *,
-        branch: str | None = None,
-        tag: str | None = None,
-        snapshot: str | None = None,
-    ) -> list[SnapshotInfo]: ...
     def async_ancestry(
         self,
         *,

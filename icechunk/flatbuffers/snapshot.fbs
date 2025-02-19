@@ -1,0 +1,137 @@
+include "object_ids.fbs";
+
+namespace gen;
+
+// a single key-value of snapshot metadata
+table MetadataItem {
+  // the name of the attribute
+  name: string (required);
+
+  // the value, serialized as rmp_serde of the json value
+  // TODO: better serialization format
+  value: [uint8] (required);
+}
+
+// a pointer to a manifest file
+struct ManifestFileInfo {
+    // id of the object in the repo's object store
+    id: ObjectId12;
+
+    // size in bytes of the whole manifest
+    size_bytes: uint64;
+
+    // number of chunk refs in the manifest
+    num_chunk_refs: uint32;
+}
+
+// a pointer to a user attributes file
+struct AttributeFileInfo {
+    // id of the object in the repo's object store
+    id: ObjectId12;
+}
+
+// a pointer to a user attributes file
+table UserAttributesRef {
+    // id of the object in the repo's object store
+    object_id: ObjectId12 (required);
+
+    // index where the user attributes for the array start
+    location: uint32;
+}
+
+// user attributes written inline
+table InlineUserAttributes {
+  // user attributes data, serialized as rmp_serde of the json value
+  // TODO: better serialization format
+  data :[uint8] (required);
+}
+
+union UserAttributesSnapshot {
+  Inline :InlineUserAttributes,
+  Reference :UserAttributesRef,
+}
+
+// A range of chunk indexes
+struct ChunkIndexRange {
+  // inclusive
+  from: uint32;
+
+  // exclusive
+  to: uint32;
+}
+
+// a pointer to a manifest
+table ManifestRef {
+    // id of the object in the repo's object store
+    object_id: ObjectId12 (required);
+
+    // one element per dimension of the array, same order as in metadata
+    extents: [ChunkIndexRange] (required);
+}
+
+// a marker for a group node
+table GroupNodeData {}
+
+// data for an array node
+table ArrayNodeData {
+  // the zarr metadata for the array
+  // serialized as rmp_serde of the json value
+  // TODO: better serialization format
+  zarr_metadata: [uint8] (required);
+
+  // pointers to all the manifests where this array has chunk references
+  manifests: [ManifestRef] (required);
+}
+
+// the node contents, that can be either a group or an array
+union NodeData {
+  Array :ArrayNodeData,
+  Group :GroupNodeData,
+}
+
+// a node
+table NodeSnapshot {
+    // id of the object in the repo's object store
+    id: ObjectId8 (required);
+
+    // absolute path of the node within the repo
+    path: string (required);
+
+    // pointer to the user attributes for the node
+    user_attributes: UserAttributesSnapshot;
+
+    // node's data
+    node_data: NodeData (required);
+}
+
+
+table Snapshot {
+  // the id of this snapshot
+  id: ObjectId12 (required);
+
+  // the id of the parent snapshot, can be null for a root snapshot
+  parent_id: ObjectId12;
+
+  nodes: [NodeSnapshot] (required);
+
+  // time at which this snapshot was generated
+  // non-leap microseconds since Jan 1, 1970 UTC
+  flushed_at: uint64;
+
+  // commit message
+  message: string (required);
+
+  // metadata for the snapshot
+  // sorted in ascending order of MetadataItem.name
+  metadata: [MetadataItem] (required);
+
+  // the list of all manifest files this snapshot points to
+  // sorted in ascending order of ManifestFileInfo.id
+  manifest_files: [ManifestFileInfo] (required);
+
+  // the list of all attribute files this snapshot points to
+  // sorted in ascending order of AttributeFileInfo.id
+  attribute_files: [AttributeFileInfo] (required);
+}
+
+root_type Snapshot;
