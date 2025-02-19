@@ -327,7 +327,7 @@ session2.rebase(icechunk.ConflictDetector())
 # RebaseFailedError: Rebase failed on snapshot AE9XS2ZWXT861KD2JGHG: 1 conflicts found
 ```
 
-This however fails because both sessions modified the `foo` attribute on the root group. We can use the `ConflictError` to get more information about the conflict.
+This however fails because both sessions modified metadata. We can use the `ConflictError` to get more information about the conflict.
 
 ```python
 try:
@@ -335,13 +335,13 @@ try:
 except icechunk.RebaseFailedError as e:
     print(e.conflicts)
 
-# [Conflict(UserAttributesDoubleUpdate, path=/)]
+# [Conflict(ZarrMetadataDoubleUpdate, path=/)]
 ```
 
-This tells us that the conflict is caused by the two sessions modifying the user attributes of the root group (`/`). In this casewe have decided that second session set the `foo` attribute to the correct value, so we can now try to rebase by instructing the `rebase` method to use the second session's changes with the [`BasicConflictSolver`](../reference/#icechunk.BasicConflictSolver).
+This tells us that the conflict is caused by the two sessions modifying the metadata attributes of the root group (`/`). In this case we have decided that second session set the `foo` attribute to the correct value, so we can now try to rebase by instructing the `rebase` method to use the second session's changes with the [`BasicConflictSolver`](../reference/#icechunk.BasicConflictSolver).
 
 ```python
-session2.rebase(icechunk.BasicConflictSolver(on_user_attributes_conflict=icechunk.VersionSelection.UseOurs))
+session2.rebase(icechunk.BasicConflictSolver())
 ```
 
 Success! We can now try and commit the changes again.

@@ -4,27 +4,32 @@ use std::{
     mem::take,
 };
 
+use bytes::Bytes;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
         manifest::{ChunkInfo, ChunkPayload},
-        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
+        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
         ChunkIndices, NodeId, Path,
     },
-    metadata::UserAttributes,
     session::SessionResult,
 };
 
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArrayData {
+    pub shape: ArrayShape,
+    pub dimension_names: Option<Vec<DimensionName>>,
+    pub user_data: Bytes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
-    new_groups: HashMap<Path, NodeId>,
-    new_arrays: HashMap<Path, (NodeId, ZarrArrayMetadata)>,
-    updated_arrays: HashMap<NodeId, ZarrArrayMetadata>,
-    // These paths may point to Arrays or Groups,
-    // since both Groups and Arrays support UserAttributes
-    updated_attributes: HashMap<NodeId, Option<UserAttributes>>,
+    new_groups: HashMap<Path, (NodeId, Bytes)>,
+    new_arrays: HashMap<Path, (NodeId, ArrayData)>,
+    updated_arrays: HashMap<NodeId, ArrayData>,
+    updated_groups: HashMap<NodeId, Bytes>,
     // It's important we keep these sorted, we use this fact in TransactionLog creation
     set_chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
     deleted_groups: HashSet<(Path, NodeId)>,
@@ -32,10 +37,6 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    pub fn zarr_updated_arrays(&self) -> impl Iterator<Item = &NodeId> {
-        self.updated_arrays.keys()
-    }
-
     pub fn deleted_arrays(&self) -> impl Iterator<Item = &(Path, NodeId)> {
         self.deleted_arrays.iter()
     }
@@ -44,8 +45,12 @@ impl ChangeSet {
         self.deleted_groups.iter()
     }
 
-    pub fn user_attributes_updated_nodes(&self) -> impl Iterator<Item = &NodeId> {
-        self.updated_attributes.keys()
+    pub fn updated_arrays(&self) -> impl Iterator<Item = &NodeId> {
+        self.updated_arrays.keys()
+    }
+
+    pub fn updated_groups(&self) -> impl Iterator<Item = &NodeId> {
+        self.updated_groups.keys()
     }
 
     pub fn array_is_deleted(&self, path_and_id: &(Path, NodeId)) -> bool {
@@ -71,39 +76,55 @@ impl ChangeSet {
         self == &ChangeSet::default()
     }
 
-    pub fn add_group(&mut self, path: Path, node_id: NodeId) {
-        self.new_groups.insert(path, node_id);
+    pub fn add_group(&mut self, path: Path, node_id: NodeId, definition: Bytes) {
+        debug_assert!(!self.updated_groups.contains_key(&node_id));
+        self.new_groups.insert(path, (node_id, definition));
     }
 
-    pub fn get_group(&self, path: &Path) -> Option<&NodeId> {
+    pub fn get_group(&self, path: &Path) -> Option<&(NodeId, Bytes)> {
         self.new_groups.get(path)
     }
 
-    pub fn get_array(&self, path: &Path) -> Option<&(NodeId, ZarrArrayMetadata)> {
+    pub fn get_array(&self, path: &Path) -> Option<&(NodeId, ArrayData)> {
         self.new_arrays.get(path)
     }
 
     /// IMPORTANT: This method does not delete children. The caller
     /// is responsible for doing that
     pub fn delete_group(&mut self, path: Path, node_id: &NodeId) {
-        self.updated_attributes.remove(node_id);
+        self.updated_groups.remove(node_id);
         if self.new_groups.remove(&path).is_none() {
             // it's an old group, we need to flag it as deleted
             self.deleted_groups.insert((path, node_id.clone()));
         }
     }
 
-    pub fn add_array(
-        &mut self,
-        path: Path,
-        node_id: NodeId,
-        metadata: ZarrArrayMetadata,
-    ) {
-        self.new_arrays.insert(path, (node_id, metadata));
+    pub fn add_array(&mut self, path: Path, node_id: NodeId, array_data: ArrayData) {
+        self.new_arrays.insert(path, (node_id, array_data));
     }
 
-    pub fn update_array(&mut self, node_id: NodeId, metadata: ZarrArrayMetadata) {
-        self.updated_arrays.insert(node_id, metadata);
+    pub fn update_array(&mut self, node_id: &NodeId, path: &Path, array_data: ArrayData) {
+        match self.new_arrays.get(path) {
+            Some((id, _)) => {
+                debug_assert!(!self.updated_arrays.contains_key(id));
+                self.new_arrays.insert(path.clone(), (node_id.clone(), array_data));
+            }
+            None => {
+                self.updated_arrays.insert(node_id.clone(), array_data);
+            }
+        }
+    }
+
+    pub fn update_group(&mut self, node_id: &NodeId, path: &Path, definition: Bytes) {
+        match self.new_groups.get(path) {
+            Some((id, _)) => {
+                debug_assert!(!self.updated_groups.contains_key(id));
+                self.new_groups.insert(path.clone(), (node_id.clone(), definition));
+            }
+            None => {
+                self.updated_groups.insert(node_id.clone(), definition);
+            }
+        }
     }
 
     pub fn delete_array(&mut self, path: Path, node_id: &NodeId) {
@@ -116,7 +137,6 @@ impl ChangeSet {
         );
 
         self.updated_arrays.remove(node_id);
-        self.updated_attributes.remove(node_id);
         self.set_chunks.remove(node_id);
         if !is_new_array {
             self.deleted_arrays.insert((path, node_id.clone()));
@@ -128,30 +148,16 @@ impl ChangeSet {
         self.deleted_groups.contains(&key) || self.deleted_arrays.contains(&key)
     }
 
-    pub fn has_updated_attributes(&self, node_id: &NodeId) -> bool {
-        self.updated_attributes.contains_key(node_id)
-    }
+    //pub fn has_updated_definition(&self, node_id: &NodeId) -> bool {
+    //    self.updated_definitions.contains_key(node_id)
+    //}
 
-    pub fn get_updated_zarr_metadata(
-        &self,
-        node_id: &NodeId,
-    ) -> Option<&ZarrArrayMetadata> {
+    pub fn get_updated_array(&self, node_id: &NodeId) -> Option<&ArrayData> {
         self.updated_arrays.get(node_id)
     }
 
-    pub fn update_user_attributes(
-        &mut self,
-        node_id: NodeId,
-        atts: Option<UserAttributes>,
-    ) {
-        self.updated_attributes.insert(node_id, atts);
-    }
-
-    pub fn get_user_attributes(
-        &self,
-        node_id: &NodeId,
-    ) -> Option<&Option<UserAttributes>> {
-        self.updated_attributes.get(node_id)
+    pub fn get_updated_group(&self, node_id: &NodeId) -> Option<&Bytes> {
+        self.updated_groups.get(node_id)
     }
 
     pub fn set_chunk_ref(
@@ -233,7 +239,7 @@ impl ChangeSet {
     }
 
     pub fn new_groups(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
-        self.new_groups.iter()
+        self.new_groups.iter().map(|(path, (node_id, _))| (path, node_id))
     }
 
     pub fn new_arrays(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
@@ -263,8 +269,8 @@ impl ChangeSet {
         // TODO: optimize
         self.new_groups.extend(other.new_groups);
         self.new_arrays.extend(other.new_arrays);
+        self.updated_groups.extend(other.updated_groups);
         self.updated_arrays.extend(other.updated_arrays);
-        self.updated_attributes.extend(other.updated_attributes);
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_arrays.extend(other.deleted_arrays);
 
@@ -320,27 +326,30 @@ impl ChangeSet {
     }
 
     pub fn get_new_array(&self, path: &Path) -> Option<NodeSnapshot> {
-        self.get_array(path).map(|(id, meta)| {
-            let meta = self.get_updated_zarr_metadata(id).unwrap_or(meta).clone();
-            let atts = self.get_user_attributes(id).cloned();
+        self.get_array(path).map(|(id, array_data)| {
+            debug_assert!(!self.updated_arrays.contains_key(id));
             NodeSnapshot {
                 id: id.clone(),
                 path: path.clone(),
-                user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
+                user_data: array_data.user_data.clone(),
                 // We put no manifests in new arrays, see get_chunk_ref to understand how chunks get
                 // fetched for those arrays
-                node_data: NodeData::Array(meta.clone(), vec![]),
+                node_data: NodeData::Array {
+                    shape: array_data.shape.clone(),
+                    dimension_names: array_data.dimension_names.clone(),
+                    manifests: vec![],
+                },
             }
         })
     }
 
     pub fn get_new_group(&self, path: &Path) -> Option<NodeSnapshot> {
-        self.get_group(path).map(|id| {
-            let atts = self.get_user_attributes(id).cloned();
+        self.get_group(path).map(|(id, definition)| {
+            debug_assert!(!self.updated_groups.contains_key(id));
             NodeSnapshot {
                 id: id.clone(),
                 path: path.clone(),
-                user_attributes: atts.flatten().map(UserAttributesSnapshot::Inline),
+                user_data: definition.clone(),
                 node_data: NodeData::Group,
             }
         })
@@ -365,50 +374,50 @@ impl ChangeSet {
             return None;
         }
 
-        let session_atts = self
-            .get_user_attributes(&node.id)
-            .cloned()
-            .map(|a| a.map(UserAttributesSnapshot::Inline));
-        let new_atts = session_atts.unwrap_or(node.user_attributes);
         match node.node_data {
-            NodeData::Group => Some(NodeSnapshot { user_attributes: new_atts, ..node }),
-            NodeData::Array(old_zarr_meta, manifests) => {
-                let new_zarr_meta = self
-                    .get_updated_zarr_metadata(&node.id)
-                    .cloned()
-                    .unwrap_or(old_zarr_meta);
-
+            NodeData::Group => {
+                let new_definition =
+                    self.updated_groups.get(&node.id).cloned().unwrap_or(node.user_data);
+                Some(NodeSnapshot { user_data: new_definition, ..node })
+            }
+            NodeData::Array { shape, dimension_names, manifests } => {
+                let new_data =
+                    self.updated_arrays.get(&node.id).cloned().unwrap_or_else(|| {
+                        ArrayData { shape, dimension_names, user_data: node.user_data }
+                    });
                 Some(NodeSnapshot {
-                    node_data: NodeData::Array(new_zarr_meta, manifests),
-                    user_attributes: new_atts,
+                    user_data: new_data.user_data,
+                    node_data: NodeData::Array {
+                        shape: new_data.shape,
+                        dimension_names: new_data.dimension_names,
+                        manifests,
+                    },
                     ..node
                 })
             }
         }
     }
 
-    pub fn undo_user_attributes_update(&mut self, node_id: &NodeId) {
-        self.updated_attributes.remove(node_id);
+    pub fn undo_update(&mut self, node_id: &NodeId) {
+        self.updated_arrays.remove(node_id);
+        self.updated_groups.remove(node_id);
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::num::NonZeroU64;
-
+    use bytes::Bytes;
     use itertools::Itertools;
 
     use super::ChangeSet;
 
     use crate::{
+        change_set::ArrayData,
         format::{
             manifest::{ChunkInfo, ChunkPayload},
-            snapshot::ZarrArrayMetadata,
+            snapshot::ArrayShape,
             ChunkIndices, NodeId,
-        },
-        metadata::{
-            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
         },
     };
 
@@ -417,36 +426,26 @@ mod tests {
         let mut change_set = ChangeSet::default();
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![2, 2, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
+        let shape = ArrayShape::new(vec![(2, 1), (2, 1), (2, 1)]).unwrap();
+        let dimension_names = Some(vec!["x".into(), "y".into(), "t".into()]);
 
         let node_id1 = NodeId::random();
         let node_id2 = NodeId::random();
+        let array_data = ArrayData {
+            shape: shape.clone(),
+            dimension_names: dimension_names.clone(),
+            user_data: Bytes::from_static(b"foobar"),
+        };
         change_set.add_array(
             "/foo/bar".try_into().unwrap(),
             node_id1.clone(),
-            zarr_meta.clone(),
+            array_data.clone(),
         );
-        change_set.add_array("/foo/baz".try_into().unwrap(), node_id2.clone(), zarr_meta);
+        change_set.add_array(
+            "/foo/baz".try_into().unwrap(),
+            node_id2.clone(),
+            array_data.clone(),
+        );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(node_id1.clone(), ChunkIndices(vec![0, 1]), None);

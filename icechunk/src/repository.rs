@@ -710,7 +710,7 @@ impl Repository {
                         }
                         Ok(node) => match node.node_data {
                             NodeData::Group => {}
-                            NodeData::Array(_, manifests) => {
+                            NodeData::Array { manifests, .. } => {
                                 for manifest in manifests {
                                     if !loaded_manifests.contains(&manifest.object_id) {
                                         let manifest_id = manifest.object_id;
@@ -823,9 +823,7 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{
-        collections::HashMap, error::Error, num::NonZeroU64, path::PathBuf, sync::Arc,
-    };
+    use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc};
 
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
@@ -834,10 +832,7 @@ mod tests {
         config::{
             CachingConfig, ManifestConfig, ManifestPreloadConfig, RepositoryConfig,
         },
-        format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices},
-        metadata::{
-            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-        },
+        format::{manifest::ChunkPayload, snapshot::ArrayShape, ChunkIndices},
         new_local_filesystem_storage,
         storage::new_in_memory_storage,
         Repository, Storage,
@@ -1030,34 +1025,48 @@ mod tests {
 
         let mut session = repository.writable_session("main").await?;
 
-        session.add_group(Path::root()).await?;
+        let def = Bytes::from_static(br#"{"this":"array"}"#);
+        session.add_group(Path::root(), def.clone()).await?;
 
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1_000, 1, 1],
-            data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float16(f32::NEG_INFINITY),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+        let shape = ArrayShape::new(vec![(1_000, 1), (1, 1), (1, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
 
         let time_path: Path = "/time".try_into().unwrap();
         let temp_path: Path = "/temperature".try_into().unwrap();
         let lat_path: Path = "/latitude".try_into().unwrap();
         let lon_path: Path = "/longitude".try_into().unwrap();
-        session.add_array(time_path.clone(), zarr_meta.clone()).await?;
-        session.add_array(temp_path.clone(), zarr_meta.clone()).await?;
-        session.add_array(lat_path.clone(), zarr_meta.clone()).await?;
-        session.add_array(lon_path.clone(), zarr_meta.clone()).await?;
+        session
+            .add_array(
+                time_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
+        session
+            .add_array(
+                temp_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
+        session
+            .add_array(
+                lat_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
+        session
+            .add_array(
+                lon_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
 
         session
             .set_chunk_ref(
@@ -1139,11 +1148,11 @@ mod tests {
         let ops = logging.fetch_operations();
 
         let lat_manifest_id = match session.get_node(&lat_path).await?.node_data {
-            NodeData::Array(_, vec) => vec[0].object_id.to_string(),
+            NodeData::Array { manifests, .. } => manifests[0].object_id.to_string(),
             NodeData::Group => panic!(),
         };
         let lon_manifest_id = match session.get_node(&lon_path).await?.node_data {
-            NodeData::Array(_, vec) => vec[0].object_id.to_string(),
+            NodeData::Array { manifests, .. } => manifests[0].object_id.to_string(),
             NodeData::Group => panic!(),
         };
         assert_eq!(ops[0].0, "fetch_snapshot");

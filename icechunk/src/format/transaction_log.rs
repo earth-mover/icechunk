@@ -30,12 +30,10 @@ impl TransactionLog {
         let mut deleted_arrays: Vec<_> =
             cs.deleted_arrays().map(|(_, id)| gen::ObjectId8::new(&id.0)).collect();
 
-        let mut updated_user_attributes: Vec<_> = cs
-            .user_attributes_updated_nodes()
-            .map(|id| gen::ObjectId8::new(&id.0))
-            .collect();
-        let mut updated_zarr_metadata: Vec<_> =
-            cs.zarr_updated_arrays().map(|id| gen::ObjectId8::new(&id.0)).collect();
+        let mut updated_arrays: Vec<_> =
+            cs.updated_arrays().map(|id| gen::ObjectId8::new(&id.0)).collect();
+        let mut updated_groups: Vec<_> =
+            cs.updated_groups().map(|id| gen::ObjectId8::new(&id.0)).collect();
 
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1_024 * 1_024);
@@ -70,17 +68,15 @@ impl TransactionLog {
         new_arrays.sort_by(|a, b| a.0.cmp(&b.0));
         deleted_groups.sort_by(|a, b| a.0.cmp(&b.0));
         deleted_arrays.sort_by(|a, b| a.0.cmp(&b.0));
-        updated_user_attributes.sort_by(|a, b| a.0.cmp(&b.0));
-        updated_zarr_metadata.sort_by(|a, b| a.0.cmp(&b.0));
+        updated_groups.sort_by(|a, b| a.0.cmp(&b.0));
+        updated_arrays.sort_by(|a, b| a.0.cmp(&b.0));
 
         let new_groups = Some(builder.create_vector(new_groups.as_slice()));
         let new_arrays = Some(builder.create_vector(new_arrays.as_slice()));
         let deleted_groups = Some(builder.create_vector(deleted_groups.as_slice()));
         let deleted_arrays = Some(builder.create_vector(deleted_arrays.as_slice()));
-        let updated_user_attributes =
-            Some(builder.create_vector(updated_user_attributes.as_slice()));
-        let updated_zarr_metadata =
-            Some(builder.create_vector(updated_zarr_metadata.as_slice()));
+        let updated_groups = Some(builder.create_vector(updated_groups.as_slice()));
+        let updated_arrays = Some(builder.create_vector(updated_arrays.as_slice()));
 
         let id = ObjectId12::new(&id.0);
         let id = Some(&id);
@@ -92,8 +88,8 @@ impl TransactionLog {
                 new_arrays,
                 deleted_groups,
                 deleted_arrays,
-                updated_user_attributes,
-                updated_zarr_metadata,
+                updated_groups,
+                updated_arrays,
                 updated_chunks,
             },
         );
@@ -129,12 +125,12 @@ impl TransactionLog {
         self.root().deleted_arrays().iter().map(From::from)
     }
 
-    pub fn updated_user_attributes(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.root().updated_user_attributes().iter().map(From::from)
+    pub fn updated_groups(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.root().updated_groups().iter().map(From::from)
     }
 
-    pub fn updated_zarr_metadata(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.root().updated_zarr_metadata().iter().map(From::from)
+    pub fn updated_arrays(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.root().updated_arrays().iter().map(From::from)
     }
 
     pub fn updated_chunks(
@@ -179,24 +175,18 @@ impl TransactionLog {
         self.root().deleted_arrays().lookup_by_key(id.0, |a, b| a.0.cmp(b)).is_some()
     }
 
-    pub fn user_attributes_updated(&self, id: &NodeId) -> bool {
-        self.root()
-            .updated_user_attributes()
-            .lookup_by_key(id.0, |a, b| a.0.cmp(b))
-            .is_some()
+    pub fn group_updated(&self, id: &NodeId) -> bool {
+        self.root().updated_groups().lookup_by_key(id.0, |a, b| a.0.cmp(b)).is_some()
+    }
+
+    pub fn array_updated(&self, id: &NodeId) -> bool {
+        self.root().updated_arrays().lookup_by_key(id.0, |a, b| a.0.cmp(b)).is_some()
     }
 
     pub fn chunks_updated(&self, id: &NodeId) -> bool {
         self.root()
             .updated_chunks()
             .lookup_by_key(id.0, |a, b| a.node_id().0.cmp(b))
-            .is_some()
-    }
-
-    pub fn zarr_metadata_updated(&self, id: &NodeId) -> bool {
-        self.root()
-            .updated_zarr_metadata()
-            .lookup_by_key(id.0, |a, b| a.0.cmp(b))
             .is_some()
     }
 
@@ -216,8 +206,8 @@ impl TransactionLog {
             + root.new_arrays().len()
             + root.deleted_groups().len()
             + root.deleted_arrays().len()
-            + root.updated_user_attributes().len()
-            + root.updated_zarr_metadata().len()
+            + root.updated_groups().len()
+            + root.updated_arrays().len()
             + root.updated_chunks().iter().map(|s| s.chunks().len()).sum::<usize>()
     }
 
@@ -240,8 +230,8 @@ pub struct DiffBuilder {
     new_arrays: HashSet<NodeId>,
     deleted_groups: HashSet<NodeId>,
     deleted_arrays: HashSet<NodeId>,
-    updated_user_attributes: HashSet<NodeId>,
-    updated_zarr_metadata: HashSet<NodeId>,
+    updated_groups: HashSet<NodeId>,
+    updated_arrays: HashSet<NodeId>,
     // we use sorted set here to simply move it to a diff without having to rebuild
     updated_chunks: HashMap<NodeId, BTreeSet<ChunkIndices>>,
 }
@@ -252,8 +242,8 @@ impl DiffBuilder {
         self.new_arrays.extend(tx.new_arrays());
         self.deleted_groups.extend(tx.deleted_groups());
         self.deleted_arrays.extend(tx.deleted_arrays());
-        self.updated_user_attributes.extend(tx.updated_user_attributes());
-        self.updated_zarr_metadata.extend(tx.updated_zarr_metadata());
+        self.updated_groups.extend(tx.updated_groups());
+        self.updated_arrays.extend(tx.updated_arrays());
 
         for (node, chunks) in tx.updated_chunks() {
             match self.updated_chunks.get_mut(&node) {
@@ -284,8 +274,8 @@ pub struct Diff {
     pub new_arrays: BTreeSet<Path>,
     pub deleted_groups: BTreeSet<Path>,
     pub deleted_arrays: BTreeSet<Path>,
-    pub updated_user_attributes: BTreeSet<Path>,
-    pub updated_zarr_metadata: BTreeSet<Path>,
+    pub updated_groups: BTreeSet<Path>,
+    pub updated_arrays: BTreeSet<Path>,
     pub updated_chunks: BTreeMap<Path, BTreeSet<ChunkIndices>>,
 }
 
@@ -315,14 +305,14 @@ impl Diff {
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let updated_user_attributes = tx
-            .updated_user_attributes
+        let updated_groups = tx
+            .updated_groups
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let updated_zarr_metadata = tx
-            .updated_zarr_metadata
+        let updated_arrays = tx
+            .updated_arrays
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
@@ -340,8 +330,8 @@ impl Diff {
             new_arrays,
             deleted_groups,
             deleted_arrays,
-            updated_user_attributes,
-            updated_zarr_metadata,
+            updated_groups,
+            updated_arrays,
             updated_chunks,
         }
     }
@@ -352,8 +342,8 @@ impl Diff {
             && self.new_arrays.is_empty()
             && self.deleted_groups.is_empty()
             && self.deleted_arrays.is_empty()
-            && self.updated_user_attributes.is_empty()
-            && self.updated_user_attributes.is_empty()
+            && self.updated_groups.is_empty()
+            && self.updated_arrays.is_empty()
             && self.updated_chunks.is_empty()
     }
 }
