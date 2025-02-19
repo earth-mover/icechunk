@@ -1472,23 +1472,23 @@ class ConflictType(Enum):
     Attributes:
         NewNodeConflictsWithExistingNode: int
             A new node conflicts with an existing node
-        NewNodeInInvalidGroup: int
+        NewNodeInInvalidGroup: tuple[int]
             A new node is in an invalid group
-        ZarrMetadataDoubleUpdate: int
+        ZarrMetadataDoubleUpdate: tuple[int]
             A zarr metadata update conflicts with an existing zarr metadata update
-        ZarrMetadataUpdateOfDeletedArray: int
+        ZarrMetadataUpdateOfDeletedArray: tuple[int]
             A zarr metadata update is attempted on a deleted array
-        ZarrMetadataUpdateOfDeletedGroup: int
+        ZarrMetadataUpdateOfDeletedGroup: tuple[int]
             A zarr metadata update is attempted on a deleted group
-        ChunkDoubleUpdate: int
+        ChunkDoubleUpdate: tuple[int]
             A chunk update conflicts with an existing chunk update
-        ChunksUpdatedInDeletedArray: int
+        ChunksUpdatedInDeletedArray: tuple[int]
             Chunks are updated in a deleted array
-        ChunksUpdatedInUpdatedArray: int
+        ChunksUpdatedInUpdatedArray: tuple[int]
             Chunks are updated in an updated array
-        DeleteOfUpdatedArray: int
+        DeleteOfUpdatedArray: tuple[int]
             A delete is attempted on an updated array
-        DeleteOfUpdatedGroup: int
+        DeleteOfUpdatedGroup: tuple[int]
             A delete is attempted on an updated group
     """
 

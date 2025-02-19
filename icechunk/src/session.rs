@@ -3665,7 +3665,6 @@ mod tests {
 
         let err = ds2.rebase(&solver).await.unwrap_err();
 
-        dbg!(&err);
         assert!(matches!(
         err,
         SessionError{kind: SessionErrorKind::RebaseFailed { snapshot, conflicts},..}

@@ -46,11 +46,11 @@ impl ChangeSet {
     }
 
     pub fn updated_arrays(&self) -> impl Iterator<Item = &NodeId> {
-        self.updated_arrays.keys().chain(self.updated_groups.keys())
+        self.updated_arrays.keys()
     }
 
     pub fn updated_groups(&self) -> impl Iterator<Item = &NodeId> {
-        self.updated_groups.keys().chain(self.updated_groups.keys())
+        self.updated_groups.keys()
     }
 
     pub fn array_is_deleted(&self, path_and_id: &(Path, NodeId)) -> bool {

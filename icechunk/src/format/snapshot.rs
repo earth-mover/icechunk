@@ -17,16 +17,16 @@ use super::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DimensionShape {
-    array_length: u64,
+    dim_length: u64,
     chunk_length: u64,
 }
 
 impl DimensionShape {
     pub fn new(array_length: u64, chunk_length: NonZeroU64) -> Self {
-        Self { array_length, chunk_length: chunk_length.get() }
+        Self { dim_length: array_length, chunk_length: chunk_length.get() }
     }
     pub fn array_length(&self) -> u64 {
-        self.array_length
+        self.dim_length
     }
     pub fn chunk_length(&self) -> u64 {
         self.chunk_length
@@ -78,10 +78,10 @@ impl ArrayShape {
     /// this will always result in proper indices at the boundaries.
     fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u32> + '_ {
         self.0.iter().map(|dim_shape| {
-            if dim_shape.chunk_length == 0 || dim_shape.array_length == 0 {
+            if dim_shape.chunk_length == 0 || dim_shape.dim_length == 0 {
                 0
             } else {
-                ((dim_shape.array_length - 1) / dim_shape.chunk_length) as u32
+                ((dim_shape.dim_length - 1) / dim_shape.chunk_length) as u32
             }
         })
     }
@@ -175,7 +175,7 @@ impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
 impl From<&gen::DimensionShape> for DimensionShape {
     fn from(value: &gen::DimensionShape) -> Self {
         DimensionShape {
-            array_length: value.array_length(),
+            dim_length: value.array_length(),
             chunk_length: value.chunk_length(),
         }
     }
@@ -593,7 +593,7 @@ fn mk_node_data(
             let shape = shape
                 .0
                 .iter()
-                .map(|ds| gen::DimensionShape::new(ds.array_length, ds.chunk_length))
+                .map(|ds| gen::DimensionShape::new(ds.dim_length, ds.chunk_length))
                 .collect::<Vec<_>>();
             let shape = builder.create_vector(shape.as_slice());
             Ok((
