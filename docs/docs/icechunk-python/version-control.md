@@ -27,7 +27,7 @@ repo = icechunk.Repository.create(icechunk.in_memory_storage())
 On creating a new [`Repository`](../reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
 
 ```python
-repo.ancestry(branch="main")
+[ancestor for ancestor in repo.ancestry(branch="main")]
 
 # [SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,19,52,41,592998, tzinfo=datetime.timezone.utc), message="Repository...")]
 ```
@@ -36,7 +36,7 @@ repo.ancestry(branch="main")
 
     The [`ancestry`](./reference/#icechunk.Repository.ancestry) method can be used to inspect the ancestry of any branch, snapshot, or tag.
 
-We get back a list of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
+We get back an iterator of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
 
 ## Creating a snapshot
 

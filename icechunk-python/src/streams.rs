@@ -1,7 +1,10 @@
 use std::{pin::Pin, sync::Arc};
 
 use futures::{Stream, StreamExt};
-use pyo3::{exceptions::PyStopAsyncIteration, prelude::*};
+use pyo3::{
+    exceptions::{PyStopAsyncIteration, PyStopIteration},
+    prelude::*,
+};
 use tokio::sync::Mutex;
 
 type PyObjectStream = Arc<Mutex<Pin<Box<dyn Stream<Item = PyResult<Py<PyAny>>> + Send>>>>;
@@ -28,6 +31,10 @@ impl PyAsyncGenerator {
     /// class to be iterable. Since we implemented __anext__ method,
     /// we can return self here.
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
@@ -61,5 +68,26 @@ impl PyAsyncGenerator {
         // TODO: Can we convert this is an async function or a coroutine in the next versions
         // of pyo3?
         pyo3_async_runtimes::tokio::future_into_py(py, future)
+    }
+
+    fn __next__<'py>(
+        slf: PyRefMut<'py, Self>,
+        py: Python<'py>,
+    ) -> PyResult<Option<PyObject>> {
+        // Arc::clone is cheap, so we can clone the Arc here because we move into the
+        // future block
+        let stream = slf.stream.clone();
+
+        py.allow_threads(move || {
+            let next = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut unlocked = stream.lock().await;
+                unlocked.next().await
+            });
+            match next {
+                Some(Ok(val)) => Ok(Some(val)),
+                Some(Err(err)) => Err(err),
+                None => Err(PyStopIteration::new_err("The iterator is exhausted")),
+            }
+        })
     }
 }
