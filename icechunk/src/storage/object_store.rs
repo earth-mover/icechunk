@@ -584,17 +584,6 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self))]
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        Ok(self
-            .get_client()
-            .await
-            .list(Some(&ObjectPath::from(self.backend.prefix())))
-            .next()
-            .await
-            .is_none())
-    }
-
-    #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
         key: &str,

@@ -363,7 +363,9 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn root_is_clean(&self) -> StorageResult<bool>;
+    async fn root_is_clean(&self) -> StorageResult<bool> {
+        Ok(self.list_objects(&Settings::default(), "").await?.next().await.is_none())
+    }
 
     async fn list_chunks(
         &self,
