@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     async fn writer(name: &str, range: Range<u64>, store: &Store) {
         println!("Starting writer {name}.");
         for i in range {
+            #[allow(clippy::dbg_macro)]
             if let Err(err) = store
                 .set(
                     format!("array/c/{i}").as_str(),

@@ -399,6 +399,7 @@ mod tests {
                 max_concurrent_requests_for_object: Some(100.try_into()?),
                 ideal_concurrent_request_size: Some(1.try_into()?),
             }),
+            ..repo.storage().default_settings()
         });
         let repo = repo.reopen(Some(config), None)?;
         assert_eq!(

@@ -174,6 +174,9 @@ impl ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: Option<ConcurrencySettings>,
+    pub unsafe_use_conditional_update: Option<bool>,
+    pub unsafe_use_conditional_create: Option<bool>,
+    pub unsafe_use_metadata: Option<bool>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -185,6 +188,18 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
     }
 
+    pub fn unsafe_use_conditional_create(&self) -> bool {
+        self.unsafe_use_conditional_create.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_conditional_update(&self) -> bool {
+        self.unsafe_use_conditional_update.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_metadata(&self) -> bool {
+        self.unsafe_use_metadata.unwrap_or(true)
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             concurrency: match (&self.concurrency, other.concurrency) {
@@ -192,6 +207,33 @@ impl Settings {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            unsafe_use_conditional_create: match (
+                &self.unsafe_use_conditional_create,
+                other.unsafe_use_conditional_create,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_conditional_update: match (
+                &self.unsafe_use_conditional_update,
+                other.unsafe_use_conditional_update,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_metadata: match (
+                &self.unsafe_use_metadata,
+                other.unsafe_use_metadata,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }

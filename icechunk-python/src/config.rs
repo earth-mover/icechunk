@@ -88,13 +88,13 @@ impl PyS3StaticCredentials {
             r#"S3StaticCredentials(access_key_id="{ak}", secret_access_key="{sk}", session_token={st}, expires_after={ea})"#,
             ak = self.access_key_id.as_str(),
             sk = self.secret_access_key.as_str(),
-            st = format_option_string(self.session_token.as_ref()),
+            st = format_option(self.session_token.as_ref()),
             ea = format_option(self.expires_after.as_ref().map(datetime_repr))
         )
     }
 }
 
-fn format_option_to_string<T: Display>(o: Option<T>) -> String {
+pub(crate) fn format_option_to_string<T: Display>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => s.to_string(),
@@ -105,13 +105,6 @@ fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => s.as_ref().to_string(),
-    }
-}
-
-pub(crate) fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
-    match o.as_ref() {
-        None => "None".to_string(),
-        Some(s) => format!(r#""{}""#, s.as_ref()),
     }
 }
 
@@ -377,8 +370,8 @@ impl PyS3Options {
         // TODO: escape
         format!(
             r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon})"#,
-            region = format_option_string(self.region.as_ref()),
-            url = format_option_string(self.endpoint_url.as_ref()),
+            region = format_option(self.region.as_ref()),
+            url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
         )
@@ -707,6 +700,12 @@ fn storage_concurrency_settings_repr(s: &PyStorageConcurrencySettings) -> String
 pub struct PyStorageSettings {
     #[pyo3(get, set)]
     pub concurrency: Option<Py<PyStorageConcurrencySettings>>,
+    #[pyo3(get, set)]
+    pub unsafe_use_conditional_update: Option<bool>,
+    #[pyo3(get, set)]
+    pub unsafe_use_conditional_create: Option<bool>,
+    #[pyo3(get, set)]
+    pub unsafe_use_metadata: Option<bool>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
@@ -717,6 +716,9 @@ impl From<storage::Settings> for PyStorageSettings {
                 Py::new(py, Into::<PyStorageConcurrencySettings>::into(c))
                     .expect("Cannot create instance of StorageConcurrencySettings")
             }),
+            unsafe_use_conditional_create: value.unsafe_use_conditional_create,
+            unsafe_use_conditional_update: value.unsafe_use_conditional_update,
+            unsafe_use_metadata: value.unsafe_use_metadata,
         })
     }
 }
@@ -725,6 +727,9 @@ impl From<&PyStorageSettings> for storage::Settings {
     fn from(value: &PyStorageSettings) -> Self {
         Python::with_gil(|py| Self {
             concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
+            unsafe_use_conditional_create: value.unsafe_use_conditional_create,
+            unsafe_use_conditional_update: value.unsafe_use_conditional_update,
+            unsafe_use_metadata: value.unsafe_use_metadata,
         })
     }
 }
@@ -741,10 +746,20 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None))]
+    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None))]
     #[new]
-    pub fn new(concurrency: Option<Py<PyStorageConcurrencySettings>>) -> Self {
-        Self { concurrency }
+    pub fn new(
+        concurrency: Option<Py<PyStorageConcurrencySettings>>,
+        unsafe_use_conditional_create: Option<bool>,
+        unsafe_use_conditional_update: Option<bool>,
+        unsafe_use_metadata: Option<bool>,
+    ) -> Self {
+        Self {
+            concurrency,
+            unsafe_use_conditional_create,
+            unsafe_use_metadata,
+            unsafe_use_conditional_update,
+        }
     }
 
     pub fn __repr__(&self) -> String {
@@ -756,7 +771,13 @@ impl PyStorageSettings {
             }),
         };
 
-        format!(r#"StorageSettings(concurrency={conc})"#, conc = inner)
+        format!(
+            r#"StorageSettings(concurrency={conc}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me})"#,
+            conc = inner,
+            cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
+            up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
+            me = format_option(self.unsafe_use_metadata.map(format_bool))
+        )
     }
 }
 

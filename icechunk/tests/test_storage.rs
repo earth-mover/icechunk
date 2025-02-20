@@ -14,7 +14,7 @@ use icechunk::{
         RefErrorKind,
     },
     storage::{
-        new_in_memory_storage, new_s3_storage, ETag, FetchConfigResult, Generation,
+        self, new_in_memory_storage, new_s3_storage, ETag, FetchConfigResult, Generation,
         StorageResult, UpdateConfigResult, VersionInfo,
     },
     ObjectStorage, Storage,
@@ -486,5 +486,57 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
         }
         Ok(())
     }).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::panic)]
+pub async fn test_write_config_can_overwrite_with_unsafe_config(
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(|_, storage| async move {
+        let storage_settings = storage::Settings {
+            unsafe_use_conditional_update: Some(false),
+            unsafe_use_conditional_create: Some(false),
+            ..storage.default_settings()
+        };
+
+        // create the initial version
+        let config = Bytes::copy_from_slice(b"hello");
+        match storage
+            .update_config(
+                &storage_settings,
+                config.clone(),
+                &VersionInfo {
+                    etag: Some(ETag("some-bad-etag".to_string())),
+                    generation: Some(Generation("42".to_string())),
+                }
+            )
+            .await?
+        {
+            UpdateConfigResult::Updated { new_version } => new_version,
+            _ => panic!(),
+        };
+
+        // attempt a bad change that should succeed in this config
+        let update_res = storage
+            .update_config(
+                &storage_settings,
+                Bytes::copy_from_slice(b"bye"),
+                &VersionInfo {
+                    etag: Some(ETag("other-bad-etag".to_string())),
+                    generation: Some(Generation("55".to_string())),
+                },
+            )
+            .await?;
+
+        assert!(matches!(update_res, UpdateConfigResult::Updated { .. }));
+
+        let fetch_res = storage.fetch_config(&storage_settings).await?;
+        assert!(
+            matches!(fetch_res, FetchConfigResult::Found{bytes, ..} if bytes.as_ref() == b"bye")
+        );
+        Ok(())
+    })
+    .await?;
     Ok(())
 }

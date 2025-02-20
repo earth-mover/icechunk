@@ -28,7 +28,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        datetime_repr, format_option_string, PyCredentials, PyRepositoryConfig,
+        datetime_repr, format_option_to_string, PyCredentials, PyRepositoryConfig,
         PyStorage, PyStorageSettings,
     },
     errors::PyIcechunkStoreError,
@@ -176,7 +176,7 @@ impl PySnapshotInfo {
         format!(
             r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
-            parent = format_option_string(self.parent_id.as_ref()),
+            parent = format_option_to_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
