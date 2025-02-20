@@ -91,6 +91,24 @@ class VirtualChunkContainer:
             The storage backend to use for the virtual chunk container.
         """
 
+class VirtualChunkSpec:
+    index: list[int]
+    location: str
+    offset: int
+    length: int
+    etag_checksum: str | None
+    last_updated_at_checksum: datetime.datetime | None
+
+    def __init__(
+        self,
+        index: list[int],
+        location: str,
+        offset: int,
+        length: int,
+        etag_checksum: str | None = None,
+        last_updated_at_checksum: datetime.datetime | None = None,
+    ) -> None: ...
+
 class CompressionAlgorithm(Enum):
     """Enum for selecting the compression algorithm used by Icechunk to write its metadata files
 
@@ -979,6 +997,12 @@ class PyStore:
         checksum: str | datetime.datetime | None = None,
         validate_container: bool = False,
     ) -> None: ...
+    def set_virtual_refs(
+        self,
+        array_path: str,
+        chunks: list[VirtualChunkSpec],
+        validate_containers: bool,
+    ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
     @property

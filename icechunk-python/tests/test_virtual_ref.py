@@ -14,6 +14,7 @@ from icechunk import (
     RepositoryConfig,
     S3Options,
     VirtualChunkContainer,
+    VirtualChunkSpec,
     containers_credentials,
     in_memory_storage,
     local_filesystem_storage,
@@ -65,74 +66,97 @@ async def test_write_minio_virtual_refs() -> None:
     old = datetime.now(UTC) - timedelta(weeks=1)
     new = datetime.now(UTC) + timedelta(minutes=1)
 
-    store.set_virtual_ref(
-        "c/0/0/0", f"s3://testbucket/{prefix}/chunk-1", offset=0, length=4
-    )
-    store.set_virtual_ref(
-        "c/1/0/0",
-        f"s3://testbucket/{prefix}/chunk-1",
-        offset=0,
-        length=4,
-        checksum=etags[0],
-    )
-    store.set_virtual_ref(
-        "c/2/0/0",
-        f"s3://testbucket/{prefix}/chunk-1",
-        offset=0,
-        length=4,
-        checksum="bad etag",
-    )
-    store.set_virtual_ref(
-        "c/3/0/0",
-        f"s3://testbucket/{prefix}/chunk-1",
-        offset=0,
-        length=4,
-        checksum=old,
-    )
-    store.set_virtual_ref(
-        "c/4/0/0",
-        f"s3://testbucket/{prefix}/chunk-1",
-        offset=0,
-        length=4,
-        checksum=new,
+    res = store.set_virtual_refs(
+        array_path="/",
+        validate_containers=True,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-1",
+                offset=0,
+                length=4,
+            ),
+            VirtualChunkSpec(
+                index=[1, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-1",
+                offset=0,
+                length=4,
+                etag_checksum=etags[0],
+            ),
+            VirtualChunkSpec(
+                index=[2, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-1",
+                offset=0,
+                length=4,
+                etag_checksum="bad etag",
+            ),
+            VirtualChunkSpec(
+                index=[3, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-1",
+                offset=0,
+                length=4,
+                last_updated_at_checksum=old,
+            ),
+            VirtualChunkSpec(
+                index=[4, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-1",
+                offset=0,
+                length=4,
+                last_updated_at_checksum=new,
+            ),
+            VirtualChunkSpec(
+                index=[0, 0, 1],
+                location=f"s3://testbucket/{prefix}/chunk-2",
+                offset=1,
+                length=4,
+            ),
+            VirtualChunkSpec(
+                index=[1, 0, 1],
+                location=f"s3://testbucket/{prefix}/chunk-2",
+                offset=1,
+                length=4,
+                etag_checksum=etags[1],
+            ),
+            VirtualChunkSpec(
+                index=[2, 0, 1],
+                location=f"s3://testbucket/{prefix}/chunk-2",
+                offset=1,
+                length=4,
+                etag_checksum="bad etag",
+            ),
+            VirtualChunkSpec(
+                index=[3, 0, 1],
+                location=f"s3://testbucket/{prefix}/chunk-2",
+                offset=1,
+                length=4,
+                last_updated_at_checksum=old,
+            ),
+            VirtualChunkSpec(
+                index=[4, 0, 1],
+                location=f"s3://testbucket/{prefix}/chunk-2",
+                offset=1,
+                length=4,
+                last_updated_at_checksum=new,
+            ),
+            # we write a ref that simulates a lost chunk
+            VirtualChunkSpec(
+                index=[0, 0, 2],
+                location=f"s3://testbucket/{prefix}/non-existing",
+                offset=1,
+                length=4,
+            ),
+            # we write one that doesn't pass container validation
+            VirtualChunkSpec(
+                index=[0, 0, 2],
+                location=f"bad://testbucket/{prefix}/non-existing",
+                offset=1,
+                length=4,
+            ),
+        ],
     )
 
-    store.set_virtual_ref(
-        "c/0/0/1", f"s3://testbucket/{prefix}/chunk-2", offset=1, length=4
-    )
-    store.set_virtual_ref(
-        "c/1/0/1",
-        f"s3://testbucket/{prefix}/chunk-2",
-        offset=1,
-        length=4,
-        checksum=etags[1],
-    )
-    store.set_virtual_ref(
-        "c/2/0/1",
-        f"s3://testbucket/{prefix}/chunk-2",
-        offset=1,
-        length=4,
-        checksum="bad etag",
-    )
-    store.set_virtual_ref(
-        "c/3/0/1",
-        f"s3://testbucket/{prefix}/chunk-2",
-        offset=1,
-        length=4,
-        checksum=old,
-    )
-    store.set_virtual_ref(
-        "c/4/0/1",
-        f"s3://testbucket/{prefix}/chunk-2",
-        offset=1,
-        length=4,
-        checksum=new,
-    )
-
-    # we write a ref that simulates a lost chunk
-    store.set_virtual_ref(
-        "c/0/0/2", f"s3://testbucket/{prefix}/non-existing", offset=1, length=4
-    )
+    # we got the failed ref index
+    assert res == [(0, 0, 2)]
 
     # can validate virtual chunk containers
     with pytest.raises(IcechunkError, match="invalid chunk location"):

@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from icechunk._icechunk_python import PyStore
+from icechunk._icechunk_python import PyStore, VirtualChunkSpec
 from zarr.abc.store import (
     ByteRequest,
     OffsetByteRequest,
@@ -246,6 +246,15 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.set_virtual_ref(
             key, location, offset, length, checksum, validate_container
         )
+
+    def set_virtual_refs(
+        self,
+        array_path: str,
+        chunks: list[VirtualChunkSpec],
+        *,
+        validate_containers: bool = False,
+    ) -> list[tuple[int, ...]] | None:
+        return self._store.set_virtual_refs(array_path, chunks, validate_containers)
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store
