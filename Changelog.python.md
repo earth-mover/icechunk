@@ -1,5 +1,44 @@
 # Changelog
 
+## Python Icechunk Library 0.2.0
+
+This release is focused on stabilizing Icechunk's on-disk serialization format. It's a non-backwards
+compatible change, hopefully the last one. Data written with previous versions must be reingested to be read with
+Icechunk 0.2.0.
+
+### Features
+
+- `Repository.ancestry` now returns an iterator, allowing interrupting the traversal of the version tree at any point.
+- New on-disk format using [flatbuffers](https://flatbuffers.dev/) makes it easier to document and implement
+(de-)serialization. This enables the creation of alternative readers and writers for the Icechunk format.
+- `Repository.readonly_session` interprets its first positional argument as a branch name:
+
+```python
+# before:
+repo.readonly_session(branch="dev")
+
+# after:
+repo.readonly_session("dev")
+
+# still possible:
+repo.readonly_session(tag="v0.1")
+repo.readonly_session(branch="foo")
+repo.readonly_session(snapshot="NXH3M0HJ7EEJ0699DPP0")
+```
+
+- Icechunk is now more resilient to changes in Zarr metadata spec, and can handle Zarr extensions.
+- More documentation.
+
+### Performance
+
+- We have improved our benchmarks, making them more flexible and effective at finding possible regressions.
+- New `Store.set_virtual_refs` method allows setting multiple virtual chunks for the same array. This
+significantly speeds up the creation of virtual datasets.
+
+### Fixes
+
+- Fix a bug in clean prefix detection
+
 ## Python Icechunk Library 0.1.3
 
 ### Features
@@ -22,10 +61,13 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 - Icechunk generates logs now. Set the environment variable `ICECHUNK_LOG=icechunk=debug` to print debug logs to stdout. Available "levels" in order of increasing verbosity are `error`, `warn`, `info`, `debug`, `trace`. The default level is `error`. Example log:
   ![image](https://private-user-images.githubusercontent.com/20792/411051729-7e6de243-73f4-4863-ba79-2dde204fe6e5.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Mzg5NTY3NTQsIm5iZiI6MTczODk1NjQ1NCwicGF0aCI6Ii8yMDc5Mi80MTEwNTE3MjktN2U2ZGUyNDMtNzNmNC00ODYzLWJhNzktMmRkZTIwNGZlNmU1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjA3VDE5MjczNFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTQ1MzdmMDY2MDA2YjdiNzUzM2RhMGE5ZDAxZDA2NWI4ZWU3MjcyZTE0YjRkY2U0ZTZkMTcxMzQzMDVjOGQ0NGQmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.LnILQIXxOjkR1y6P5w6k9UREm0zOH1tIzt2vrjVcRKM)
 - Icechunk can now be installed using `conda`:
+
   ```shell
   conda install -c conda-forge icechunk
   ```
+
 - Optionally delete branches and tags that point to expired snapshots:
+
   ```python
     def expire_snapshots(
         self,
@@ -35,19 +77,17 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
         delete_expired_tags: bool = False,
     ) -> set[str]: ...
   ```
-- More documentation. See [the Icechunk website](https://icechunk.io/)
 
+- More documentation. See [the Icechunk website](https://icechunk.io/)
 
 ### Performance
 
 - Faster `exists` zarr `Store` method.
 - Implement `Store.getsize_prefix` method. This significantly speeds up `info_complete`.
 
-
 ### Fixes
 
 - Default regular expression to preload manifests.
-
 
 ## Python Icechunk Library 0.1.1
 
@@ -55,16 +95,17 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 
 - Session deserialization error when using distributed writes
 
-
 ## Python Icechunk Library 0.1.0
 
 ### Features
 
 - Expiration and garbage collection. It's now possible to maintain only recent versions of the repository, reclaiming the storage used exclusively by expired versions.
 - Allow an arbitrary map of properties to commits. Example:
+
   ```
   session.commit("some message", metadata={"author": "icechunk-team"})
   ```
+
   This properties can be retrieved via `ancestry`.
 - New `chunk_coordinates` function to list all initialized chunks in an array.
 - It's now possible to delete tags. New tags with the same name won't be allowed to preserve the immutability of snapshots pointed by a tag.
@@ -89,7 +130,6 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 - Bad manifest split in unmodified arrays
 - Documentation was updated to the latest API.
 
-
 ## Python Icechunk Library 0.1.0a15
 
 ### Fixes
@@ -104,6 +144,7 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 - The snapshot now keeps track of the chunk space bounding box for each manifest
 - Configuration settings can now be overridden in a field-by-field basis
   Example:
+
   ```python
    config = icechunk.RepositoryConfig(inline_chunk_threshold_byte=0)
    storage = ...
@@ -113,6 +154,7 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
        config=config,
    )
   ```
+
   will use 0 for `inline_chunk_threshold_byte` but all other configuration fields will come from
   the repository persistent config. If persistent config is not set, configuration defaults will
   take its place.
@@ -147,6 +189,7 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
        config=config,
    )
 - `ancestry` function can now receive a branch/tag name or a snapshot id
+
 - `set_virtual_ref` can now validate the virtual chunk container exists
 
   ```
