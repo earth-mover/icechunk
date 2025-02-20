@@ -209,10 +209,6 @@ impl Storage for LoggingStorage {
         self.backend.get_snapshot_last_modified(settings, snapshot).await
     }
 
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        self.backend.root_is_clean().await
-    }
-
     async fn get_object_range_buf(
         &self,
         key: &str,
