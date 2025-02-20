@@ -969,8 +969,6 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub inline_chunk_threshold_bytes: Option<u16>,
     #[pyo3(get, set)]
-    pub unsafe_overwrite_refs: Option<bool>,
-    #[pyo3(get, set)]
     pub get_partial_values_concurrency: Option<u16>,
     #[pyo3(get, set)]
     pub compression: Option<Py<PyCompressionConfig>>,
@@ -996,7 +994,6 @@ impl From<&PyRepositoryConfig> for RepositoryConfig {
     fn from(value: &PyRepositoryConfig) -> Self {
         Python::with_gil(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
             caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
@@ -1014,7 +1011,6 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
         #[allow(clippy::expect_used)]
         Python::with_gil(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             compression: value.compression.map(|c| {
                 Py::new(py, Into::<PyCompressionConfig>::into(c))
@@ -1049,11 +1045,10 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, unsafe_overwrite_refs = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
-        unsafe_overwrite_refs: Option<bool>,
         get_partial_values_concurrency: Option<u16>,
         compression: Option<Py<PyCompressionConfig>>,
         caching: Option<Py<PyCachingConfig>>,
@@ -1063,7 +1058,6 @@ impl PyRepositoryConfig {
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs,
             get_partial_values_concurrency,
             compression,
             caching,
@@ -1129,9 +1123,8 @@ impl PyRepositoryConfig {
             }));
             // TODO: virtual chunk containers
             format!(
-                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, unsafe_overwrite_refs={uns}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest})"#,
+                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest})"#,
                 inl = format_option_to_string(self.inline_chunk_threshold_bytes),
-                uns = format_option(self.unsafe_overwrite_refs.map(format_bool)),
                 partial = format_option_to_string(self.get_partial_values_concurrency),
                 comp = comp,
                 caching = caching,

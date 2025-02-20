@@ -13,7 +13,6 @@ use crate::{
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private, Storage, StorageError,
 };
-use async_stream::try_stream;
 use async_trait::async_trait;
 use aws_config::{
     meta::region::RegionProviderChain, retry::ProvideErrorKind, AppName, BehaviorVersion,
@@ -41,8 +40,8 @@ use tracing::instrument;
 
 use super::{
     FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, StorageErrorKind,
-    StorageResult, UpdateConfigResult, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH,
-    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX,
+    CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -248,6 +247,14 @@ impl S3Storage {
 
         Ok(res.deleted().len())
     }
+
+    fn get_ref_name<'a>(&self, key: Option<&'a str>) -> Option<&'a str> {
+        let key = key?;
+        let prefix = self.ref_key("").ok()?;
+        let relative_key = key.strip_prefix(&prefix)?;
+        let ref_name = relative_key.split('/').next()?;
+        Some(ref_name)
+    }
 }
 
 pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
@@ -278,7 +285,7 @@ impl Storage for S3Storage {
             Ok(output) => match output.e_tag {
                 Some(etag) => Ok(FetchConfigResult::Found {
                     bytes: output.body.collect().await?.into_bytes(),
-                    etag,
+                    version: VersionInfo::from_etag_only(etag),
                 }),
                 None => Ok(FetchConfigResult::NotFound),
             },
@@ -294,7 +301,7 @@ impl Storage for S3Storage {
         &self,
         _settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult> {
         let key = self.get_config_path()?;
         let mut req = self
@@ -306,7 +313,7 @@ impl Storage for S3Storage {
             .content_type("application/yaml")
             .body(config.into());
 
-        if let Some(etag) = etag {
+        if let Some(etag) = previous_version.etag() {
             req = req.if_match(etag)
         } else {
             req = req.if_none_match("*")
@@ -322,7 +329,8 @@ impl Storage for S3Storage {
                         "Config object should have an etag".to_string(),
                     ))?
                     .to_string();
-                Ok(UpdateConfigResult::Updated { new_etag })
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(UpdateConfigResult::Updated { new_version })
             }
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
@@ -471,7 +479,11 @@ impl Storage for S3Storage {
         match res {
             Ok(res) => {
                 let bytes = res.body.collect().await?.into_bytes();
-                Ok(GetRefResult::Found { bytes })
+                if let Some(version) = res.e_tag.map(VersionInfo::from_etag_only) {
+                    Ok(GetRefResult::Found { bytes, version })
+                } else {
+                    Ok(GetRefResult::NotFound)
+                }
             }
             Err(err)
                 if err
@@ -494,21 +506,16 @@ impl Storage for S3Storage {
             .list_objects_v2()
             .bucket(self.bucket.clone())
             .prefix(prefix.clone())
-            .delimiter("/")
             .into_paginator()
             .send();
 
         let mut res = Vec::new();
 
         while let Some(page) = paginator.try_next().await? {
-            for common_prefix in page.common_prefixes() {
-                if let Some(key) = common_prefix
-                    .prefix()
-                    .as_ref()
-                    .and_then(|key| key.strip_prefix(prefix.as_str()))
-                    .and_then(|key| key.strip_suffix('/'))
-                {
-                    res.push(key.to_string());
+            for obj in page.contents.unwrap_or_else(Vec::new) {
+                let name = self.get_ref_name(obj.key());
+                if let Some(name) = name {
+                    res.push(name.to_string());
                 }
             }
         }
@@ -516,42 +523,13 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self, _settings))]
-    async fn ref_versions(
-        &self,
-        _settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>> {
-        let prefix = self.ref_key(ref_name)?;
-        let mut paginator = self
-            .get_client()
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix.clone())
-            .into_paginator()
-            .send();
-
-        let prefix = prefix + "/";
-        let stream = try_stream! {
-            while let Some(page) = paginator.try_next().await? {
-                for object in page.contents() {
-                    if let Some(key) = object.key.as_ref().and_then(|key| key.strip_prefix(prefix.as_str())) {
-                        yield key.to_string()
-                    }
-                }
-            }
-        };
-        Ok(stream.boxed())
-    }
-
     #[instrument(skip(self, _settings, bytes))]
     async fn write_ref(
         &self,
         _settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key)?;
         let mut builder = self
@@ -561,8 +539,10 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .key(key.clone());
 
-        if !overwrite_refs {
-            builder = builder.if_none_match("*")
+        if let Some(etag) = previous_version.etag() {
+            builder = builder.if_match(etag);
+        } else {
+            builder = builder.if_none_match("*");
         }
 
         let res = builder.body(bytes.into()).send().await;

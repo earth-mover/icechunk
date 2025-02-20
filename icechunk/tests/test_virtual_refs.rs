@@ -15,7 +15,7 @@ mod tests {
         repository::VersionInfo,
         session::{get_chunk, SessionErrorKind},
         storage::{
-            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ObjectStorage,
+            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ETag, ObjectStorage,
         },
         store::{StoreError, StoreErrorKind},
         virtual_chunks::VirtualChunkContainer,
@@ -711,7 +711,7 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
-            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
+            checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
         };
 
         store.set_virtual_ref("array/c/0/0/2", ref1, false).await?;
@@ -733,7 +733,7 @@ mod tests {
             )?,
             offset: 22306,
             length: 288,
-            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
+            checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
         };
 
         store.set_virtual_ref("array/c/1/1/1", public_ref, false).await?;

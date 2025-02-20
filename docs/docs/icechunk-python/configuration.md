@@ -22,10 +22,6 @@ It allows you to configure the following parameters:
 
 The threshold for when to inline a chunk into a manifest instead of storing it as a separate object in the storage backend.
 
-### [`unsafe_overwrite_refs`](./reference.md#icechunk.RepositoryConfig.unsafe_overwrite_refs)
-
-Whether to allow overwriting references in the repository.
-
 ### [`get_partial_values_concurrency`](./reference.md#icechunk.RepositoryConfig.get_partial_values_concurrency)
 
 The number of concurrent requests to make when getting partial values from storage.

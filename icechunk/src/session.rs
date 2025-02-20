@@ -812,7 +812,6 @@ impl Session {
         let id = match current {
             Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => {
                 do_commit(
-                    &self.config,
                     self.storage.as_ref(),
                     Arc::clone(&self.asset_manager),
                     self.storage_settings.as_ref(),
@@ -835,7 +834,6 @@ impl Session {
                     .into())
                 } else {
                     do_commit(
-                        &self.config,
                         self.storage.as_ref(),
                         Arc::clone(&self.asset_manager),
                         self.storage_settings.as_ref(),
@@ -1624,7 +1622,6 @@ async fn flush(
 
 #[allow(clippy::too_many_arguments)]
 async fn do_commit(
-    config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
     asset_manager: Arc<AssetManager>,
     storage_settings: &storage::Settings,
@@ -1647,7 +1644,6 @@ async fn do_commit(
         branch_name,
         new_snapshot.clone(),
         Some(&parent_snapshot),
-        config.unsafe_overwrite_refs(),
     )
     .await
     {
@@ -1747,7 +1743,7 @@ mod tests {
             detector::ConflictDetector,
         },
         format::manifest::ManifestExtents,
-        refs::{fetch_ref, Ref},
+        refs::{fetch_tag, Ref},
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{
@@ -2021,11 +2017,14 @@ mod tests {
             "main",
             snapshot.id().clone(),
             None,
-            true,
         )
         .await?;
-        Repository::store_config(storage.as_ref(), &RepositoryConfig::default(), None)
-            .await?;
+        Repository::store_config(
+            storage.as_ref(),
+            &RepositoryConfig::default(),
+            &storage::VersionInfo::for_creation(),
+        )
+        .await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
@@ -2864,14 +2863,12 @@ mod tests {
         let new_snapshot_id = ds.commit("first commit", None).await?;
         assert_eq!(
             new_snapshot_id,
-            fetch_ref(storage.as_ref(), &storage_settings, "main").await?.1.snapshot
+            fetch_branch_tip(storage.as_ref(), &storage_settings, "main").await?.snapshot
         );
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
         repo.create_tag("v1", &new_snapshot_id).await?;
-        let (ref_name, ref_data) =
-            fetch_ref(storage.as_ref(), &storage_settings, "v1").await?;
-        assert_eq!(ref_name, Ref::Tag("v1".to_string()));
+        let ref_data = fetch_tag(storage.as_ref(), &storage_settings, "v1").await?;
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
         assert!(matches!(
@@ -2906,9 +2903,9 @@ mod tests {
         )
         .await?;
         let new_snapshot_id = ds.commit("second commit", None).await?;
-        let (ref_name, ref_data) =
-            fetch_ref(storage.as_ref(), &storage_settings, Ref::DEFAULT_BRANCH).await?;
-        assert_eq!(ref_name, Ref::Branch("main".to_string()));
+        let ref_data =
+            fetch_branch_tip(storage.as_ref(), &storage_settings, Ref::DEFAULT_BRANCH)
+                .await?;
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
         let parents = repo
@@ -3416,7 +3413,6 @@ mod tests {
             "main",
             conflicting_snap.clone(),
             Some(&current_snap),
-            false,
         )
         .await?;
         Ok(())

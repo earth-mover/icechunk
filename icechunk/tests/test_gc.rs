@@ -58,7 +58,6 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::create(
         Some(RepositoryConfig {
             inline_chunk_threshold_bytes: Some(0),
-            unsafe_overwrite_refs: Some(true),
             ..Default::default()
         }),
         Arc::clone(&storage),
@@ -127,7 +126,6 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
         "main",
         first_snap_id,
         Some(&second_snap_id),
-        false,
     )
     .await?;
 

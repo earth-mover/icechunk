@@ -8,18 +8,20 @@ use bytes::Bytes;
 use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, ManifestId, SnapshotId},
+    new_local_filesystem_storage,
     refs::{
         create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
         RefErrorKind,
     },
     storage::{
         new_in_memory_storage, new_s3_storage, FetchConfigResult, StorageResult,
-        UpdateConfigResult,
+        UpdateConfigResult, VersionInfo,
     },
     ObjectStorage, Storage,
 };
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
+use tempfile::tempdir;
 use tokio::io::AsyncReadExt;
 
 #[allow(clippy::expect_used)]
@@ -89,9 +91,10 @@ async fn mk_azure_blob_storage(
     Ok(storage)
 }
 
+#[allow(clippy::expect_used)]
 async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
 where
-    F: Fn(Arc<dyn Storage + Send + Sync>) -> Fut,
+    F: Fn(&'static str, Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
     let prefix = format!("{:?}", ChunkId::random());
@@ -100,16 +103,27 @@ where
     let s2 = new_in_memory_storage().await.unwrap();
     let s3 = mk_s3_object_store_storage(format!("{prefix}2").as_str()).await?;
     let s4 = mk_azure_blob_storage(prefix.as_str()).await?;
-    f(s1).await?;
-    f(s2).await?;
-    f(s3).await?;
-    f(s4).await?;
+    let dir = tempdir().expect("cannot create temp dir");
+    let s5 = new_local_filesystem_storage(dir.path())
+        .await
+        .expect("Cannot create local Storage");
+
+    println!("Using in memory storage");
+    f("in_memory", s2).await?;
+    println!("Using local filesystem storage");
+    f("local_filesystem", s5).await?;
+    println!("Using s3 native storage");
+    f("s3_native", s1).await?;
+    println!("Using s3 object_store storage");
+    f("s3_object_store", s3).await?;
+    println!("Using azure_blob storage");
+    f("azure_blob", s4).await?;
     Ok(())
 }
 
 #[tokio::test]
 pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
@@ -133,7 +147,7 @@ pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>
 
 #[tokio::test]
 pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = ManifestId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
@@ -165,7 +179,7 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
 
 #[tokio::test]
 pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = ChunkId::random();
         let bytes = Bytes::from_static(b"hello");
@@ -181,11 +195,10 @@ pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
-            .await?;
+        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone()).await?;
         let back = fetch_tag(storage.as_ref(), &storage_settings, "mytag").await?;
         assert_eq!(id, back.snapshot);
         Ok(())
@@ -196,10 +209,10 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
             .await?;
 
         let back =
@@ -213,14 +226,14 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 
 #[tokio::test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
             .await?;
 
         let res =
-            create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone(), false)
+            create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
                 .await;
         assert!(matches!(res, Err(RefError{kind: RefErrorKind::TagAlreadyExists(r), ..}) if r == "mytag"));
         Ok(())
@@ -231,20 +244,18 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
 
 #[tokio::test]
 pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
 
-        let res = update_branch(
+        update_branch(
             storage.as_ref(),
             &storage_settings,
             "some-branch",
             id.clone(),
             None,
-            false,
         )
         .await?;
-        assert_eq!(res.0, 0);
 
         let res =
             fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
@@ -258,7 +269,7 @@ pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Erro
 
 #[tokio::test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
         update_branch(
@@ -267,7 +278,6 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
             "some-branch",
             id.clone(),
             None,
-            false,
         )
         .await?;
 
@@ -285,44 +295,38 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 
 #[tokio::test]
 pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id1 = SnapshotId::random();
         let id2 = SnapshotId::random();
         let id3 = SnapshotId::random();
 
-        let res = update_branch(
+        update_branch(
             storage.as_ref(),
             &storage_settings,
             "some-branch",
             id1.clone(),
             None,
-            false,
         )
         .await?;
-        assert_eq!(res.0, 0);
 
-        let res = update_branch(
+        update_branch(
             storage.as_ref(),
             &storage_settings,
             "some-branch",
             id2.clone(),
             Some(&id1),
-            false,
         )
         .await?;
-        assert_eq!(res.0, 1);
 
-        let res = update_branch(
+        update_branch(
             storage.as_ref(),
             &storage_settings,
             "some-branch",
             id3.clone(),
             Some(&id2),
-            false,
         )
         .await?;
-        assert_eq!(res.0, 2);
 
         let res =
             fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
@@ -336,56 +340,27 @@ pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id1 = SnapshotId::random();
         let id2 = SnapshotId::random();
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "main",
-            id1.clone(),
-            None,
-            false,
-        )
-        .await?;
+        update_branch(storage.as_ref(), &storage_settings, "main", id1.clone(), None)
+            .await?;
         update_branch(
             storage.as_ref(),
             &storage_settings,
             "main",
             id2.clone(),
             Some(&id1),
-            false,
         )
         .await?;
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "foo",
-            id1.clone(),
-            None,
-            false,
-        )
-        .await?;
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "bar",
-            id1.clone(),
-            None,
-            false,
-        )
-        .await?;
-        create_tag(storage.as_ref(), &storage_settings, "my-tag", id1.clone(), false)
+        update_branch(storage.as_ref(), &storage_settings, "foo", id1.clone(), None)
             .await?;
-        create_tag(
-            storage.as_ref(),
-            &storage_settings,
-            "my-other-tag",
-            id1.clone(),
-            false,
-        )
-        .await?;
+        update_branch(storage.as_ref(), &storage_settings, "bar", id1.clone(), None)
+            .await?;
+        create_tag(storage.as_ref(), &storage_settings, "my-tag", id1.clone()).await?;
+        create_tag(storage.as_ref(), &storage_settings, "my-other-tag", id1.clone())
+            .await?;
 
         let res: HashSet<_> =
             HashSet::from_iter(list_refs(storage.as_ref(), &storage_settings).await?);
@@ -408,17 +383,17 @@ pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
-        let etag = match storage.update_config(&storage_settings, config.clone(), None).await? {
-    UpdateConfigResult::Updated { new_etag } => new_etag,
+        let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
+    UpdateConfigResult::Updated { new_version } => new_version,
     UpdateConfigResult::NotOnLatestVersion => panic!(),
 };
-        assert_ne!(etag, "");
+        assert_ne!(version, VersionInfo::for_creation());
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, FetchConfigResult::Found{bytes, etag: actual_etag} if actual_etag == etag && bytes == config )
+            matches!(res, FetchConfigResult::Found{bytes, version: actual_version} if actual_version == version && bytes == config )
         );
         Ok(())
     }).await?;
@@ -428,21 +403,21 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 #[tokio::test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
-        let first_etag = match storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), None).await? {
-            UpdateConfigResult::Updated { new_etag } => new_etag,
+        let first_version = match storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), &VersionInfo::for_creation()).await? {
+            UpdateConfigResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
         let config = Bytes::copy_from_slice(b"bye");
-        let second_etag = match storage.update_config(&storage_settings, config.clone(), Some(first_etag.as_str())).await? {
-            UpdateConfigResult::Updated { new_etag } => new_etag,
+        let second_version = match storage.update_config(&storage_settings, config.clone(), &first_version).await? {
+            UpdateConfigResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
-        assert_ne!(second_etag, first_etag);
+        assert_ne!(second_version, first_version);
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, FetchConfigResult::Found{bytes, etag: actual_etag} if actual_etag == second_etag && bytes == config )
+            matches!(res, FetchConfigResult::Found{bytes, version: actual_version} if actual_version == second_version && bytes == config )
         );
         Ok(())
     }).await?;
@@ -450,48 +425,63 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio::test]
-pub async fn test_write_config_fails_on_bad_etag_when_non_existing(
+pub async fn test_write_config_fails_on_bad_version_when_non_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MiniIO but seems to work on S3
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings();
-    let etag = storage
+    let version = storage
         .update_config(
             &storage_settings,
             Bytes::copy_from_slice(b"hello"),
-            Some("00000000000000000000000000000000"),
+            &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
         )
         .await;
 
-    assert!(matches!(etag, Ok(UpdateConfigResult::NotOnLatestVersion)));
+    assert!(matches!(version, Ok(UpdateConfigResult::NotOnLatestVersion)));
     Ok(())
 }
 
 #[tokio::test]
 #[allow(clippy::panic)]
-pub async fn test_write_config_fails_on_bad_etag_when_existing(
+pub async fn test_write_config_fails_on_bad_version_when_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage| async move {
+    with_storage(|storage_type, storage| async move {
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
-        let etag = match storage.update_config(&storage_settings, config.clone(), None).await? {
-            UpdateConfigResult::Updated { new_etag } => new_etag,
+        let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
+            UpdateConfigResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
-        let res = storage
+        let update_res = storage
             .update_config(&storage_settings,
                 Bytes::copy_from_slice(b"bye"),
-                Some("00000000000000000000000000000000"),
+            &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
             )
             .await?;
-        assert!(matches!(res, UpdateConfigResult::NotOnLatestVersion));
+        if storage_type == "local_filesystem" {
+            // FIXME: local file system doesn't have conditional updates yet
+            assert!(matches!(update_res, UpdateConfigResult::Updated{..}));
 
-        let res = storage.fetch_config(&storage_settings, ).await?;
-        assert!(
-            matches!(res, FetchConfigResult::Found{bytes, etag: actual_etag} if actual_etag == etag && bytes == config )
-        );
-            Ok(())
+        } else {
+            assert!(matches!(update_res, UpdateConfigResult::NotOnLatestVersion));
+        }
+
+        let fetch_res = storage.fetch_config(&storage_settings, ).await?;
+        if storage_type == "local_filesystem" {
+            // FIXME: local file system doesn't have conditional updates yet
+            assert!(
+                matches!(fetch_res, FetchConfigResult::Found{bytes, version: actual_version}
+                    if actual_version != version && bytes == Bytes::copy_from_slice(b"bye"))
+            );
+        } else {
+            assert!(
+                matches!(fetch_res, FetchConfigResult::Found{bytes, version: actual_version}
+                    if actual_version == version && bytes == config )
+            );
+        }
+        Ok(())
     }).await?;
     Ok(())
 }

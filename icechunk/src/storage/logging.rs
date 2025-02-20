@@ -12,7 +12,7 @@ use tokio::io::AsyncRead;
 
 use super::{
     FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, Storage, StorageError,
-    StorageResult, UpdateConfigResult, WriteRefResult,
+    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult,
 };
 use crate::{
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
@@ -56,9 +56,9 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult> {
-        self.backend.update_config(settings, config, etag).await
+        self.backend.update_config(settings, config, previous_version).await
     }
 
     async fn fetch_snapshot(
@@ -178,18 +178,10 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult> {
-        self.backend.write_ref(settings, ref_key, overwrite_refs, bytes).await
-    }
-
-    async fn ref_versions(
-        &self,
-        settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>> {
-        self.backend.ref_versions(settings, ref_name).await
+        self.backend.write_ref(settings, ref_key, bytes, previous_version).await
     }
 
     async fn list_objects<'a>(

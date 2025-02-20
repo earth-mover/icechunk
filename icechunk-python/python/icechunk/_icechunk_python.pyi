@@ -570,7 +570,6 @@ class RepositoryConfig:
     def __init__(
         self,
         inline_chunk_threshold_bytes: int | None = None,
-        unsafe_overwrite_refs: bool | None = None,
         get_partial_values_concurrency: int | None = None,
         compression: CompressionConfig | None = None,
         caching: CachingConfig | None = None,
@@ -585,8 +584,6 @@ class RepositoryConfig:
         ----------
         inline_chunk_threshold_bytes: int | None
             The maximum size of a chunk that will be stored inline in the repository.
-        unsafe_overwrite_refs: bool | None
-            Whether to allow overwriting references in the repository.
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
         compression: CompressionConfig | None
@@ -615,28 +612,6 @@ class RepositoryConfig:
     def inline_chunk_threshold_bytes(self, value: int | None) -> None:
         """
         Set the maximum size of a chunk that will be stored inline in the repository. Chunks larger than this size will be written to storage.
-        """
-        ...
-    @property
-    def unsafe_overwrite_refs(self) -> bool | None:
-        """
-        Whether to allow overwriting references in the repository.
-
-        Returns
-        -------
-        bool | None
-            Whether to allow overwriting references in the repository.
-        """
-        ...
-    @unsafe_overwrite_refs.setter
-    def unsafe_overwrite_refs(self, value: bool | None) -> None:
-        """
-        Set whether to allow overwriting references in the repository.
-
-        Parameters
-        ----------
-        value: bool | None
-            Whether to allow overwriting references in the repository.
         """
         ...
     @property
