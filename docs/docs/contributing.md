@@ -16,6 +16,11 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 ## Development
 
 ### Python Development Workflow
+The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
+```bash
+cd icechunk-python
+```
 
 Create / activate a virtual environment:
 
@@ -43,6 +48,9 @@ Build the project in dev mode:
 
 ```bash
 maturin develop
+
+# or with the optional dependencies
+maturin develop --extras=test,benchmark
 ```
 
 or build the project in editable mode:
