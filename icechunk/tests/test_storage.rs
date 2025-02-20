@@ -6,7 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use icechunk::{
-    config::{S3Credentials, S3Options, S3StaticCredentials},
+    config::{GcsStaticCredentials, S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, ManifestId, SnapshotId},
     new_local_filesystem_storage,
     refs::{
@@ -14,8 +14,8 @@ use icechunk::{
         RefErrorKind,
     },
     storage::{
-        new_in_memory_storage, new_s3_storage, FetchConfigResult, StorageResult,
-        UpdateConfigResult, VersionInfo,
+        new_in_memory_storage, new_s3_storage, ETag, FetchConfigResult, Generation,
+        StorageResult, UpdateConfigResult, VersionInfo,
     },
     ObjectStorage, Storage,
 };
@@ -107,6 +107,7 @@ where
     let s5 = new_local_filesystem_storage(dir.path())
         .await
         .expect("Cannot create local Storage");
+    let s6 = ml_gcs_storage(prefix.as_str()).await?;
 
     println!("Using in memory storage");
     f("in_memory", s2).await?;
@@ -457,7 +458,10 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
         let update_res = storage
             .update_config(&storage_settings,
                 Bytes::copy_from_slice(b"bye"),
-            &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
+            &VersionInfo{
+                etag: Some(ETag("00000000000000000000000000000000".to_string())),
+                generation: Some(Generation("0".to_string())),
+            },
             )
             .await?;
         if storage_type == "local_filesystem" {
