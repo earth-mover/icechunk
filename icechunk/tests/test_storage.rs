@@ -6,7 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use icechunk::{
-    config::{GcsStaticCredentials, S3Credentials, S3Options, S3StaticCredentials},
+    config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, ManifestId, SnapshotId},
     new_local_filesystem_storage,
     refs::{
@@ -107,7 +107,6 @@ where
     let s5 = new_local_filesystem_storage(dir.path())
         .await
         .expect("Cannot create local Storage");
-    let s6 = ml_gcs_storage(prefix.as_str()).await?;
 
     println!("Using in memory storage");
     f("in_memory", s2).await?;
