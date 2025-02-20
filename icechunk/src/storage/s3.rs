@@ -640,20 +640,6 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self))]
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        let res = self
-            .get_client()
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(self.prefix.clone())
-            .max_keys(1)
-            .send()
-            .await?;
-        Ok(res.contents.map(|v| v.is_empty()).unwrap_or(true))
-    }
-
-    #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
         key: &str,
