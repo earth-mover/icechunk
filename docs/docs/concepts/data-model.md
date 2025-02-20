@@ -62,7 +62,7 @@ For example, appending a new time slice to multiple arrays should be done as a s
 2. Write new chunks for each array in the group.
 
 While the transaction is in progress, none of these changes will be visible to other users of the store.
-Once the transaction is committed, a new snapshot is generated.
+Once the transaction is committed using `Repository.commit`, a new snapshot is generated.
 Readers can only see and use committed snapshots.
 
 ### Branches and Tags
@@ -80,7 +80,8 @@ Tags are appropriate for publishing specific releases of a repository or for any
 
 Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
 Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
-You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files.
+You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files. 
+Chunk references are stored in "chunk manifest" files.
 
 ### How Does It Work?
 
