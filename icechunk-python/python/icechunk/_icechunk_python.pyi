@@ -1393,7 +1393,6 @@ class BasicConflictSolver(ConflictSolver):
     This conflict solver allows for simple configuration of resolution behavior for conflicts that may occur during a rebase operation.
     It will attempt to resolve a limited set of conflicts based on the configuration options provided.
 
-    - When a user attribute conflict is encountered, the behavior is determined by the `on_user_attributes_conflict` option
     - When a chunk conflict is encountered, the behavior is determined by the `on_chunk_conflict` option
     - When an array is deleted that has been updated, `fail_on_delete_of_updated_array` will determine whether to fail the rebase operation
     - When a group is deleted that has been updated, `fail_on_delete_of_updated_group` will determine whether to fail the rebase operation
@@ -1402,7 +1401,6 @@ class BasicConflictSolver(ConflictSolver):
     def __init__(
         self,
         *,
-        on_user_attributes_conflict: VersionSelection = VersionSelection.UseOurs,
         on_chunk_conflict: VersionSelection = VersionSelection.UseOurs,
         fail_on_delete_of_updated_array: bool = False,
         fail_on_delete_of_updated_group: bool = False,
@@ -1411,8 +1409,6 @@ class BasicConflictSolver(ConflictSolver):
 
         Parameters
         ----------
-        on_user_attributes_conflict: VersionSelection
-            The behavior to use when a user attribute conflict is encountered, by default VersionSelection.use_ours()
         on_chunk_conflict: VersionSelection
             The behavior to use when a chunk conflict is encountered, by default VersionSelection.use_theirs()
         fail_on_delete_of_updated_array: bool
@@ -1476,39 +1472,36 @@ class ConflictType(Enum):
     Attributes:
         NewNodeConflictsWithExistingNode: int
             A new node conflicts with an existing node
-        NewNodeInInvalidGroup: int
+        NewNodeInInvalidGroup: tuple[int]
             A new node is in an invalid group
-        ZarrMetadataDoubleUpdate: int
+        ZarrMetadataDoubleUpdate: tuple[int]
             A zarr metadata update conflicts with an existing zarr metadata update
-        ZarrMetadataUpdateOfDeletedArray: int
+        ZarrMetadataUpdateOfDeletedArray: tuple[int]
             A zarr metadata update is attempted on a deleted array
-        UserAttributesDoubleUpdate: int
-            A user attribute update conflicts with an existing user attribute update
-        UserAttributesUpdateOfDeletedNode: int
-            A user attribute update is attempted on a deleted node
-        ChunkDoubleUpdate: int
+        ZarrMetadataUpdateOfDeletedGroup: tuple[int]
+            A zarr metadata update is attempted on a deleted group
+        ChunkDoubleUpdate: tuple[int]
             A chunk update conflicts with an existing chunk update
-        ChunksUpdatedInDeletedArray: int
+        ChunksUpdatedInDeletedArray: tuple[int]
             Chunks are updated in a deleted array
-        ChunksUpdatedInUpdatedArray: int
+        ChunksUpdatedInUpdatedArray: tuple[int]
             Chunks are updated in an updated array
-        DeleteOfUpdatedArray: int
+        DeleteOfUpdatedArray: tuple[int]
             A delete is attempted on an updated array
-        DeleteOfUpdatedGroup: int
+        DeleteOfUpdatedGroup: tuple[int]
             A delete is attempted on an updated group
     """
 
-    NewNodeConflictsWithExistingNode = 1
-    NewNodeInInvalidGroup = 2
-    ZarrMetadataDoubleUpdate = 3
-    ZarrMetadataUpdateOfDeletedArray = 4
-    UserAttributesDoubleUpdate = 5
-    UserAttributesUpdateOfDeletedNode = 6
-    ChunkDoubleUpdate = 7
-    ChunksUpdatedInDeletedArray = 8
-    ChunksUpdatedInUpdatedArray = 9
-    DeleteOfUpdatedArray = 10
-    DeleteOfUpdatedGroup = 11
+    NewNodeConflictsWithExistingNode = (1,)
+    NewNodeInInvalidGroup = (2,)
+    ZarrMetadataDoubleUpdate = (3,)
+    ZarrMetadataUpdateOfDeletedArray = (4,)
+    ZarrMetadataUpdateOfDeletedGroup = (5,)
+    ChunkDoubleUpdate = (6,)
+    ChunksUpdatedInDeletedArray = (7,)
+    ChunksUpdatedInUpdatedArray = (8,)
+    DeleteOfUpdatedArray = (9,)
+    DeleteOfUpdatedGroup = (10,)
 
 class Conflict:
     """A conflict detected between snapshots"""

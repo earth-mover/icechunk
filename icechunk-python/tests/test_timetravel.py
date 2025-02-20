@@ -42,8 +42,8 @@ def test_timetravel() -> None:
     )
     assert status.deleted_groups == set()
     assert status.deleted_arrays == set()
-    assert status.updated_user_attributes == {"/", "/air_temp"}  # why?
-    assert status.updated_zarr_metadata == set()
+    assert status.updated_arrays == set()
+    assert status.updated_groups == set()
 
     first_snapshot_id = session.commit("commit 1")
     assert session.read_only
@@ -137,8 +137,8 @@ def test_timetravel() -> None:
     )
     assert diff.deleted_groups == set()
     assert diff.deleted_arrays == set()
-    assert diff.updated_user_attributes == {"/", "/air_temp"}  # why?
-    assert diff.updated_zarr_metadata == set()
+    assert diff.updated_arrays == set()
+    assert diff.updated_groups == set()
     assert (
         repr(diff)
         == """\
@@ -146,10 +146,6 @@ Groups created:
     /
 
 Arrays created:
-    /air_temp
-
-User attributes updated:
-    /
     /air_temp
 
 Chunks updated:
@@ -165,6 +161,25 @@ Chunks updated:
         [0, 8]
         [0, 9]
         ... 90 more
+"""
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    group = zarr.open_group(store=store)
+    air_temp = group.create_array(
+        "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4", overwrite=True
+    )
+    assert (
+        repr(session.status())
+        == """\
+Arrays created:
+    /air_temp
+
+Arrays deleted:
+    /air_temp
+
 """
     )
 

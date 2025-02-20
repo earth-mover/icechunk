@@ -271,8 +271,8 @@ async def test_icechunk_can_read_old_repo() -> None:
     )
     assert diff.deleted_groups == set()
     assert diff.deleted_arrays == set()
-    assert diff.updated_user_attributes == set()
-    assert diff.updated_zarr_metadata == set()
+    assert diff.updated_groups == set()
+    assert diff.updated_arrays == set()
 
 
 if __name__ == "__main__":

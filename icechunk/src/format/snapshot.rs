@@ -1,5 +1,6 @@
-use std::{collections::BTreeMap, convert::Infallible, sync::Arc};
+use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use flatbuffers::{FlatBufferBuilder, VerifierOptions};
@@ -7,68 +8,44 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::metadata::{
-    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames, FillValue,
-    StorageTransformer, UserAttributes,
-};
-
 use super::{
     flatbuffers::gen,
     manifest::{Manifest, ManifestExtents, ManifestRef},
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
-    IcechunkResult, ManifestId, NodeId, Path, SnapshotId, TableOffset,
+    IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UserAttributesRef {
-    pub object_id: AttributesId,
-    pub location: TableOffset,
+pub struct DimensionShape {
+    dim_length: u64,
+    chunk_length: u64,
+}
+
+impl DimensionShape {
+    pub fn new(array_length: u64, chunk_length: NonZeroU64) -> Self {
+        Self { dim_length: array_length, chunk_length: chunk_length.get() }
+    }
+    pub fn array_length(&self) -> u64 {
+        self.dim_length
+    }
+    pub fn chunk_length(&self) -> u64 {
+        self.chunk_length
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UserAttributesSnapshot {
-    Inline(UserAttributes),
-    Ref(UserAttributesRef),
-}
+pub struct ArrayShape(Vec<DimensionShape>);
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub enum NodeType {
-    Group,
-    Array,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ZarrArrayMetadata {
-    pub shape: ArrayShape,
-    pub data_type: DataType,
-    pub chunk_shape: ChunkShape,
-    pub chunk_key_encoding: ChunkKeyEncoding,
-    pub fill_value: FillValue,
-    pub codecs: Vec<Codec>,
-    pub storage_transformers: Option<Vec<StorageTransformer>>,
-    pub dimension_names: Option<DimensionNames>,
-}
-
-impl ZarrArrayMetadata {
-    /// Returns an iterator over the maximum permitted chunk indices for the array.
-    ///
-    /// This function calculates the maximum chunk indices based on the shape of the array
-    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
-    /// this will always result in proper indices at the boundaries.
-    ///
-    /// # Returns
-    ///
-    /// A ChunkIndices type containing the max chunk index for each dimension.
-    fn max_chunk_indices_permitted(&self) -> ChunkIndices {
-        debug_assert_eq!(self.shape.len(), self.chunk_shape.0.len());
-
-        ChunkIndices(
-            self.shape
-                .iter()
-                .zip(self.chunk_shape.0.iter())
-                .map(|(s, cs)| if *s == 0 { 0 } else { ((s - 1) / cs.get()) as u32 })
-                .collect(),
-        )
+impl ArrayShape {
+    pub fn new<I>(it: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = (u64, u64)>,
+    {
+        let v = it.into_iter().map(|(al, cl)| {
+            let cl = NonZeroU64::new(cl)?;
+            Some(DimensionShape::new(al, cl))
+        });
+        v.collect::<Option<Vec<_>>>().map(Self)
     }
 
     /// Validates the provided chunk coordinates for the array.
@@ -87,27 +64,75 @@ impl ZarrArrayMetadata {
     ///
     /// Returns false if the chunk coordinates are invalid.
     pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> bool {
-        debug_assert_eq!(self.shape.len(), coord.0.len());
-
         coord
             .0
             .iter()
-            .zip(self.max_chunk_indices_permitted().0)
+            .zip(self.max_chunk_indices_permitted())
             .all(|(index, index_permitted)| *index <= index_permitted)
+    }
+
+    /// Returns an iterator over the maximum permitted chunk indices for the array.
+    ///
+    /// This function calculates the maximum chunk indices based on the shape of the array
+    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
+    /// this will always result in proper indices at the boundaries.
+    fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.iter().map(|dim_shape| {
+            if dim_shape.chunk_length == 0 || dim_shape.dim_length == 0 {
+                0
+            } else {
+                ((dim_shape.dim_length - 1) / dim_shape.chunk_length) as u32
+            }
+        })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DimensionName {
+    NotSpecified,
+    Name(String),
+}
+
+impl From<Option<&str>> for DimensionName {
+    fn from(value: Option<&str>) -> Self {
+        match value {
+            Some(s) => s.into(),
+            None => DimensionName::NotSpecified,
+        }
+    }
+}
+
+impl From<&str> for DimensionName {
+    fn from(value: &str) -> Self {
+        if value.is_empty() {
+            DimensionName::NotSpecified
+        } else {
+            DimensionName::Name(value.to_string())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeData {
-    Array(ZarrArrayMetadata, Vec<ManifestRef>),
+    Array {
+        shape: ArrayShape,
+        dimension_names: Option<Vec<DimensionName>>,
+        manifests: Vec<ManifestRef>,
+    },
     Group,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum NodeType {
+    Group,
+    Array,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeSnapshot {
     pub id: NodeId,
     pub path: Path,
-    pub user_attributes: Option<UserAttributesSnapshot>,
+    pub user_data: Bytes,
     pub node_data: NodeData,
 }
 
@@ -115,7 +140,7 @@ impl NodeSnapshot {
     pub fn node_type(&self) -> NodeType {
         match &self.node_data {
             NodeData::Group => NodeType::Group,
-            NodeData::Array(_, _) => NodeType::Array,
+            NodeData::Array { .. } => NodeType::Array,
         }
     }
 }
@@ -147,14 +172,23 @@ impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
     }
 }
 
-impl<'a> TryFrom<gen::ArrayNodeData<'a>> for NodeData {
-    type Error = rmp_serde::decode::Error;
+impl From<&gen::DimensionShape> for DimensionShape {
+    fn from(value: &gen::DimensionShape) -> Self {
+        DimensionShape {
+            dim_length: value.array_length(),
+            chunk_length: value.chunk_length(),
+        }
+    }
+}
 
-    fn try_from(value: gen::ArrayNodeData<'a>) -> Result<Self, Self::Error> {
-        // TODO: is it ok to call `bytes` here? Or do we need to collect an iterator
-        let meta = rmp_serde::from_slice(value.zarr_metadata().bytes())?;
-        let manifest_refs = value.manifests().iter().map(|m| m.into()).collect();
-        Ok(Self::Array(meta, manifest_refs))
+impl<'a> From<gen::ArrayNodeData<'a>> for NodeData {
+    fn from(value: gen::ArrayNodeData<'a>) -> Self {
+        let dimension_names = value
+            .dimension_names()
+            .map(|dn| dn.iter().map(|name| name.name().into()).collect());
+        let shape = ArrayShape(value.shape().iter().map(|dim| dim.into()).collect());
+        let manifests = value.manifests().iter().map(|m| m.into()).collect();
+        Self::Array { shape, dimension_names, manifests }
     }
 }
 
@@ -164,62 +198,25 @@ impl<'a> From<gen::GroupNodeData<'a>> for NodeData {
     }
 }
 
-impl<'a> TryFrom<gen::InlineUserAttributes<'a>> for UserAttributesSnapshot {
-    type Error = rmp_serde::decode::Error;
-
-    fn try_from(value: gen::InlineUserAttributes<'a>) -> Result<Self, Self::Error> {
-        let parsed = rmp_serde::from_slice(value.data().bytes())?;
-        Ok(Self::Inline(UserAttributes { parsed }))
-    }
-}
-
-impl<'a> From<gen::UserAttributesRef<'a>> for UserAttributesSnapshot {
-    fn from(value: gen::UserAttributesRef<'a>) -> Self {
-        Self::Ref(UserAttributesRef {
-            object_id: value.object_id().into(),
-            location: value.location(),
-        })
-    }
-}
-
 impl<'a> TryFrom<gen::NodeSnapshot<'a>> for NodeSnapshot {
     type Error = IcechunkFormatError;
 
     fn try_from(value: gen::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
         #[allow(clippy::expect_used, clippy::panic)]
         let node_data: NodeData = match value.node_data_type() {
-            gen::NodeData::Array => value
-                .node_data_as_array()
-                .expect("Bug in flatbuffers library")
-                .try_into()?,
+            gen::NodeData::Array => {
+                value.node_data_as_array().expect("Bug in flatbuffers library").into()
+            }
             gen::NodeData::Group => {
                 value.node_data_as_group().expect("Bug in flatbuffers library").into()
             }
             x => panic!("Invalid node data type in flatbuffers file {:?}", x),
         };
-        #[allow(clippy::expect_used, clippy::panic)]
-        let user_attributes: Option<UserAttributesSnapshot> =
-            match value.user_attributes_type() {
-                gen::UserAttributesSnapshot::Inline => Some(
-                    value
-                        .user_attributes_as_inline()
-                        .expect("Bug in flatbuffers library")
-                        .try_into()?,
-                ),
-                gen::UserAttributesSnapshot::Reference => Some(
-                    value
-                        .user_attributes_as_reference()
-                        .expect("Bug in flatbuffers library")
-                        .into(),
-                ),
-                gen::UserAttributesSnapshot::NONE => None,
-                x => panic!("Invalid user attributes type in flatbuffers file {:?}", x),
-            };
         let res = NodeSnapshot {
             id: value.id().into(),
             path: value.path().to_string().try_into()?,
-            user_attributes,
             node_data,
+            user_data: Bytes::copy_from_slice(value.user_data().bytes()),
         };
         Ok(res)
     }
@@ -232,12 +229,6 @@ impl From<&gen::ManifestFileInfo> for ManifestFileInfo {
             size_bytes: value.size_bytes(),
             num_chunk_refs: value.num_chunk_refs(),
         }
-    }
-}
-
-impl From<&gen::AttributeFileInfo> for AttributeFileInfo {
-    fn from(value: &gen::AttributeFileInfo) -> Self {
-        Self { id: value.id().into() }
     }
 }
 
@@ -258,11 +249,6 @@ impl ManifestFileInfo {
             size_bytes,
         }
     }
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct AttributeFileInfo {
-    pub id: AttributesId,
 }
 
 #[derive(Debug, PartialEq)]
@@ -327,7 +313,6 @@ impl Snapshot {
         message: String,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
-        mut attribute_files: Vec<AttributeFileInfo>,
         sorted_iter: I,
     ) -> IcechunkResult<Self>
     where
@@ -346,16 +331,6 @@ impl Snapshot {
             })
             .collect::<Vec<_>>();
         let manifest_files = builder.create_vector(&manifest_files);
-
-        attribute_files.sort_by(|a, b| a.id.cmp(&b.id));
-        let attribute_files = attribute_files
-            .iter()
-            .map(|att| {
-                let id = gen::ObjectId12::new(&att.id.0);
-                gen::AttributeFileInfo::new(&id)
-            })
-            .collect::<Vec<_>>();
-        let attribute_files = builder.create_vector(&attribute_files);
 
         let metadata_items: Vec<_> = properties
             .unwrap_or_default()
@@ -393,7 +368,6 @@ impl Snapshot {
                 message: Some(message),
                 metadata: Some(metadata_items),
                 manifest_files: Some(manifest_files),
-                attribute_files: Some(attribute_files),
             },
         );
 
@@ -412,7 +386,6 @@ impl Snapshot {
             None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
-            Default::default(),
             Default::default(),
             nodes,
         )
@@ -475,10 +448,6 @@ impl Snapshot {
         self.root().manifest_files().iter().map(|mf| mf.into())
     }
 
-    pub fn attribute_files(&self) -> impl Iterator<Item = AttributeFileInfo> + '_ {
-        self.root().attribute_files().iter().map(|f| f.into())
-    }
-
     /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
     pub fn adopt(&self, new_child: &Snapshot) -> IcechunkResult<Self> {
         // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
@@ -490,7 +459,6 @@ impl Snapshot {
             new_child.message().clone(),
             Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
-            new_child.attribute_files().collect(),
             new_child.iter(),
         )
     }
@@ -560,52 +528,18 @@ fn mk_node<'bldr>(
 ) -> IcechunkResult<flatbuffers::WIPOffset<gen::NodeSnapshot<'bldr>>> {
     let id = gen::ObjectId8::new(&node.id.0);
     let path = builder.create_string(node.path.to_string().as_str());
-    let (user_attributes_type, user_attributes) =
-        mk_user_attributes(builder, node.user_attributes.as_ref())?;
     let (node_data_type, node_data) = mk_node_data(builder, &node.node_data)?;
+    let user_data = Some(builder.create_vector(&node.user_data));
     Ok(gen::NodeSnapshot::create(
         builder,
         &gen::NodeSnapshotArgs {
             id: Some(&id),
             path: Some(path),
-            user_attributes_type,
-            user_attributes,
             node_data_type,
             node_data,
+            user_data,
         },
     ))
-}
-
-fn mk_user_attributes(
-    builder: &mut flatbuffers::FlatBufferBuilder<'_>,
-    atts: Option<&UserAttributesSnapshot>,
-) -> IcechunkResult<(
-    gen::UserAttributesSnapshot,
-    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
-)> {
-    match atts {
-        Some(UserAttributesSnapshot::Inline(user_attributes)) => {
-            let data = builder
-                .create_vector(rmp_serde::to_vec(&user_attributes.parsed)?.as_slice());
-            let inl = gen::InlineUserAttributes::create(
-                builder,
-                &gen::InlineUserAttributesArgs { data: Some(data) },
-            );
-            Ok((gen::UserAttributesSnapshot::Inline, Some(inl.as_union_value())))
-        }
-        Some(UserAttributesSnapshot::Ref(uatts)) => {
-            let id = gen::ObjectId12::new(&uatts.object_id.0);
-            let reference = gen::UserAttributesRef::create(
-                builder,
-                &gen::UserAttributesRefArgs {
-                    object_id: Some(&id),
-                    location: uatts.location,
-                },
-            );
-            Ok((gen::UserAttributesSnapshot::Reference, Some(reference.as_union_value())))
-        }
-        None => Ok((gen::UserAttributesSnapshot::NONE, None)),
-    }
 }
 
 fn mk_node_data(
@@ -616,9 +550,7 @@ fn mk_node_data(
     Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
 )> {
     match node_data {
-        NodeData::Array(zarr, manifests) => {
-            let zarr_metadata =
-                Some(builder.create_vector(rmp_serde::to_vec(zarr)?.as_slice()));
+        NodeData::Array { manifests, dimension_names, shape } => {
             let manifests = manifests
                 .iter()
                 .map(|manref| {
@@ -639,14 +571,40 @@ fn mk_node_data(
                 })
                 .collect::<Vec<_>>();
             let manifests = builder.create_vector(manifests.as_slice());
+            let dimensions = dimension_names.as_ref().map(|dn| {
+                let names = dn
+                    .iter()
+                    .map(|n| match n {
+                        DimensionName::Name(s) => {
+                            let n = builder.create_shared_string(s.as_str());
+                            gen::DimensionName::create(
+                                builder,
+                                &gen::DimensionNameArgs { name: Some(n) },
+                            )
+                        }
+                        DimensionName::NotSpecified => gen::DimensionName::create(
+                            builder,
+                            &gen::DimensionNameArgs { name: None },
+                        ),
+                    })
+                    .collect::<Vec<_>>();
+                builder.create_vector(names.as_slice())
+            });
+            let shape = shape
+                .0
+                .iter()
+                .map(|ds| gen::DimensionShape::new(ds.dim_length, ds.chunk_length))
+                .collect::<Vec<_>>();
+            let shape = builder.create_vector(shape.as_slice());
             Ok((
                 gen::NodeData::Array,
                 Some(
                     gen::ArrayNodeData::create(
                         builder,
                         &gen::ArrayNodeDataArgs {
-                            zarr_metadata,
                             manifests: Some(manifests),
+                            shape: Some(shape),
+                            dimension_names: dimensions,
                         },
                     )
                     .as_union_value(),
@@ -670,54 +628,23 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::{
-        collections::HashMap,
-        iter::{self},
-        num::NonZeroU64,
-    };
+    use std::iter::{self};
 
     #[test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![10u64, 20, 30],
-            data_type: DataType::Float32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(3).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float32(0f32),
+        let shape1 = ArrayShape::new(vec![(10u64, 3), (20, 2), (30, 1)]).unwrap();
+        let dim_names1 = Some(vec!["x".into(), "y".into(), "t".into()]);
 
-            codecs: vec![Codec {
-                name: "mycodec".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
-        let zarr_meta2 = ZarrArrayMetadata {
-            storage_transformers: None,
-            data_type: DataType::Int32,
-            dimension_names: Some(vec![None, None, Some("t".to_string())]),
-            fill_value: FillValue::Int32(0i32),
-            ..zarr_meta1.clone()
-        };
-        let zarr_meta3 =
-            ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
+        let shape2 = shape1.clone();
+        let dim_names2 = Some(vec![
+            DimensionName::NotSpecified,
+            DimensionName::NotSpecified,
+            "t".into(),
+        ]);
+
+        let shape3 = shape1.clone();
+        let dim_names3 = None;
+
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
             extents: ManifestExtents::new(&[0, 0, 0], &[100, 100, 100]),
@@ -727,58 +654,61 @@ mod tests {
             extents: ManifestExtents::new(&[0, 0, 0], &[100, 100, 100]),
         };
 
-        let oid = ObjectId::random();
         let node_ids = iter::repeat_with(NodeId::random).take(7).collect::<Vec<_>>();
         // nodes must be sorted by path
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/a".try_into().unwrap(),
                 id: node_ids[1].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape2.clone(),
+                    dimension_names: dim_names2.clone(),
+                    manifests: vec![],
+                },
             },
             NodeSnapshot {
                 path: "/b".try_into().unwrap(),
                 id: node_ids[2].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
-                    object_id: oid.clone(),
-                    location: 42,
-                })),
-                node_data: NodeData::Array(
-                    zarr_meta1.clone(),
-                    vec![man_ref1.clone(), man_ref2.clone()],
-                ),
+                user_data: Bytes::copy_from_slice(b"hello"),
+                node_data: NodeData::Array {
+                    shape: shape1.clone(),
+                    dimension_names: dim_names1.clone(),
+                    manifests: vec![man_ref1.clone(), man_ref2.clone()],
+                },
             },
             NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape3.clone(),
+                    dimension_names: dim_names3.clone(),
+                    manifests: vec![],
+                },
             },
             NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
-                )),
+                user_data: Bytes::copy_from_slice(b"bye"),
                 node_data: NodeData::Group,
             },
         ];
@@ -801,7 +731,6 @@ mod tests {
             String::default(),
             Default::default(),
             manifests,
-            vec![],
             nodes.into_iter().map(Ok::<NodeSnapshot, Infallible>),
         )
         .unwrap();
@@ -822,9 +751,7 @@ mod tests {
             NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
-                )),
+                user_data: Bytes::copy_from_slice(b"bye"),
                 node_data: NodeData::Group,
             },
         );
@@ -834,7 +761,7 @@ mod tests {
             NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
         );
@@ -844,11 +771,12 @@ mod tests {
             NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
-                    object_id: oid,
-                    location: 42,
-                })),
-                node_data: NodeData::Array(zarr_meta1.clone(), vec![man_ref1, man_ref2]),
+                user_data: Bytes::copy_from_slice(b"hello"),
+                node_data: NodeData::Array {
+                    shape: shape1.clone(),
+                    dimension_names: dim_names1.clone(),
+                    manifests: vec![man_ref1, man_ref2]
+                },
             },
         );
         let node = st.get_node(&"/array2".try_into().unwrap()).unwrap();
@@ -857,8 +785,12 @@ mod tests {
             NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape2.clone(),
+                    dimension_names: dim_names2.clone(),
+                    manifests: vec![]
+                },
             },
         );
         let node = st.get_node(&"/b/array3".try_into().unwrap()).unwrap();
@@ -867,8 +799,12 @@ mod tests {
             NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape3.clone(),
+                    dimension_names: dim_names3.clone(),
+                    manifests: vec![]
+                },
             },
         );
         Ok(())
@@ -876,45 +812,17 @@ mod tests {
 
     #[test]
     fn test_valid_chunk_coord() {
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![10000, 10001, 9999],
-            data_type: DataType::Float32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float32(0f32),
-
-            codecs: vec![Codec {
-                name: "mycodec".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }],
-            storage_transformers: None,
-            dimension_names: None,
-        };
-
-        let zarr_meta2 = ZarrArrayMetadata {
-            shape: vec![0, 0, 0],
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-            ]),
-            ..zarr_meta1.clone()
-        };
-
+        let shape1 =
+            ArrayShape::new(vec![(10_000, 1_000), (10_001, 1_000), (9_999, 1_000)])
+                .unwrap();
+        let shape2 = ArrayShape::new(vec![(0, 1_000), (0, 1_000), (0, 1_000)]).unwrap();
         let coord1 = ChunkIndices(vec![9, 10, 9]);
         let coord2 = ChunkIndices(vec![10, 11, 10]);
         let coord3 = ChunkIndices(vec![0, 0, 0]);
 
-        assert!(zarr_meta1.valid_chunk_coord(&coord1));
-        assert!(!zarr_meta1.valid_chunk_coord(&coord2));
+        assert!(shape1.valid_chunk_coord(&coord1));
+        assert!(!shape1.valid_chunk_coord(&coord2));
 
-        assert!(zarr_meta2.valid_chunk_coord(&coord3));
+        assert!(shape2.valid_chunk_coord(&coord3));
     }
 }

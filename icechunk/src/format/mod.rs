@@ -19,7 +19,7 @@ use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
 
-use crate::{error::ICError, metadata::DataType, private};
+use crate::{error::ICError, private};
 
 pub mod attributes;
 pub mod manifest;
@@ -241,11 +241,6 @@ pub type TableOffset = u32;
 pub enum IcechunkFormatErrorKind {
     #[error(transparent)]
     VirtualReferenceError(VirtualReferenceErrorKind),
-
-    #[error("error decoding fill_value from array. Found size: {found_size}, target size: {target_size}, type: {target_type}")]
-    FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
-    #[error("error decoding fill_value from json. Type: {data_type}, value: {value}")]
-    FillValueParse { data_type: DataType, value: serde_json::Value },
     #[error("node not found at `{path:?}`")]
     NodeNotFound { path: Path },
     #[error("chunk coordinates not found `{coords:?}`")]

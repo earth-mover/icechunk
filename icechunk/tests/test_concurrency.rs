@@ -1,10 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path},
-    metadata::{
-        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-    },
+    format::{snapshot::ArrayShape, ByteRange, ChunkIndices, Path},
     session::{get_chunk, Session},
     storage::new_in_memory_storage,
     Repository, Storage,
@@ -13,7 +10,6 @@ use pretty_assertions::assert_eq;
 use rand::{rng, Rng};
 use std::{
     collections::{HashMap, HashSet},
-    num::NonZeroU64,
     sync::Arc,
     time::Duration,
 };
@@ -39,26 +35,11 @@ async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::create(None, storage, HashMap::new()).await?;
     let mut ds = repo.writable_session("main").await?;
 
-    ds.add_group(Path::root()).await?;
-    let zarr_meta = ZarrArrayMetadata {
-        shape: vec![N as u64, N as u64],
-        data_type: DataType::Float64,
-        chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(1).expect("Cannot create NonZero"),
-            NonZeroU64::new(1).expect("Cannot create NonZero"),
-        ]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Float64(f64::NAN),
-        codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-        storage_transformers: Some(vec![StorageTransformer {
-            name: "mytransformer".to_string(),
-            configuration: None,
-        }]),
-        dimension_names: Some(vec![Some("x".to_string()), Some("y".to_string())]),
-    };
-
+    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+    let dimension_names = Some(vec!["x".into(), "y".into()]);
+    let user_data = Bytes::new();
     let new_array_path: Path = "/array".try_into().unwrap();
-    ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+    ds.add_array(new_array_path.clone(), shape, dimension_names, user_data).await?;
 
     let ds = Arc::new(RwLock::new(ds));
 
@@ -154,8 +135,7 @@ async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
             expected_indices.insert(ChunkIndices(vec![x, y]));
         }
     }
-    let expected_nodes: HashSet<String> =
-        HashSet::from_iter(vec!["/".to_string(), "/array".to_string()]);
+    let expected_nodes: HashSet<String> = HashSet::from_iter(vec!["/array".to_string()]);
 
     barrier.wait().await;
     loop {

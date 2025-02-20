@@ -66,8 +66,8 @@ impl ConflictSolver for ConflictDetector {
         let path_finder = PathFinder::new(current_repo.list_nodes().await?);
 
         let updated_arrays_already_updated = current_changes
-            .zarr_updated_arrays()
-            .filter(|node_id| previous_change.zarr_metadata_updated(node_id))
+            .updated_arrays()
+            .filter(|node_id| previous_change.array_updated(node_id))
             .map(Ok);
 
         let updated_arrays_already_updated = stream::iter(updated_arrays_already_updated)
@@ -76,8 +76,19 @@ impl ConflictSolver for ConflictDetector {
                 Ok(Conflict::ZarrMetadataDoubleUpdate(path))
             });
 
+        let updated_groups_already_updated = current_changes
+            .updated_groups()
+            .filter(|node_id| previous_change.group_updated(node_id))
+            .map(Ok);
+
+        let updated_groups_already_updated = stream::iter(updated_groups_already_updated)
+            .and_then(|node_id| async {
+                let path = path_finder.find(node_id)?;
+                Ok(Conflict::ZarrMetadataDoubleUpdate(path))
+            });
+
         let updated_arrays_were_deleted = current_changes
-            .zarr_updated_arrays()
+            .updated_arrays()
             .filter(|node_id| previous_change.array_deleted(node_id))
             .map(Ok);
 
@@ -87,32 +98,15 @@ impl ConflictSolver for ConflictDetector {
                 Ok(Conflict::ZarrMetadataUpdateOfDeletedArray(path))
             });
 
-        let updated_attributes_already_updated = current_changes
-            .user_attributes_updated_nodes()
-            .filter(|node_id| previous_change.user_attributes_updated(node_id))
+        let updated_groups_were_deleted = current_changes
+            .updated_groups()
+            .filter(|node_id| previous_change.group_deleted(node_id))
             .map(Ok);
 
-        let updated_attributes_already_updated =
-            stream::iter(updated_attributes_already_updated).and_then(|node_id| async {
+        let updated_groups_were_deleted = stream::iter(updated_groups_were_deleted)
+            .and_then(|node_id| async {
                 let path = path_finder.find(node_id)?;
-                Ok(Conflict::UserAttributesDoubleUpdate {
-                    path,
-                    node_id: node_id.clone(),
-                })
-            });
-
-        let updated_attributes_on_deleted_node = current_changes
-            .user_attributes_updated_nodes()
-            .filter(|node_id| {
-                previous_change.array_deleted(node_id)
-                    || previous_change.group_deleted(node_id)
-            })
-            .map(Ok);
-
-        let updated_attributes_on_deleted_node =
-            stream::iter(updated_attributes_on_deleted_node).and_then(|node_id| async {
-                let path = path_finder.find(node_id)?;
-                Ok(Conflict::UserAttributesUpdateOfDeletedNode(path))
+                Ok(Conflict::ZarrMetadataUpdateOfDeletedGroup(path))
             });
 
         let chunks_updated_in_deleted_array = current_changes
@@ -131,7 +125,7 @@ impl ConflictSolver for ConflictDetector {
 
         let chunks_updated_in_updated_array = current_changes
             .arrays_with_chunk_changes()
-            .filter(|node_id| previous_change.zarr_metadata_updated(node_id))
+            .filter(|node_id| previous_change.array_updated(node_id))
             .map(Ok);
 
         let chunks_updated_in_updated_array =
@@ -187,8 +181,7 @@ impl ConflictSolver for ConflictDetector {
             };
 
             if let Some(node_id) = id {
-                if previous_change.zarr_metadata_updated(&node_id)
-                    || previous_change.user_attributes_updated(&node_id)
+                if previous_change.array_updated(&node_id)
                     || previous_change.chunks_updated(&node_id)
                 {
                     Ok(Some(Conflict::DeleteOfUpdatedArray {
@@ -216,7 +209,7 @@ impl ConflictSolver for ConflictDetector {
             };
 
             if let Some(node_id) = id {
-                if previous_change.user_attributes_updated(&node_id) {
+                if previous_change.group_updated(&node_id) {
                     Ok(Some(Conflict::DeleteOfUpdatedGroup {
                         path: path.clone(),
                         node_id: node_id.clone(),
@@ -232,9 +225,9 @@ impl ConflictSolver for ConflictDetector {
         let all_conflicts: Vec<_> = new_nodes_explicit_conflicts
             .chain(new_nodes_implicit_conflicts)
             .chain(updated_arrays_already_updated)
+            .chain(updated_groups_already_updated)
             .chain(updated_arrays_were_deleted)
-            .chain(updated_attributes_already_updated)
-            .chain(updated_attributes_on_deleted_node)
+            .chain(updated_groups_were_deleted)
             .chain(chunks_updated_in_deleted_array)
             .chain(chunks_updated_in_updated_array)
             .chain(chunks_double_updated)

@@ -14,13 +14,12 @@ pub enum PyConflictType {
     NewNodeInInvalidGroup = 2,
     ZarrMetadataDoubleUpdate = 3,
     ZarrMetadataUpdateOfDeletedArray = 4,
-    UserAttributesDoubleUpdate = 5,
-    UserAttributesUpdateOfDeletedNode = 6,
-    ChunkDoubleUpdate = 7,
-    ChunksUpdatedInDeletedArray = 8,
-    ChunksUpdatedInUpdatedArray = 9,
-    DeleteOfUpdatedArray = 10,
-    DeleteOfUpdatedGroup = 11,
+    ZarrMetadataUpdateOfDeletedGroup = 5,
+    ChunkDoubleUpdate = 6,
+    ChunksUpdatedInDeletedArray = 7,
+    ChunksUpdatedInUpdatedArray = 8,
+    DeleteOfUpdatedArray = 9,
+    DeleteOfUpdatedGroup = 10,
 }
 
 impl Display for PyConflictType {
@@ -31,12 +30,11 @@ impl Display for PyConflictType {
             }
             PyConflictType::NewNodeInInvalidGroup => "New node in invalid group",
             PyConflictType::ZarrMetadataDoubleUpdate => "Zarr metadata double update",
+            PyConflictType::ZarrMetadataUpdateOfDeletedGroup => {
+                "Zarr metadata update of deleted group"
+            }
             PyConflictType::ZarrMetadataUpdateOfDeletedArray => {
                 "Zarr metadata update of deleted array"
-            }
-            PyConflictType::UserAttributesDoubleUpdate => "User attributes double update",
-            PyConflictType::UserAttributesUpdateOfDeletedNode => {
-                "User attributes update of deleted node"
             }
             PyConflictType::ChunkDoubleUpdate => "Chunk double update",
             PyConflictType::ChunksUpdatedInDeletedArray => {
@@ -108,13 +106,8 @@ impl From<&Conflict> for PyConflict {
                 path: path.to_string(),
                 conflicted_chunks: None,
             },
-            Conflict::UserAttributesDoubleUpdate { path, node_id: _ } => PyConflict {
-                conflict_type: PyConflictType::UserAttributesDoubleUpdate,
-                path: path.to_string(),
-                conflicted_chunks: None,
-            },
-            Conflict::UserAttributesUpdateOfDeletedNode(path) => PyConflict {
-                conflict_type: PyConflictType::UserAttributesUpdateOfDeletedNode,
+            Conflict::ZarrMetadataUpdateOfDeletedGroup(path) => PyConflict {
+                conflict_type: PyConflictType::ZarrMetadataUpdateOfDeletedGroup,
                 path: path.to_string(),
                 conflicted_chunks: None,
             },
@@ -188,9 +181,8 @@ pub struct PyBasicConflictSolver;
 #[pymethods]
 impl PyBasicConflictSolver {
     #[new]
-    #[pyo3(signature = (*, on_user_attributes_conflict=PyVersionSelection::UseOurs, on_chunk_conflict=PyVersionSelection::UseOurs, fail_on_delete_of_updated_array = false, fail_on_delete_of_updated_group = false))]
+    #[pyo3(signature = (*, on_chunk_conflict=PyVersionSelection::UseOurs, fail_on_delete_of_updated_array = false, fail_on_delete_of_updated_group = false))]
     fn new(
-        on_user_attributes_conflict: PyVersionSelection,
         on_chunk_conflict: PyVersionSelection,
         fail_on_delete_of_updated_array: bool,
         fail_on_delete_of_updated_group: bool,
@@ -198,7 +190,6 @@ impl PyBasicConflictSolver {
         (
             Self,
             PyConflictSolver(Arc::new(BasicConflictSolver {
-                on_user_attributes_conflict: on_user_attributes_conflict.into(),
                 on_chunk_conflict: on_chunk_conflict.into(),
                 fail_on_delete_of_updated_array,
                 fail_on_delete_of_updated_group,
