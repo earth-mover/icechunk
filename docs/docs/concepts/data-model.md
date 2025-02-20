@@ -47,9 +47,8 @@ In standard Zarr usage, these keys are filenames in a filesystem or object keys 
 
 When writing data, a Zarr implementation will create these keys and populate them with data.
 
-:::tip
-An important point is that **the state of a Zarr dataset is spread over many different keys**, both metadata and chunks.
-:::
+!!! tip
+    An important point is that **the state of a Zarr dataset is spread over many different keys**, both metadata and chunks.
 
 ## Icechunk Data Model
 
@@ -80,7 +79,7 @@ Tags are appropriate for publishing specific releases of a repository or for any
 
 Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
 Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
-You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files. 
+You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files.
 Chunk references are stored in "chunk manifest" files.
 
 ### How Does It Work?

@@ -192,9 +192,8 @@ graph TD;
     I-->|retry| D
 ```
 
-:::caution
-The "optimistic concurrency" approach is relatively expensive and assumes that conflicts
-are unlikely. It makes the assumption that users will design their workloads to avoid
-deliberately creating many simultaneous commits at the same time.
-This is elaborated further in [Best Practices](best-practices).
-:::
+!!! caution
+    The "optimistic concurrency" approach is relatively expensive and assumes that conflicts
+    are unlikely. It makes the assumption that users will design their workloads to avoid
+    deliberately creating many simultaneous commits at the same time.
+    This is elaborated further in [Best Practices](best-practices).

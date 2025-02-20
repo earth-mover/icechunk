@@ -102,9 +102,8 @@ They overlap writes on the chunk spanning the range `10:20`.
 In this case, only one commit will succeed, and the other will raise an error.
 _This is good!_ It means Icechunk helped us avoid a potentially inconsistent update to the array
 that would have produced an incorrect end state.
-:::tip
-This sort of consistency problem is not possible to detect when using Zarr directly on object storage.
-:::
+!!! tip
+    This sort of consistency problem is not possible to detect when using Zarr directly on object storage.
 
 It is now up to the user to decide what to do next.
 In the example below, the user's code implements a manual retry by checking out the repo in its
