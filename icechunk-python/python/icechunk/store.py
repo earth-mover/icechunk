@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from icechunk._icechunk_python import PyStore
+from icechunk._icechunk_python import PyStore, VirtualChunkSpec
 from zarr.abc.store import (
     ByteRequest,
     OffsetByteRequest,
@@ -246,6 +246,34 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.set_virtual_ref(
             key, location, offset, length, checksum, validate_container
         )
+
+    def set_virtual_refs(
+        self,
+        array_path: str,
+        chunks: list[VirtualChunkSpec],
+        *,
+        validate_containers: bool = False,
+    ) -> list[tuple[int, ...]] | None:
+        """Store multiple virtual references for the same array.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array"
+        chunks : list[VirtualChunkSpec],
+            The list of virtula chunks to add
+        validate_containers: bool
+            If set to true, ignore virtual references for locations that don't match any existing virtual chunk container
+
+
+        Returns
+        -------
+        list[tuple[int, ...]] | None
+
+            If all virtual references where successfully updated, it returns None.
+            If there were validation errors, it returns the chunk indices of all failed references.
+        """
+        return self._store.set_virtual_refs(array_path, chunks, validate_containers)
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store

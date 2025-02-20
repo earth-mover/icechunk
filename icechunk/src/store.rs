@@ -133,6 +133,12 @@ impl From<SessionError> for StoreError {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SetVirtualRefsResult {
+    Done,
+    FailedRefs(Vec<ChunkIndices>),
+}
+
 #[derive(Clone)]
 pub struct Store {
     session: Arc<RwLock<Session>>,
@@ -382,6 +388,44 @@ impl Store {
                 format!("use .set to modify metadata for key {}", key),
             )
             .into()),
+        }
+    }
+
+    #[instrument(skip(self, references))]
+    pub async fn set_virtual_refs<I>(
+        &self,
+        array_path: &Path,
+        validate_container: bool,
+        references: I,
+    ) -> StoreResult<SetVirtualRefsResult>
+    where
+        I: IntoIterator<Item = (ChunkIndices, VirtualChunkRef)> + std::fmt::Debug,
+    {
+        if self.read_only().await {
+            return Err(StoreErrorKind::ReadOnly.into());
+        }
+
+        let mut session = self.session.write().await;
+        let mut failed = Vec::new();
+        for (index, reference) in references.into_iter() {
+            if validate_container
+                && session.matching_container(&reference.location).is_none()
+            {
+                failed.push(index);
+            } else {
+                session
+                    .set_chunk_ref(
+                        array_path.clone(),
+                        index,
+                        Some(ChunkPayload::Virtual(reference)),
+                    )
+                    .await?;
+            }
+        }
+        if failed.is_empty() {
+            Ok(SetVirtualRefsResult::Done)
+        } else {
+            Ok(SetVirtualRefsResult::FailedRefs(failed))
         }
     }
 

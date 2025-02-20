@@ -91,6 +91,49 @@ class VirtualChunkContainer:
             The storage backend to use for the virtual chunk container.
         """
 
+class VirtualChunkSpec:
+    """The specification for a virtual chunk reference."""
+    @property
+    def index(self) -> list[int]:
+        """The chunk index, in chunk coordinates space"""
+        ...
+    @property
+    def location(self) -> str:
+        """The URL to the virtual chunk data, something like 's3://bucket/foo.nc'"""
+        ...
+    @property
+    def offset(self) -> int:
+        """The chunk offset within the pointed object, in bytes"""
+        ...
+    @property
+    def length(self) -> int:
+        """The length of the chunk in bytes"""
+        ...
+    @property
+    def etag_checksum(self) -> str | None:
+        """Optional object store e-tag for the containing object.
+
+        Icechunk will refuse to serve data from this chunk if the etag has changed.
+        """
+        ...
+    @property
+    def last_updated_at_checksum(self) -> datetime.datetime | None:
+        """Optional timestamp for the containing object.
+
+        Icechunk will refuse to serve data from this chunk if it has been modified in object store after this time.
+        """
+        ...
+
+    def __init__(
+        self,
+        index: list[int],
+        location: str,
+        offset: int,
+        length: int,
+        etag_checksum: str | None = None,
+        last_updated_at_checksum: datetime.datetime | None = None,
+    ) -> None: ...
+
 class CompressionAlgorithm(Enum):
     """Enum for selecting the compression algorithm used by Icechunk to write its metadata files
 
@@ -979,6 +1022,12 @@ class PyStore:
         checksum: str | datetime.datetime | None = None,
         validate_container: bool = False,
     ) -> None: ...
+    def set_virtual_refs(
+        self,
+        array_path: str,
+        chunks: list[VirtualChunkSpec],
+        validate_containers: bool,
+    ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
     @property
