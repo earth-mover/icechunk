@@ -205,9 +205,11 @@ impl S3Storage {
         let mut b =
             self.get_client().await.put_object().bucket(self.bucket.clone()).key(key);
 
-        if let Some(ct) = content_type {
-            b = b.content_type(ct)
-        };
+        if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                b = b.content_type(ct)
+            };
+        }
 
         if settings.unsafe_use_metadata() {
             for (k, v) in metadata {
@@ -312,8 +314,11 @@ impl Storage for S3Storage {
             .put_object()
             .bucket(self.bucket.clone())
             .key(key)
-            .content_type("application/yaml")
             .body(config.into());
+
+        if settings.unsafe_use_metadata() {
+            req = req.content_type("application/yaml")
+        }
 
         match (
             previous_version.etag(),
