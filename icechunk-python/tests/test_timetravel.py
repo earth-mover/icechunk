@@ -258,3 +258,38 @@ async def test_tag_delete() -> None:
 
     with pytest.raises(ValueError):
         repo.create_tag("tag", snap)
+
+
+async def test_session_with_as_of() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    times = []
+    group = zarr.group(store=store, overwrite=True)
+    sid = session.commit("root")
+    times.append(next(repo.ancestry(snapshot=sid)).written_at)
+
+    for i in range(5):
+        session = repo.writable_session("main")
+        store = session.store
+        group = zarr.open_group(store=store)
+        group.create_group(f"child {i}")
+        sid = session.commit(f"child {i}")
+        times.append(next(repo.ancestry(snapshot=sid)).written_at)
+
+    ancestry = list(p for p in repo.ancestry(branch="main"))
+    assert len(ancestry) == 7  # initial + root + 5 children
+
+    store = repo.readonly_session("main", as_of=times[-1]).store
+    group = zarr.open_group(store=store, mode="r")
+
+    for i, time in enumerate(times):
+        store = repo.readonly_session("main", as_of=time).store
+        group = zarr.open_group(store=store, mode="r")
+        expected_children = {f"child {j}" for j in range(i)}
+        actual_children = {g[0] for g in group.members()}
+        assert expected_children == actual_children

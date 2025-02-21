@@ -983,6 +983,7 @@ class PyRepository:
         *,
         tag: str | None = None,
         snapshot: str | None = None,
+        as_of: datetime.datetime | None = None,
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
     def expire_snapshots(

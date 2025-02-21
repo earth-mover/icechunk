@@ -433,6 +433,7 @@ class Repository:
         *,
         tag: str | None = None,
         snapshot: str | None = None,
+        as_of: datetime.datetime | None = None,
     ) -> Session:
         """
         Create a read-only session.
@@ -449,6 +450,9 @@ class Repository:
             If provided, the tag to create the session on.
         snapshot : str, optional
             If provided, the snapshot ID to create the session on.
+        as_of: datetime.datetime, optional
+            When combined with the branch argument, it will open the session at the last
+            snapshot that is at or before this datetime
 
         Returns
         -------
@@ -460,7 +464,9 @@ class Repository:
         Only one of the arguments can be specified.
         """
         return Session(
-            self._repository.readonly_session(branch=branch, tag=tag, snapshot=snapshot)
+            self._repository.readonly_session(
+                branch=branch, tag=tag, snapshot=snapshot, as_of=as_of
+            )
         )
 
     def writable_session(self, branch: str) -> Session:
