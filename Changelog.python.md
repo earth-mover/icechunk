@@ -1,5 +1,28 @@
 # Changelog
 
+## Python Icechunk Library 0.2.1
+
+### Features
+
+- Users can now override consistency defaults. With this Icechunk is usable in a larger set of object stores,
+including those without support for conditional updates. In this setting, Icechunk loses some of its consistency guarantees.
+This configuration variables are for advanced users only, and should only be changed if necessary for compatibility.
+
+  ```python
+  class StorageSettings:
+    ...
+
+    @property
+    def unsafe_use_conditional_update(self) -> bool | None:
+        ...
+    @property
+    def unsafe_use_conditional_create(self) -> bool | None:
+        ...
+    @property
+    def unsafe_use_metadata(self) -> bool | None:
+        ...
+  ```
+
 ## Python Icechunk Library 0.2.0
 
 This release is focused on stabilizing Icechunk's on-disk serialization format. It's a non-backwards
