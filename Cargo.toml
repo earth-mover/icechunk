@@ -9,6 +9,7 @@ unwrap_used = "warn"
 panic = "warn"
 todo = "warn"
 unimplemented = "warn"
+dbg_macro = "warn"
 
 [workspace.metadata.release]
 allow-branch = ["main"]

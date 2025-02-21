@@ -585,7 +585,13 @@ class StorageConcurrencySettings:
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
-    def __init__(self, concurrency: StorageConcurrencySettings | None = None) -> None:
+    def __init__(
+        self,
+        concurrency: StorageConcurrencySettings | None = None,
+        unsafe_use_conditional_create: bool | None = None,
+        unsafe_use_conditional_update: bool | None = None,
+        unsafe_use_metadata: bool | None = None,
+    ) -> None:
         """
         Create a new `StorageSettings` object
 
@@ -593,18 +599,45 @@ class StorageSettings:
         ----------
         concurrency: StorageConcurrencySettings | None
             The configuration for how Icechunk uses its Storage instance.
+
+        unsafe_use_conditional_update: bool | None
+            If set to False, Icechunk loses some of its consistency guarantees.
+            This is only useful in object stores that don't support the feature.
+            Use it at your own risk.
+
+        unsafe_use_conditional_create: bool | None
+            If set to False, Icechunk loses some of its consistency guarantees.
+            This is only useful in object stores that don't support the feature.
+            Use at your own risk.
+
+        unsafe_use_metadata: bool | None
+            Don't write metadata fields in Icechunk files.
+            This is only useful in object stores that don't support the feature.
+            Use at your own risk.
         """
         ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None:
         """
-        The configuration for how Icechunk uses its Storage instance.
+        The configuration for how much concurrency Icechunk store uses
 
         Returns
         -------
         StorageConcurrencySettings | None
             The configuration for how Icechunk uses its Storage instance.
         """
+
+    @property
+    def unsafe_use_conditional_update(self) -> bool | None:
+        """True if Icechunk will use conditional PUT operations for updates in the object store"""
+        ...
+    @property
+    def unsafe_use_conditional_create(self) -> bool | None:
+        """True if Icechunk will use conditional PUT operations for creation in the object store"""
+        ...
+    @property
+    def unsafe_use_metadata(self) -> bool | None:
+        """True if Icechunk will write object metadata in the object store"""
         ...
 
 class RepositoryConfig:

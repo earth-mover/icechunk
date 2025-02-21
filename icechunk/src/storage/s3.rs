@@ -196,6 +196,7 @@ impl S3Storage {
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
+        settings: &Settings,
         key: &str,
         content_type: Option<impl Into<String>>,
         metadata: I,
@@ -208,10 +209,11 @@ impl S3Storage {
             b = b.content_type(ct)
         };
 
-        for (k, v) in metadata {
-            b = b.metadata(k, v);
+        if settings.unsafe_use_metadata() {
+            for (k, v) in metadata {
+                b = b.metadata(k, v);
+            }
         }
-
         b.body(bytes.into()).send().await?;
         Ok(())
     }
@@ -296,10 +298,10 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, _settings, config))]
+    #[instrument(skip(self, settings, config))]
     async fn update_config(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         config: Bytes,
         previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult> {
@@ -313,10 +315,14 @@ impl Storage for S3Storage {
             .content_type("application/yaml")
             .body(config.into());
 
-        if let Some(etag) = previous_version.etag() {
-            req = req.if_match(etag)
-        } else {
-            req = req.if_none_match("*")
+        match (
+            previous_version.etag(),
+            settings.unsafe_use_conditional_create(),
+            settings.unsafe_use_conditional_update(),
+        ) {
+            (None, true, _) => req = req.if_none_match("*"),
+            (Some(etag), _, true) => req = req.if_match(etag),
+            (_, _, _) => {}
         }
 
         let res = req.send().await;
@@ -411,53 +417,67 @@ impl Storage for S3Storage {
             .await
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_snapshot(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_snapshot_path(&id)?;
-        self.put_object(key.as_str(), None::<String>, metadata, bytes).await
+        self.put_object(settings, key.as_str(), None::<String>, metadata, bytes).await
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_manifest(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: ManifestId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_manifest_path(&id)?;
-        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
+        self.put_object(
+            settings,
+            key.as_str(),
+            None::<String>,
+            metadata.into_iter(),
+            bytes,
+        )
+        .await
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_transaction_path(&id)?;
-        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
+        self.put_object(
+            settings,
+            key.as_str(),
+            None::<String>,
+            metadata.into_iter(),
+            bytes,
+        )
+        .await
     }
 
-    #[instrument(skip(self, _settings, bytes))]
+    #[instrument(skip(self, settings, bytes))]
     async fn write_chunk(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: ChunkId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let key = self.get_chunk_path(&id)?;
         //FIXME: use multipart upload
         let metadata: [(String, String); 0] = [];
-        self.put_object(key.as_str(), None::<String>, metadata, bytes).await
+        self.put_object(settings, key.as_str(), None::<String>, metadata, bytes).await
     }
 
     #[instrument(skip(self, _settings))]
@@ -523,10 +543,10 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self, _settings, bytes))]
+    #[instrument(skip(self, settings, bytes))]
     async fn write_ref(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         ref_key: &str,
         bytes: Bytes,
         previous_version: &VersionInfo,
@@ -539,10 +559,18 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .key(key.clone());
 
-        if let Some(etag) = previous_version.etag() {
-            builder = builder.if_match(etag);
-        } else {
-            builder = builder.if_none_match("*");
+        match (
+            previous_version.etag(),
+            settings.unsafe_use_conditional_create(),
+            settings.unsafe_use_conditional_update(),
+        ) {
+            (None, true, _) => {
+                builder = builder.if_none_match("*");
+            }
+            (Some(etag), _, true) => {
+                builder = builder.if_match(etag);
+            }
+            (_, _, _) => {}
         }
 
         let res = builder.body(bytes.into()).send().await;

@@ -158,16 +158,6 @@ impl ObjectStorage {
         self.backend.artificially_sort_refs_in_mem()
     }
 
-    /// We need this because object_store's local file implementation doesn't support metadata.
-    pub fn supports_metadata(&self) -> bool {
-        self.backend.supports_metadata()
-    }
-
-    /// We need this because object_store's local file implementation doesn't support it
-    pub fn supports_conditional_put_updates(&self) -> bool {
-        self.backend.supports_conditional_put_updates()
-    }
-
     /// Return all keys in the store
     ///
     /// Intended for testing and debugging purposes only.
@@ -251,8 +241,12 @@ impl ObjectStorage {
             .compat())
     }
 
-    fn metadata_to_attributes(&self, metadata: Vec<(String, String)>) -> Attributes {
-        if self.supports_metadata() {
+    fn metadata_to_attributes(
+        &self,
+        settings: &Settings,
+        metadata: Vec<(String, String)>,
+    ) -> Attributes {
+        if settings.unsafe_use_metadata() {
             Attributes::from_iter(metadata.into_iter().map(|(key, val)| {
                 (
                     Attribute::Metadata(std::borrow::Cow::Owned(key)),
@@ -270,18 +264,24 @@ impl ObjectStorage {
         Some(parent.as_ref().to_string())
     }
 
-    fn get_put_mode(&self, previous_version: &VersionInfo) -> PutMode {
-        let degrade_to_overwrite =
-            !previous_version.is_create() && !self.supports_conditional_put_updates();
-        if degrade_to_overwrite {
-            PutMode::Overwrite
-        } else if previous_version.is_create() {
-            PutMode::Create
-        } else {
-            PutMode::Update(UpdateVersion {
+    fn get_put_mode(
+        &self,
+        settings: &Settings,
+        previous_version: &VersionInfo,
+    ) -> PutMode {
+        match (
+            previous_version.is_create(),
+            settings.unsafe_use_conditional_create(),
+            settings.unsafe_use_conditional_update(),
+        ) {
+            (true, true, _) => PutMode::Create,
+            (true, false, _) => PutMode::Overwrite,
+
+            (false, _, true) => PutMode::Update(UpdateVersion {
                 e_tag: previous_version.etag().cloned(),
                 version: previous_version.generation().cloned(),
-            })
+            }),
+            (false, _, false) => PutMode::Overwrite,
         }
     }
 }
@@ -317,15 +317,15 @@ impl Storage for ObjectStorage {
             Err(err) => Err(err.into()),
         }
     }
-    #[instrument(skip(self, _settings, config))]
+    #[instrument(skip(self, settings, config))]
     async fn update_config(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         config: Bytes,
         previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult> {
         let path = self.get_config_path();
-        let attributes = if self.supports_metadata() {
+        let attributes = if settings.unsafe_use_metadata() {
             Attributes::from_iter(vec![(
                 Attribute::ContentType,
                 AttributeValue::from("application/yaml"),
@@ -334,7 +334,7 @@ impl Storage for ObjectStorage {
             Attributes::new()
         };
 
-        let mode = self.get_put_mode(previous_version);
+        let mode = self.get_put_mode(settings, previous_version);
 
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         let res = self.get_client().await.put_opts(&path, config.into(), options).await;
@@ -394,48 +394,48 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_snapshot(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_snapshot_path(&id);
-        let attributes = self.metadata_to_attributes(metadata);
+        let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client().await.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_manifest(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: ManifestId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_manifest_path(&id);
-        let attributes = self.metadata_to_attributes(metadata);
+        let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client().await.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_transaction_path(&id);
-        let attributes = self.metadata_to_attributes(metadata);
+        let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client().await.put_opts(&path, bytes.into(), options).await?;
@@ -506,16 +506,16 @@ impl Storage for ObjectStorage {
             .await?)
     }
 
-    #[instrument(skip(self, _settings, bytes))]
+    #[instrument(skip(self, settings, bytes))]
     async fn write_ref(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         ref_key: &str,
         bytes: Bytes,
         previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key);
-        let mode = self.get_put_mode(previous_version);
+        let mode = self.get_put_mode(settings, previous_version);
         let opts = PutOptions { mode, ..PutOptions::default() };
 
         match self
@@ -634,19 +634,7 @@ pub trait ObjectStoreBackend: Debug + Sync + Send {
         false
     }
 
-    /// We need this because object_store's local file implementation doesn't support metadata.
-    fn supports_metadata(&self) -> bool {
-        true
-    }
-
-    /// We need this because object_store's local file implementation doesn't support it
-    fn supports_conditional_put_updates(&self) -> bool {
-        true
-    }
-
-    fn default_settings(&self) -> Settings {
-        Settings::default()
-    }
+    fn default_settings(&self) -> Settings;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -674,6 +662,7 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
                     NonZeroU64::new(1).unwrap_or(NonZeroU64::MIN),
                 ),
             }),
+            ..Default::default()
         }
     }
 }
@@ -706,14 +695,6 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         true
     }
 
-    fn supports_metadata(&self) -> bool {
-        false
-    }
-
-    fn supports_conditional_put_updates(&self) -> bool {
-        false
-    }
-
     fn default_settings(&self) -> Settings {
         Settings {
             concurrency: Some(ConcurrencySettings {
@@ -724,6 +705,9 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
                     NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
                 ),
             }),
+            unsafe_use_conditional_update: Some(false),
+            unsafe_use_metadata: Some(false),
+            ..Default::default()
         }
     }
 }
@@ -795,6 +779,10 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
     }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -843,6 +831,10 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
 
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
+    }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
     }
 }
 
@@ -909,6 +901,10 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
 
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
+    }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
     }
 }
 
