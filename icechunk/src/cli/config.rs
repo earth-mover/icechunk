@@ -2,30 +2,9 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{RepositoryConfig, S3Options, S3StaticCredentials};
+use crate::config::{RepositoryConfig, S3Credentials, S3Options};
 
-// Redefine to remove the Refreshable field
-#[derive(Clone, Debug, Deserialize, Serialize, Default, PartialEq, Eq)]
-pub enum S3Credentials {
-    #[default]
-    FromEnv,
-    Anonymous,
-    Static(S3StaticCredentials),
-}
-
-impl From<S3Credentials> for crate::config::S3Credentials {
-    fn from(s3_credentials: S3Credentials) -> Self {
-        match s3_credentials {
-            S3Credentials::Anonymous => crate::config::S3Credentials::Anonymous,
-            S3Credentials::FromEnv => crate::config::S3Credentials::FromEnv,
-            S3Credentials::Static(credentials) => {
-                crate::config::S3Credentials::Static(credentials)
-            }
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RepoLocation {
     pub bucket: String,
     pub prefix: String,
@@ -33,7 +12,7 @@ pub struct RepoLocation {
 
 // TODO (Daniel): Add serde macros
 // TODO (Daniel): Add the rest of the object store types
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum RepositoryDefinition {
     LocalFileSystem {
         path: PathBuf,
@@ -56,7 +35,7 @@ impl RepositoryDefinition {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
+#[derive(Debug, Hash, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RepositoryAlias(pub String);
 
 impl FromStr for RepositoryAlias {
@@ -67,13 +46,14 @@ impl FromStr for RepositoryAlias {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Repositories {
     pub repos: HashMap<RepositoryAlias, RepositoryDefinition>,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env::temp_dir;
     use std::fs::File;
 
     use serde_yaml_ng::{from_reader, to_writer};
@@ -104,22 +84,22 @@ mod tests {
             config: repo_config,
         };
 
-        let mut repos = Repositories { repos: HashMap::new() };
+        let mut _repos = Repositories { repos: HashMap::new() };
 
         let alias = RepositoryAlias("my-repo".to_string());
-        repos.repos.insert(alias.clone(), repo_def);
+        _repos.repos.insert(alias.clone(), repo_def);
 
         // Assert: serde round-trip
-        let serialized = serde_yaml_ng::to_string(&repos).unwrap();
+        let serialized = serde_yaml_ng::to_string(&_repos).unwrap();
         let deserialized: Repositories = serde_yaml_ng::from_str(&serialized).unwrap();
-        assert_eq!(deserialized, repos);
+        assert!(matches!(deserialized, _repos));
 
         // Assert: file round-trip
-        let path = "test.yaml";
-        let file = File::create(path).unwrap();
-        to_writer(file, &repos).unwrap();
+        let path = temp_dir().join("test_serialization.yaml");
+        let file = File::create(&path).unwrap();
+        to_writer(file, &_repos).unwrap();
         let file = File::open(path).unwrap();
         let deserialized: Repositories = from_reader(file).unwrap();
-        assert_eq!(deserialized, repos);
+        assert!(matches!(deserialized, _repos));
     }
 }

@@ -1,4 +1,3 @@
-use crate::config::S3Options;
 use crate::repository::VersionInfo;
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Input, Select};
@@ -15,8 +14,9 @@ use crate::storage::new_local_filesystem_storage;
 use crate::{new_s3_storage, Repository, RepositoryConfig, Storage};
 
 use crate::cli::config::{Repositories, RepositoryAlias, RepositoryDefinition};
+use crate::config::{S3Credentials, S3Options};
 
-use super::config::{RepoLocation, S3Credentials};
+use super::config::RepoLocation;
 
 #[derive(Debug, Parser)]
 #[clap()]
