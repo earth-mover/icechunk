@@ -6,7 +6,6 @@ use serde_yaml_ng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::pin;
 
 use anyhow::{Context, Ok, Result};
 
@@ -136,7 +135,6 @@ async fn snapshot_list(list_cmd: ListCommand) -> Result<()> {
 
     let branch_ref = VersionInfo::BranchTipRef(list_cmd.branch.clone());
     let ancestry = repository.ancestry(&branch_ref).await?;
-    pin!(ancestry);
     ancestry
         .take(list_cmd.n)
         .for_each(|snapshot| async move {
