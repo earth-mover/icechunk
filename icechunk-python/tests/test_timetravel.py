@@ -58,14 +58,14 @@ def test_timetravel() -> None:
 
     new_snapshot_id = session.commit("commit 2")
 
-    session = repo.readonly_session(snapshot=first_snapshot_id)
+    session = repo.readonly_session(snapshot_id=first_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
-    session = repo.readonly_session(snapshot=new_snapshot_id)
+    session = repo.readonly_session(snapshot_id=new_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
@@ -116,7 +116,7 @@ def test_timetravel() -> None:
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert air_temp[200, 6] == 90
 
-    parents = list(repo.ancestry(snapshot=feature_snapshot_id))
+    parents = list(repo.ancestry(snapshot_id=feature_snapshot_id))
     assert [snap.message for snap in parents] == [
         "commit 3",
         "commit 2",
@@ -128,7 +128,7 @@ def test_timetravel() -> None:
     assert list(repo.ancestry(tag="v1.0")) == parents
     assert list(repo.ancestry(branch="feature-not-dead")) == parents
 
-    diff = repo.diff(to_tag="v1.0", from_snapshot=parents[-1].id)
+    diff = repo.diff(to_tag="v1.0", from_snapshot_id=parents[-1].id)
     assert diff.new_groups == {"/"}
     assert diff.new_arrays == {"/air_temp"}
     assert list(diff.updated_chunks.keys()) == ["/air_temp"]
@@ -185,11 +185,11 @@ Arrays deleted:
 
     with pytest.raises(ValueError, match="doesn't include"):
         # if we call diff in the wrong order it fails with a message
-        repo.diff(from_tag="v1.0", to_snapshot=parents[-1].id)
+        repo.diff(from_tag="v1.0", to_snapshot_id=parents[-1].id)
 
     # check async ancestry works
-    assert list(repo.ancestry(snapshot=feature_snapshot_id)) == asyncio.run(
-        async_ancestry(repo, snapshot=feature_snapshot_id)
+    assert list(repo.ancestry(snapshot_id=feature_snapshot_id)) == asyncio.run(
+        async_ancestry(repo, snapshot_id=feature_snapshot_id)
     )
     assert list(repo.ancestry(tag="v1.0")) == asyncio.run(
         async_ancestry(repo, tag="v1.0")
