@@ -223,7 +223,9 @@ class Repository:
         # the returned object is both an Async and Sync iterator
         res = cast(
             Iterator[SnapshotInfo],
-            self._repository.async_ancestry(branch=branch, tag=tag, snapshot_id=snapshot_id),
+            self._repository.async_ancestry(
+                branch=branch, tag=tag, snapshot_id=snapshot_id
+            ),
         )
         return res
 
@@ -255,7 +257,9 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        return self._repository.async_ancestry(branch=branch, tag=tag, snapshot_id=snapshot_id)
+        return self._repository.async_ancestry(
+            branch=branch, tag=tag, snapshot_id=snapshot_id
+        )
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -460,7 +464,9 @@ class Repository:
         Only one of the arguments can be specified.
         """
         return Session(
-            self._repository.readonly_session(branch=branch, tag=tag, snapshot_id=snapshot_id)
+            self._repository.readonly_session(
+                branch=branch, tag=tag, snapshot_id=snapshot_id
+            )
         )
 
     def writable_session(self, branch: str) -> Session:
