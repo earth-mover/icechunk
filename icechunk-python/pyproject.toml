@@ -129,6 +129,5 @@ known-first-party = ["dask", "distributed", "icechunk", "xarray", "zarr"]
 # Disallow all relative imports.
 ban-relative-imports = "all"
 
-
 [project.scripts]
 icechunk = "icechunk._icechunk_python:cli_entrypoint"

@@ -8,8 +8,6 @@ mod streams;
 
 use std::env;
 
-use clap::error::ErrorKind;
-use clap::Parser;
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
@@ -29,13 +27,19 @@ use errors::{
 };
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
 use repository::{PyDiff, PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::PyStore;
 
+#[cfg(feature = "cli")]
+use clap::error::ErrorKind;
+#[cfg(feature = "cli")]
+use clap::Parser;
+#[cfg(feature = "cli")]
 use icechunk::cli::interface::{run_cli, IcechunkCLI};
-use pyo3::wrap_pyfunction;
 
+#[cfg(feature = "cli")]
 #[pyfunction]
 fn cli_entrypoint(py: Python) -> PyResult<()> {
     let sys = py.import("sys")?;
@@ -62,6 +66,13 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
             }
         },
     }
+}
+
+#[cfg(not(feature = "cli"))]
+#[pyfunction]
+fn cli_entrypoint(_py: Python) -> PyResult<()> {
+    println!("Must install the optional `cli` feature to use the Icechunk CLI.");
+    Ok(())
 }
 
 #[pyfunction]
