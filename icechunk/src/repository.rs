@@ -60,7 +60,7 @@ pub enum RepositoryErrorKind {
 
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
-    #[error("ranch {branch} does not have a snapshots before or at {at}")]
+    #[error("branch {branch} does not have a snapshots before or at {at}")]
     InvalidAsOfSpec { branch: String, at: DateTime<Utc> },
     #[error("invalid snapshot id: `{0}`")]
     InvalidSnapshotId(String),
