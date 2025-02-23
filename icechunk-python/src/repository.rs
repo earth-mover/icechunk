@@ -517,7 +517,7 @@ impl PyRepository {
         let repo = Arc::clone(&self.0);
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot_id)?;
+            let version = args_to_version_info(branch, tag, snapshot_id, None)?;
             let ancestry = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { repo.ancestry_arc(&version).await })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
@@ -701,8 +701,8 @@ impl PyRepository {
         to_tag: Option<String>,
         to_snapshot_id: Option<String>,
     ) -> PyResult<PyDiff> {
-        let from = args_to_version_info(from_branch, from_tag, from_snapshot_id)?;
-        let to = args_to_version_info(to_branch, to_tag, to_snapshot_id)?;
+        let from = args_to_version_info(from_branch, from_tag, from_snapshot_id, None)?;
+        let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
 
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -717,17 +717,18 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
     pub fn readonly_session(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
         snapshot_id: Option<String>,
+        as_of: Option<DateTime<Utc>>,
     ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot_id)?;
+            let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     self.0
@@ -841,6 +842,7 @@ fn args_to_version_info(
     branch: Option<String>,
     tag: Option<String>,
     snapshot: Option<String>,
+    as_of: Option<DateTime<Utc>>,
 ) -> PyResult<VersionInfo> {
     let n = [&branch, &tag, &snapshot].iter().filter(|r| !r.is_none()).count();
     if n > 1 {
@@ -849,8 +851,18 @@ fn args_to_version_info(
         ));
     }
 
-    if let Some(branch_name) = branch {
-        Ok(VersionInfo::BranchTipRef(branch_name))
+    if as_of.is_some() && branch.is_none() {
+        return Err(PyValueError::new_err(
+            "as_of argument must be provided together with a branch name",
+        ));
+    }
+
+    if let Some(branch) = branch {
+        if let Some(at) = as_of {
+            Ok(VersionInfo::AsOf { branch, at })
+        } else {
+            Ok(VersionInfo::BranchTipRef(branch))
+        }
     } else if let Some(tag_name) = tag {
         Ok(VersionInfo::TagRef(tag_name))
     } else if let Some(snapshot_id) = snapshot {

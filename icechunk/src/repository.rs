@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
+use async_recursion::async_recursion;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use err_into::ErrorInto as _;
 use futures::{
     stream::{FuturesOrdered, FuturesUnordered},
@@ -37,15 +39,13 @@ use crate::{
     Storage, StorageError,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum VersionInfo {
-    #[serde(rename = "snapshot_id")]
     SnapshotId(SnapshotId),
-    #[serde(rename = "tag")]
     TagRef(String),
-    #[serde(rename = "branch")]
     BranchTipRef(String),
+    AsOf { branch: String, at: DateTime<Utc> },
 }
 
 #[derive(Debug, Error)]
@@ -60,6 +60,8 @@ pub enum RepositoryErrorKind {
 
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
+    #[error("branch {branch} does not have a snapshots before or at {at}")]
+    InvalidAsOfSpec { branch: String, at: DateTime<Utc> },
     #[error("invalid snapshot id: `{0}`")]
     InvalidSnapshotId(String),
     #[error("tag error: `{0}`")]
@@ -404,11 +406,12 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
+    #[async_recursion(?Send)]
     #[instrument(skip(self))]
-    pub async fn ancestry(
-        &self,
+    pub async fn ancestry<'a>(
+        &'a self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a> {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_ancestry(&snapshot_id).await
     }
@@ -571,6 +574,24 @@ impl Repository {
                 )
                 .await?;
                 Ok(ref_data.snapshot)
+            }
+            VersionInfo::AsOf { branch, at } => {
+                let tip = VersionInfo::BranchTipRef(branch.clone());
+                let snap = self
+                    .ancestry(&tip)
+                    .await?
+                    .try_skip_while(|parent| ready(Ok(&parent.flushed_at > at)))
+                    .take(1)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                match snap.into_iter().next() {
+                    Some(snap) => Ok(snap.id),
+                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
+                        branch: branch.clone(),
+                        at: *at,
+                    }
+                    .into()),
+                }
             }
         }
     }
