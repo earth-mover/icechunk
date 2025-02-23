@@ -189,8 +189,8 @@ async fn config_init() -> Result<()> {
         .interact()
         .context("❌ Failed to select repository type")?;
 
-    let repo = match repo_type {
-        0 => {
+    let repo = match repo_types[repo_type] {
+        "Local" => {
             let path: String = Input::new()
                 .with_prompt("Enter path")
                 .interact()
@@ -200,7 +200,7 @@ async fn config_init() -> Result<()> {
                 config: RepositoryConfig::default(),
             }
         }
-        1 => {
+        "S3" => {
             let bucket: String = Input::new()
                 .with_prompt("Enter bucket")
                 .interact()
