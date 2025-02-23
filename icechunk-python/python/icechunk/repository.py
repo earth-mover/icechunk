@@ -196,7 +196,7 @@ class Repository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
     ) -> Iterator[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
@@ -207,7 +207,7 @@ class Repository:
             The branch to get the ancestry of.
         tag : str, optional
             The tag to get the ancestry of.
-        snapshot : str, optional
+        snapshot_id : str, optional
             The snapshot ID to get the ancestry of.
 
         Returns
@@ -223,7 +223,9 @@ class Repository:
         # the returned object is both an Async and Sync iterator
         res = cast(
             Iterator[SnapshotInfo],
-            self._repository.async_ancestry(branch=branch, tag=tag, snapshot=snapshot),
+            self._repository.async_ancestry(
+                branch=branch, tag=tag, snapshot_id=snapshot_id
+            ),
         )
         return res
 
@@ -232,7 +234,7 @@ class Repository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
@@ -243,7 +245,7 @@ class Repository:
             The branch to get the ancestry of.
         tag : str, optional
             The tag to get the ancestry of.
-        snapshot : str, optional
+        snapshot_id : str, optional
             The snapshot ID to get the ancestry of.
 
         Returns
@@ -255,7 +257,9 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        return self._repository.async_ancestry(branch=branch, tag=tag, snapshot=snapshot)
+        return self._repository.async_ancestry(
+            branch=branch, tag=tag, snapshot_id=snapshot_id
+        )
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -400,10 +404,10 @@ class Repository:
         *,
         from_branch: str | None = None,
         from_tag: str | None = None,
-        from_snapshot: str | None = None,
+        from_snapshot_id: str | None = None,
         to_branch: str | None = None,
         to_tag: str | None = None,
-        to_snapshot: str | None = None,
+        to_snapshot_id: str | None = None,
     ) -> Diff:
         """
         Compute an overview of the operations executed from version `from` to version `to`.
@@ -421,10 +425,10 @@ class Repository:
         return self._repository.diff(
             from_branch=from_branch,
             from_tag=from_tag,
-            from_snapshot=from_snapshot,
+            from_snapshot_id=from_snapshot_id,
             to_branch=to_branch,
             to_tag=to_tag,
-            to_snapshot=to_snapshot,
+            to_snapshot_id=to_snapshot_id,
         )
 
     def readonly_session(
@@ -432,7 +436,7 @@ class Repository:
         branch: str | None = None,
         *,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
         as_of: datetime.datetime | None = None,
     ) -> Session:
         """
@@ -448,7 +452,7 @@ class Repository:
             If provided, the branch to create the session on.
         tag : str, optional
             If provided, the tag to create the session on.
-        snapshot : str, optional
+        snapshot_id : str, optional
             If provided, the snapshot ID to create the session on.
         as_of: datetime.datetime, optional
             When combined with the branch argument, it will open the session at the last
@@ -465,7 +469,7 @@ class Repository:
         """
         return Session(
             self._repository.readonly_session(
-                branch=branch, tag=tag, snapshot=snapshot, as_of=as_of
+                branch=branch, tag=tag, snapshot_id=snapshot_id, as_of=as_of
             )
         )
 

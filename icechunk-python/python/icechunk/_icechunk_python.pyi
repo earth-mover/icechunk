@@ -957,7 +957,7 @@ class PyRepository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
@@ -972,17 +972,17 @@ class PyRepository:
         self,
         from_branch: str | None = None,
         from_tag: str | None = None,
-        from_snapshot: str | None = None,
+        from_snapshot_id: str | None = None,
         to_branch: str | None = None,
         to_tag: str | None = None,
-        to_snapshot: str | None = None,
+        to_snapshot_id: str | None = None,
     ) -> Diff: ...
     def readonly_session(
         self,
         branch: str | None = None,
         *,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
         as_of: datetime.datetime | None = None,
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...

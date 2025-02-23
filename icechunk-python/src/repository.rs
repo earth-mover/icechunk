@@ -506,18 +506,18 @@ impl PyRepository {
     }
 
     /// Returns an object that is both a sync and an async iterator
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
     pub fn async_ancestry(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
-        snapshot: Option<String>,
+        snapshot_id: Option<String>,
     ) -> PyResult<PyAsyncGenerator> {
         let repo = Arc::clone(&self.0);
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot, None)?;
+            let version = args_to_version_info(branch, tag, snapshot_id, None)?;
             let ancestry = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { repo.ancestry_arc(&version).await })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
@@ -689,20 +689,20 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot=None, to_branch=None, to_tag=None, to_snapshot=None))]
+    #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn diff(
         &self,
         py: Python<'_>,
         from_branch: Option<String>,
         from_tag: Option<String>,
-        from_snapshot: Option<String>,
+        from_snapshot_id: Option<String>,
         to_branch: Option<String>,
         to_tag: Option<String>,
-        to_snapshot: Option<String>,
+        to_snapshot_id: Option<String>,
     ) -> PyResult<PyDiff> {
-        let from = args_to_version_info(from_branch, from_tag, from_snapshot, None)?;
-        let to = args_to_version_info(to_branch, to_tag, to_snapshot, None)?;
+        let from = args_to_version_info(from_branch, from_tag, from_snapshot_id, None)?;
+        let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
 
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -717,18 +717,18 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None, as_of = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
     pub fn readonly_session(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
-        snapshot: Option<String>,
+        snapshot_id: Option<String>,
         as_of: Option<DateTime<Utc>>,
     ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot, as_of)?;
+            let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     self.0

@@ -154,7 +154,7 @@ xr.open_zarr(session.store, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-session = repo.readonly_session(snapshot=first_snapshot)
+session = repo.readonly_session(snapshot_id=first_snapshot)
 
 xr.open_zarr(session.store, consolidated=False)
 # <xarray.Dataset> Size: 9MB
