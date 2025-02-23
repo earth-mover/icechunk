@@ -279,7 +279,7 @@ async def test_session_with_as_of() -> None:
         group = zarr.open_group(store=store)
         group.create_group(f"child {i}")
         sid = session.commit(f"child {i}")
-        times.append(next(repo.ancestry(snapshot=sid)).written_at)
+        times.append(next(repo.ancestry(snapshot_id=sid)).written_at)
 
     ancestry = list(p for p in repo.ancestry(branch="main"))
     assert len(ancestry) == 7  # initial + root + 5 children
