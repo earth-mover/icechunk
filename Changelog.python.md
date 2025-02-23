@@ -46,7 +46,7 @@ repo.readonly_session("dev")
 # still possible:
 repo.readonly_session(tag="v0.1")
 repo.readonly_session(branch="foo")
-repo.readonly_session(snapshot="NXH3M0HJ7EEJ0699DPP0")
+repo.readonly_session(snapshot_id="NXH3M0HJ7EEJ0699DPP0")
 ```
 
 - Icechunk is now more resilient to changes in Zarr metadata spec, and can handle Zarr extensions.
