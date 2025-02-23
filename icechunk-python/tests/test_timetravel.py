@@ -271,7 +271,7 @@ async def test_session_with_as_of() -> None:
     times = []
     group = zarr.group(store=store, overwrite=True)
     sid = session.commit("root")
-    times.append(next(repo.ancestry(snapshot=sid)).written_at)
+    times.append(next(repo.ancestry(snapshot_id=sid)).written_at)
 
     for i in range(5):
         session = repo.writable_session("main")
