@@ -4,6 +4,7 @@ use dialoguer::{Input, Select};
 use futures::stream::StreamExt;
 use serde_yaml_ng;
 use std::collections::HashMap;
+use std::fs::{create_dir_all, File};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use crate::{new_s3_storage, Repository, RepositoryConfig, Storage};
 
 use crate::cli::config::{Repositories, RepositoryAlias, RepositoryDefinition};
 use crate::config::{S3Credentials, S3Options};
+use dirs::config_dir;
 
 use super::config::RepoLocation;
 
@@ -73,13 +75,30 @@ struct ListCommand {
     branch: String,
 }
 
-const CONFIG_PATH: &str = "default.yaml";
+const CONFIG_DIR: &str = "icechunk";
+const CONFIG_NAME: &str = "cli-config.yaml";
+
+fn config_path() -> PathBuf {
+    let mut path = config_dir().unwrap();
+    path.push(CONFIG_DIR);
+    path.push(CONFIG_NAME);
+    path
+}
 
 fn load_repositories() -> Result<Repositories> {
-    let path = PathBuf::from(CONFIG_PATH);
-    let file = std::fs::File::open(path).context("❌ Failed to open config")?;
+    let path = config_path();
+    let file = File::open(path).context("❌ Failed to open config")?;
     let deserialized: Repositories = serde_yaml_ng::from_reader(file)?;
     Ok(deserialized)
+}
+
+fn write_config(repositories: Repositories) -> Result<(), anyhow::Error> {
+    let path = config_path();
+    create_dir_all(path.parent().unwrap())
+        .context("❌ Failed to create config directory")?;
+    let file = File::create(path).context("❌ Failed to create config file")?;
+    serde_yaml_ng::to_writer(file, &repositories)?;
+    Ok(())
 }
 
 async fn get_storage(
@@ -87,7 +106,7 @@ async fn get_storage(
 ) -> Result<Arc<dyn Storage + Send + Sync>> {
     match repository_definition {
         RepositoryDefinition::LocalFileSystem { path, .. } => {
-            let storage = new_local_filesystem_storage(&path)
+            let storage = new_local_filesystem_storage(path)
                 .await
                 .context(format!("❌ Failed to create storage at {:?}", path))?;
             Ok(storage)
@@ -99,7 +118,7 @@ async fn get_storage(
                 object_store_config.clone(),
                 location.bucket.clone(),
                 Some(location.prefix.clone()),
-                Some(crate::config::S3Credentials::from(credentials.clone())),
+                Some(credentials.clone()),
             )?;
             Ok(storage)
         }
@@ -212,9 +231,7 @@ async fn config_init() -> Result<()> {
 
     repositories.repos.insert(RepositoryAlias(alias), repo);
 
-    let path = PathBuf::from(CONFIG_PATH);
-    let file = std::fs::File::create(path).context("❌ Failed to create config file")?;
-    serde_yaml_ng::to_writer(file, &repositories)?;
+    write_config(repositories)?;
 
     Ok(())
 }
