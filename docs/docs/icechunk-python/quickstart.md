@@ -35,7 +35,10 @@ However, you can also create a repo on your local filesystem.
 # remove local path if it already exists to prevent errors
 # this is hidden in the rendered docs
 from shutil import rmtree
-rmtree("./icechunk-local");
+try:
+    rmtree("./icechunk-local");
+except FileNotFoundError:
+    pass
 ```
 
 === "S3 Storage"
@@ -105,7 +108,8 @@ array[:] = 1
 Now let's commit our update using the session
 
 ```python exec="on" session="quickstart" source="material-block"
-snapshot_id = session.commit("first commit")
+snapshot_id_1 = session.commit("first commit")
+print(snapshot_id_1)
 ```
 
 🎉 Congratulations! You just made your first Icechunk snapshot.
@@ -142,7 +146,7 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python exec="on" session="quickstart" source="material-block"
-hist = repo.ancestry(snapshot=snapshot_id_2)
+hist = repo.ancestry(snapshot_id=snapshot_id_2)
 for ancestor in hist:
     print(ancestor.id, ancestor.message, ancestor.written_at)
 ```
@@ -153,7 +157,7 @@ for ancestor in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-earlier_session = repo.readonly_session(snapshot=hist[1].id)
+earlier_session = repo.readonly_session(snapshot_id=snapshot_id_1)
 store = earlier_session.store
 
 # get the array
