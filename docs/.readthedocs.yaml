@@ -15,11 +15,11 @@ build:
       - poetry config virtualenvs.create false
     post_install:
       # Install deps and build using poetry
-      - . "$READTHEDOCS_VIRTUALENV_PATH/bin/activate" && cd docs && poetry install
-python:
-  install:
-   - method: pip
-     path: icechunk-python
+      - . "$READTHEDOCS_VIRTUALENV_PATH/bin/activate" && cd docs && poetry install && maturin develop ../icechunk-python
+# python:
+#   install:
+#    - method: pip
+#      path: icechunk-python
 
 mkdocs:
   configuration: docs/mkdocs.yml
