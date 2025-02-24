@@ -7,6 +7,7 @@ repo_url: https://github.com/earth-mover/icechunk
 repo_name: earth-mover/icechunk
 copyright: Earthmover PBC # @see overrides/partials/footer.html
 
+strict: true
 site_dir: ./.site
 
 extra_css:
