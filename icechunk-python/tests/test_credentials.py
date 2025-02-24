@@ -4,11 +4,11 @@ from pathlib import Path
 import pytest
 
 from icechunk import (
-    gcs_storage,
     Repository,
     S3Options,
     S3StaticCredentials,
     Storage,
+    gcs_storage,
     s3_refreshable_credentials,
     s3_storage,
 )
