@@ -16,9 +16,10 @@ build:
     post_install:
       # Install deps and build using poetry
       - . "$READTHEDOCS_VIRTUALENV_PATH/bin/activate" && cd docs && poetry install
-python install:
-  - method: pip
-    path: .
+python:
+  install:
+   - method: pip
+     path: .
 
 mkdocs:
   configuration: docs/mkdocs.yml
