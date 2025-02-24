@@ -141,9 +141,11 @@ __all__ = [
     "tigris_storage",
 ]
 
-def print_debug_info()->None:
+
+def print_debug_info() -> None:
     import platform
     from importlib import import_module
+
     print(f"platform:  {platform.platform()}")
     print(f"python:  {platform.python_version()}")
     print(f"icechunk:  {__version__}")
@@ -152,5 +154,6 @@ def print_debug_info()->None:
             print(f"{package}:  {import_module(package).__version__}")
         except ModuleNotFoundError:
             continue
+
 
 initialize_logs()
