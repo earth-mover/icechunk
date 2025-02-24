@@ -340,7 +340,7 @@ class Repository:
         """
         self._repository.delete_branch(branch)
 
-    def delete_tag(self, branch: str) -> None:
+    def delete_tag(self, tag: str) -> None:
         """
         Delete a tag.
 
@@ -353,7 +353,7 @@ class Repository:
         -------
         None
         """
-        self._repository.delete_tag(branch)
+        self._repository.delete_tag(tag)
 
     def create_tag(self, tag: str, snapshot_id: str) -> None:
         """
