@@ -138,7 +138,7 @@ plugins:
           paths: [../icechunk-python/python]
   - mkdocs-jupyter:
       include_source: True
-      include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
+      # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
   - markdown-exec
       #  - "icechunk-python/docs/**/*.ipynb"
       #  - "icechunk-python/docs/docs/icechunk-python/*.ipynb"
@@ -176,7 +176,6 @@ nav:
   - FAQ: faq.md
   - Icechunk Python:
     - Quickstart: icechunk-python/quickstart.md
-    - Quickstart2: icechunk-python/quickstart2.ipynb
     - Configuration: icechunk-python/configuration.md
     - Storage: icechunk-python/storage.md
     - FAQ: icechunk-python/faq.md
