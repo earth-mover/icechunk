@@ -5,6 +5,7 @@
 ### Features
 
 - Added the ability to checkout a session `as_of` a specific time. This is useful for replaying what the repo would be at a specific point in time.
+- Support for refreshable Google Cloud Storage credentials.
 
 ### Fixes
 
