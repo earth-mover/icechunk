@@ -2,16 +2,24 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{RepositoryConfig, S3Credentials, S3Options};
+use crate::config::{
+    AzureCredentials, GcsCredentials, RepositoryConfig, S3Credentials, S3Options,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RepoLocation {
     pub bucket: String,
-    pub prefix: String,
+    pub prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AzureRepoLocation {
+    pub account: String,
+    pub container: String,
+    pub prefix: Option<String>,
 }
 
 // TODO (Daniel): Add serde macros
-// TODO (Daniel): Add the rest of the object store types
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RepositoryDefinition {
     LocalFileSystem {
@@ -24,13 +32,34 @@ pub enum RepositoryDefinition {
         credentials: S3Credentials,
         config: RepositoryConfig,
     },
+    Tigris {
+        location: RepoLocation,
+        object_store_config: S3Options,
+        credentials: S3Credentials,
+        config: RepositoryConfig,
+    },
+    Azure {
+        location: AzureRepoLocation,
+        object_store_config: HashMap<String, String>,
+        credentials: AzureCredentials,
+        config: RepositoryConfig,
+    },
+    GCS {
+        location: RepoLocation,
+        object_store_config: HashMap<String, String>,
+        credentials: GcsCredentials,
+        config: RepositoryConfig,
+    },
 }
 
 impl RepositoryDefinition {
     pub fn get_config(&self) -> &RepositoryConfig {
         match self {
-            RepositoryDefinition::LocalFileSystem { config, .. } => config,
-            RepositoryDefinition::S3 { config, .. } => config,
+            RepositoryDefinition::LocalFileSystem { config, .. }
+            | RepositoryDefinition::S3 { config, .. }
+            | RepositoryDefinition::Tigris { config, .. }
+            | RepositoryDefinition::Azure { config, .. }
+            | RepositoryDefinition::GCS { config, .. } => config,
         }
     }
 }
@@ -66,7 +95,7 @@ mod tests {
     fn test_serialization() {
         let location = RepoLocation {
             bucket: "my-bucket".to_string(),
-            prefix: "my-prefix".to_string(),
+            prefix: Some("my-prefix".to_string()),
         };
         let object_store_config = S3Options {
             region: Some("us-west-2".to_string()),

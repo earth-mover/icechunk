@@ -5,19 +5,23 @@ use futures::stream::StreamExt;
 use serde_yaml_ng;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Ok, Result};
 
-use crate::storage::new_local_filesystem_storage;
+use crate::storage::{
+    new_azure_blob_storage, new_gcs_storage, new_local_filesystem_storage,
+    new_tigris_storage,
+};
 use crate::{new_s3_storage, Repository, RepositoryConfig, Storage};
 
 use crate::cli::config::{Repositories, RepositoryAlias, RepositoryDefinition};
-use crate::config::{S3Credentials, S3Options};
+use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};
 use dirs::config_dir;
 
-use super::config::RepoLocation;
+use super::config::{AzureRepoLocation, RepoLocation};
 
 #[derive(Debug, Parser)]
 #[clap()]
@@ -119,16 +123,61 @@ async fn get_storage(
             let storage = new_s3_storage(
                 object_store_config.clone(),
                 location.bucket.clone(),
-                Some(location.prefix.clone()),
+                location.prefix.clone(),
                 Some(credentials.clone()),
             )
             .context("Failed to create S3 storage")?;
             Ok(storage)
         }
+        RepositoryDefinition::Tigris {
+            location,
+            object_store_config,
+            credentials,
+            ..
+        } => {
+            let storage = new_tigris_storage(
+                object_store_config.clone(),
+                location.bucket.clone(),
+                location.prefix.clone(),
+                Some(credentials.clone()),
+            )
+            .context("Failed to create Tigris storage")?;
+            Ok(storage)
+        }
+        RepositoryDefinition::GCS {
+            location, object_store_config, credentials, ..
+        } => {
+            let storage = new_gcs_storage(
+                location.bucket.clone(),
+                location.prefix.clone(),
+                Some(credentials.clone()),
+                Some(object_store_config.clone()),
+            )
+            .await
+            .context("Failed to create GCS storage")?;
+            Ok(storage)
+        }
+        RepositoryDefinition::Azure {
+            location,
+            object_store_config,
+            credentials,
+            ..
+        } => {
+            let storage = new_azure_blob_storage(
+                location.account.clone(),
+                location.container.clone(),
+                location.prefix.clone(),
+                Some(credentials.clone()),
+                Some(object_store_config.clone()),
+            )
+            .await
+            .context("Failed to create Azure storage")?;
+            Ok(storage)
+        }
     }
 }
 
-// TODO (Daniel): Consider writing this as a library to make it easily testable
+// TODO (): Consider writing this as a library to make it easily testable
 async fn repo_create(init_cmd: CreateCommand) -> Result<()> {
     let repos = load_repositories()?;
     let repo =
@@ -185,7 +234,7 @@ async fn config_init() -> Result<()> {
         .interact()
         .context("Failed to get alias")?;
 
-    let repo_types = vec!["Local", "S3"];
+    let repo_types = vec!["Local", "S3", "Tigris", "GCS", "Azure"];
 
     let repo_type = Select::new()
         .with_prompt("Select repository type")
@@ -220,7 +269,7 @@ async fn config_init() -> Result<()> {
                 .context("Failed to get region")?;
 
             RepositoryDefinition::S3 {
-                location: RepoLocation { bucket, prefix },
+                location: RepoLocation { bucket, prefix: Some(prefix) },
                 object_store_config: S3Options {
                     region: Some(region),
                     endpoint_url: None,
@@ -231,6 +280,75 @@ async fn config_init() -> Result<()> {
                 config: RepositoryConfig::default(),
             }
         }
+        "Tigris" => {
+            let bucket: String = Input::new()
+                .with_prompt("Enter bucket")
+                .interact()
+                .context("Failed to get bucket")?;
+            let prefix: String = Input::new()
+                .with_prompt("Enter prefix")
+                .interact()
+                .context("Failed to get prefix")?;
+            let region: String = Input::new()
+                .with_prompt("Enter region")
+                .interact()
+                .context("Failed to get region")?;
+            let endpoint_url: String = Input::new()
+                .with_prompt("Enter endpoint URL")
+                .interact()
+                .context("Failed to get endpoint URL")?;
+
+            RepositoryDefinition::Tigris {
+                location: RepoLocation { bucket, prefix: Some(prefix) },
+                object_store_config: S3Options {
+                    region: Some(region),
+                    endpoint_url: Some(endpoint_url),
+                    anonymous: false,
+                    allow_http: false,
+                },
+                credentials: S3Credentials::FromEnv,
+                config: RepositoryConfig::default(),
+            }
+        }
+        "GCS" => {
+            let bucket: String = Input::new()
+                .with_prompt("Enter bucket")
+                .interact()
+                .context("Failed to get bucket")?;
+            let prefix: String = Input::new()
+                .with_prompt("Enter prefix")
+                .interact()
+                .context("Failed to get prefix")?;
+
+            RepositoryDefinition::GCS {
+                location: RepoLocation { bucket, prefix: Some(prefix) },
+                object_store_config: HashMap::new(),
+                credentials: GcsCredentials::FromEnv,
+                config: RepositoryConfig::default(),
+            }
+        }
+        "Azure" => {
+            let account: String = Input::new()
+                .with_prompt("Enter account")
+                .interact()
+                .context("Failed to get account")?;
+            let container: String = Input::new()
+                .with_prompt("Enter container")
+                .interact()
+                .context("Failed to get container")?;
+            let prefix: String = Input::new()
+                .with_prompt("Enter prefix")
+                .interact()
+                .context("Failed to get prefix")?;
+
+            RepositoryDefinition::Azure {
+                location: AzureRepoLocation { account, container, prefix: Some(prefix) },
+                object_store_config: HashMap::new(),
+                credentials: AzureCredentials::FromEnv,
+                config: RepositoryConfig::default(),
+            }
+        }
+
         _ => unreachable!(),
     };
 
