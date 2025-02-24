@@ -31,6 +31,13 @@ To get started, let's create a new Icechunk repository.
 We recommend creating your repo on a cloud storage platform to get the most out of Icechunk's cloud-native design.
 However, you can also create a repo on your local filesystem.
 
+```python exec="on"
+# remove local path if it already exists to preven errors
+# this is hidden in the rendered docs
+from shutil import rmtree
+rmtree("./icechunk-local");
+```
+
 === "S3 Storage"
 
     ```python
@@ -57,7 +64,7 @@ However, you can also create a repo on your local filesystem.
 
 === "Local Storage"
 
-    ```python
+    ```python exec="on" session="quickstart" source="above"
     import icechunk
     storage = icechunk.local_filesystem_storage("./icechunk-local")
     repo = icechunk.Repository.create(storage)
@@ -68,13 +75,13 @@ However, you can also create a repo on your local filesystem.
 Once the repository is created, we can use `Session`s to read and write data. Since there is no data in the repository yet,
 let's create a writable session on the default `main` branch.
 
-```python
+```python exec="on" session="quickstart" source="above"
 session = repo.writable_session("main")
 ```
 
 Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
 
-```python
+```python exec="on" session="quickstart" source="above"
 store = session.store  # A zarr store
 ```
 
@@ -83,7 +90,7 @@ store = session.store  # A zarr store
 We can now use our Icechunk `store` with Zarr.
 Let's first create a group and an array within it.
 
-```python
+```python exec="on" session="quickstart" source="above"
 import zarr
 group = zarr.group(store)
 array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
@@ -91,13 +98,13 @@ array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
 
 Now let's write some data
 
-```python
+```python exec="on" session="quickstart" source="above"
 array[:] = 1
 ```
 
 Now let's commit our update using the session
 
-```python
+```python exec="on" session="quickstart" source="above"
 session.commit("first commit")
 ```
 

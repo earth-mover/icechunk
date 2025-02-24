@@ -136,10 +136,12 @@ plugins:
           options:
             docstring_style: numpy
           paths: [../icechunk-python/python]
-
   - mkdocs-jupyter:
       include_source: True
-      #include:
+      include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
+  - markdown-exec
+      #  - "icechunk-python/docs/**/*.ipynb"
+      #  - "icechunk-python/docs/docs/icechunk-python/*.ipynb"
       #  - "icechunk-python/notebooks/*.ipynb"
       #  - "icechunk-python/examples/*.py"
 
@@ -172,6 +174,7 @@ nav:
   - FAQ: faq.md
   - Icechunk Python:
     - Quickstart: icechunk-python/quickstart.md
+    - Quickstart2: icechunk-python/quickstart2.ipynb
     - Configuration: icechunk-python/configuration.md
     - Storage: icechunk-python/storage.md
     - FAQ: icechunk-python/faq.md
@@ -185,8 +188,8 @@ nav:
       - Icechunk for Git Users: icechunk-python/cheatsheets/git-users.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
-#    - Notebooks:
-#      - ... | flat | icechunk-python/notebooks/*.ipynb
+    # - Notebooks:
+    #   - ... | flat | icechunk-python/notebooks/*.ipynb
   - Icechunk Rust: icechunk-rust.md
   - Contributing: contributing.md
   - Sample Datasets: sample-datasets.md
