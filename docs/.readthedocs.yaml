@@ -19,7 +19,7 @@ build:
 python:
   install:
    - method: pip
-     path: ../icechunk-python/.
+     path: icechunk-python
 
 mkdocs:
   configuration: docs/mkdocs.yml
