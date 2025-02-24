@@ -32,7 +32,7 @@ We recommend creating your repo on a cloud storage platform to get the most out 
 However, you can also create a repo on your local filesystem.
 
 ```python exec="on"
-# remove local path if it already exists to preven errors
+# remove local path if it already exists to prevent errors
 # this is hidden in the rendered docs
 from shutil import rmtree
 rmtree("./icechunk-local");
@@ -75,13 +75,13 @@ rmtree("./icechunk-local");
 Once the repository is created, we can use `Session`s to read and write data. Since there is no data in the repository yet,
 let's create a writable session on the default `main` branch.
 
-```python exec="on" session="quickstart" source="above"
+```python exec="on" session="quickstart" source="material-block"
 session = repo.writable_session("main")
 ```
 
 Now that we have a session, we can access the `IcechunkStore` from it to interact with the underlying data using `zarr`:
 
-```python exec="on" session="quickstart" source="above"
+```python exec="on" session="quickstart" source="material-block"
 store = session.store  # A zarr store
 ```
 
@@ -90,7 +90,7 @@ store = session.store  # A zarr store
 We can now use our Icechunk `store` with Zarr.
 Let's first create a group and an array within it.
 
-```python exec="on" session="quickstart" source="above"
+```python exec="on" session="quickstart" source="material-block"
 import zarr
 group = zarr.group(store)
 array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
@@ -98,14 +98,14 @@ array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
 
 Now let's write some data
 
-```python exec="on" session="quickstart" source="above"
+```python exec="on" session="quickstart" source="material-block"
 array[:] = 1
 ```
 
 Now let's commit our update using the session
 
-```python exec="on" session="quickstart" source="above"
-session.commit("first commit")
+```python exec="on" session="quickstart" source="material-block"
+snapshot_id = session.commit("first commit")
 ```
 
 🎉 Congratulations! You just made your first Icechunk snapshot.
@@ -118,7 +118,7 @@ session.commit("first commit")
 
 At this point, we have already committed using our session, so we need to get a new session and store to make more changes.
 
-```python
+```python exec="on" session="quickstart" source="material-block"
 session_2 = repo.writable_session("main")
 store_2 = session_2.store
 group = zarr.open_group(store_2)
@@ -127,13 +127,13 @@ array = group["my_array"]
 
 Let's now put some new data into our array, overwriting the first five elements.
 
-```python
+```python exec="on" session="quickstart" source="material-block"
 array[:5] = 2
 ```
 
 ...and commit the changes
 
-```python
+```python exec="on" session="quickstart" source="material-block"
 snapshot_id_2 = session_2.commit("overwrite some values")
 ```
 
@@ -141,24 +141,19 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 
 We can see the full version history of our repo:
 
-```python
-hist = list(repo.ancestry(snapshot_id=snapshot_id_2))
+```python exec="on" session="quickstart" source="material-block"
+hist = repo.ancestry(snapshot=snapshot_id_2)
 for ancestor in hist:
     print(ancestor.id, ancestor.message, ancestor.written_at)
-
-# Output:
-# AHC3TSP5ERXKTM4FCB5G overwrite some values 2024-10-14 14:07:27.328429+00:00
-# Q492CAPV7SF3T1BC0AA0 first commit 2024-10-14 14:07:26.152193+00:00
-# T7SMDT9C5DZ8MP83DNM0 Repository initialized 2024-10-14 14:07:22.338529+00:00
 ```
 
 ...and we can go back in time to the earlier version.
 
-```python
+```python exec="on" session="quickstart" source="material-block"
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-earlier_session = repo.readonly_session(snapshot_id=hist[1].id)
+earlier_session = repo.readonly_session(snapshot=hist[1].id)
 store = earlier_session.store
 
 # get the array
