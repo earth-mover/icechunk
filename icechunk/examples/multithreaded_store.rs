@@ -13,7 +13,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
     let config = RepositoryConfig {
         inline_chunk_threshold_bytes: Some(128),
-        unsafe_overwrite_refs: Some(true),
         ..Default::default()
     };
     let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
@@ -55,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     async fn writer(name: &str, range: Range<u64>, store: &Store) {
         println!("Starting writer {name}.");
         for i in range {
+            #[allow(clippy::dbg_macro)]
             if let Err(err) = store
                 .set(
                     format!("array/c/{i}").as_str(),

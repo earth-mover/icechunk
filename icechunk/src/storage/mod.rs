@@ -104,7 +104,38 @@ const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
 
-pub type ETag = String;
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
+pub struct ETag(pub String);
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct Generation(pub String);
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct VersionInfo {
+    pub etag: Option<ETag>,
+    pub generation: Option<Generation>,
+}
+
+impl VersionInfo {
+    pub fn for_creation() -> Self {
+        Self { etag: None, generation: None }
+    }
+
+    pub fn from_etag_only(etag: String) -> Self {
+        Self { etag: Some(ETag(etag)), generation: None }
+    }
+
+    pub fn is_create(&self) -> bool {
+        self.etag.is_none() && self.generation.is_none()
+    }
+
+    pub fn etag(&self) -> Option<&String> {
+        self.etag.as_ref().map(|e| &e.0)
+    }
+
+    pub fn generation(&self) -> Option<&String> {
+        self.generation.as_ref().map(|e| &e.0)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
@@ -143,6 +174,9 @@ impl ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: Option<ConcurrencySettings>,
+    pub unsafe_use_conditional_update: Option<bool>,
+    pub unsafe_use_conditional_create: Option<bool>,
+    pub unsafe_use_metadata: Option<bool>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -154,6 +188,18 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
     }
 
+    pub fn unsafe_use_conditional_create(&self) -> bool {
+        self.unsafe_use_conditional_create.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_conditional_update(&self) -> bool {
+        self.unsafe_use_conditional_update.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_metadata(&self) -> bool {
+        self.unsafe_use_metadata.unwrap_or(true)
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             concurrency: match (&self.concurrency, other.concurrency) {
@@ -161,6 +207,33 @@ impl Settings {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            unsafe_use_conditional_create: match (
+                &self.unsafe_use_conditional_create,
+                other.unsafe_use_conditional_create,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_conditional_update: match (
+                &self.unsafe_use_conditional_update,
+                other.unsafe_use_conditional_update,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_metadata: match (
+                &self.unsafe_use_metadata,
+                other.unsafe_use_metadata,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }
@@ -197,19 +270,19 @@ impl Reader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchConfigResult {
-    Found { bytes: Bytes, etag: ETag },
+    Found { bytes: Bytes, version: VersionInfo },
     NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateConfigResult {
-    Updated { new_etag: ETag },
+    Updated { new_version: VersionInfo },
     NotOnLatestVersion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetRefResult {
-    Found { bytes: Bytes },
+    Found { bytes: Bytes, version: VersionInfo },
     NotFound,
 }
 
@@ -235,7 +308,7 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult>;
     async fn fetch_snapshot(
         &self,
@@ -304,17 +377,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         ref_key: &str,
     ) -> StorageResult<GetRefResult>;
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn ref_versions(
-        &self,
-        settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>>;
     async fn write_ref(
         &self,
         settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult>;
 
     async fn list_objects<'a>(
@@ -337,7 +405,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn root_is_clean(&self) -> StorageResult<bool>;
+    async fn root_is_clean(&self) -> StorageResult<bool> {
+        match self.list_objects(&Settings::default(), "").await?.next().await {
+            None => Ok(true),
+            Some(Ok(_)) => Ok(false),
+            Some(Err(err)) => Err(err),
+        }
+    }
 
     async fn list_chunks(
         &self,

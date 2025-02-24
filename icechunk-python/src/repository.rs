@@ -28,7 +28,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        datetime_repr, format_option_string, PyCredentials, PyRepositoryConfig,
+        datetime_repr, format_option_to_string, PyCredentials, PyRepositoryConfig,
         PyStorage, PyStorageSettings,
     },
     errors::PyIcechunkStoreError,
@@ -176,7 +176,7 @@ impl PySnapshotInfo {
         format!(
             r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
-            parent = format_option_string(self.parent_id.as_ref()),
+            parent = format_option_to_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
@@ -195,9 +195,9 @@ pub struct PyDiff {
     #[pyo3(get)]
     pub deleted_arrays: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_user_attributes: BTreeSet<String>,
+    pub updated_groups: BTreeSet<String>,
     #[pyo3(get)]
-    pub updated_zarr_metadata: BTreeSet<String>,
+    pub updated_arrays: BTreeSet<String>,
     #[pyo3(get)]
     // A Vec instead of a set to avoid issues with list not being hashable in python
     pub updated_chunks: BTreeMap<String, Vec<Vec<u32>>>,
@@ -213,16 +213,10 @@ impl From<Diff> for PyDiff {
             value.deleted_groups.into_iter().map(|path| path.to_string()).collect();
         let deleted_arrays =
             value.deleted_arrays.into_iter().map(|path| path.to_string()).collect();
-        let updated_user_attributes = value
-            .updated_user_attributes
-            .into_iter()
-            .map(|path| path.to_string())
-            .collect();
-        let updated_zarr_metadata = value
-            .updated_zarr_metadata
-            .into_iter()
-            .map(|path| path.to_string())
-            .collect();
+        let updated_groups =
+            value.updated_groups.into_iter().map(|path| path.to_string()).collect();
+        let updated_arrays =
+            value.updated_arrays.into_iter().map(|path| path.to_string()).collect();
         let updated_chunks = value
             .updated_chunks
             .into_iter()
@@ -238,8 +232,8 @@ impl From<Diff> for PyDiff {
             new_arrays,
             deleted_groups,
             deleted_arrays,
-            updated_user_attributes,
-            updated_zarr_metadata,
+            updated_groups,
+            updated_arrays,
             updated_chunks,
         }
     }
@@ -266,17 +260,17 @@ impl PyDiff {
             res.push('\n');
         }
 
-        if !self.updated_zarr_metadata.is_empty() {
-            res.push_str("Zarr metadata updated:\n");
-            for g in self.updated_zarr_metadata.iter() {
+        if !self.updated_groups.is_empty() {
+            res.push_str("Group definitions updated:\n");
+            for g in self.updated_groups.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
             res.push('\n');
         }
 
-        if !self.updated_user_attributes.is_empty() {
-            res.push_str("User attributes updated:\n");
-            for g in self.updated_user_attributes.iter() {
+        if !self.updated_arrays.is_empty() {
+            res.push_str("Array definitions updated:\n");
+            for g in self.updated_arrays.iter() {
                 writeln!(res, "    {}", g).unwrap();
             }
             res.push('\n');
@@ -511,46 +505,19 @@ impl PyRepository {
         PyStorage(Arc::clone(self.0.storage()))
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
-    pub fn ancestry(
-        &self,
-        py: Python<'_>,
-        branch: Option<String>,
-        tag: Option<String>,
-        snapshot: Option<String>,
-    ) -> PyResult<Vec<PySnapshotInfo>> {
-        // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot)?;
-
-            // TODO: this holds everything in memory
-            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let ancestry = self
-                    .0
-                    .ancestry(&version)
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?
-                    .map_ok(Into::<PySnapshotInfo>::into)
-                    .try_collect::<Vec<_>>()
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(ancestry)
-            })
-        })
-    }
-
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
+    /// Returns an object that is both a sync and an async iterator
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
     pub fn async_ancestry(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
-        snapshot: Option<String>,
+        snapshot_id: Option<String>,
     ) -> PyResult<PyAsyncGenerator> {
         let repo = Arc::clone(&self.0);
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot)?;
+            let version = args_to_version_info(branch, tag, snapshot_id, None)?;
             let ancestry = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { repo.ancestry_arc(&version).await })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
@@ -722,20 +689,20 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot=None, to_branch=None, to_tag=None, to_snapshot=None))]
+    #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn diff(
         &self,
         py: Python<'_>,
         from_branch: Option<String>,
         from_tag: Option<String>,
-        from_snapshot: Option<String>,
+        from_snapshot_id: Option<String>,
         to_branch: Option<String>,
         to_tag: Option<String>,
-        to_snapshot: Option<String>,
+        to_snapshot_id: Option<String>,
     ) -> PyResult<PyDiff> {
-        let from = args_to_version_info(from_branch, from_tag, from_snapshot)?;
-        let to = args_to_version_info(to_branch, to_tag, to_snapshot)?;
+        let from = args_to_version_info(from_branch, from_tag, from_snapshot_id, None)?;
+        let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
 
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -750,17 +717,18 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
     pub fn readonly_session(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
-        snapshot: Option<String>,
+        snapshot_id: Option<String>,
+        as_of: Option<DateTime<Utc>>,
     ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let version = args_to_version_info(branch, tag, snapshot)?;
+            let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     self.0
@@ -874,6 +842,7 @@ fn args_to_version_info(
     branch: Option<String>,
     tag: Option<String>,
     snapshot: Option<String>,
+    as_of: Option<DateTime<Utc>>,
 ) -> PyResult<VersionInfo> {
     let n = [&branch, &tag, &snapshot].iter().filter(|r| !r.is_none()).count();
     if n > 1 {
@@ -882,8 +851,18 @@ fn args_to_version_info(
         ));
     }
 
-    if let Some(branch_name) = branch {
-        Ok(VersionInfo::BranchTipRef(branch_name))
+    if as_of.is_some() && branch.is_none() {
+        return Err(PyValueError::new_err(
+            "as_of argument must be provided together with a branch name",
+        ));
+    }
+
+    if let Some(branch) = branch {
+        if let Some(at) = as_of {
+            Ok(VersionInfo::AsOf { branch, at })
+        } else {
+            Ok(VersionInfo::BranchTipRef(branch))
+        }
     } else if let Some(tag_name) = tag {
         Ok(VersionInfo::TagRef(tag_name))
     } else if let Some(snapshot_id) = snapshot {

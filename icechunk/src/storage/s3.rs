@@ -13,7 +13,6 @@ use crate::{
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private, Storage, StorageError,
 };
-use async_stream::try_stream;
 use async_trait::async_trait;
 use aws_config::{
     meta::region::RegionProviderChain, retry::ProvideErrorKind, AppName, BehaviorVersion,
@@ -41,8 +40,8 @@ use tracing::instrument;
 
 use super::{
     FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, StorageErrorKind,
-    StorageResult, UpdateConfigResult, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH,
-    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX,
+    CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -197,6 +196,7 @@ impl S3Storage {
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
+        settings: &Settings,
         key: &str,
         content_type: Option<impl Into<String>>,
         metadata: I,
@@ -205,14 +205,17 @@ impl S3Storage {
         let mut b =
             self.get_client().await.put_object().bucket(self.bucket.clone()).key(key);
 
-        if let Some(ct) = content_type {
-            b = b.content_type(ct)
-        };
-
-        for (k, v) in metadata {
-            b = b.metadata(k, v);
+        if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                b = b.content_type(ct)
+            };
         }
 
+        if settings.unsafe_use_metadata() {
+            for (k, v) in metadata {
+                b = b.metadata(k, v);
+            }
+        }
         b.body(bytes.into()).send().await?;
         Ok(())
     }
@@ -248,6 +251,14 @@ impl S3Storage {
 
         Ok(res.deleted().len())
     }
+
+    fn get_ref_name<'a>(&self, key: Option<&'a str>) -> Option<&'a str> {
+        let key = key?;
+        let prefix = self.ref_key("").ok()?;
+        let relative_key = key.strip_prefix(&prefix)?;
+        let ref_name = relative_key.split('/').next()?;
+        Some(ref_name)
+    }
 }
 
 pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
@@ -278,7 +289,7 @@ impl Storage for S3Storage {
             Ok(output) => match output.e_tag {
                 Some(etag) => Ok(FetchConfigResult::Found {
                     bytes: output.body.collect().await?.into_bytes(),
-                    etag,
+                    version: VersionInfo::from_etag_only(etag),
                 }),
                 None => Ok(FetchConfigResult::NotFound),
             },
@@ -289,12 +300,12 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, _settings, config))]
+    #[instrument(skip(self, settings, config))]
     async fn update_config(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult> {
         let key = self.get_config_path()?;
         let mut req = self
@@ -303,13 +314,20 @@ impl Storage for S3Storage {
             .put_object()
             .bucket(self.bucket.clone())
             .key(key)
-            .content_type("application/yaml")
             .body(config.into());
 
-        if let Some(etag) = etag {
-            req = req.if_match(etag)
-        } else {
-            req = req.if_none_match("*")
+        if settings.unsafe_use_metadata() {
+            req = req.content_type("application/yaml")
+        }
+
+        match (
+            previous_version.etag(),
+            settings.unsafe_use_conditional_create(),
+            settings.unsafe_use_conditional_update(),
+        ) {
+            (None, true, _) => req = req.if_none_match("*"),
+            (Some(etag), _, true) => req = req.if_match(etag),
+            (_, _, _) => {}
         }
 
         let res = req.send().await;
@@ -322,7 +340,8 @@ impl Storage for S3Storage {
                         "Config object should have an etag".to_string(),
                     ))?
                     .to_string();
-                Ok(UpdateConfigResult::Updated { new_etag })
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(UpdateConfigResult::Updated { new_version })
             }
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
@@ -403,53 +422,67 @@ impl Storage for S3Storage {
             .await
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_snapshot(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_snapshot_path(&id)?;
-        self.put_object(key.as_str(), None::<String>, metadata, bytes).await
+        self.put_object(settings, key.as_str(), None::<String>, metadata, bytes).await
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_manifest(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: ManifestId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_manifest_path(&id)?;
-        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
+        self.put_object(
+            settings,
+            key.as_str(),
+            None::<String>,
+            metadata.into_iter(),
+            bytes,
+        )
+        .await
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_transaction_path(&id)?;
-        self.put_object(key.as_str(), None::<String>, metadata.into_iter(), bytes).await
+        self.put_object(
+            settings,
+            key.as_str(),
+            None::<String>,
+            metadata.into_iter(),
+            bytes,
+        )
+        .await
     }
 
-    #[instrument(skip(self, _settings, bytes))]
+    #[instrument(skip(self, settings, bytes))]
     async fn write_chunk(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: ChunkId,
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let key = self.get_chunk_path(&id)?;
         //FIXME: use multipart upload
         let metadata: [(String, String); 0] = [];
-        self.put_object(key.as_str(), None::<String>, metadata, bytes).await
+        self.put_object(settings, key.as_str(), None::<String>, metadata, bytes).await
     }
 
     #[instrument(skip(self, _settings))]
@@ -471,7 +504,11 @@ impl Storage for S3Storage {
         match res {
             Ok(res) => {
                 let bytes = res.body.collect().await?.into_bytes();
-                Ok(GetRefResult::Found { bytes })
+                if let Some(version) = res.e_tag.map(VersionInfo::from_etag_only) {
+                    Ok(GetRefResult::Found { bytes, version })
+                } else {
+                    Ok(GetRefResult::NotFound)
+                }
             }
             Err(err)
                 if err
@@ -494,21 +531,16 @@ impl Storage for S3Storage {
             .list_objects_v2()
             .bucket(self.bucket.clone())
             .prefix(prefix.clone())
-            .delimiter("/")
             .into_paginator()
             .send();
 
         let mut res = Vec::new();
 
         while let Some(page) = paginator.try_next().await? {
-            for common_prefix in page.common_prefixes() {
-                if let Some(key) = common_prefix
-                    .prefix()
-                    .as_ref()
-                    .and_then(|key| key.strip_prefix(prefix.as_str()))
-                    .and_then(|key| key.strip_suffix('/'))
-                {
-                    res.push(key.to_string());
+            for obj in page.contents.unwrap_or_else(Vec::new) {
+                let name = self.get_ref_name(obj.key());
+                if let Some(name) = name {
+                    res.push(name.to_string());
                 }
             }
         }
@@ -516,42 +548,13 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self, _settings))]
-    async fn ref_versions(
-        &self,
-        _settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>> {
-        let prefix = self.ref_key(ref_name)?;
-        let mut paginator = self
-            .get_client()
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix.clone())
-            .into_paginator()
-            .send();
-
-        let prefix = prefix + "/";
-        let stream = try_stream! {
-            while let Some(page) = paginator.try_next().await? {
-                for object in page.contents() {
-                    if let Some(key) = object.key.as_ref().and_then(|key| key.strip_prefix(prefix.as_str())) {
-                        yield key.to_string()
-                    }
-                }
-            }
-        };
-        Ok(stream.boxed())
-    }
-
-    #[instrument(skip(self, _settings, bytes))]
+    #[instrument(skip(self, settings, bytes))]
     async fn write_ref(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key)?;
         let mut builder = self
@@ -561,8 +564,18 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .key(key.clone());
 
-        if !overwrite_refs {
-            builder = builder.if_none_match("*")
+        match (
+            previous_version.etag(),
+            settings.unsafe_use_conditional_create(),
+            settings.unsafe_use_conditional_update(),
+        ) {
+            (None, true, _) => {
+                builder = builder.if_none_match("*");
+            }
+            (Some(etag), _, true) => {
+                builder = builder.if_match(etag);
+            }
+            (_, _, _) => {}
         }
 
         let res = builder.body(bytes.into()).send().await;
@@ -657,20 +670,6 @@ impl Storage for S3Storage {
         })?;
 
         Ok(res)
-    }
-
-    #[instrument(skip(self))]
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        let res = self
-            .get_client()
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(self.prefix.clone())
-            .max_keys(1)
-            .send()
-            .await?;
-        Ok(res.contents.map(|v| v.is_empty()).unwrap_or(true))
     }
 
     #[instrument(skip(self))]

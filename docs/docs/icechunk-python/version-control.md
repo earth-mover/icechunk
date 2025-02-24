@@ -27,7 +27,7 @@ repo = icechunk.Repository.create(icechunk.in_memory_storage())
 On creating a new [`Repository`](../reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
 
 ```python
-repo.ancestry(branch="main")
+[ancestor for ancestor in repo.ancestry(branch="main")]
 
 # [SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,19,52,41,592998, tzinfo=datetime.timezone.utc), message="Repository...")]
 ```
@@ -36,7 +36,7 @@ repo.ancestry(branch="main")
 
     The [`ancestry`](./reference/#icechunk.Repository.ancestry) method can be used to inspect the ancestry of any branch, snapshot, or tag.
 
-We get back a list of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
+We get back an iterator of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
 
 ## Creating a snapshot
 
@@ -270,20 +270,16 @@ session2 = repo.writable_session("main")
 
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
-```
 
-First, we'll modify the attributes of the root group from both sessions.
-
-```python
-root1.attrs["foo"] = "bar"
-root2.attrs["foo"] = "baz"
+root1["data"][0,0] = 1
+root2["data"][0,:] = 2
 ```
 
 and then try to commit the changes.
 
 ```python
-session1.commit(message="Update foo attribute on root group")
-session2.commit(message="Update foo attribute on root group")
+session1.commit(message="Update first element of data array")
+session2.commit(message="Update first row of data array")
 
 # AE9XS2ZWXT861KD2JGHG
 # ---------------------------------------------------------------------------
@@ -327,65 +323,7 @@ session2.rebase(icechunk.ConflictDetector())
 # RebaseFailedError: Rebase failed on snapshot AE9XS2ZWXT861KD2JGHG: 1 conflicts found
 ```
 
-This however fails because both sessions modified the `foo` attribute on the root group. We can use the `ConflictError` to get more information about the conflict.
-
-```python
-try:
-    session2.rebase(icechunk.ConflictDetector())
-except icechunk.RebaseFailedError as e:
-    print(e.conflicts)
-
-# [Conflict(UserAttributesDoubleUpdate, path=/)]
-```
-
-This tells us that the conflict is caused by the two sessions modifying the user attributes of the root group (`/`). In this casewe have decided that second session set the `foo` attribute to the correct value, so we can now try to rebase by instructing the `rebase` method to use the second session's changes with the [`BasicConflictSolver`](../reference/#icechunk.BasicConflictSolver).
-
-```python
-session2.rebase(icechunk.BasicConflictSolver(on_user_attributes_conflict=icechunk.VersionSelection.UseOurs))
-```
-
-Success! We can now try and commit the changes again.
-
-```python
-session2.commit(message="Update foo attribute on root group")
-
-# 'SY4WRE8A9TVYMTJPEAHG'
-```
-
-This same process can be used to resolve conflicts with arrays. Let's try to modify the `data` array from both sessions.
-
-```python
-session1 = repo.writable_session("main")
-session2 = repo.writable_session("main")
-
-root1 = zarr.group(session1.store)
-root2 = zarr.group(session2.store)
-
-root1["data"][0,0] = 1
-root2["data"][0,:] = 2
-```
-
-We have now created a conflict, because the first session modified the first element of the `data` array, and the second session modified the first row of the `data` array. Let's commit the changes from the second session first, then see what conflicts are reported when we try to commit the changes from the first session.
-
-```python
-print(session2.commit(message="Update first row of data array"))
-print(session1.commit(message="Update first element of data array"))
-
-# ---------------------------------------------------------------------------
-# ConflictError                             Traceback (most recent call last)
-# Cell In[15], line 2
-#      1 print(session2.commit(message="Update first row of data array"))
-# ----> 2 print(session1.commit(message="Update first element of data array"))
-
-# File ~/Developer/icechunk/icechunk-python/python/icechunk/session.py:224, in Session.commit(self, message, metadata)
-#     222     return self._session.commit(message, metadata)
-#     223 except PyConflictError as e:
-# --> 224     raise ConflictError(e) from None
-
-# ConflictError: Failed to commit, expected parent: Some("SY4WRE8A9TVYMTJPEAHG"), actual parent: Some("5XRDGZPSG747AMMRTWT0")
-```
-
-Okay! We have a conflict. Lets see what conflicts are reported.
+This however fails because both sessions modified metadata. We can use the `RebaseFailedError` to get more information about the conflict.
 
 ```python
 try:
@@ -470,4 +408,4 @@ root["data"][:,:]
 
 #### Limitations
 
-At the moment, the rebase functionality is limited to resolving conflicts with attributes on arrays and groups, and conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.
+At the moment, the rebase functionality is limited to resolving conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.

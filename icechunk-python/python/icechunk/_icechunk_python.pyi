@@ -91,6 +91,49 @@ class VirtualChunkContainer:
             The storage backend to use for the virtual chunk container.
         """
 
+class VirtualChunkSpec:
+    """The specification for a virtual chunk reference."""
+    @property
+    def index(self) -> list[int]:
+        """The chunk index, in chunk coordinates space"""
+        ...
+    @property
+    def location(self) -> str:
+        """The URL to the virtual chunk data, something like 's3://bucket/foo.nc'"""
+        ...
+    @property
+    def offset(self) -> int:
+        """The chunk offset within the pointed object, in bytes"""
+        ...
+    @property
+    def length(self) -> int:
+        """The length of the chunk in bytes"""
+        ...
+    @property
+    def etag_checksum(self) -> str | None:
+        """Optional object store e-tag for the containing object.
+
+        Icechunk will refuse to serve data from this chunk if the etag has changed.
+        """
+        ...
+    @property
+    def last_updated_at_checksum(self) -> datetime.datetime | None:
+        """Optional timestamp for the containing object.
+
+        Icechunk will refuse to serve data from this chunk if it has been modified in object store after this time.
+        """
+        ...
+
+    def __init__(
+        self,
+        index: list[int],
+        location: str,
+        offset: int,
+        length: int,
+        etag_checksum: str | None = None,
+        last_updated_at_checksum: datetime.datetime | None = None,
+    ) -> None: ...
+
 class CompressionAlgorithm(Enum):
     """Enum for selecting the compression algorithm used by Icechunk to write its metadata files
 
@@ -542,7 +585,13 @@ class StorageConcurrencySettings:
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
-    def __init__(self, concurrency: StorageConcurrencySettings | None = None) -> None:
+    def __init__(
+        self,
+        concurrency: StorageConcurrencySettings | None = None,
+        unsafe_use_conditional_create: bool | None = None,
+        unsafe_use_conditional_update: bool | None = None,
+        unsafe_use_metadata: bool | None = None,
+    ) -> None:
         """
         Create a new `StorageSettings` object
 
@@ -550,18 +599,45 @@ class StorageSettings:
         ----------
         concurrency: StorageConcurrencySettings | None
             The configuration for how Icechunk uses its Storage instance.
+
+        unsafe_use_conditional_update: bool | None
+            If set to False, Icechunk loses some of its consistency guarantees.
+            This is only useful in object stores that don't support the feature.
+            Use it at your own risk.
+
+        unsafe_use_conditional_create: bool | None
+            If set to False, Icechunk loses some of its consistency guarantees.
+            This is only useful in object stores that don't support the feature.
+            Use at your own risk.
+
+        unsafe_use_metadata: bool | None
+            Don't write metadata fields in Icechunk files.
+            This is only useful in object stores that don't support the feature.
+            Use at your own risk.
         """
         ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None:
         """
-        The configuration for how Icechunk uses its Storage instance.
+        The configuration for how much concurrency Icechunk store uses
 
         Returns
         -------
         StorageConcurrencySettings | None
             The configuration for how Icechunk uses its Storage instance.
         """
+
+    @property
+    def unsafe_use_conditional_update(self) -> bool | None:
+        """True if Icechunk will use conditional PUT operations for updates in the object store"""
+        ...
+    @property
+    def unsafe_use_conditional_create(self) -> bool | None:
+        """True if Icechunk will use conditional PUT operations for creation in the object store"""
+        ...
+    @property
+    def unsafe_use_metadata(self) -> bool | None:
+        """True if Icechunk will write object metadata in the object store"""
         ...
 
 class RepositoryConfig:
@@ -570,7 +646,6 @@ class RepositoryConfig:
     def __init__(
         self,
         inline_chunk_threshold_bytes: int | None = None,
-        unsafe_overwrite_refs: bool | None = None,
         get_partial_values_concurrency: int | None = None,
         compression: CompressionConfig | None = None,
         caching: CachingConfig | None = None,
@@ -585,8 +660,6 @@ class RepositoryConfig:
         ----------
         inline_chunk_threshold_bytes: int | None
             The maximum size of a chunk that will be stored inline in the repository.
-        unsafe_overwrite_refs: bool | None
-            Whether to allow overwriting references in the repository.
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
         compression: CompressionConfig | None
@@ -615,28 +688,6 @@ class RepositoryConfig:
     def inline_chunk_threshold_bytes(self, value: int | None) -> None:
         """
         Set the maximum size of a chunk that will be stored inline in the repository. Chunks larger than this size will be written to storage.
-        """
-        ...
-    @property
-    def unsafe_overwrite_refs(self) -> bool | None:
-        """
-        Whether to allow overwriting references in the repository.
-
-        Returns
-        -------
-        bool | None
-            Whether to allow overwriting references in the repository.
-        """
-        ...
-    @unsafe_overwrite_refs.setter
-    def unsafe_overwrite_refs(self, value: bool | None) -> None:
-        """
-        Set whether to allow overwriting references in the repository.
-
-        Parameters
-        ----------
-        value: bool | None
-            Whether to allow overwriting references in the repository.
         """
         ...
     @property
@@ -901,19 +952,12 @@ class PyRepository:
     def save_config(self) -> None: ...
     def config(self) -> RepositoryConfig: ...
     def storage(self) -> Storage: ...
-    def ancestry(
-        self,
-        *,
-        branch: str | None = None,
-        tag: str | None = None,
-        snapshot: str | None = None,
-    ) -> list[SnapshotInfo]: ...
     def async_ancestry(
         self,
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
@@ -928,17 +972,18 @@ class PyRepository:
         self,
         from_branch: str | None = None,
         from_tag: str | None = None,
-        from_snapshot: str | None = None,
+        from_snapshot_id: str | None = None,
         to_branch: str | None = None,
         to_tag: str | None = None,
-        to_snapshot: str | None = None,
+        to_snapshot_id: str | None = None,
     ) -> Diff: ...
     def readonly_session(
         self,
         branch: str | None = None,
         *,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
+        as_of: datetime.datetime | None = None,
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
     def expire_snapshots(
@@ -1011,6 +1056,12 @@ class PyStore:
         checksum: str | datetime.datetime | None = None,
         validate_container: bool = False,
     ) -> None: ...
+    def set_virtual_refs(
+        self,
+        array_path: str,
+        chunks: list[VirtualChunkSpec],
+        validate_containers: bool,
+    ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
     @property
@@ -1400,7 +1451,6 @@ class BasicConflictSolver(ConflictSolver):
     This conflict solver allows for simple configuration of resolution behavior for conflicts that may occur during a rebase operation.
     It will attempt to resolve a limited set of conflicts based on the configuration options provided.
 
-    - When a user attribute conflict is encountered, the behavior is determined by the `on_user_attributes_conflict` option
     - When a chunk conflict is encountered, the behavior is determined by the `on_chunk_conflict` option
     - When an array is deleted that has been updated, `fail_on_delete_of_updated_array` will determine whether to fail the rebase operation
     - When a group is deleted that has been updated, `fail_on_delete_of_updated_group` will determine whether to fail the rebase operation
@@ -1409,7 +1459,6 @@ class BasicConflictSolver(ConflictSolver):
     def __init__(
         self,
         *,
-        on_user_attributes_conflict: VersionSelection = VersionSelection.UseOurs,
         on_chunk_conflict: VersionSelection = VersionSelection.UseOurs,
         fail_on_delete_of_updated_array: bool = False,
         fail_on_delete_of_updated_group: bool = False,
@@ -1418,8 +1467,6 @@ class BasicConflictSolver(ConflictSolver):
 
         Parameters
         ----------
-        on_user_attributes_conflict: VersionSelection
-            The behavior to use when a user attribute conflict is encountered, by default VersionSelection.use_ours()
         on_chunk_conflict: VersionSelection
             The behavior to use when a chunk conflict is encountered, by default VersionSelection.use_theirs()
         fail_on_delete_of_updated_array: bool
@@ -1483,39 +1530,36 @@ class ConflictType(Enum):
     Attributes:
         NewNodeConflictsWithExistingNode: int
             A new node conflicts with an existing node
-        NewNodeInInvalidGroup: int
+        NewNodeInInvalidGroup: tuple[int]
             A new node is in an invalid group
-        ZarrMetadataDoubleUpdate: int
+        ZarrMetadataDoubleUpdate: tuple[int]
             A zarr metadata update conflicts with an existing zarr metadata update
-        ZarrMetadataUpdateOfDeletedArray: int
+        ZarrMetadataUpdateOfDeletedArray: tuple[int]
             A zarr metadata update is attempted on a deleted array
-        UserAttributesDoubleUpdate: int
-            A user attribute update conflicts with an existing user attribute update
-        UserAttributesUpdateOfDeletedNode: int
-            A user attribute update is attempted on a deleted node
-        ChunkDoubleUpdate: int
+        ZarrMetadataUpdateOfDeletedGroup: tuple[int]
+            A zarr metadata update is attempted on a deleted group
+        ChunkDoubleUpdate: tuple[int]
             A chunk update conflicts with an existing chunk update
-        ChunksUpdatedInDeletedArray: int
+        ChunksUpdatedInDeletedArray: tuple[int]
             Chunks are updated in a deleted array
-        ChunksUpdatedInUpdatedArray: int
+        ChunksUpdatedInUpdatedArray: tuple[int]
             Chunks are updated in an updated array
-        DeleteOfUpdatedArray: int
+        DeleteOfUpdatedArray: tuple[int]
             A delete is attempted on an updated array
-        DeleteOfUpdatedGroup: int
+        DeleteOfUpdatedGroup: tuple[int]
             A delete is attempted on an updated group
     """
 
-    NewNodeConflictsWithExistingNode = 1
-    NewNodeInInvalidGroup = 2
-    ZarrMetadataDoubleUpdate = 3
-    ZarrMetadataUpdateOfDeletedArray = 4
-    UserAttributesDoubleUpdate = 5
-    UserAttributesUpdateOfDeletedNode = 6
-    ChunkDoubleUpdate = 7
-    ChunksUpdatedInDeletedArray = 8
-    ChunksUpdatedInUpdatedArray = 9
-    DeleteOfUpdatedArray = 10
-    DeleteOfUpdatedGroup = 11
+    NewNodeConflictsWithExistingNode = (1,)
+    NewNodeInInvalidGroup = (2,)
+    ZarrMetadataDoubleUpdate = (3,)
+    ZarrMetadataUpdateOfDeletedArray = (4,)
+    ZarrMetadataUpdateOfDeletedGroup = (5,)
+    ChunkDoubleUpdate = (6,)
+    ChunksUpdatedInDeletedArray = (7,)
+    ChunksUpdatedInUpdatedArray = (8,)
+    DeleteOfUpdatedArray = (9,)
+    DeleteOfUpdatedGroup = (10,)
 
 class Conflict:
     """A conflict detected between snapshots"""

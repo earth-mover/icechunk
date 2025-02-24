@@ -29,7 +29,7 @@ use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use repository::{PyDiff, PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
-use store::PyStore;
+use store::{PyStore, VirtualChunkSpec};
 
 #[pyfunction]
 fn initialize_logs() -> PyResult<()> {
@@ -82,6 +82,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
+    m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
 

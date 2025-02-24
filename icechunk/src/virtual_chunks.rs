@@ -325,7 +325,7 @@ impl S3Fetcher {
                         )
                     }
                     Some(Checksum::ETag(etag)) => {
-                        b = b.if_match(etag);
+                        b = b.if_match(&etag.0);
                     }
                     None => {}
                 };
@@ -459,7 +459,7 @@ impl ChunkFetcher for LocalFSFetcher {
                     .expect("Bad last modified field in virtual chunk reference");
                 options.if_unmodified_since = Some(d);
             }
-            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.clone()),
+            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.0.clone()),
             None => {}
         }
 

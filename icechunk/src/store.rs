@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     fmt::Display,
     iter,
-    num::NonZeroU64,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -24,12 +23,8 @@ use crate::{
     error::ICError,
     format::{
         manifest::{ChunkPayload, VirtualChunkRef},
-        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path, PathError,
-    },
-    metadata::{
-        ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
-        FillValue, StorageTransformer, UserAttributes,
+        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
+        ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
     },
     refs::{RefError, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
@@ -101,6 +96,8 @@ pub enum StoreErrorKind {
         "invalid chunk location, no matching virtual chunk container: `{chunk_location}`"
     )]
     InvalidVirtualChunkContainer { chunk_location: String },
+    #[error("{0}")]
+    Other(String),
     #[error("unknown store error")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -134,6 +131,12 @@ impl From<SessionError> for StoreError {
     fn from(value: SessionError) -> Self {
         Self::with_context(StoreErrorKind::SessionError(value.kind), value.context)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SetVirtualRefsResult {
+    Done,
+    FailedRefs(Vec<ChunkIndices>),
 }
 
 #[derive(Clone)]
@@ -299,12 +302,12 @@ impl Store {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
-                    self.set_array_meta(node_path, array_meta, locked_session).await
+                    self.set_array_meta(node_path, value, array_meta, locked_session)
+                        .await
                 } else {
-                    match serde_json::from_slice(value.as_ref()) {
-                        Ok(group_meta) => {
-                            self.set_group_meta(node_path, group_meta, locked_session)
-                                .await
+                    match serde_json::from_slice::<GroupMetadata>(value.as_ref()) {
+                        Ok(_) => {
+                            self.set_group_meta(node_path, value, locked_session).await
                         }
                         Err(err) => Err(StoreErrorKind::BadMetadata(err).into()),
                     }
@@ -388,6 +391,44 @@ impl Store {
         }
     }
 
+    #[instrument(skip(self, references))]
+    pub async fn set_virtual_refs<I>(
+        &self,
+        array_path: &Path,
+        validate_container: bool,
+        references: I,
+    ) -> StoreResult<SetVirtualRefsResult>
+    where
+        I: IntoIterator<Item = (ChunkIndices, VirtualChunkRef)> + std::fmt::Debug,
+    {
+        if self.read_only().await {
+            return Err(StoreErrorKind::ReadOnly.into());
+        }
+
+        let mut session = self.session.write().await;
+        let mut failed = Vec::new();
+        for (index, reference) in references.into_iter() {
+            if validate_container
+                && session.matching_container(&reference.location).is_none()
+            {
+                failed.push(index);
+            } else {
+                session
+                    .set_chunk_ref(
+                        array_path.clone(),
+                        index,
+                        Some(ChunkPayload::Virtual(reference)),
+                    )
+                    .await?;
+            }
+        }
+        if failed.is_empty() {
+            Ok(SetVirtualRefsResult::Done)
+        } else {
+            Ok(SetVirtualRefsResult::FailedRefs(failed))
+        }
+    }
+
     #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
@@ -414,7 +455,7 @@ impl Store {
                 let node = guard.get_closest_ancestor_node(&path).await;
                 if let Ok(NodeSnapshot {
                     path: node_path,
-                    node_data: NodeData::Array(..),
+                    node_data: NodeData::Array { .. },
                     ..
                 }) = node
                 {
@@ -540,7 +581,7 @@ impl Store {
         let path = Path::try_from(absolute_prefix)?;
         let session = Arc::clone(&self.session).read_owned().await;
         let results = match session.get_node(&path).await {
-            Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => {
+            Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => {
                 // if this is an array we know what to yield
                 vec![
                     ListDirItem::Key("zarr.json".to_string()),
@@ -551,7 +592,7 @@ impl Store {
                     ListDirItem::Prefix("c".to_string()),
                 ]
             }
-            Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => {
+            Ok(NodeSnapshot { node_data: NodeData::Group { .. }, .. }) => {
                 // if the prefix is the path to a group we need to discover any nodes with the prefix as node path
                 // listing chunks is unnecessary
                 self.list_metadata_prefix(prefix, true)
@@ -647,47 +688,49 @@ impl Store {
     async fn set_array_meta(
         &self,
         path: Path,
+        user_data: Bytes,
         array_meta: ArrayMetadata,
-        locked_repo: Option<&mut Session>,
+        locked_session: Option<&mut Session>,
     ) -> Result<(), StoreError> {
-        match locked_repo {
-            Some(repo) => set_array_meta(path, array_meta, repo).await,
-            None => self.set_array_meta_locking(path, array_meta).await,
+        match locked_session {
+            Some(session) => set_array_meta(path, user_data, array_meta, session).await,
+            None => self.set_array_meta_locking(path, user_data, array_meta).await,
         }
     }
 
     async fn set_array_meta_locking(
         &self,
         path: Path,
+        user_data: Bytes,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         let mut guard = self.session.write().await;
-        set_array_meta(path, array_meta, guard.deref_mut()).await
+        set_array_meta(path, user_data, array_meta, guard.deref_mut()).await
     }
 
     async fn set_group_meta(
         &self,
         path: Path,
-        group_meta: GroupMetadata,
+        user_data: Bytes,
         locked_repo: Option<&mut Session>,
     ) -> Result<(), StoreError> {
         match locked_repo {
-            Some(repo) => set_group_meta(path, group_meta, repo).await,
-            None => self.set_group_meta_locking(path, group_meta).await,
+            Some(repo) => set_group_meta(path, user_data, repo).await,
+            None => self.set_group_meta_locking(path, user_data).await,
         }
     }
 
     async fn set_group_meta_locking(
         &self,
         path: Path,
-        group_meta: GroupMetadata,
+        user_data: Bytes,
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         let mut guard = self.session.write().await;
-        set_group_meta(path, group_meta, guard.deref_mut()).await
+        set_group_meta(path, user_data, guard.deref_mut()).await
     }
 
     async fn list_metadata_prefix<'a, 'b: 'a>(
@@ -741,60 +784,45 @@ impl Store {
 
 async fn set_array_meta(
     path: Path,
+    user_data: Bytes,
     array_meta: ArrayMetadata,
-    repo: &mut Session,
+    session: &mut Session,
 ) -> StoreResult<()> {
-    // TODO: Consider deleting all this logic?
-    // We try hard to not overwrite existing metadata here.
-    // I don't think this is actually useful because Zarr's
-    // Array/Group API will require that the user set `overwrite=True`
-    // which will delete any existing array metadata. This path is only
-    // applicable when using the explicit `store.set` interface.
-    if let Ok(node) = repo.get_array(&path).await {
-        // Check if the user attributes are different, if they are update them
-        let existing_attrs = match node.user_attributes {
-            None => None,
-            Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-            // FIXME: implement
-            Some(UserAttributesSnapshot::Ref(_)) => None,
-        };
-
-        if existing_attrs != array_meta.attributes {
-            repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
-        }
-
-        // Check if the zarr metadata is different, if it is update it
-        if let NodeData::Array(existing_array_metadata, _) = node.node_data {
-            if existing_array_metadata != array_meta.zarr_metadata {
-                repo.update_array(path, array_meta.zarr_metadata).await?;
+    let shape = array_meta
+        .shape()
+        .ok_or(StoreErrorKind::Other("Invalid chunk grid metadata".to_string()))?;
+    if let Ok(node) = session.get_array(&path).await {
+        if let NodeData::Array { .. } = node.node_data {
+            if node.user_data != user_data {
+                session
+                    .update_array(&path, shape, array_meta.dimension_names(), user_data)
+                    .await?;
             }
-        } else {
-            // This should be unreachable, but just in case...
-            repo.update_array(path, array_meta.zarr_metadata).await?;
         }
-
+        // FIXME: don't ignore error
         Ok(())
     } else {
-        repo.add_array(path.clone(), array_meta.zarr_metadata).await?;
-        repo.set_user_attributes(path, array_meta.attributes).await?;
+        session
+            .add_array(path.clone(), shape, array_meta.dimension_names(), user_data)
+            .await?;
         Ok(())
     }
 }
 
 async fn set_group_meta(
     path: Path,
-    group_meta: GroupMetadata,
-    repo: &mut Session,
+    user_data: Bytes,
+    session: &mut Session,
 ) -> StoreResult<()> {
-    // we need to hold the lock while we search the group and do the update to avoid race
-    // conditions with other writers (notice we don't take &mut self)
-    //
-    if repo.get_group(&path).await.is_ok() {
-        repo.set_user_attributes(path, group_meta.attributes).await?;
+    if let Ok(node) = session.get_group(&path).await {
+        if let NodeData::Group = node.node_data {
+            if node.user_data != user_data {
+                session.update_group(&path, user_data).await?;
+            }
+        }
         Ok(())
     } else {
-        repo.add_group(path.clone()).await?;
-        repo.set_user_attributes(path, group_meta.attributes).await?;
+        session.add_group(path.clone(), user_data).await?;
         Ok(())
     }
 }
@@ -803,29 +831,13 @@ async fn get_metadata(
     _key: &str,
     path: &Path,
     range: &ByteRange,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<Bytes> {
     // FIXME: don't skip errors
-    let node = repo.get_node(path).await.map_err(|_| {
+    let node = session.get_node(path).await.map_err(|_| {
         StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
     })?;
-    let user_attributes = match node.user_attributes {
-        None => None,
-        Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-        // FIXME: implement
-        #[allow(clippy::unimplemented)]
-        Some(UserAttributesSnapshot::Ref(_)) => unimplemented!(),
-    };
-    let full_metadata = match node.node_data {
-        NodeData::Group => {
-            Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
-        }
-        NodeData::Array(zarr_metadata, _) => {
-            Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
-        }
-    }?;
-
-    Ok(range.slice(full_metadata))
+    Ok(range.slice(node.user_data))
 }
 
 async fn get_chunk_bytes(
@@ -833,9 +845,9 @@ async fn get_chunk_bytes(
     path: Path,
     coords: ChunkIndices,
     byte_range: &ByteRange,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<Bytes> {
-    let reader = repo.get_chunk_reader(&path, &coords, byte_range).await?;
+    let reader = session.get_chunk_reader(&path, &coords, byte_range).await?;
 
     // then we can fetch the bytes without holding the lock
     let chunk = get_chunk(reader).await?;
@@ -849,8 +861,12 @@ async fn get_chunk_bytes(
     )
 }
 
-async fn get_metadata_size(key: &str, path: &Path, repo: &Session) -> StoreResult<u64> {
-    let bytes = get_metadata(key, path, &ByteRange::From(0), repo).await?;
+async fn get_metadata_size(
+    key: &str,
+    path: &Path,
+    session: &Session,
+) -> StoreResult<u64> {
+    let bytes = get_metadata(key, path, &ByteRange::From(0), session).await?;
     Ok(bytes.len() as u64)
 }
 
@@ -858,9 +874,9 @@ async fn get_chunk_size(
     _key: &str,
     path: &Path,
     coords: &ChunkIndices,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<u64> {
-    let chunk_ref = repo.get_chunk_ref(path, coords).await?;
+    let chunk_ref = session.get_chunk_ref(path, coords).await?;
     let size = chunk_ref
         .map(|payload| match payload {
             ChunkPayload::Inline(bytes) => bytes.len() as u64,
@@ -874,14 +890,14 @@ async fn get_chunk_size(
 async fn get_key(
     key: &str,
     byte_range: &ByteRange,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<Bytes> {
     let bytes = match Key::parse(key)? {
         Key::Metadata { node_path } => {
-            get_metadata(key, &node_path, byte_range, repo).await
+            get_metadata(key, &node_path, byte_range, session).await
         }
         Key::Chunk { node_path, coords } => {
-            get_chunk_bytes(key, node_path, coords, byte_range, repo).await
+            get_chunk_bytes(key, node_path, coords, byte_range, session).await
         }
         Key::ZarrV2(key) => {
             Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
@@ -1037,153 +1053,39 @@ impl Display for Key {
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ArrayMetadata {
-    zarr_format: u8,
+    pub shape: Vec<u64>,
+
     #[serde(deserialize_with = "validate_array_node_type")]
     node_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<UserAttributes>,
-    #[serde(flatten)]
-    #[serde_as(as = "TryFromInto<ZarrArrayMetadataSerialzer>")]
-    zarr_metadata: ZarrArrayMetadata,
-}
-
-#[serde_as]
-#[derive(Serialize, Deserialize)]
-pub struct ZarrArrayMetadataSerialzer {
-    pub shape: ArrayShape,
-    pub data_type: DataType,
 
     #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
-    #[serde(rename = "chunk_grid")]
-    pub chunk_shape: ChunkShape,
+    pub chunk_grid: Vec<u64>,
 
-    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
-    pub chunk_key_encoding: ChunkKeyEncoding,
-    pub fill_value: serde_json::Value,
-    pub codecs: Vec<Codec>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_transformers: Option<Vec<StorageTransformer>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    // each dimension name can be null in Zarr
-    pub dimension_names: Option<DimensionNames>,
+    pub dimension_names: Option<Vec<Option<String>>>,
 }
 
-impl TryFrom<ZarrArrayMetadataSerialzer> for ZarrArrayMetadata {
-    type Error = IcechunkFormatError;
-
-    fn try_from(value: ZarrArrayMetadataSerialzer) -> Result<Self, Self::Error> {
-        let ZarrArrayMetadataSerialzer {
-            shape,
-            data_type,
-            chunk_shape,
-            chunk_key_encoding,
-            fill_value,
-            codecs,
-            storage_transformers,
-            dimension_names,
-        } = value;
-        {
-            let fill_value = FillValue::from_data_type_and_json(&data_type, &fill_value)?;
-            Ok(ZarrArrayMetadata {
-                fill_value,
-                shape,
-                data_type,
-                chunk_shape,
-                chunk_key_encoding,
-                codecs,
-                storage_transformers,
-                dimension_names,
-            })
-        }
+impl ArrayMetadata {
+    fn dimension_names(&self) -> Option<Vec<DimensionName>> {
+        self.dimension_names
+            .as_ref()
+            .map(|ds| ds.iter().map(|d| d.as_ref().map(|s| s.as_str()).into()).collect())
     }
-}
 
-impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
-    fn from(value: ZarrArrayMetadata) -> Self {
-        let ZarrArrayMetadata {
-            shape,
-            data_type,
-            chunk_shape,
-            chunk_key_encoding,
-            fill_value,
-            codecs,
-            storage_transformers,
-            dimension_names,
-        } = value;
-        {
-            fn fill_value_to_json(f: FillValue) -> serde_json::Value {
-                match f {
-                    FillValue::Bool(b) => b.into(),
-                    FillValue::Int8(n) => n.into(),
-                    FillValue::Int16(n) => n.into(),
-                    FillValue::Int32(n) => n.into(),
-                    FillValue::Int64(n) => n.into(),
-                    FillValue::UInt8(n) => n.into(),
-                    FillValue::UInt16(n) => n.into(),
-                    FillValue::UInt32(n) => n.into(),
-                    FillValue::UInt64(n) => n.into(),
-                    FillValue::Float16(f) => {
-                        if f.is_nan() {
-                            FillValue::NAN_STR.into()
-                        } else if f == f32::INFINITY {
-                            FillValue::INF_STR.into()
-                        } else if f == f32::NEG_INFINITY {
-                            FillValue::NEG_INF_STR.into()
-                        } else {
-                            f.into()
-                        }
-                    }
-                    FillValue::Float32(f) => {
-                        if f.is_nan() {
-                            FillValue::NAN_STR.into()
-                        } else if f == f32::INFINITY {
-                            FillValue::INF_STR.into()
-                        } else if f == f32::NEG_INFINITY {
-                            FillValue::NEG_INF_STR.into()
-                        } else {
-                            f.into()
-                        }
-                    }
-                    FillValue::Float64(f) => {
-                        if f.is_nan() {
-                            FillValue::NAN_STR.into()
-                        } else if f == f64::INFINITY {
-                            FillValue::INF_STR.into()
-                        } else if f == f64::NEG_INFINITY {
-                            FillValue::NEG_INF_STR.into()
-                        } else {
-                            f.into()
-                        }
-                    }
-                    FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::String(s) => s.into(),
-                    FillValue::Bytes(b) => b.into(),
-                }
-            }
-
-            let fill_value = fill_value_to_json(fill_value);
-            ZarrArrayMetadataSerialzer {
-                shape,
-                data_type,
-                chunk_shape,
-                chunk_key_encoding,
-                codecs,
-                storage_transformers,
-                dimension_names,
-                fill_value,
-            }
+    fn shape(&self) -> Option<ArrayShape> {
+        if self.shape.len() != self.chunk_grid.len() {
+            None
+        } else {
+            ArrayShape::new(
+                self.shape.iter().zip(self.chunk_grid.iter()).map(|(a, b)| (*a, *b)),
+            )
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GroupMetadata {
-    zarr_format: u8,
     #[serde(deserialize_with = "validate_group_node_type")]
     node_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<UserAttributes>,
 }
 
 fn validate_group_node_type<'de, D>(d: D) -> Result<String, D::Error>
@@ -1218,49 +1120,18 @@ where
     Ok(value)
 }
 
-impl ArrayMetadata {
-    fn new(attributes: Option<UserAttributes>, zarr_metadata: ZarrArrayMetadata) -> Self {
-        Self { zarr_format: 3, node_type: "array".to_string(), attributes, zarr_metadata }
-    }
-
-    fn to_bytes(&self) -> Bytes {
-        Bytes::from_iter(
-            // We can unpack because it comes from controlled datastructures that can be serialized
-            #[allow(clippy::expect_used)]
-            serde_json::to_vec(self).expect("bug in ArrayMetadata serialization"),
-        )
-    }
-}
-
-impl GroupMetadata {
-    fn new(attributes: Option<UserAttributes>) -> Self {
-        Self { zarr_format: 3, node_type: "group".to_string(), attributes }
-    }
-
-    fn to_bytes(&self) -> Bytes {
-        Bytes::from_iter(
-            // We can unpack because it comes from controlled datastructures that can be serialized
-            #[allow(clippy::expect_used)]
-            serde_json::to_vec(self).expect("bug in GroupMetadata serialization"),
-        )
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 struct NameConfigSerializer {
     name: String,
     configuration: serde_json::Value,
 }
 
-impl From<ChunkShape> for NameConfigSerializer {
-    fn from(value: ChunkShape) -> Self {
+impl From<Vec<u64>> for NameConfigSerializer {
+    fn from(value: Vec<u64>) -> Self {
         let arr = serde_json::Value::Array(
             value
-                .0
                 .iter()
-                .map(|v| {
-                    serde_json::Value::Number(serde_json::value::Number::from(v.get()))
-                })
+                .map(|v| serde_json::Value::Number(serde_json::value::Number::from(*v)))
                 .collect(),
         );
         let kvs = serde_json::value::Map::from_iter(iter::once((
@@ -1274,7 +1145,7 @@ impl From<ChunkShape> for NameConfigSerializer {
     }
 }
 
-impl TryFrom<NameConfigSerializer> for ChunkShape {
+impl TryFrom<NameConfigSerializer> for Vec<u64> {
     type Error = &'static str;
 
     fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
@@ -1289,48 +1160,12 @@ impl TryFrom<NameConfigSerializer> for ChunkShape {
                     .ok_or("cannot parse ChunkShape")?;
                 let shape = values
                     .iter()
-                    .map(|v| v.as_u64().and_then(|u64| NonZeroU64::try_from(u64).ok()))
+                    .map(|v| v.as_u64())
                     .collect::<Option<Vec<_>>>()
                     .ok_or("cannot parse ChunkShape")?;
-                Ok(ChunkShape(shape))
+                Ok(shape)
             }
             _ => Err("cannot parse ChunkShape"),
-        }
-    }
-}
-
-impl From<ChunkKeyEncoding> for NameConfigSerializer {
-    fn from(_value: ChunkKeyEncoding) -> Self {
-        let kvs = serde_json::value::Map::from_iter(iter::once((
-            "separator".to_string(),
-            serde_json::Value::String("/".to_string()),
-        )));
-        Self {
-            name: "default".to_string(),
-            configuration: serde_json::Value::Object(kvs),
-        }
-    }
-}
-
-impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
-    type Error = &'static str;
-
-    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
-        //FIXME: we are hardcoding / as the separator
-        match value {
-            NameConfigSerializer {
-                name,
-                configuration: serde_json::Value::Object(kvs),
-            } if name == "default" => {
-                if let Some("/") =
-                    kvs.get("separator").ok_or("cannot parse ChunkKeyEncoding")?.as_str()
-                {
-                    Ok(ChunkKeyEncoding::Slash)
-                } else {
-                    Err("cannot parse ChunkKeyEncoding")
-                }
-            }
-            _ => Err("cannot parse ChunkKeyEncoding"),
         }
     }
 }
@@ -1537,97 +1372,28 @@ mod tests {
         .is_err());
 
         assert!(serde_json::from_str::<ArrayMetadata>(
-            r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-        )
-        .is_ok());
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            )
+            .is_ok());
         assert!(serde_json::from_str::<ArrayMetadata>(
-            r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-        )
-        .is_err());
+                r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            )
+            .is_err());
 
         // deserialize with nan
-        assert!(matches!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float16(n) if n.is_nan()
-        ));
-        assert!(matches!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float32(n) if n.is_nan()
-        ));
-        assert!(matches!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float64(n) if n.is_nan()
-        ));
+        assert_eq!(
+                serde_json::from_str::<ArrayMetadata>(
+                    r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+                ).unwrap().dimension_names(),
+                Some(vec!["x".into(), "y".into(), "t".into()])
 
-        // deserialize with infinity
+            );
         assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float16(f32::INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float32(f32::INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float64(f64::INFINITY)
-        );
-
-        // deserialize with -infinity
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float16(f32::NEG_INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float32(f32::NEG_INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float64(f64::NEG_INFINITY)
-        );
-
-        // infinity roundtrip
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float16(f32::NEG_INFINITY),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
-        let zarr_meta = ArrayMetadata::new(None, zarr_meta);
-
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                serde_json::to_string(&zarr_meta).unwrap().as_str()
-            )
-            .unwrap(),
-            zarr_meta,
-        )
+                serde_json::from_str::<ArrayMetadata>(
+                    r#"{"zarr_format":3,"node_type":"array","shape":[2,3,4],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,2,3]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+                ).unwrap().shape(),
+                ArrayShape::new(vec![(2,1), (3,2), (4,3) ])
+            );
     }
 
     #[tokio::test]
@@ -1644,7 +1410,7 @@ mod tests {
         store
             .set(
                 "zarr.json",
-                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+                Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#),
             )
             .await?;
         assert_eq!(
@@ -1652,13 +1418,13 @@ mod tests {
             Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
         );
 
-        store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
+        store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#)).await?;
         assert_eq!(
-            store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
-            Bytes::copy_from_slice(
-                br#"{"zarr_format":3,"node_type":"group","attributes":{"eggs":42,"spam":"ham"}}"#
-            )
-        );
+               store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
+               Bytes::copy_from_slice(
+                   br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#
+               )
+           );
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
@@ -2568,7 +2334,7 @@ mod tests {
         store
             .set(
                 "zarr.json",
-                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+                Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#),
             )
             .await
             .unwrap();

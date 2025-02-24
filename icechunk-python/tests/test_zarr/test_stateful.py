@@ -106,8 +106,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         array, _ = array_and_chunks
         # TODO: support size-0 arrays GH392
         assume(array.size > 0)
-        # TODO: fix complex fill values GH391
-        assume(not np.iscomplexobj(array))
         super().add_array(data, name, array_and_chunks)
 
     #####  TODO: port everything below to zarr

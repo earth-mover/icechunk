@@ -13,21 +13,18 @@
 use std::{
     collections::HashMap,
     env::{self},
-    num::NonZeroU64,
     sync::Arc,
     time::Instant,
 };
 
+use bytes::Bytes;
 use futures::{stream::FuturesUnordered, StreamExt};
 use icechunk::{
     config::CompressionConfig,
     format::{
         manifest::{ChunkPayload, ChunkRef},
-        snapshot::ZarrArrayMetadata,
+        snapshot::ArrayShape,
         ChunkId, ChunkIndices, Path,
-    },
-    metadata::{
-        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
     },
     new_local_filesystem_storage,
     repository::VersionInfo,
@@ -62,30 +59,12 @@ async fn mk_repo(
 async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let repo = mk_repo(path).await?;
     let mut session = repo.writable_session("main").await?;
-    let meta = ZarrArrayMetadata {
-        shape: vec![MAX_I, MAX_J, MAX_L, MAX_K],
-        data_type: DataType::Int32,
-        chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-        ]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Int32(0),
-        codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-        storage_transformers: Some(vec![StorageTransformer {
-            name: "mytransformer".to_string(),
-            configuration: None,
-        }]),
-        dimension_names: Some(vec![
-            Some("x".to_string()),
-            Some("y".to_string()),
-            Some("t".to_string()),
-        ]),
-    };
+    let shape =
+        ArrayShape::new(vec![(MAX_I, 1), (MAX_J, 1), (MAX_K, 1), (MAX_L, 1)]).unwrap();
+    let user_data = Bytes::new();
+    let dimension_names = Some(vec!["i".into(), "j".into(), "k".into(), "l".into()]);
     let path: Path = "/array".try_into().unwrap();
-    session.add_array(path.clone(), meta).await?;
+    session.add_array(path.clone(), shape, dimension_names, user_data).await?;
     session.commit("array created", None).await?;
 
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));

@@ -46,10 +46,10 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    ConcurrencySettings, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
-    Storage, StorageError, StorageErrorKind, StorageResult, UpdateConfigResult,
-    WriteRefResult, CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX,
-    SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    ConcurrencySettings, ETag, FetchConfigResult, Generation, GetRefResult, ListInfo,
+    Reader, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
+    UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH,
+    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -158,11 +158,6 @@ impl ObjectStorage {
         self.backend.artificially_sort_refs_in_mem()
     }
 
-    /// We need this because object_store's local file implementation doesn't support metadata.
-    pub fn supports_metadata(&self) -> bool {
-        self.backend.supports_metadata()
-    }
-
     /// Return all keys in the store
     ///
     /// Intended for testing and debugging purposes only.
@@ -219,27 +214,6 @@ impl ObjectStorage {
         ObjectPath::from(format!("{}/{}/{}", self.backend.prefix(), REF_PREFIX, ref_key))
     }
 
-    async fn do_ref_versions(&self, ref_name: &str) -> BoxStream<StorageResult<String>> {
-        let prefix = self.ref_key(ref_name);
-        self.get_client()
-            .await
-            .list(Some(prefix.clone()).as_ref())
-            .map_err(|e| e.into())
-            .and_then(move |meta| {
-                ready(
-                    self.drop_prefix(&prefix, &meta.location)
-                        .map(|path| path.to_string())
-                        .ok_or(
-                            StorageErrorKind::Other(
-                                "Bug in ref prefix logic".to_string(),
-                            )
-                            .into(),
-                        ),
-                )
-            })
-            .boxed()
-    }
-
     async fn delete_batch(
         &self,
         prefix: &str,
@@ -267,8 +241,12 @@ impl ObjectStorage {
             .compat())
     }
 
-    fn metadata_to_attributes(&self, metadata: Vec<(String, String)>) -> Attributes {
-        if self.supports_metadata() {
+    fn metadata_to_attributes(
+        &self,
+        settings: &Settings,
+        metadata: Vec<(String, String)>,
+    ) -> Attributes {
+        if settings.unsafe_use_metadata() {
             Attributes::from_iter(metadata.into_iter().map(|(key, val)| {
                 (
                     Attribute::Metadata(std::borrow::Cow::Owned(key)),
@@ -277,6 +255,33 @@ impl ObjectStorage {
             }))
         } else {
             Attributes::new()
+        }
+    }
+
+    fn get_ref_name(&self, prefix: &ObjectPath, meta: &ObjectMeta) -> Option<String> {
+        let relative_key = self.drop_prefix(prefix, &meta.location)?;
+        let parent = relative_key.parts().next()?;
+        Some(parent.as_ref().to_string())
+    }
+
+    fn get_put_mode(
+        &self,
+        settings: &Settings,
+        previous_version: &VersionInfo,
+    ) -> PutMode {
+        match (
+            previous_version.is_create(),
+            settings.unsafe_use_conditional_create(),
+            settings.unsafe_use_conditional_update(),
+        ) {
+            (true, true, _) => PutMode::Create,
+            (true, false, _) => PutMode::Overwrite,
+
+            (false, _, true) => PutMode::Update(UpdateVersion {
+                e_tag: previous_version.etag().cloned(),
+                version: previous_version.generation().cloned(),
+            }),
+            (false, _, false) => PutMode::Overwrite,
         }
     }
 }
@@ -300,25 +305,27 @@ impl Storage for ObjectStorage {
         let response = self.get_client().await.get(&path).await;
 
         match response {
-            Ok(result) => match result.meta.e_tag.clone() {
-                Some(etag) => {
-                    Ok(FetchConfigResult::Found { bytes: result.bytes().await?, etag })
-                }
-                None => Ok(FetchConfigResult::NotFound),
-            },
+            Ok(result) => {
+                let version = VersionInfo {
+                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+                    generation: result.meta.version.as_ref().cloned().map(Generation),
+                };
+
+                Ok(FetchConfigResult::Found { bytes: result.bytes().await?, version })
+            }
             Err(object_store::Error::NotFound { .. }) => Ok(FetchConfigResult::NotFound),
             Err(err) => Err(err.into()),
         }
     }
-    #[instrument(skip(self, _settings, config))]
+    #[instrument(skip(self, settings, config))]
     async fn update_config(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult> {
         let path = self.get_config_path();
-        let attributes = if self.supports_metadata() {
+        let attributes = if settings.unsafe_use_metadata() {
             Attributes::from_iter(vec![(
                 Attribute::ContentType,
                 AttributeValue::from("application/yaml"),
@@ -327,23 +334,17 @@ impl Storage for ObjectStorage {
             Attributes::new()
         };
 
-        let mode = if let Some(etag) = etag {
-            PutMode::Update(UpdateVersion {
-                e_tag: Some(etag.to_string()),
-                version: None,
-            })
-        } else {
-            PutMode::Create
-        };
+        let mode = self.get_put_mode(settings, previous_version);
 
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         let res = self.get_client().await.put_opts(&path, config.into(), options).await;
         match res {
             Ok(res) => {
-                let new_etag = res.e_tag.ok_or(StorageErrorKind::Other(
-                    "Config object should have an etag".to_string(),
-                ))?;
-                Ok(UpdateConfigResult::Updated { new_etag })
+                let new_version = VersionInfo {
+                    etag: res.e_tag.map(ETag),
+                    generation: res.version.map(Generation),
+                };
+                Ok(UpdateConfigResult::Updated { new_version })
             }
             Err(object_store::Error::Precondition { .. }) => {
                 Ok(UpdateConfigResult::NotOnLatestVersion)
@@ -393,48 +394,48 @@ impl Storage for ObjectStorage {
         Ok(Box::new(self.get_object_reader(settings, &path).await?))
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_snapshot(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_snapshot_path(&id);
-        let attributes = self.metadata_to_attributes(metadata);
+        let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client().await.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_manifest(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: ManifestId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_manifest_path(&id);
-        let attributes = self.metadata_to_attributes(metadata);
+        let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client().await.put_opts(&path, bytes.into(), options).await?;
         Ok(())
     }
 
-    #[instrument(skip(self, _settings, metadata, bytes))]
+    #[instrument(skip(self, settings, metadata, bytes))]
     async fn write_transaction_log(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         id: SnapshotId,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
         let path = self.get_transaction_path(&id);
-        let attributes = self.metadata_to_attributes(metadata);
+        let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client().await.put_opts(&path, bytes.into(), options).await?;
@@ -479,7 +480,14 @@ impl Storage for ObjectStorage {
     ) -> StorageResult<GetRefResult> {
         let key = self.ref_key(ref_key);
         match self.get_client().await.get(&key).await {
-            Ok(res) => Ok(GetRefResult::Found { bytes: res.bytes().await? }),
+            Ok(res) => {
+                let etag = res.meta.e_tag.clone().map(ETag);
+                let generation = res.meta.version.clone().map(Generation);
+                Ok(GetRefResult::Found {
+                    bytes: res.bytes().await?,
+                    version: VersionInfo { etag, generation },
+                })
+            }
             Err(object_store::Error::NotFound { .. }) => Ok(GetRefResult::NotFound),
             Err(err) => Err(err.into()),
         }
@@ -487,54 +495,27 @@ impl Storage for ObjectStorage {
 
     #[instrument(skip(self, _settings))]
     async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
-        // FIXME: i don't think object_store's implementation of list_with_delimiter is any good
-        // we need to test if it even works beyond 1k refs
         let prefix = self.ref_key("");
 
         Ok(self
             .get_client()
             .await
-            .list_with_delimiter(Some(prefix.clone()).as_ref())
-            .await?
-            .common_prefixes
-            .iter()
-            .filter_map(|path| {
-                self.drop_prefix(&prefix, path).map(|path| path.to_string())
-            })
-            .collect())
+            .list(Some(prefix.clone()).as_ref())
+            .try_filter_map(|meta| ready(Ok(self.get_ref_name(&prefix, &meta))))
+            .try_collect()
+            .await?)
     }
 
-    #[instrument(skip(self, _settings))]
-    async fn ref_versions(
-        &self,
-        _settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>> {
-        let res = self.do_ref_versions(ref_name).await;
-        if self.artificially_sort_refs_in_mem() {
-            #[allow(clippy::expect_used)]
-            // This branch is used for local tests, not in production. We don't expect the size of
-            // these streams to be large, so we can collect in memory and fail early if there is an
-            // error
-            let mut all =
-                res.try_collect::<Vec<_>>().await.expect("Error fetching ref versions");
-            all.sort();
-            Ok(futures::stream::iter(all.into_iter().map(Ok)).boxed())
-        } else {
-            Ok(res)
-        }
-    }
-
-    #[instrument(skip(self, _settings, bytes))]
+    #[instrument(skip(self, settings, bytes))]
     async fn write_ref(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key);
-        let mode = if overwrite_refs { PutMode::Overwrite } else { PutMode::Create };
+        let mode = self.get_put_mode(settings, previous_version);
         let opts = PutOptions { mode, ..PutOptions::default() };
 
         match self
@@ -544,7 +525,8 @@ impl Storage for ObjectStorage {
             .await
         {
             Ok(_) => Ok(WriteRefResult::Written),
-            Err(object_store::Error::AlreadyExists { .. }) => {
+            Err(object_store::Error::Precondition { .. })
+            | Err(object_store::Error::AlreadyExists { .. }) => {
                 Ok(WriteRefResult::WontOverwrite)
             }
             Err(err) => Err(err.into()),
@@ -602,17 +584,6 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self))]
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        Ok(self
-            .get_client()
-            .await
-            .list(Some(&ObjectPath::from(self.backend.prefix())))
-            .next()
-            .await
-            .is_none())
-    }
-
-    #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
         key: &str,
@@ -663,14 +634,7 @@ pub trait ObjectStoreBackend: Debug + Sync + Send {
         false
     }
 
-    /// We need this because object_store's local file implementation doesn't support metadata.
-    fn supports_metadata(&self) -> bool {
-        true
-    }
-
-    fn default_settings(&self) -> Settings {
-        Settings::default()
-    }
+    fn default_settings(&self) -> Settings;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -698,6 +662,7 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
                     NonZeroU64::new(1).unwrap_or(NonZeroU64::MIN),
                 ),
             }),
+            ..Default::default()
         }
     }
 }
@@ -730,10 +695,6 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         true
     }
 
-    fn supports_metadata(&self) -> bool {
-        false
-    }
-
     fn default_settings(&self) -> Settings {
         Settings {
             concurrency: Some(ConcurrencySettings {
@@ -744,6 +705,9 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
                     NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
                 ),
             }),
+            unsafe_use_conditional_update: Some(false),
+            unsafe_use_metadata: Some(false),
+            ..Default::default()
         }
     }
 }
@@ -815,6 +779,10 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
     }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -863,6 +831,10 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
 
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
+    }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
     }
 }
 
@@ -929,6 +901,10 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
 
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
+    }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
     }
 }
 
