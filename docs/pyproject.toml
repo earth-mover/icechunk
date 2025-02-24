@@ -24,6 +24,7 @@ mkdocs-breadcrumbs-plugin = "^0.1.10"
 mkdocs-minify-plugin = "^0.8.0"
 mkdocs-mermaid2-plugin = "^1.1.1"
 mkdocs-git-authors-plugin = "^0.9.0"
+markdown-exec = "^1.10.0"
 
 [tool.poetry.group.dev.dependencies]
 mike = "^2.1.3"
