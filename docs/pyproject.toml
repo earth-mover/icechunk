@@ -25,6 +25,7 @@ mkdocs-minify-plugin = "^0.8.0"
 mkdocs-mermaid2-plugin = "^1.1.1"
 mkdocs-git-authors-plugin = "^0.9.0"
 markdown-exec = "^1.10.0"
+maturin = "^1.8.2"
 
 [tool.poetry.group.dev.dependencies]
 mike = "^2.1.3"
