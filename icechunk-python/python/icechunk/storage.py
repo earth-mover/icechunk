@@ -2,6 +2,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
     S3StaticCredentials,
@@ -222,6 +223,7 @@ def gcs_storage(
     bearer_token: str | None = None,
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
+    get_credentials: Callable[[], GcsBearerCredential] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Google Cloud Storage object store.
 
@@ -235,6 +237,8 @@ def gcs_storage(
         Fetch credentials from the operative system environment
     bearer_token: str | None
         The bearer token to use for the object store
+    get_credentials: Callable[[], GcsBearerCredential] | None
+        Use this function to get and refresh object store credentials
     """
     credentials = gcs_credentials(
         service_account_file=service_account_file,
@@ -242,6 +246,7 @@ def gcs_storage(
         application_credentials=application_credentials,
         bearer_token=bearer_token,
         from_env=from_env,
+        get_credentials=get_credentials,
     )
     return Storage.new_gcs(
         bucket=bucket,
