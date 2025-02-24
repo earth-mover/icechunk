@@ -31,28 +31,30 @@ pub struct IcechunkCLI {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(subcommand)]
+    #[command(subcommand, about = "Manage repositories")]
     Repo(RepoCommand),
-    #[command(subcommand)]
+    #[command(subcommand, about = "Manage snapshots")]
     Snapshot(SnapshotCommand),
-    #[command(subcommand)]
+    #[command(subcommand, about = "Manage configuration")]
     Config(ConfigCommand),
 }
 
 #[derive(Debug, Subcommand)]
 enum RepoCommand {
-    #[clap(name = "create")]
+    #[clap(name = "create", about = "Create a repository")]
     Create(CreateCommand),
 }
 
 #[derive(Debug, Subcommand)]
 enum SnapshotCommand {
-    #[clap(name = "list")]
+    #[clap(name = "list", about = "List snapshots in a repository")]
     List(ListCommand),
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
+    #[clap(name = "init", about = "Interactively create a new config file.")]
+    Init(InitCommand),
     #[clap(
         name = "add",
         about = concat!(
@@ -60,13 +62,31 @@ enum ConfigCommand {
             "Config is created if it doesn't exist."
         )
     )]
-    Add,
-    #[clap(name = "list")]
+    Add(AddCommand),
+    #[clap(name = "list", about = "Print the current config.")]
     List,
 }
 
 #[derive(Debug, Args)]
 struct CreateCommand {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+}
+
+#[derive(Debug, Args)]
+struct InitCommand {
+    #[arg(
+        short = 'f',
+        long = "force",
+        help = "Overwrite existing config",
+        default_value = "false"
+    )]
+    force: bool,
+}
+
+#[derive(Debug, Args)]
+struct AddCommand {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
     repo: RepositoryAlias,
 }
 
@@ -219,19 +239,38 @@ async fn snapshot_list(list_cmd: ListCommand, config: CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn config_add(config: &CliConfig) -> Result<CliConfig> {
+async fn config_add(add_cmd: AddCommand, config: &CliConfig) -> Result<CliConfig> {
+    if config.repos.contains_key(&add_cmd.repo) {
+        return Err(anyhow::anyhow!("Repository {:?} already exists", add_cmd.repo));
+    }
+
+    let alias = add_cmd.repo.clone();
+    let new_config = add_repo_to_config(alias, config)?;
+
+    Ok(new_config)
+}
+
+async fn config_init(init_cmd: &InitCommand, config: &CliConfig) -> Result<CliConfig> {
+    if !config.repos.is_empty() && !init_cmd.force {
+        return Err(anyhow::anyhow!(
+            "Config already exists and contains repositories. Use --force to overwrite."
+        ));
+    }
+
     let alias: String = Input::new()
         .with_prompt("Enter alias")
-        .validate_with(|input: &String| {
-            if config.repos.contains_key(&RepositoryAlias(input.clone())) {
-                Err(anyhow::anyhow!("Alias already exists"))
-            } else {
-                Ok(())
-            }
-        })
         .interact()
         .context("Failed to get alias")?;
 
+    let repo = add_repo_to_config(RepositoryAlias(alias), &CliConfig::default())?;
+
+    Ok(repo)
+}
+
+fn add_repo_to_config(
+    repo_alias: RepositoryAlias,
+    config: &CliConfig,
+) -> Result<CliConfig> {
     let repo_types = vec!["Local", "S3", "Tigris", "GCS", "Azure"];
 
     let repo_type = Select::new()
@@ -351,7 +390,7 @@ async fn config_add(config: &CliConfig) -> Result<CliConfig> {
     };
 
     let mut new_config = (*config).clone();
-    new_config.repos.insert(RepositoryAlias(alias), repo);
+    new_config.repos.insert(repo_alias, repo);
 
     Ok(new_config)
 }
@@ -372,8 +411,13 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
         Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
             snapshot_list(list_cmd, config).await
         }
-        Command::Config(ConfigCommand::Add) => {
-            let new_config = config_add(&config).await?;
+        Command::Config(ConfigCommand::Init(init_cmd)) => {
+            let new_config = config_init(&init_cmd, &config).await?;
+            write_config(&new_config)?;
+            Ok(())
+        }
+        Command::Config(ConfigCommand::Add(add_cmd)) => {
+            let new_config = config_add(add_cmd, &config).await?;
             write_config(&new_config)?;
             Ok(())
         }
