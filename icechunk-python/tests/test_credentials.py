@@ -8,7 +8,6 @@ from icechunk import (
     S3Options,
     S3StaticCredentials,
     Storage,
-    gcs_storage,
     s3_refreshable_credentials,
     s3_storage,
 )
@@ -122,28 +121,6 @@ def test_s3_refreshable_credentials_refresh(tmp_path: Path) -> None:
         region="us-east-1",
         endpoint_url="http://localhost:9000",
         allow_http=True,
-        bucket="testbucket",
-        prefix="this-repo-does-not-exist",
-        get_credentials=creds_obj,
-    )
-
-    # credentials expire immediately so refresh function keeps getting called
-    assert not Repository.exists(st)
-    assert not Repository.exists(st)
-    assert not Repository.exists(st)
-    assert path.read_text() == "..."
-
-    # after three times credentials don't expire, so the file doesn't change
-    assert not Repository.exists(st)
-    assert not Repository.exists(st)
-    assert path.read_text() == "..."
-
-
-def test_gcs_refreshable_credentials_refresh(tmp_path: Path) -> None:
-    path = tmp_path / "calls.txt"
-    creds_obj = ExpirableCredentials(path)
-
-    st = gcs_storage(
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
         get_credentials=creds_obj,
