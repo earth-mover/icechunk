@@ -33,8 +33,6 @@ use session::PySession;
 use store::PyStore;
 
 #[cfg(feature = "cli")]
-use clap::error::ErrorKind;
-#[cfg(feature = "cli")]
 use clap::Parser;
 #[cfg(feature = "cli")]
 use icechunk::cli::interface::{run_cli, IcechunkCLI};
@@ -46,25 +44,16 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
     let args: Vec<String> = sys.getattr("argv")?.extract()?;
     match IcechunkCLI::try_parse_from(args.to_vec()) {
         Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            run_cli(cli_args).await.map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-            })?;
+            if let Err(e) = run_cli(cli_args).await {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
             Ok(())
         }),
-        // TODO (Daniel): Improve error handling & printout
-        Err(e) => match e.kind() {
-            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-            | ErrorKind::MissingRequiredArgument => {
-                print!("{}", e);
-                return Ok(());
-            }
-            _ => {
-                println!("{:?}", e.kind());
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    e.to_string(),
-                ));
-            }
-        },
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
     }
 }
 
