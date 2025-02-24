@@ -5,7 +5,6 @@ use futures::stream::StreamExt;
 use serde_yaml_ng;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
-use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,7 +16,7 @@ use crate::storage::{
 };
 use crate::{new_s3_storage, Repository, RepositoryConfig, Storage};
 
-use crate::cli::config::{Repositories, RepositoryAlias, RepositoryDefinition};
+use crate::cli::config::{CliConfig, RepositoryAlias, RepositoryDefinition};
 use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};
 use dirs::config_dir;
 
@@ -54,8 +53,14 @@ enum SnapshotCommand {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    #[clap(name = "init")]
-    Init,
+    #[clap(
+        name = "add",
+        about = concat!(
+            "Interactively add a repository to the config. ",
+            "Config is created if it doesn't exist."
+        )
+    )]
+    Add,
     #[clap(name = "list")]
     List,
 }
@@ -89,21 +94,20 @@ fn config_path() -> PathBuf {
     path
 }
 
-fn load_repositories() -> Result<Repositories> {
+fn load_config() -> Result<CliConfig> {
     let path = config_path();
     let file = File::open(path).context("Failed to open config")?;
-    let deserialized: Repositories =
+    let deserialized: CliConfig =
         serde_yaml_ng::from_reader(file).context("Failed to parse config")?;
     Ok(deserialized)
 }
 
-fn write_config(repositories: Repositories) -> Result<(), anyhow::Error> {
+fn write_config(config: &CliConfig) -> Result<(), anyhow::Error> {
     let path = config_path();
     create_dir_all(path.parent().unwrap())
         .context("Failed to create config directory")?;
     let file = File::create(path).context("Failed to create config file")?;
-    serde_yaml_ng::to_writer(file, &repositories)
-        .context("Failed to write config to file")?;
+    serde_yaml_ng::to_writer(file, &config).context("Failed to write config to file")?;
     Ok(())
 }
 
@@ -177,11 +181,9 @@ async fn get_storage(
     }
 }
 
-// TODO (): Consider writing this as a library to make it easily testable
-async fn repo_create(init_cmd: CreateCommand) -> Result<()> {
-    let repos = load_repositories()?;
+async fn repo_create(init_cmd: CreateCommand, config: CliConfig) -> Result<()> {
     let repo =
-        repos.repos.get(&init_cmd.repo).context("Repository not found in config")?;
+        config.repos.get(&init_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
 
     let config = Some(repo.get_config().clone());
@@ -195,10 +197,9 @@ async fn repo_create(init_cmd: CreateCommand) -> Result<()> {
     Ok(())
 }
 
-async fn snapshot_list(list_cmd: ListCommand) -> Result<()> {
-    let repos = load_repositories()?;
+async fn snapshot_list(list_cmd: ListCommand, config: CliConfig) -> Result<()> {
     let repo =
-        repos.repos.get(&list_cmd.repo).context("Repository not found in config")?;
+        config.repos.get(&list_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
     let config = Some(repo.get_config().clone());
 
@@ -218,14 +219,11 @@ async fn snapshot_list(list_cmd: ListCommand) -> Result<()> {
     Ok(())
 }
 
-async fn config_init() -> Result<()> {
-    let mut repositories =
-        load_repositories().unwrap_or(Repositories { repos: HashMap::new() });
-
+async fn config_add(config: &CliConfig) -> Result<CliConfig> {
     let alias: String = Input::new()
         .with_prompt("Enter alias")
         .validate_with(|input: &String| {
-            if repositories.repos.contains_key(&RepositoryAlias(input.clone())) {
+            if config.repos.contains_key(&RepositoryAlias(input.clone())) {
                 Err(anyhow::anyhow!("Alias already exists"))
             } else {
                 Ok(())
@@ -352,29 +350,34 @@ async fn config_init() -> Result<()> {
         _ => unreachable!(),
     };
 
-    repositories.repos.insert(RepositoryAlias(alias), repo);
+    let mut new_config = (*config).clone();
+    new_config.repos.insert(RepositoryAlias(alias), repo);
 
-    write_config(repositories)?;
-
-    Ok(())
+    Ok(new_config)
 }
 
-async fn config_list() -> Result<()> {
-    let repositories = load_repositories()?;
-    let serialized = serde_yaml_ng::to_string(&repositories)?;
+async fn config_list(config: CliConfig) -> Result<()> {
+    let serialized = serde_yaml_ng::to_string(&config)?;
     println!("{}", serialized);
 
     Ok(())
 }
 
 pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
+    let config = load_config().unwrap_or_default();
     match args.cmd {
-        Command::Repo(RepoCommand::Create(init_cmd)) => repo_create(init_cmd).await,
-        Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
-            snapshot_list(list_cmd).await
+        Command::Repo(RepoCommand::Create(init_cmd)) => {
+            repo_create(init_cmd, config).await
         }
-        Command::Config(ConfigCommand::Init) => config_init().await,
-        Command::Config(ConfigCommand::List) => config_list().await,
+        Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
+            snapshot_list(list_cmd, config).await
+        }
+        Command::Config(ConfigCommand::Add) => {
+            let new_config = config_add(&config).await?;
+            write_config(&new_config)?;
+            Ok(())
+        }
+        Command::Config(ConfigCommand::List) => config_list(config).await,
     }
     .map_err(|e| anyhow::anyhow!("❌ {}", e))
 }

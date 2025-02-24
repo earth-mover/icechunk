@@ -6,21 +6,20 @@ use crate::config::{
     AzureCredentials, GcsCredentials, RepositoryConfig, S3Credentials, S3Options,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RepoLocation {
     pub bucket: String,
     pub prefix: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AzureRepoLocation {
     pub account: String,
     pub container: String,
     pub prefix: Option<String>,
 }
 
-// TODO (Daniel): Add serde macros
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RepositoryDefinition {
     LocalFileSystem {
         path: PathBuf,
@@ -75,8 +74,8 @@ impl FromStr for RepositoryAlias {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Repositories {
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct CliConfig {
     pub repos: HashMap<RepositoryAlias, RepositoryDefinition>,
 }
 
@@ -113,14 +112,14 @@ mod tests {
             config: repo_config,
         };
 
-        let mut _repos = Repositories { repos: HashMap::new() };
+        let mut _repos = CliConfig { repos: HashMap::new() };
 
         let alias = RepositoryAlias("my-repo".to_string());
         _repos.repos.insert(alias.clone(), repo_def);
 
         // Assert: serde round-trip
         let serialized = serde_yaml_ng::to_string(&_repos).unwrap();
-        let deserialized: Repositories = serde_yaml_ng::from_str(&serialized).unwrap();
+        let deserialized: CliConfig = serde_yaml_ng::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, _repos));
 
         // Assert: file round-trip
@@ -128,7 +127,7 @@ mod tests {
         let file = File::create(&path).unwrap();
         to_writer(file, &_repos).unwrap();
         let file = File::open(path).unwrap();
-        let deserialized: Repositories = from_reader(file).unwrap();
+        let deserialized: CliConfig = from_reader(file).unwrap();
         assert!(matches!(deserialized, _repos));
     }
 }
