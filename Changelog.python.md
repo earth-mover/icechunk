@@ -1,5 +1,18 @@
 # Changelog
 
+## Python Icechunk Library 0.2.2
+
+### Features
+
+- Added the ability to checkout a session `as_of` a specific time. This is useful for replaying what the repo would be at a specific point in time.
+- Support for refreshable Google Cloud Storage credentials.
+
+### Fixes
+
+- Fix a bug where the clean prefix detection was hiding other errors when creating repositories.
+- API now correctly uses `snapshot_id` instead of `snapshot` consistently.
+- Only write `content-type` to metadata files if the target object store supports it.
+
 ## Python Icechunk Library 0.2.1
 
 ### Features
