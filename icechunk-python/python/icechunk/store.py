@@ -289,7 +289,7 @@ class IcechunkStore(Store, SyncMixin):
 
         Parameters
         ----------
-        key : str
+        prefix : str
         """
         return await self._store.delete_dir(prefix)
 
