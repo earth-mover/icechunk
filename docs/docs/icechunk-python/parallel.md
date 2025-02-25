@@ -81,6 +81,10 @@ xr.testing.assert_identical(ds, ondisk)
 
 ## Distributed writes
 
+!!! info
+
+    See a full executable example [here](https://github.com/earth-mover/icechunk/blob/main/icechunk-python/examples/mpwrite.py).
+
 Any task execution framework (e.g. `ProcessPoolExecutor`, Joblib, Lithops, Dask Distributed, Ray, etc.)
 can be used instead of the `ThreadPoolExecutor`. However such workloads should account for
 Icehunk being a "stateful" store that records changes executed in a write session.
