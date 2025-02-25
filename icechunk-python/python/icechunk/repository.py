@@ -140,6 +140,16 @@ class Repository:
         """
         return PyRepository.exists(storage)
 
+    def __getstate__(self) -> object:
+        return {
+            "_repository": self._repository.as_bytes(),
+        }
+
+    def __setstate__(self, state: object) -> None:
+        if not isinstance(state, dict):
+            raise ValueError("Invalid repository state")
+        self._repository = PyRepository.from_bytes(state["_repository"])
+
     @staticmethod
     def fetch_config(storage: Storage) -> RepositoryConfig | None:
         """

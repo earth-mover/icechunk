@@ -25,6 +25,12 @@ def tmp_repo(tmpdir: Path) -> Repository:
     return repo
 
 
+def test_pickle_repository(tmp_repo: Repository) -> None:
+    pickled = pickle.dumps(tmp_repo)
+    roundtripped = pickle.loads(pickled)
+    assert tmp_repo.list_branches() == roundtripped.list_branches()
+
+
 def test_pickle_read_only(tmp_repo: Repository) -> None:
     tmp_session = tmp_repo.writable_session(branch="main")
     tmp_store = tmp_session.store
