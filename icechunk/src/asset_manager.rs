@@ -680,7 +680,7 @@ mod test {
     use super::*;
     use crate::{
         format::{
-            manifest::{ChunkInfo, ChunkPayload},
+            manifest::{ChunkInfo, ChunkPayload, ManifestShards},
             ChunkIndices, NodeId,
         },
         storage::{logging::LoggingStorage, new_in_memory_storage, Storage},
@@ -692,6 +692,7 @@ mod test {
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
+        let shards = ManifestShards::default(1);
         let node1 = NodeId::random();
         let node2 = NodeId::random();
         let ci1 = ChunkInfo {
@@ -705,7 +706,7 @@ mod test {
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
         let pre_existing_manifest =
-            Manifest::from_iter(vec![ci1].into_iter()).await?.unwrap();
+            Manifest::from_iter(vec![ci1].into_iter(), &shards).await?.unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
         let pre_existing_id = pre_existing_manifest.id();
         let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
@@ -720,7 +721,7 @@ mod test {
         );
 
         let manifest =
-            Arc::new(Manifest::from_iter(vec![ci2.clone()].into_iter()).await?.unwrap());
+            Arc::new(Manifest::from_iter(vec![ci2.clone()].into_iter(), &shards).await?.unwrap());
         let id = manifest.id();
         let size = caching.write_manifest(Arc::clone(&manifest)).await?;
 
@@ -765,6 +766,7 @@ mod test {
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
+        let shards = ManifestShards::default(1);
         let ci1 = ChunkInfo {
             node: NodeId::random(),
             coord: ChunkIndices(vec![]),
@@ -780,15 +782,15 @@ mod test {
         let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
         let manifest1 =
-            Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?.unwrap());
+            Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3], &shards).await?.unwrap());
         let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
         let manifest2 =
-            Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?.unwrap());
+            Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6], &shards).await?.unwrap());
         let id2 = manifest2.id();
         let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
         let manifest3 =
-            Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?.unwrap());
+            Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9], &shards).await?.unwrap());
         let id3 = manifest3.id();
         let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
 
@@ -829,12 +831,13 @@ mod test {
         let manager =
             Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone(), 1));
 
+        let shards = ManifestShards::default(2);
         // some reasonable size so it takes some time to parse
         let manifest = Manifest::from_iter((0..5_000).map(|_| ChunkInfo {
             node: NodeId::random(),
             coord: ChunkIndices(Vec::from([rand::random(), rand::random()])),
             payload: ChunkPayload::Inline("hello".into()),
-        }))
+        }), &shards)
         .await
         .unwrap()
         .unwrap();

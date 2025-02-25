@@ -1,10 +1,12 @@
-use std::{borrow::Cow, convert::Infallible, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow, collections::HashMap, convert::Infallible, ops::Range, sync::Arc,
+};
 
 use crate::format::flatbuffers::gen;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::Itertools;
+use itertools::{multiunzip, repeat_n, Itertools};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -21,12 +23,6 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(Vec<Range<u32>>);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestRef {
-    pub object_id: ManifestId,
-    pub extents: ManifestExtents,
-}
-
 impl ManifestExtents {
     pub fn new(from: &[u32], to: &[u32]) -> Self {
         let v = from
@@ -37,8 +33,76 @@ impl ManifestExtents {
         Self(v)
     }
 
+    pub fn contains(&self, coord: &[u32]) -> bool {
+        self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Range<u32>> {
         self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestRef {
+    pub object_id: ManifestId,
+    pub extents: ManifestExtents,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestShards(Vec<ManifestExtents>);
+
+impl ManifestShards {
+    pub fn default(ndim: usize) -> Self {
+        Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
+    }
+
+    pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
+        let res = iter
+            .into_iter()
+            .map(|x| x.into_iter().tuple_windows())
+            .multi_cartesian_product()
+            .map(|x| multiunzip(x))
+            .map(|(from, to): (Vec<u32>, Vec<u32>)| {
+                ManifestExtents::new(from.as_slice(), to.as_slice())
+            });
+        Self(res.collect())
+    }
+
+    // Returns the index of shard_range that includes ChunkIndices
+    // This can be used at write time to split manifests based on the config
+    // and at read time to choose which manifest to query for chunk payload
+    pub fn which(&self, coord: &ChunkIndices) -> Result<usize, IcechunkFormatError> {
+        // shard_range[i] must bound ChunkIndices
+        // 0 <= return value <= shard_range.len()
+        // it is possible that shard_range does not include a coord. say we have 2x2 shard grid
+        // but only shard (0,0) and shard (1,1) are populated with data.
+        // A coord located in (1, 0) should return Err
+        // Since shard_range need not form a regular grid, we must iterate through and find the first result.
+        // ManifestExtents in shard_range MUST NOT overlap with each other. How do we ensure this?
+        // ndim must be the same
+        // debug_assert_eq!(coord.0.len(), shard_range[0].len());
+        // FIXME: could optimize for unbounded single manifest
+        self.iter()
+            .enumerate()
+            .find(|(_, e)| e.contains(coord.0.as_slice()))
+            .map(|(i, _)| i as usize)
+            .ok_or(IcechunkFormatError::from(
+                IcechunkFormatErrorKind::InvalidIndexForSharding {
+                    coords: coord.clone(),
+                },
+            ))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -177,6 +241,7 @@ impl Manifest {
 
     pub async fn from_stream<E>(
         stream: impl Stream<Item = Result<ChunkInfo, E>>,
+        shards: &ManifestShards,
     ) -> Result<Option<Self>, E> {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
@@ -186,27 +251,41 @@ impl Manifest {
 
         let mut all = all.iter().peekable();
 
-        let mut array_manifests = Vec::with_capacity(1);
+        let mut array_manifests = Vec::with_capacity(shards.len());
+        // why peek?
+        // this seems to handle multiple nodes, but we only send one in?
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
+            let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
+            sharded_refs.reserve(shards.len());
             // TODO: what is a good capacity
-            let mut refs = Vec::with_capacity(8_192);
+            let ref_capacity = 8_192;
+            sharded_refs.insert(0, Vec::with_capacity(ref_capacity));
             while let Some(chunk) = all.next_if(|chunk| chunk.node == current_node) {
-                refs.push(mk_chunk_ref(&mut builder, chunk));
+                let shard_index = shards.which(&chunk.coord).unwrap();
+                sharded_refs
+                    .entry(shard_index)
+                    .or_insert_with(|| Vec::with_capacity(ref_capacity))
+                    .push(mk_chunk_ref(&mut builder, chunk));
             }
 
             let node_id = Some(gen::ObjectId8::new(&current_node.0));
-            let refs = Some(builder.create_vector(refs.as_slice()));
-            let array_manifest = gen::ArrayManifest::create(
-                &mut builder,
-                &gen::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
-            );
-            array_manifests.push(array_manifest);
+            for refs in sharded_refs.values() {
+                // FIXME: skip empty refs?
+                let refs = Some(builder.create_vector(refs.as_slice()));
+                let array_manifest = gen::ArrayManifest::create(
+                    &mut builder,
+                    &gen::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
+                );
+                array_manifests.push(array_manifest);
+            }
         }
 
         if array_manifests.is_empty() {
-            // empty manifet
+            // empty manifest
             return Ok(None);
         }
+
+        // looks we now
 
         let arrays = builder.create_vector(array_manifests.as_slice());
         let manifest_id = ManifestId::random();
@@ -227,8 +306,9 @@ impl Manifest {
     /// Used for tests
     pub async fn from_iter<T: IntoIterator<Item = ChunkInfo>>(
         iter: T,
+        shards: &ManifestShards,
     ) -> Result<Option<Self>, Infallible> {
-        Self::from_stream(futures::stream::iter(iter.into_iter().map(Ok))).await
+        Self::from_stream(futures::stream::iter(iter.into_iter().map(Ok)), shards).await
     }
 
     pub fn len(&self) -> usize {
