@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library 0.2.3
+
+### Features
+
+- `Repository` can now be pickled.
+- `icechunk.print_debug_info()` now prints out relative information about the installed version of icechunk and relative dependencies.
+
+### Fixes
+
+- Fixes a missing export for Google Cloud Storage credentials.
+
 ## Python Icechunk Library 0.2.2
 
 ### Features
