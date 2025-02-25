@@ -1312,6 +1312,10 @@ impl PyStorage {
         })
     }
 
+    pub fn __repr__(&self) -> String {
+        format!("{}", self.0)
+    }
+
     pub fn default_settings(&self) -> PyStorageSettings {
         self.0.default_settings().into()
     }

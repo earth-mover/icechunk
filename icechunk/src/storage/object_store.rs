@@ -27,7 +27,7 @@ use object_store::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fmt::Debug,
+    fmt::{self, Debug, Display},
     fs::create_dir_all,
     future::ready,
     num::{NonZeroU16, NonZeroU64},
@@ -283,6 +283,12 @@ impl ObjectStorage {
             }),
             (false, _, false) => PutMode::Overwrite,
         }
+    }
+}
+
+impl fmt::Display for ObjectStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ObjectStorage(backend={})", self.backend)
     }
 }
 
@@ -622,7 +628,7 @@ impl Storage for ObjectStorage {
 
 #[async_trait]
 #[typetag::serde(tag = "object_store_provider_type")]
-pub trait ObjectStoreBackend: Debug + Sync + Send {
+pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError>;
 
     /// The prefix for the object store.
@@ -639,6 +645,12 @@ pub trait ObjectStoreBackend: Debug + Sync + Send {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InMemoryObjectStoreBackend;
+
+impl fmt::Display for InMemoryObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "InMemoryObjectStoreBackend")
+    }
+}
 
 #[async_trait]
 #[typetag::serde(name = "in_memory_object_store_provider")]
@@ -670,6 +682,12 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemObjectStoreBackend {
     path: PathBuf,
+}
+
+impl fmt::Display for LocalFileSystemObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LocalFileSystemObjectStoreBackend(path={})", self.path.display())
+    }
 }
 
 #[async_trait]
@@ -718,6 +736,18 @@ pub struct S3ObjectStoreBackend {
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
     config: Option<S3Options>,
+}
+
+impl fmt::Display for S3ObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "S3ObjectStoreBackend(bucket={}, prefix={}, config={})",
+            self.bucket,
+            self.prefix.as_deref().unwrap_or(""),
+            self.config.as_ref().map(|c| c.to_string()).unwrap_or("None".to_string())
+        )
+    }
 }
 
 #[async_trait]
@@ -794,6 +824,18 @@ pub struct AzureObjectStoreBackend {
     config: Option<HashMap<AzureConfigKey, String>>,
 }
 
+impl fmt::Display for AzureObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "AzureObjectStoreBackend(account={}, container={}, prefix={})",
+            self.account,
+            self.container,
+            self.prefix.as_deref().unwrap_or("")
+        )
+    }
+}
+
 #[async_trait]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
@@ -844,6 +886,17 @@ pub struct GcsObjectStoreBackend {
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
     config: Option<HashMap<GoogleConfigKey, String>>,
+}
+
+impl fmt::Display for GcsObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GcsObjectStoreBackend(bucket={}, prefix={})",
+            self.bucket,
+            self.prefix.as_deref().unwrap_or("")
+        )
+    }
 }
 
 #[async_trait]

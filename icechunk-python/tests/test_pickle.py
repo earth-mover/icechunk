@@ -25,10 +25,16 @@ def tmp_repo(tmpdir: Path) -> Repository:
     return repo
 
 
-def test_pickle_repository(tmp_repo: Repository) -> None:
+def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
     pickled = pickle.dumps(tmp_repo)
     roundtripped = pickle.loads(pickled)
     assert tmp_repo.list_branches() == roundtripped.list_branches()
+
+    storage = tmp_repo.storage
+    assert (
+        repr(storage)
+        == f"ObjectStorage(backend=LocalFileSystemObjectStoreBackend(path={tmpdir}))"
+    )
 
 
 def test_pickle_read_only(tmp_repo: Repository) -> None:

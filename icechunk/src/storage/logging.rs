@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     ops::Range,
     sync::{Arc, Mutex},
 };
@@ -34,6 +35,12 @@ impl LoggingStorage {
     #[allow(clippy::expect_used)] // this implementation is intended for tests only
     pub fn fetch_operations(&self) -> Vec<(String, String)> {
         self.fetch_log.lock().expect("poison lock").clone()
+    }
+}
+
+impl fmt::Display for LoggingStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LoggingStorage(backend={})", self.backend)
     }
 }
 
