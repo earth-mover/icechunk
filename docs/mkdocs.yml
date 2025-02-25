@@ -7,6 +7,7 @@ repo_url: https://github.com/earth-mover/icechunk
 repo_name: earth-mover/icechunk
 copyright: Earthmover PBC # @see overrides/partials/footer.html
 
+strict: true
 site_dir: ./.site
 
 extra_css:
@@ -136,10 +137,12 @@ plugins:
           options:
             docstring_style: numpy
           paths: [../icechunk-python/python]
-
   - mkdocs-jupyter:
       include_source: True
-      #include:
+      # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
+  - markdown-exec
+      #  - "icechunk-python/docs/**/*.ipynb"
+      #  - "icechunk-python/docs/docs/icechunk-python/*.ipynb"
       #  - "icechunk-python/notebooks/*.ipynb"
       #  - "icechunk-python/examples/*.py"
 
@@ -165,6 +168,8 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: "#"
 
 nav:
   - Home: index.md
@@ -185,8 +190,8 @@ nav:
       - Icechunk for Git Users: icechunk-python/cheatsheets/git-users.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
-#    - Notebooks:
-#      - ... | flat | icechunk-python/notebooks/*.ipynb
+    # - Notebooks:
+    #   - ... | flat | icechunk-python/notebooks/*.ipynb
   - Icechunk Rust: icechunk-rust.md
   - Contributing: contributing.md
   - Sample Datasets: sample-datasets.md
