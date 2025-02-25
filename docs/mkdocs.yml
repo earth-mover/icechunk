@@ -169,6 +169,9 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Overview: overview.md
+  - Concepts:
+      - Version Control System: concepts/version-control-system.md
+      - Best Practices: concepts/best-practices.md
   - FAQ: faq.md
   - Icechunk Python:
     - Quickstart: icechunk-python/quickstart.md
