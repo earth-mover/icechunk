@@ -298,7 +298,7 @@ pub enum WriteRefResult {
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
-pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
+pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     fn default_settings(&self) -> Settings {
         Default::default()
     }
