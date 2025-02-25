@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
@@ -460,6 +461,29 @@ impl PyRepository {
                     )
                     .map_err(PyIcechunkStoreError::RepositoryError)?,
             )))
+        })
+    }
+
+    #[classmethod]
+    fn from_bytes(
+        _cls: Bound<'_, PyType>,
+        py: Python<'_>,
+        bytes: Vec<u8>,
+    ) -> PyResult<Self> {
+        // This is a compute intensive task, we need to release the Gil
+        py.allow_threads(move || {
+            let repository = Repository::from_bytes(bytes)
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(Self(Arc::new(repository)))
+        })
+    }
+
+    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<[u8]>> {
+        // This is a compute intensive task, we need to release the Gil
+        py.allow_threads(move || {
+            let bytes =
+                self.0.as_bytes().map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(Cow::Owned(bytes))
         })
     }
 

@@ -135,7 +135,7 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python
-hist = repo.ancestry(snapshot_id=snapshot_id_2)
+hist = list(repo.ancestry(snapshot_id=snapshot_id_2))
 for ancestor in hist:
     print(ancestor.id, ancestor.message, ancestor.written_at)
 

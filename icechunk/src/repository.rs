@@ -331,6 +331,16 @@ impl Repository {
         )
     }
 
+    #[instrument(skip(bytes))]
+    pub fn from_bytes(bytes: Vec<u8>) -> RepositoryResult<Self> {
+        rmp_serde::from_slice(&bytes).err_into()
+    }
+
+    #[instrument(skip(self))]
+    pub fn as_bytes(&self) -> RepositoryResult<Vec<u8>> {
+        rmp_serde::to_vec(self).err_into()
+    }
+
     #[instrument(skip_all)]
     pub async fn fetch_config(
         storage: &(dyn Storage + Send + Sync),
