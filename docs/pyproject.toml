@@ -28,6 +28,7 @@ markdown-exec = "^1.10.0"
 maturin = "^1.8.2"
 xarray = "^2025.1.2"
 pooch = "^1.8.2"
+scipy = "^1.15.2"
 
 [tool.poetry.group.dev.dependencies]
 mike = "^2.1.3"
