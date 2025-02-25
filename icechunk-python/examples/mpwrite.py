@@ -1,3 +1,5 @@
+# An example of using multiprocessing to write to an Icechunk dataset
+
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 

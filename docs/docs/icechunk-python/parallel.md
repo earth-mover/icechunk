@@ -127,8 +127,8 @@ with ProcessPoolExecutor() as executor:
             executor.submit(write_timestamp, itime=i, session=session)
             for i in range(ds.sizes["time"])
         ]
-    # grab the Session objects from each individual write task
-    sessions = [f.result() for f in futures]
+        # grab the Session objects from each individual write task
+        sessions = [f.result() for f in futures]
 
 # manually merge the remote sessions in to the local session
 session = merge_sessions(session, *sessions)
