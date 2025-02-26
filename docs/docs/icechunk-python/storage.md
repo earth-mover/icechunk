@@ -73,10 +73,6 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     )
     ```
 
-#### AWS Limitations
-
-- Icechunk is currently incompatible with [S3 Express One Zone](https://aws.amazon.com/s3/storage-classes/express-one-zone/). See [this issue](https://github.com/earth-mover/icechunk/issues/667) for more discussion.
-
 #### Tigris
 
 [Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
