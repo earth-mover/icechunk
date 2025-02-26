@@ -5,6 +5,7 @@ use futures::stream::StreamExt;
 use serde_yaml_ng;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
+use std::io::stdout;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -201,7 +202,7 @@ async fn get_storage(
     }
 }
 
-async fn repo_create(init_cmd: CreateCommand, config: CliConfig) -> Result<()> {
+async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()> {
     let repo =
         config.repos.get(&init_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
@@ -217,7 +218,11 @@ async fn repo_create(init_cmd: CreateCommand, config: CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn snapshot_list(list_cmd: ListCommand, config: CliConfig) -> Result<()> {
+async fn snapshot_list(
+    list_cmd: &ListCommand,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
     let repo =
         config.repos.get(&list_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
@@ -229,23 +234,23 @@ async fn snapshot_list(list_cmd: ListCommand, config: CliConfig) -> Result<()> {
 
     let branch_ref = VersionInfo::BranchTipRef(list_cmd.branch.clone());
     let ancestry = repository.ancestry(&branch_ref).await?;
-    ancestry
-        .take(list_cmd.n)
-        .for_each(|snapshot| async move {
-            println!("{:?}", snapshot);
-        })
-        .await;
+
+    let snapshots: Vec<_> = ancestry.take(list_cmd.n).collect().await;
+
+    for snapshot in snapshots {
+        writeln!(writer, "{:?}", snapshot.context("Failed to get snapshot")?)?;
+    }
 
     Ok(())
 }
 
-async fn config_add(add_cmd: AddCommand, config: &CliConfig) -> Result<CliConfig> {
+async fn config_add(add_cmd: &AddCommand, config: &CliConfig) -> Result<CliConfig> {
     if config.repos.contains_key(&add_cmd.repo) {
         return Err(anyhow::anyhow!("Repository {:?} already exists", add_cmd.repo));
     }
 
     let alias = add_cmd.repo.clone();
-    let new_config = add_repo_to_config(alias, config)?;
+    let new_config = add_repo_to_config(&alias, config)?;
 
     Ok(new_config)
 }
@@ -262,13 +267,13 @@ async fn config_init(init_cmd: &InitCommand, config: &CliConfig) -> Result<CliCo
         .interact()
         .context("Failed to get alias")?;
 
-    let repo = add_repo_to_config(RepositoryAlias(alias), &CliConfig::default())?;
+    let repo = add_repo_to_config(&RepositoryAlias(alias), &CliConfig::default())?;
 
     Ok(repo)
 }
 
 fn add_repo_to_config(
-    repo_alias: RepositoryAlias,
+    repo_alias: &RepositoryAlias,
     config: &CliConfig,
 ) -> Result<CliConfig> {
     let repo_types = vec!["Local", "S3", "Tigris", "GCS", "Azure"];
@@ -390,14 +395,14 @@ fn add_repo_to_config(
     };
 
     let mut new_config = (*config).clone();
-    new_config.repos.insert(repo_alias, repo);
+    new_config.repos.insert((*repo_alias).clone(), repo);
 
     Ok(new_config)
 }
 
-async fn config_list(config: CliConfig) -> Result<()> {
+async fn config_list(config: &CliConfig, mut writer: impl std::io::Write) -> Result<()> {
     let serialized = serde_yaml_ng::to_string(&config)?;
-    println!("{}", serialized);
+    writeln!(writer, "{}", serialized)?;
 
     Ok(())
 }
@@ -406,10 +411,10 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
     let config = load_config().unwrap_or_default();
     match args.cmd {
         Command::Repo(RepoCommand::Create(init_cmd)) => {
-            repo_create(init_cmd, config).await
+            repo_create(&init_cmd, &config).await
         }
         Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
-            snapshot_list(list_cmd, config).await
+            snapshot_list(&list_cmd, &config, stdout()).await
         }
         Command::Config(ConfigCommand::Init(init_cmd)) => {
             let new_config = config_init(&init_cmd, &config).await?;
@@ -417,11 +422,108 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
             Ok(())
         }
         Command::Config(ConfigCommand::Add(add_cmd)) => {
-            let new_config = config_add(add_cmd, &config).await?;
+            let new_config = config_add(&add_cmd, &config).await?;
             write_config(&new_config)?;
             Ok(())
         }
-        Command::Config(ConfigCommand::List) => config_list(config).await,
+        Command::Config(ConfigCommand::List) => config_list(&config, stdout()).await,
     }
     .map_err(|e| anyhow::anyhow!("❌ {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::read_dir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_repo_create() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let path = temp.path().to_path_buf();
+
+        let repo_alias = RepositoryAlias("test-repo".to_string());
+        let repo = RepositoryDefinition::LocalFileSystem {
+            path: path.clone(),
+            config: RepositoryConfig::default(),
+        };
+
+        let mut repos = HashMap::new();
+        repos.insert(repo_alias.clone(), repo);
+
+        let config = CliConfig { repos };
+
+        let init_cmd = CreateCommand { repo: repo_alias.clone() };
+
+        repo_create(&init_cmd, &config).await.unwrap();
+
+        let refs = path.join("refs");
+        let snapshots = path.join("snapshots");
+
+        assert!(refs.is_dir());
+        assert!(snapshots.is_dir());
+
+        let mut refs_contents = read_dir(refs).unwrap();
+        assert!(refs_contents.next().is_some());
+
+        let mut snapshots_contents = read_dir(snapshots).unwrap();
+        assert!(snapshots_contents.next().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_list() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let path = temp.path().to_path_buf();
+
+        let repo_alias = RepositoryAlias("test-repo".to_string());
+        let repo = RepositoryDefinition::LocalFileSystem {
+            path: path.clone(),
+            config: RepositoryConfig::default(),
+        };
+
+        let mut repos = HashMap::new();
+        repos.insert(repo_alias.clone(), repo);
+
+        let config = CliConfig { repos };
+
+        let init_cmd = CreateCommand { repo: repo_alias.clone() };
+
+        repo_create(&init_cmd, &config).await.unwrap();
+
+        let list_cmd =
+            ListCommand { repo: repo_alias.clone(), n: 10, branch: "main".to_string() };
+
+        let mut writer = Vec::new();
+        snapshot_list(&list_cmd, &config.clone(), &mut writer).await.unwrap();
+
+        let output = String::from_utf8(writer).unwrap();
+
+        assert_eq!(output.lines().count(), 1);
+        assert!(output.contains("SnapshotInfo"));
+    }
+
+    #[tokio::test]
+    async fn test_config_list() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let path = temp.path().to_path_buf();
+
+        let repo_alias = RepositoryAlias("test-repo".to_string());
+        let repo = RepositoryDefinition::LocalFileSystem {
+            path: path.clone(),
+            config: RepositoryConfig::default(),
+        };
+
+        let mut repos = HashMap::new();
+        repos.insert(repo_alias.clone(), repo);
+
+        let config = CliConfig { repos };
+
+        let mut writer = Vec::new();
+
+        config_list(&config, &mut writer).await.unwrap();
+
+        let output = String::from_utf8(writer).unwrap();
+
+        assert!(output.contains("LocalFileSystem"));
+    }
 }
