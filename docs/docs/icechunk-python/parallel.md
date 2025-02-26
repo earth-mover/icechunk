@@ -83,6 +83,8 @@ xr.testing.assert_identical(ds, ondisk)
 
 !!! info
 
+    This code will not execute with a `ProcessPoolExecutor` without [some changes](https://docs.python.org/3/library/multiprocessing.html#programming-guidelines).
+    Specifically it requires wrapping the code in a `if __name__ == "__main__":` block.
     See a full executable example [here](https://github.com/earth-mover/icechunk/blob/main/icechunk-python/examples/mpwrite.py).
 
 Any task execution framework (e.g. `ProcessPoolExecutor`, Joblib, Lithops, Dask Distributed, Ray, etc.)
