@@ -30,7 +30,7 @@ use crate::{
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+            ManifestShards, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
         snapshot::{
@@ -1380,32 +1380,58 @@ impl<'a> FlushProcess<'a> {
     ) -> SessionResult<()> {
         let mut from = vec![];
         let mut to = vec![];
-        let chunks = stream::iter(
-            self.change_set
-                .new_array_chunk_iterator(node_id, node_path)
-                .map(Ok::<ChunkInfo, Infallible>),
-        );
-        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
+        let mut chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
 
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20], vec![0, 10, 20]]);
 
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-
-            self.manifest_refs
-                .entry(node_id.clone())
-                .and_modify(|v| v.push(new_ref.clone()))
-                .or_insert_with(|| vec![new_ref]);
+        let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
+        sharded_refs.reserve(shards.len());
+        // TODO: what is a good capacity
+        let ref_capacity = 8_192;
+        sharded_refs.insert(0, Vec::with_capacity(ref_capacity));
+        while let Some(chunk) = chunks.next() {
+            let shard_index = shards.which(&chunk.coord).unwrap();
+            sharded_refs
+                .entry(shard_index)
+                .or_insert_with(|| Vec::with_capacity(ref_capacity))
+                .push(chunk);
         }
+
+        for i in 0..shards.len() {
+            if let Some(shard_chunks) = sharded_refs.remove(&i) {
+                let shard_chunks = stream::iter(
+                    shard_chunks.into_iter().map(Ok::<ChunkInfo, Infallible>),
+                );
+                let shard_chunks =
+                    aggregate_extents(&mut from, &mut to, shard_chunks, |ci| &ci.coord);
+
+                if let Some(new_manifest) =
+                    Manifest::from_stream(shard_chunks).await.unwrap()
+                {
+                    let new_manifest = Arc::new(new_manifest);
+                    let new_manifest_size = self
+                        .asset_manager
+                        .write_manifest(Arc::clone(&new_manifest))
+                        .await?;
+
+                    let file_info =
+                        ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+                    self.manifest_files.insert(file_info);
+
+                    let new_ref = ManifestRef {
+                        object_id: new_manifest.id().clone(),
+                        extents: ManifestExtents::new(&from, &to),
+                    };
+
+                    self.manifest_refs
+                        .entry(node_id.clone())
+                        .and_modify(|v| v.push(new_ref.clone()))
+                        .or_insert_with(|| vec![new_ref]);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1428,6 +1454,15 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let updated_chunks =
             aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
+
+        // // FIXME
+        // let shards = {
+        //     if let NodeData::Array { shape, .. } = node.node_data.clone() {
+        //         ManifestShards::default(shape.len())
+        //     } else {
+        //         todo!()
+        //     }
+        // };
 
         if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
             let new_manifest = Arc::new(new_manifest);
@@ -1747,8 +1782,8 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::ManifestExtents,
-        refs::{Ref, fetch_tag},
+        format::manifest::{ManifestExtents, ManifestShards},
+        refs::{fetch_tag, Ref},
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{
@@ -1948,6 +1983,24 @@ mod tests {
 
         prop_assert_eq!(from, expected_from);
         prop_assert_eq!(to, expected_to);
+    }
+
+    #[tokio::test]
+    async fn test_which_shard() -> Result<(), Box<dyn Error>> {
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
+
+        assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![11])).unwrap(), 1);
+
+        let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
+
+        let shards = ManifestShards::from_edges(edges);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
+        assert!(shards.which(&ChunkIndices(vec![21, 21])).is_err());
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
