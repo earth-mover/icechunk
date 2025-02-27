@@ -6,6 +6,7 @@
 
 - `Repository` can now be pickled.
 - `icechunk.print_debug_info()` now prints out relative information about the installed version of icechunk and relative dependencies.
+- `icechunk.Storage` now supports `__repr__`. Only configuration values will be printed, no credentials.
 
 ### Fixes
 

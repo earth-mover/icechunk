@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     future::ready,
     ops::Range,
     path::{Path, PathBuf},
@@ -57,6 +58,16 @@ pub struct S3Storage {
     /// does not support async cfunction calls from deserialization. This gives
     /// us a way to lazily initialize the client.
     client: OnceCell<Arc<Client>>,
+}
+
+impl fmt::Display for S3Storage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "S3Storage(bucket={}, prefix={}, config={})",
+            self.bucket, self.prefix, self.config,
+        )
+    }
 }
 
 #[instrument(skip(credentials))]

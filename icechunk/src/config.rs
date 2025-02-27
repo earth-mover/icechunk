@@ -24,6 +24,19 @@ pub struct S3Options {
     pub allow_http: bool,
 }
 
+impl fmt::Display for S3Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={})",
+            self.region.as_deref().unwrap_or("None"),
+            self.endpoint_url.as_deref().unwrap_or("None"),
+            self.anonymous,
+            self.allow_http
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectStoreConfig {
