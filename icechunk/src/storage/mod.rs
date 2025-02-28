@@ -721,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn test_is_clean() {
         let repo_dir = TempDir::new().unwrap();
-        let s = new_local_filesystem_storage(repo_dir.path()).unwrap();
+        let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
         assert!(s.root_is_clean().await.unwrap());
 
         let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
@@ -730,7 +730,7 @@ mod tests {
 
         let inside_existing =
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
-        let s = new_local_filesystem_storage(&inside_existing).unwrap();
+        let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
         assert!(s.root_is_clean().await.unwrap());
     }
 

@@ -79,8 +79,6 @@ impl ObjectStorage {
     pub async fn new_local_filesystem(
         prefix: &StdPath,
     ) -> Result<ObjectStorage, StorageError> {
-        let prefix = std::fs::canonicalize(prefix)
-            .map_err(|e| StorageError::Other(e.to_string()))?;
         let backend =
             Arc::new(LocalFileSystemObjectStoreBackend { path: prefix.to_path_buf() });
         let client = backend.mk_object_store().await?;
