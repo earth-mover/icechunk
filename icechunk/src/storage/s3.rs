@@ -798,4 +798,39 @@ mod tests {
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
         assert_eq!(storage.config, deserialized.config);
     }
+
+    #[tokio::test]
+    async fn test_s3_paths() {
+        let storage = S3Storage::new(
+            S3Options {
+                region: Some("us-west-2".to_string()),
+                endpoint_url: None,
+                allow_http: true,
+                anonymous: false,
+            },
+            "bucket".to_string(),
+            Some("prefix".to_string()),
+            S3Credentials::FromEnv,
+        )
+        .unwrap();
+
+        let ref_path = storage.ref_key("ref_key").unwrap();
+        assert_eq!(ref_path, "prefix/refs/ref_key");
+
+        let snapshot_id = SnapshotId::random();
+        let snapshot_path = storage.get_snapshot_path(&snapshot_id).unwrap();
+        assert_eq!(snapshot_path, format!("prefix/snapshots/{snapshot_id}"));
+
+        let manifest_id = ManifestId::random();
+        let manifest_path = storage.get_manifest_path(&manifest_id).unwrap();
+        assert_eq!(manifest_path, format!("prefix/manifests/{manifest_id}"));
+
+        let chunk_id = ChunkId::random();
+        let chunk_path = storage.get_chunk_path(&chunk_id).unwrap();
+        assert_eq!(chunk_path, format!("prefix/chunks/{chunk_id}"));
+
+        let transaction_id = SnapshotId::random();
+        let transaction_path = storage.get_transaction_path(&transaction_id).unwrap();
+        assert_eq!(transaction_path, format!("prefix/transactions/{transaction_id}"));
+    }
 }
