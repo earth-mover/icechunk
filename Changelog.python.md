@@ -1,5 +1,11 @@
 # Changelog
 
+### Python Icechunk Library 0.2.4
+
+### Fixes
+
+- Fixes a bug where object storage paths were incorrectly formatted when using Windows.
+
 ## Python Icechunk Library 0.2.3
 
 ### Features
