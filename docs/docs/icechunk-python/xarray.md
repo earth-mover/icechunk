@@ -37,7 +37,8 @@ Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll crea
 Icechunk repo in S3 or a local file system. You will need to replace the `StorageConfig`
 with a bucket or file path that you have access to.
 
-```python
+
+```python exec="on" session="xarray" source="material-block"
 import xarray as xr
 import icechunk
 ```
@@ -54,8 +55,9 @@ import icechunk
 
 === "Local Storage"
 
-    ```python
-    storage_config = icechunk.local_filesystem_storage("./icechunk-xarray")
+    ```python exec="on" session="xarray" source="material-block"
+    import tempfile
+    storage_config = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
     repo = icechunk.Repository.create(storage_config)
     ```
 
@@ -73,7 +75,7 @@ We'll write the two blocks to Icechunk in separate transactions later in the thi
     pip install pooch netCDF4
     ```
 
-```python
+```python exec="on" session="xarray" source="material-block"
 ds = xr.tutorial.open_dataset('rasm')
 
 ds1 = ds.isel(time=slice(None, 18))  # part 1
@@ -84,13 +86,13 @@ ds2 = ds.isel(time=slice(18, None))  # part 2
 
 Create a new writable session on the `main` branch to get the `IcechunkStore`:
 
-```python
+```python exec="on" session="xarray" source="material-block"
 session = repo.writable_session("main")
 ```
 
 Writing Xarray data to Icechunk is as easy as calling `to_icechunk`:
 
-```python
+```python exec="on" session="xarray" source="material-block"
 from icechunk.xarray import to_icechunk
 
 to_icechunk(ds, session)
@@ -98,7 +100,7 @@ to_icechunk(ds, session)
 
 After writing, we commit the changes using the session:
 
-```python
+```python exec="on" session="xarray" source="material-block"
 first_snapshot = session.commit("add RASM data to store")
 first_snapshot
 # output: 'ME4VKFPA5QAY0B2YSG8G'
@@ -109,7 +111,7 @@ first_snapshot
 Next, we want to add a second block of data to our store. Above, we created `ds2` for just
 this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='time'`.
 
-```python
+```python exec="on" session="xarray" source="material-block"
 # we have to get a new session after committing
 session = repo.writable_session("main")
 to_icechunk(ds2, session, append_dim='time')
@@ -117,16 +119,16 @@ to_icechunk(ds2, session, append_dim='time')
 
 And then we'll commit the changes:
 
-```python
-session.commit("append more data")
-# output: 'WW4V8V34QCZ2NXTD5DXG'
+```python exec="on" session="xarray" source="material-block"
+print(session.commit("append more data"))
 ```
 
 ## Reading data with Xarray
 
-To read data stored in Icechunk with Xarray, we'll use `xarray.open_zarr`:
 
-```python
+<!-- Intentionally hiding the output because the xarray does not
+render well with markdownexec -->
+```python exec="on" session="xarray" source="material-block"
 xr.open_zarr(session.store, consolidated=False)
 # output: <xarray.Dataset> Size: 17MB
 # Dimensions:  (time: 36, y: 205, x: 275)
@@ -149,11 +151,12 @@ xr.open_zarr(session.store, consolidated=False)
 #     references:                Based on the initial model of Liang et al., 19...
 #     source:                    RACM R1002RBRxaaa01a
 #     title:                     /workspace/jhamman/processed/R1002RBRxaaa01a/l...
+
 ```
 
 We can also read data from previous snapshots by checking out prior versions:
 
-```python
+```python exec="on" session="xarray" source="material-block"
 session = repo.readonly_session(snapshot_id=first_snapshot)
 
 xr.open_zarr(session.store, consolidated=False)
