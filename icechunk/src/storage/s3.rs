@@ -2,7 +2,7 @@ use std::{
     fmt,
     future::ready,
     ops::Range,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -30,7 +30,6 @@ use aws_sdk_s3::{
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto as _;
 use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
@@ -149,11 +148,7 @@ impl S3Storage {
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
-        path.into_os_string()
-            .into_string()
-            .map_err(StorageErrorKind::BadPrefix)
-            .err_into()
+        Ok(format!("{}/{}/{}", self.prefix, file_prefix, id).replace("//", "/"))
     }
 
     fn get_path<const SIZE: usize, T: FileTypeTag>(
@@ -186,11 +181,7 @@ impl S3Storage {
     }
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
-        path.into_os_string()
-            .into_string()
-            .map_err(StorageErrorKind::BadPrefix)
-            .err_into()
+        Ok(format!("{}/{}/{}", self.prefix, REF_PREFIX, ref_key).replace("//", "/"))
     }
 
     async fn get_object_reader(
@@ -612,10 +603,7 @@ impl Storage for S3Storage {
         _settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
-            .into_os_string()
-            .into_string()
-            .map_err(StorageErrorKind::BadPrefix)?;
+        let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
         let stream = self
             .get_client()
             .await
