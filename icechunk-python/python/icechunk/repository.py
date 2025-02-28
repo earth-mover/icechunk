@@ -1,8 +1,9 @@
 import datetime
-from collections.abc import AsyncIterator
-from typing import Self
+from collections.abc import AsyncIterator, Iterator
+from typing import Self, cast
 
 from icechunk._icechunk_python import (
+    Diff,
     GCSummary,
     PyRepository,
     RepositoryConfig,
@@ -139,6 +140,16 @@ class Repository:
         """
         return PyRepository.exists(storage)
 
+    def __getstate__(self) -> object:
+        return {
+            "_repository": self._repository.as_bytes(),
+        }
+
+    def __setstate__(self, state: object) -> None:
+        if not isinstance(state, dict):
+            raise ValueError("Invalid repository state")
+        self._repository = PyRepository.from_bytes(state["_repository"])
+
     @staticmethod
     def fetch_config(storage: Storage) -> RepositoryConfig | None:
         """
@@ -195,8 +206,8 @@ class Repository:
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot: str | None = None,
-    ) -> list[SnapshotInfo]:
+        snapshot_id: str | None = None,
+    ) -> Iterator[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
 
@@ -206,7 +217,7 @@ class Repository:
             The branch to get the ancestry of.
         tag : str, optional
             The tag to get the ancestry of.
-        snapshot : str, optional
+        snapshot_id : str, optional
             The snapshot ID to get the ancestry of.
 
         Returns
@@ -218,14 +229,22 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        return self._repository.ancestry(branch=branch, tag=tag, snapshot=snapshot)
+
+        # the returned object is both an Async and Sync iterator
+        res = cast(
+            Iterator[SnapshotInfo],
+            self._repository.async_ancestry(
+                branch=branch, tag=tag, snapshot_id=snapshot_id
+            ),
+        )
+        return res
 
     def async_ancestry(
         self,
         *,
         branch: str | None = None,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
@@ -236,7 +255,7 @@ class Repository:
             The branch to get the ancestry of.
         tag : str, optional
             The tag to get the ancestry of.
-        snapshot : str, optional
+        snapshot_id : str, optional
             The snapshot ID to get the ancestry of.
 
         Returns
@@ -248,7 +267,9 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        return self._repository.async_ancestry(branch=branch, tag=tag, snapshot=snapshot)
+        return self._repository.async_ancestry(
+            branch=branch, tag=tag, snapshot_id=snapshot_id
+        )
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -329,7 +350,7 @@ class Repository:
         """
         self._repository.delete_branch(branch)
 
-    def delete_tag(self, branch: str) -> None:
+    def delete_tag(self, tag: str) -> None:
         """
         Delete a tag.
 
@@ -342,7 +363,7 @@ class Repository:
         -------
         None
         """
-        self._repository.delete_tag(branch)
+        self._repository.delete_tag(tag)
 
     def create_tag(self, tag: str, snapshot_id: str) -> None:
         """
@@ -388,12 +409,45 @@ class Repository:
         """
         return self._repository.lookup_tag(tag)
 
-    def readonly_session(
+    def diff(
         self,
         *,
+        from_branch: str | None = None,
+        from_tag: str | None = None,
+        from_snapshot_id: str | None = None,
+        to_branch: str | None = None,
+        to_tag: str | None = None,
+        to_snapshot_id: str | None = None,
+    ) -> Diff:
+        """
+        Compute an overview of the operations executed from version `from` to version `to`.
+
+        Both versions, `from` and `to`, must be identified. Identification can be done using a branch, tag or snapshot id.
+        The styles used to identify the `from` and `to` versions can be different.
+
+        The `from` version must be a member of the `ancestry` of `to`.
+
+        Returns
+        -------
+        Diff
+            The operations executed between the two versions
+        """
+        return self._repository.diff(
+            from_branch=from_branch,
+            from_tag=from_tag,
+            from_snapshot_id=from_snapshot_id,
+            to_branch=to_branch,
+            to_tag=to_tag,
+            to_snapshot_id=to_snapshot_id,
+        )
+
+    def readonly_session(
+        self,
         branch: str | None = None,
+        *,
         tag: str | None = None,
-        snapshot: str | None = None,
+        snapshot_id: str | None = None,
+        as_of: datetime.datetime | None = None,
     ) -> Session:
         """
         Create a read-only session.
@@ -408,8 +462,11 @@ class Repository:
             If provided, the branch to create the session on.
         tag : str, optional
             If provided, the tag to create the session on.
-        snapshot : str, optional
+        snapshot_id : str, optional
             If provided, the snapshot ID to create the session on.
+        as_of: datetime.datetime, optional
+            When combined with the branch argument, it will open the session at the last
+            snapshot that is at or before this datetime
 
         Returns
         -------
@@ -421,7 +478,9 @@ class Repository:
         Only one of the arguments can be specified.
         """
         return Session(
-            self._repository.readonly_session(branch=branch, tag=tag, snapshot=snapshot)
+            self._repository.readonly_session(
+                branch=branch, tag=tag, snapshot_id=snapshot_id, as_of=as_of
+            )
         )
 
     def writable_session(self, branch: str) -> Session:
@@ -445,7 +504,13 @@ class Repository:
         """
         return Session(self._repository.writable_session(branch))
 
-    def expire_snapshots(self, older_than: datetime.datetime) -> set[str]:
+    def expire_snapshots(
+        self,
+        older_than: datetime.datetime,
+        *,
+        delete_expired_branches: bool = False,
+        delete_expired_tags: bool = False,
+    ) -> set[str]:
         """Expire all snapshots older than a threshold.
 
         This processes snapshots found by navigating all references in
@@ -455,6 +520,10 @@ class Repository:
         from history. Notice that this snapshot are not necessarily
         available for garbage collection, they could still be pointed by
         ether refs.
+
+        If delete_expired_* is set to True, branches or tags that, after the
+        expiration process, point to expired snapshots directly, will be
+        deleted.
 
         Warning: this is an administrative operation, it should be run
         carefully. The repository can still operate concurrently while

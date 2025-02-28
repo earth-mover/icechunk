@@ -12,7 +12,9 @@ use url::Url;
 use crate::{
     config::{Credentials, S3Credentials, S3Options},
     format::{
-        manifest::{Checksum, SecondsSinceEpoch, VirtualReferenceError},
+        manifest::{
+            Checksum, SecondsSinceEpoch, VirtualReferenceError, VirtualReferenceErrorKind,
+        },
         ChunkOffset,
     },
     private,
@@ -172,7 +174,7 @@ impl VirtualChunkResolver {
         chunk_location: &str,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
         let cont = find_container(chunk_location, &self.containers).ok_or_else(|| {
-            VirtualReferenceError::NoContainerForUrl(chunk_location.to_string())
+            VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
         })?;
 
         // Many tasks will be fetching chunks at the same time, so it's important
@@ -222,9 +224,9 @@ impl VirtualChunkResolver {
             ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
                 let creds = match self.credentials.get(&cont.name) {
                     Some(Credentials::S3(creds)) => creds,
-                    Some(_) => {
-                        Err(VirtualReferenceError::InvalidCredentials("S3".to_string()))?
-                    }
+                    Some(_) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "S3".to_string(),
+                    ))?,
                     None => {
                         if opts.anonymous {
                             &S3Credentials::Anonymous
@@ -238,9 +240,9 @@ impl VirtualChunkResolver {
             ObjectStoreConfig::Tigris(opts) => {
                 let creds = match self.credentials.get(&cont.name) {
                     Some(Credentials::S3(creds)) => creds,
-                    Some(_) => {
-                        Err(VirtualReferenceError::InvalidCredentials("S3".to_string()))?
-                    }
+                    Some(_) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "S3".to_string(),
+                    ))?,
                     None => {
                         if opts.anonymous {
                             &S3Credentials::Anonymous
@@ -300,70 +302,77 @@ impl S3Fetcher {
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
         let client = &self.client;
-        let results = split_in_multiple_requests(
-            range,
-            self.settings.concurrency().ideal_concurrent_request_size().get(),
-            self.settings.concurrency().max_concurrent_requests_for_object().get(),
-        )
-        .map(|range| async move {
-            let key = key.to_string();
-            let client = Arc::clone(client);
-            let bucket = bucket.to_string();
-            let mut b = client
-                .get_object()
-                .bucket(bucket)
-                .key(key)
-                .range(range_to_header(&range));
+        let results =
+            split_in_multiple_requests(
+                range,
+                self.settings.concurrency().ideal_concurrent_request_size().get(),
+                self.settings.concurrency().max_concurrent_requests_for_object().get(),
+            )
+            .map(|range| async move {
+                let key = key.to_string();
+                let client = Arc::clone(client);
+                let bucket = bucket.to_string();
+                let mut b = client
+                    .get_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .range(range_to_header(&range));
 
-            match checksum {
-                Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
-                    b = b.if_unmodified_since(
-                        aws_sdk_s3::primitives::DateTime::from_secs(*seconds as i64),
-                    )
-                }
-                Some(Checksum::ETag(etag)) => {
-                    b = b.if_match(etag);
-                }
-                None => {}
-            };
+                match checksum {
+                    Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                        b = b.if_unmodified_since(
+                            aws_sdk_s3::primitives::DateTime::from_secs(*seconds as i64),
+                        )
+                    }
+                    Some(Checksum::ETag(etag)) => {
+                        b = b.if_match(&etag.0);
+                    }
+                    None => {}
+                };
 
-            b.send()
-                .await
-                .map_err(|e| match e {
-                    // minio returns this
-                    SdkError::ServiceError(err) => {
-                        if err.err().meta().code() == Some("PreconditionFailed") {
-                            VirtualReferenceError::ObjectModified(location.to_string())
-                        } else {
-                            VirtualReferenceError::FetchError(Box::new(SdkError::<
-                                GetObjectError,
-                            >::ServiceError(
-                                err
-                            )))
+                b.send()
+                    .await
+                    .map_err(|e| match e {
+                        // minio returns this
+                        SdkError::ServiceError(err) => {
+                            if err.err().meta().code() == Some("PreconditionFailed") {
+                                VirtualReferenceErrorKind::ObjectModified(
+                                    location.to_string(),
+                                )
+                            } else {
+                                VirtualReferenceErrorKind::FetchError(Box::new(
+                                    SdkError::<GetObjectError>::ServiceError(err),
+                                ))
+                            }
                         }
-                    }
-                    // S3 API documents this
-                    SdkError::ResponseError(err) => {
-                        let status = err.raw().status().as_u16();
-                        // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
-                        if status == 409 || status == 412 {
-                            VirtualReferenceError::ObjectModified(location.to_string())
-                        } else {
-                            VirtualReferenceError::FetchError(Box::new(SdkError::<
-                                GetObjectError,
-                            >::ResponseError(
-                                err
-                            )))
+                        // S3 API documents this
+                        SdkError::ResponseError(err) => {
+                            let status = err.raw().status().as_u16();
+                            // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                            if status == 409 || status == 412 {
+                                VirtualReferenceErrorKind::ObjectModified(
+                                    location.to_string(),
+                                )
+                            } else {
+                                VirtualReferenceErrorKind::FetchError(Box::new(
+                                    SdkError::<GetObjectError>::ResponseError(err),
+                                ))
+                            }
                         }
-                    }
-                    other_err => VirtualReferenceError::FetchError(Box::new(other_err)),
-                })?
-                .body
-                .collect()
-                .await
-                .map_err(|e| VirtualReferenceError::FetchError(Box::new(e)))
-        })
-        .collect::<FuturesOrdered<_>>();
+                        other_err => {
+                            VirtualReferenceErrorKind::FetchError(Box::new(other_err))
+                        }
+                    })?
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|e| {
+                        VirtualReferenceError::from(
+                            VirtualReferenceErrorKind::FetchError(Box::new(e)),
+                        )
+                    })
+            })
+            .collect::<FuturesOrdered<_>>();
 
         let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
         results
@@ -385,12 +394,13 @@ impl ChunkFetcher for S3Fetcher {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
-        let url = Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
+        let url =
+            Url::parse(location).map_err(VirtualReferenceErrorKind::CannotParseUrl)?;
 
         let bucket_name = if let Some(host) = url.host_str() {
             host.to_string()
         } else {
-            Err(VirtualReferenceError::CannotParseBucketName(
+            Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
             ))?
         };
@@ -403,10 +413,11 @@ impl ChunkFetcher for S3Fetcher {
         let needed_bytes = range.end - range.start;
         let remaining = buf.remaining() as u64;
         if remaining != needed_bytes {
-            Err(VirtualReferenceError::InvalidObjectSize {
+            Err(VirtualReferenceErrorKind::InvalidObjectSize {
                 expected: needed_bytes,
                 available: remaining,
-            })
+            }
+            .into())
         } else {
             Ok(buf.copy_to_bytes(needed_bytes as usize))
         }
@@ -434,7 +445,8 @@ impl ChunkFetcher for LocalFSFetcher {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
-        let url = Url::parse(location).map_err(VirtualReferenceError::CannotParseUrl)?;
+        let url =
+            Url::parse(location).map_err(VirtualReferenceErrorKind::CannotParseUrl)?;
         let usize_range = range.start as usize..range.end as usize;
         let mut options =
             GetOptions { range: Some(usize_range.into()), ..Default::default() };
@@ -447,22 +459,23 @@ impl ChunkFetcher for LocalFSFetcher {
                     .expect("Bad last modified field in virtual chunk reference");
                 options.if_unmodified_since = Some(d);
             }
-            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.clone()),
+            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.0.clone()),
             None => {}
         }
 
         let path = Path::parse(url.path())
-            .map_err(|e| VirtualReferenceError::OtherError(Box::new(e)))?;
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
 
         match self.client.get_opts(&path, options).await {
             Ok(res) => res
                 .bytes()
                 .await
-                .map_err(|e| VirtualReferenceError::FetchError(Box::new(e))),
+                .map_err(|e| VirtualReferenceErrorKind::FetchError(Box::new(e)).into()),
             Err(object_store::Error::Precondition { .. }) => {
-                Err(VirtualReferenceError::ObjectModified(location.to_string()))
+                Err(VirtualReferenceErrorKind::ObjectModified(location.to_string())
+                    .into())
             }
-            Err(err) => Err(VirtualReferenceError::FetchError(Box::new(err))),
+            Err(err) => Err(VirtualReferenceErrorKind::FetchError(Box::new(err)).into()),
         }
     }
 }

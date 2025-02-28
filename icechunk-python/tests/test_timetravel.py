@@ -21,6 +21,7 @@ def test_timetravel() -> None:
         storage=ic.in_memory_storage(),
         config=config,
     )
+
     session = repo.writable_session("main")
     store = session.store
 
@@ -32,7 +33,19 @@ def test_timetravel() -> None:
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
 
-    snapshot_id = session.commit("commit 1")
+    status = session.status()
+    assert status.new_groups == {"/"}
+    assert status.new_arrays == {"/air_temp"}
+    assert list(status.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(status.updated_chunks["/air_temp"]) == sorted(
+        [[i, j] for i in range(10) for j in range(10)]
+    )
+    assert status.deleted_groups == set()
+    assert status.deleted_arrays == set()
+    assert status.updated_arrays == set()
+    assert status.updated_groups == set()
+
+    first_snapshot_id = session.commit("commit 1")
     assert session.read_only
 
     session = repo.writable_session("main")
@@ -45,14 +58,14 @@ def test_timetravel() -> None:
 
     new_snapshot_id = session.commit("commit 2")
 
-    session = repo.readonly_session(snapshot=snapshot_id)
+    session = repo.readonly_session(snapshot_id=first_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
-    session = repo.readonly_session(snapshot=new_snapshot_id)
+    session = repo.readonly_session(snapshot_id=new_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
@@ -103,7 +116,7 @@ def test_timetravel() -> None:
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert air_temp[200, 6] == 90
 
-    parents = list(repo.ancestry(snapshot=feature_snapshot_id))
+    parents = list(repo.ancestry(snapshot_id=feature_snapshot_id))
     assert [snap.message for snap in parents] == [
         "commit 3",
         "commit 2",
@@ -115,9 +128,68 @@ def test_timetravel() -> None:
     assert list(repo.ancestry(tag="v1.0")) == parents
     assert list(repo.ancestry(branch="feature-not-dead")) == parents
 
+    diff = repo.diff(to_tag="v1.0", from_snapshot_id=parents[-1].id)
+    assert diff.new_groups == {"/"}
+    assert diff.new_arrays == {"/air_temp"}
+    assert list(diff.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(diff.updated_chunks["/air_temp"]) == sorted(
+        [[i, j] for i in range(10) for j in range(10)]
+    )
+    assert diff.deleted_groups == set()
+    assert diff.deleted_arrays == set()
+    assert diff.updated_arrays == set()
+    assert diff.updated_groups == set()
+    assert (
+        repr(diff)
+        == """\
+Groups created:
+    /
+
+Arrays created:
+    /air_temp
+
+Chunks updated:
+    /air_temp:
+        [0, 0]
+        [0, 1]
+        [0, 2]
+        [0, 3]
+        [0, 4]
+        [0, 5]
+        [0, 6]
+        [0, 7]
+        [0, 8]
+        [0, 9]
+        ... 90 more
+"""
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    group = zarr.open_group(store=store)
+    air_temp = group.create_array(
+        "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4", overwrite=True
+    )
+    assert (
+        repr(session.status())
+        == """\
+Arrays created:
+    /air_temp
+
+Arrays deleted:
+    /air_temp
+
+"""
+    )
+
+    with pytest.raises(ValueError, match="doesn't include"):
+        # if we call diff in the wrong order it fails with a message
+        repo.diff(from_tag="v1.0", to_snapshot_id=parents[-1].id)
+
     # check async ancestry works
-    assert list(repo.ancestry(snapshot=feature_snapshot_id)) == asyncio.run(
-        async_ancestry(repo, snapshot=feature_snapshot_id)
+    assert list(repo.ancestry(snapshot_id=feature_snapshot_id)) == asyncio.run(
+        async_ancestry(repo, snapshot_id=feature_snapshot_id)
     )
     assert list(repo.ancestry(tag="v1.0")) == asyncio.run(
         async_ancestry(repo, tag="v1.0")
@@ -160,7 +232,7 @@ async def test_branch_reset() -> None:
 
     repo.reset_branch("main", prev_snapshot_id)
 
-    session = repo.readonly_session(branch="main")
+    session = repo.readonly_session("main")
     store = session.store
 
     keys = {k async for k in store.list()}
@@ -186,3 +258,38 @@ async def test_tag_delete() -> None:
 
     with pytest.raises(ValueError):
         repo.create_tag("tag", snap)
+
+
+async def test_session_with_as_of() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    times = []
+    group = zarr.group(store=store, overwrite=True)
+    sid = session.commit("root")
+    times.append(next(repo.ancestry(snapshot_id=sid)).written_at)
+
+    for i in range(5):
+        session = repo.writable_session("main")
+        store = session.store
+        group = zarr.open_group(store=store)
+        group.create_group(f"child {i}")
+        sid = session.commit(f"child {i}")
+        times.append(next(repo.ancestry(snapshot_id=sid)).written_at)
+
+    ancestry = list(p for p in repo.ancestry(branch="main"))
+    assert len(ancestry) == 7  # initial + root + 5 children
+
+    store = repo.readonly_session("main", as_of=times[-1]).store
+    group = zarr.open_group(store=store, mode="r")
+
+    for i, time in enumerate(times):
+        store = repo.readonly_session("main", as_of=time).store
+        group = zarr.open_group(store=store, mode="r")
+        expected_children = {f"child {j}" for j in range(i)}
+        actual_children = {g[0] for g in group.members()}
+        assert expected_children == actual_children

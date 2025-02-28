@@ -9,6 +9,7 @@ use std::{
     ops::Range,
     sync::Arc,
 };
+use tracing::{debug, instrument, trace, Span};
 
 use crate::{
     config::CachingConfig,
@@ -21,10 +22,10 @@ use crate::{
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
-        ChunkId, ChunkOffset, IcechunkFormatError, ManifestId, SnapshotId,
+        ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId, SnapshotId,
     },
     private,
-    repository::{RepositoryError, RepositoryResult},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, Reader},
     Storage,
 };
@@ -137,6 +138,7 @@ impl AssetManager {
         )
     }
 
+    #[instrument(skip(self, manifest))]
     pub async fn write_manifest(&self, manifest: Arc<Manifest>) -> RepositoryResult<u64> {
         let manifest_c = Arc::clone(&manifest);
         let res = write_new_manifest(
@@ -146,10 +148,11 @@ impl AssetManager {
             &self.storage_settings,
         )
         .await?;
-        self.manifest_cache.insert(manifest.id.clone(), manifest);
+        self.manifest_cache.insert(manifest.id().clone(), manifest);
         Ok(res)
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_manifest(
         &self,
         manifest_id: &ManifestId,
@@ -171,6 +174,7 @@ impl AssetManager {
         }
     }
 
+    #[instrument(skip(self,))]
     pub async fn fetch_manifest_unknown_size(
         &self,
         manifest_id: &ManifestId,
@@ -178,6 +182,7 @@ impl AssetManager {
         self.fetch_manifest(manifest_id, 0).await
     }
 
+    #[instrument(skip(self, snapshot))]
     pub async fn write_snapshot(&self, snapshot: Arc<Snapshot>) -> RepositoryResult<()> {
         let snapshot_c = Arc::clone(&snapshot);
         write_new_snapshot(
@@ -188,10 +193,13 @@ impl AssetManager {
         )
         .await?;
         let snapshot_id = snapshot.id().clone();
+        // This line is critical for expiration:
+        // When we edit snapshots in place, we need the cache to return the new version
         self.snapshot_cache.insert(snapshot_id, snapshot);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_snapshot(
         &self,
         snapshot_id: &SnapshotId,
@@ -211,6 +219,7 @@ impl AssetManager {
         }
     }
 
+    #[instrument(skip(self, log))]
     pub async fn write_transaction_log(
         &self,
         transaction_id: SnapshotId,
@@ -229,6 +238,7 @@ impl AssetManager {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_transaction_log(
         &self,
         transaction_id: &SnapshotId,
@@ -248,15 +258,18 @@ impl AssetManager {
         }
     }
 
+    #[instrument(skip(self, bytes))]
     pub async fn write_chunk(
         &self,
         chunk_id: ChunkId,
         bytes: Bytes,
     ) -> RepositoryResult<()> {
+        trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         Ok(self.storage.write_chunk(&self.storage_settings, chunk_id, bytes).await?)
     }
 
+    #[instrument(skip(self))]
     pub async fn fetch_chunk(
         &self,
         chunk_id: &ChunkId,
@@ -266,7 +279,7 @@ impl AssetManager {
         match self.chunk_cache.get_value_or_guard_async(&key).await {
             Ok(chunk) => Ok(chunk),
             Err(guard) => {
-                // TODO: split and parallelize downloads
+                trace!(%chunk_id, ?range, "Downloading chunk");
                 let chunk = self
                     .storage
                     .fetch_chunk(&self.storage_settings, chunk_id, range)
@@ -279,16 +292,18 @@ impl AssetManager {
 
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
+    #[instrument(skip(self))]
     pub async fn snapshot_ancestry(
         self: Arc<Self>,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
         let mut this = self.fetch_snapshot(snapshot_id).await?;
         let stream = try_stream! {
-            yield this.as_ref().into();
+            let info: SnapshotInfo = this.as_ref().try_into()?;
+            yield info;
             while let Some(parent) = this.parent_id() {
-                let snap = self.fetch_snapshot(parent).await?;
-                let info: SnapshotInfo = snap.as_ref().into();
+                let snap = self.fetch_snapshot(&parent).await?;
+                let info: SnapshotInfo = snap.as_ref().try_into()?;
                 yield info;
                 this = snap;
             }
@@ -296,11 +311,16 @@ impl AssetManager {
         Ok(stream)
     }
 
+    #[instrument(skip(self))]
     pub async fn get_snapshot_last_modified(
         &self,
-        snap: &SnapshotId,
+        snapshot_id: &SnapshotId,
     ) -> RepositoryResult<DateTime<Utc>> {
-        Ok(self.storage.get_snapshot_last_modified(&self.storage_settings, snap).await?)
+        debug!(%snapshot_id, "Getting snapshot timestamp");
+        Ok(self
+            .storage
+            .get_snapshot_last_modified(&self.storage_settings, snapshot_id)
+            .await?)
     }
 }
 
@@ -333,9 +353,10 @@ fn check_header(
     read.read_exact(&mut buf)?;
     // Magic numbers
     if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
-        return Err(RepositoryError::FormatError(
-            IcechunkFormatError::InvalidMagicNumbers,
-        ));
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidMagicNumbers,
+        )
+        .into());
     }
 
     let mut buf = [0; 24];
@@ -346,7 +367,7 @@ fn check_header(
     read.read_exact(std::slice::from_mut(&mut spec_version))?;
 
     let spec_version = spec_version.try_into().map_err(|_| {
-        RepositoryError::FormatError(IcechunkFormatError::InvalidSpecVersion)
+        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion)
     })?;
 
     let mut actual_file_type_int = 0;
@@ -354,24 +375,29 @@ fn check_header(
 
     let actual_file_type: FileTypeBin =
         actual_file_type_int.try_into().map_err(|_| {
-            RepositoryError::FormatError(IcechunkFormatError::InvalidFileType {
+            RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidFileType {
                 expected: file_type,
                 got: actual_file_type_int,
             })
         })?;
 
     if actual_file_type != file_type {
-        return Err(RepositoryError::FormatError(IcechunkFormatError::InvalidFileType {
-            expected: file_type,
-            got: actual_file_type_int,
-        }));
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidFileType {
+                expected: file_type,
+                got: actual_file_type_int,
+            },
+        )
+        .into());
     }
 
     let mut compression = 0;
     read.read_exact(std::slice::from_mut(&mut compression))?;
 
     let compression = compression.try_into().map_err(|_| {
-        RepositoryError::FormatError(IcechunkFormatError::InvalidCompressionAlgorithm)
+        RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
+        )
     })?;
 
     Ok((spec_version, compression))
@@ -400,10 +426,13 @@ async fn write_new_manifest(
         ),
     ];
 
-    let id = new_manifest.id.clone();
+    let id = new_manifest.id().clone();
+
+    let span = Span::current();
     // TODO: we should compress only when the manifest reaches a certain size
     // but then, we would need to include metadata to know if it's compressed or not
     let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let buffer = binary_file_header(
             SpecVersionBin::current(),
             FileTypeBin::Manifest,
@@ -418,11 +447,12 @@ async fn write_new_manifest(
             &mut compressor,
         )?;
 
-        compressor.finish().map_err(RepositoryError::IOError)
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
 
     let len = buffer.len() as u64;
+    debug!(%id, size_bytes=len, "Writing manifest");
     storage.write_manifest(storage_settings, id.clone(), metadata, buffer.into()).await?;
     Ok(len)
 }
@@ -433,6 +463,8 @@ async fn fetch_manifest(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Manifest>> {
+    debug!(%manifest_id, "Downloading manifest");
+
     let reader = if manifest_size > 0 {
         storage
             .fetch_manifest_known_size(storage_settings, manifest_id, manifest_size)
@@ -443,11 +475,12 @@ async fn fetch_manifest(
         )
     };
 
+    let span = Span::current();
     tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let (spec_version, decompressor) =
             check_and_get_decompressor(reader, FileTypeBin::Manifest)?;
-        deserialize_manifest(spec_version, decompressor)
-            .map_err(RepositoryError::DeserializationError)
+        deserialize_manifest(spec_version, decompressor).map_err(RepositoryError::from)
     })
     .await?
     .map(Arc::new)
@@ -490,7 +523,9 @@ async fn write_new_snapshot(
     ];
 
     let id = new_snapshot.id().clone();
+    let span = Span::current();
     let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let buffer = binary_file_header(
             SpecVersionBin::current(),
             FileTypeBin::Snapshot,
@@ -505,10 +540,11 @@ async fn write_new_snapshot(
             &mut compressor,
         )?;
 
-        compressor.finish().map_err(RepositoryError::IOError)
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
 
+    debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     storage.write_snapshot(storage_settings, id.clone(), metadata, buffer.into()).await?;
 
     Ok(id)
@@ -519,15 +555,17 @@ async fn fetch_snapshot(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<Snapshot>> {
+    debug!(%snapshot_id, "Downloading snapshot");
     let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
 
+    let span = Span::current();
     tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let (spec_version, decompressor) = check_and_get_decompressor(
             Reader::Asynchronous(read),
             FileTypeBin::Snapshot,
         )?;
-        deserialize_snapshot(spec_version, decompressor)
-            .map_err(RepositoryError::DeserializationError)
+        deserialize_snapshot(spec_version, decompressor).map_err(RepositoryError::from)
     })
     .await?
     .map(Arc::new)
@@ -557,7 +595,9 @@ async fn write_new_tx_log(
         ),
     ];
 
+    let span = Span::current();
     let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let buffer = binary_file_header(
             SpecVersionBin::current(),
             FileTypeBin::TransactionLog,
@@ -570,10 +610,11 @@ async fn write_new_tx_log(
             SpecVersionBin::current(),
             &mut compressor,
         )?;
-        compressor.finish().map_err(RepositoryError::IOError)
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
     })
     .await??;
 
+    debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     storage
         .write_transaction_log(storage_settings, transaction_id, metadata, buffer.into())
         .await?;
@@ -586,15 +627,18 @@ async fn fetch_transaction_log(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<Arc<TransactionLog>> {
+    debug!(%transaction_id, "Downloading transaction log");
     let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
 
+    let span = Span::current();
     tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
         let (spec_version, decompressor) = check_and_get_decompressor(
             Reader::Asynchronous(read),
             FileTypeBin::TransactionLog,
         )?;
         deserialize_transaction_log(spec_version, decompressor)
-            .map_err(RepositoryError::DeserializationError)
+            .map_err(RepositoryError::from)
     })
     .await?
     .map(Arc::new)
@@ -631,7 +675,7 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
-    use itertools::Itertools;
+    use itertools::{assert_equal, Itertools};
 
     use super::*;
     use crate::{
@@ -644,24 +688,26 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
+        let node1 = NodeId::random();
+        let node2 = NodeId::random();
         let ci1 = ChunkInfo {
-            node: NodeId::random(),
-            coord: ChunkIndices(vec![]),
+            node: node1.clone(),
+            coord: ChunkIndices(vec![0]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"a")),
         };
         let ci2 = ChunkInfo {
-            node: NodeId::random(),
-            coord: ChunkIndices(vec![]),
+            node: node2.clone(),
+            coord: ChunkIndices(vec![1]),
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
         let pre_existing_manifest =
             Manifest::from_iter(vec![ci1].into_iter()).await?.unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
-        let pre_existing_id = &pre_existing_manifest.id;
+        let pre_existing_id = pre_existing_manifest.id();
         let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
@@ -674,37 +720,38 @@ mod test {
         );
 
         let manifest =
-            Arc::new(Manifest::from_iter(vec![ci2].into_iter()).await?.unwrap());
-        let id = &manifest.id;
+            Arc::new(Manifest::from_iter(vec![ci2.clone()].into_iter()).await?.unwrap());
+        let id = manifest.id();
         let size = caching.write_manifest(Arc::clone(&manifest)).await?;
 
-        assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
-        assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
+        let fetched = caching.fetch_manifest(&id, size).await?;
+        assert_eq!(fetched.len(), 1);
+        assert_equal(
+            fetched.iter(node2.clone()).map(|x| x.unwrap()),
+            [(ci2.coord.clone(), ci2.payload.clone())],
+        );
+
+        // fetch again
+        caching.fetch_manifest(&id, size).await?;
         // when we insert we cache, so no fetches
         assert_eq!(logging.fetch_operations(), vec![]);
 
         // first time it sees an ID it calls the backend
-        assert_eq!(
-            caching.fetch_manifest(pre_existing_id, pre_size).await?,
-            pre_existing_manifest
-        );
+        caching.fetch_manifest(&pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
 
         // only calls backend once
-        assert_eq!(
-            caching.fetch_manifest(pre_existing_id, pre_size).await?,
-            pre_existing_manifest
-        );
+        caching.fetch_manifest(&pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
         );
 
         // other walues still cached
-        assert_eq!(caching.fetch_manifest(id, size).await?, manifest);
+        caching.fetch_manifest(&id, size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
@@ -714,7 +761,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
 
@@ -734,15 +781,15 @@ mod test {
 
         let manifest1 =
             Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?.unwrap());
-        let id1 = &manifest1.id;
+        let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
         let manifest2 =
             Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?.unwrap());
-        let id2 = &manifest2.id;
+        let id2 = manifest2.id();
         let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
         let manifest3 =
             Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?.unwrap());
-        let id3 = &manifest3.id;
+        let id3 = manifest3.id();
         let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
@@ -763,9 +810,9 @@ mod test {
 
         // we keep asking for all 3 items, but the cache can only fit 2
         for _ in 0..20 {
-            assert_eq!(caching.fetch_manifest(id1, size1).await?, manifest1);
-            assert_eq!(caching.fetch_manifest(id2, size2).await?, manifest2);
-            assert_eq!(caching.fetch_manifest(id3, size3).await?, manifest3);
+            caching.fetch_manifest(&id1, size1).await?;
+            caching.fetch_manifest(&id2, size2).await?;
+            caching.fetch_manifest(&id3, size3).await?;
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);
@@ -777,7 +824,7 @@ mod test {
     async fn test_dont_fetch_asset_twice() -> Result<(), Box<dyn std::error::Error>> {
         // Test that two concurrent requests for the same manifest doesn't generate two
         // object_store requests, one of them must wait
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage()?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager =
             Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone(), 1));
@@ -791,7 +838,7 @@ mod test {
         .await
         .unwrap()
         .unwrap();
-        let manifest_id = manifest.id.clone();
+        let manifest_id = manifest.id().clone();
         let size = manager.write_manifest(Arc::new(manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));

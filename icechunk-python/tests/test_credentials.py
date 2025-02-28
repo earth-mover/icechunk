@@ -113,7 +113,7 @@ class ExpirableCredentials:
         )
 
 
-def test_refreshable_credentials_refresh(tmp_path: Path) -> None:
+def test_s3_refreshable_credentials_refresh(tmp_path: Path) -> None:
     path = tmp_path / "calls.txt"
     creds_obj = ExpirableCredentials(path)
 

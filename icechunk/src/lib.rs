@@ -21,8 +21,8 @@ pub mod asset_manager;
 pub mod change_set;
 pub mod config;
 pub mod conflicts;
+pub mod error;
 pub mod format;
-pub mod metadata;
 pub mod ops;
 pub mod refs;
 pub mod repository;
@@ -45,4 +45,27 @@ mod private {
     /// Used to seal traits we don't want user code to implement, to maintain compatibility.
     /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
     pub trait Sealed {}
+}
+
+#[cfg(feature = "logs")]
+pub fn initialize_tracing() {
+    use tracing_error::ErrorLayer;
+    use tracing_subscriber::{
+        layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
+    };
+
+    // We have two Layers. One keeps track of the spans to feed the ICError instances.
+    // The other is the one spitting logs to stdout. Filtering only applies to the second Layer.
+
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .pretty()
+        .with_filter(EnvFilter::from_env("ICECHUNK_LOG"));
+
+    let error_span_layer = ErrorLayer::default();
+
+    if let Err(err) =
+        Registry::default().with(error_span_layer).with(stdout_layer).try_init()
+    {
+        println!("Warning: {}", err);
+    }
 }

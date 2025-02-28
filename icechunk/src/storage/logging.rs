@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     ops::Range,
     sync::{Arc, Mutex},
 };
@@ -10,7 +11,10 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
 
-use super::{ETag, ListInfo, Reader, Settings, Storage, StorageError, StorageResult};
+use super::{
+    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, Storage, StorageError,
+    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult,
+};
 use crate::{
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
@@ -34,6 +38,12 @@ impl LoggingStorage {
     }
 }
 
+impl fmt::Display for LoggingStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LoggingStorage(backend={})", self.backend)
+    }
+}
+
 impl private::Sealed for LoggingStorage {}
 
 #[async_trait]
@@ -46,16 +56,16 @@ impl Storage for LoggingStorage {
     async fn fetch_config(
         &self,
         settings: &Settings,
-    ) -> StorageResult<Option<(Bytes, ETag)>> {
+    ) -> StorageResult<FetchConfigResult> {
         self.backend.fetch_config(settings).await
     }
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
-    ) -> StorageResult<ETag> {
-        self.backend.update_config(settings, config, etag).await
+        previous_version: &VersionInfo,
+    ) -> StorageResult<UpdateConfigResult> {
+        self.backend.update_config(settings, config, previous_version).await
     }
 
     async fn fetch_snapshot(
@@ -159,7 +169,11 @@ impl Storage for LoggingStorage {
         self.backend.write_chunk(settings, id, bytes).await
     }
 
-    async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes> {
+    async fn get_ref(
+        &self,
+        settings: &Settings,
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult> {
         self.backend.get_ref(settings, ref_key).await
     }
 
@@ -171,18 +185,10 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
-    ) -> StorageResult<()> {
-        self.backend.write_ref(settings, ref_key, overwrite_refs, bytes).await
-    }
-
-    async fn ref_versions(
-        &self,
-        settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>> {
-        self.backend.ref_versions(settings, ref_name).await
+        previous_version: &VersionInfo,
+    ) -> StorageResult<WriteRefResult> {
+        self.backend.write_ref(settings, ref_key, bytes, previous_version).await
     }
 
     async fn list_objects<'a>(
@@ -208,10 +214,6 @@ impl Storage for LoggingStorage {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
         self.backend.get_snapshot_last_modified(settings, snapshot).await
-    }
-
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        self.backend.root_is_clean().await
     }
 
     async fn get_object_range_buf(

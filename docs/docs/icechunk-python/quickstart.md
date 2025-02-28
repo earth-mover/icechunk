@@ -6,17 +6,24 @@ If you're not familiar with Zarr, you may want to start with the [Zarr Tutorial]
 
 ## Installation
 
-Install Icechunk with pip
+Icechunk can be installed using pip or conda:
 
-```python
-pip install icechunk
-```
+=== "pip"
+
+    ```bash
+    python -m pip install icechunk
+    ```
+
+=== "conda"
+
+    ```bash
+    conda install -c conda-forge icechunk
+    ```
 
 !!! note
 
     Icechunk is currently designed to support the [Zarr V3 Specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html).
     Using it today requires installing Zarr Python 3.
-
 
 ## Create a new Icechunk repository
 
@@ -27,6 +34,7 @@ However, you can also create a repo on your local filesystem.
 === "S3 Storage"
 
     ```python
+    import icechunk
     storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -34,6 +42,7 @@ However, you can also create a repo on your local filesystem.
 === "Google Cloud Storage"
 
     ```python
+    import icechunk
     storage = icechunk.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -41,6 +50,7 @@ However, you can also create a repo on your local filesystem.
 === "Azure Blob Storage"
 
     ```python
+    import icechunk
     storage = icechunk.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -48,6 +58,7 @@ However, you can also create a repo on your local filesystem.
 === "Local Storage"
 
     ```python
+    import icechunk
     storage = icechunk.local_filesystem_storage("./icechunk-local")
     repo = icechunk.Repository.create(storage)
     ```
@@ -73,6 +84,7 @@ We can now use our Icechunk `store` with Zarr.
 Let's first create a group and an array within it.
 
 ```python
+import zarr
 group = zarr.group(store)
 array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
 ```
@@ -94,7 +106,6 @@ session.commit("first commit")
 !!! note
 
     Once a writable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
-
 
 ## Make a second commit
 
@@ -124,7 +135,7 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 We can see the full version history of our repo:
 
 ```python
-hist = repo.ancestry(snapshot=snapshot_id_2)
+hist = list(repo.ancestry(snapshot_id=snapshot_id_2))
 for ancestor in hist:
     print(ancestor.id, ancestor.message, ancestor.written_at)
 
@@ -140,12 +151,12 @@ for ancestor in hist:
 # latest version
 assert array[0] == 2
 # check out earlier snapshot
-earlier_session = repo.readonly_session(snapshot=snapshot_id=hist[1].id)
+earlier_session = repo.readonly_session(snapshot_id=hist[1].id)
 store = earlier_session.store
 
 # get the array
 group = zarr.open_group(store, mode="r")
-array = group["my_array]
+array = group["my_array"]
 
 # verify data matches first version
 assert array[0] == 1

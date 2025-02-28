@@ -99,7 +99,8 @@ to_icechunk(ds, session)
 After writing, we commit the changes using the session:
 
 ```python
-session.commit("add RASM data to store")
+first_snapshot = session.commit("add RASM data to store")
+first_snapshot
 # output: 'ME4VKFPA5QAY0B2YSG8G'
 ```
 
@@ -126,7 +127,7 @@ session.commit("append more data")
 To read data stored in Icechunk with Xarray, we'll use `xarray.open_zarr`:
 
 ```python
-xr.open_zarr(store, consolidated=False)
+xr.open_zarr(session.store, consolidated=False)
 # output: <xarray.Dataset> Size: 17MB
 # Dimensions:  (time: 36, y: 205, x: 275)
 # Coordinates:
@@ -153,7 +154,7 @@ xr.open_zarr(store, consolidated=False)
 We can also read data from previous snapshots by checking out prior versions:
 
 ```python
-session = repo.readable_session(snapshot_id='ME4VKFPA5QAY0B2YSG8G')
+session = repo.readonly_session(snapshot_id=first_snapshot)
 
 xr.open_zarr(session.store, consolidated=False)
 # <xarray.Dataset> Size: 9MB

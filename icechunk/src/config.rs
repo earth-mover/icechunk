@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+pub use object_store::gcp::GcpCredential;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -21,6 +22,19 @@ pub struct S3Options {
     pub endpoint_url: Option<String>,
     pub anonymous: bool,
     pub allow_http: bool,
+}
+
+impl fmt::Display for S3Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={})",
+            self.region.as_deref().unwrap_or("None"),
+            self.endpoint_url.as_deref().unwrap_or("None"),
+            self.anonymous,
+            self.allow_http
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,7 +68,7 @@ impl CompressionConfig {
     }
 
     pub fn level(&self) -> u8 {
-        self.level.unwrap_or(1)
+        self.level.unwrap_or(3)
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -144,28 +158,28 @@ impl ManifestPreloadConfig {
                         // regexes taken from https://github.com/xarray-contrib/cf-xarray/blob/1591ff5ea7664a6bdef24055ef75e242cd5bfc8b/cf_xarray/criteria.py#L149-L160
                         ManifestPreloadCondition::NameMatches {
                             // time
-                            regex: r#"\bt\b|(time|min|hour|day|week|month|year)[0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^\bt\b$|^(time|min|hour|day|week|month|year)[0-9]*$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // Z
-                            regex: r#"(z|nav_lev|gdep|lv_|[o]*lev|bottom_top|sigma|h(ei)?ght|altitude|depth|isobaric|pres|isotherm)[a-z_]*[0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^(z|nav_lev|gdep|lv_|[o]*lev|bottom_top|sigma|h(ei)?ght|altitude|depth|isobaric|pres|isotherm)[a-z_]*[0-9]*$"#.to_string(), // codespell:ignore
 
                         },
                         ManifestPreloadCondition::NameMatches {
                             // Y
-                            regex: r#"y|j|nlat|rlat|nj"#.to_string(), // codespell:ignore
+                            regex: r#"^(y|j|nlat|rlat|nj)$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // latitude
-                            regex: r#"y?(nav_lat|lat|gphi)[a-z0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^y?(nav_lat|lat|gphi)[a-z0-9]*$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // longitude
-                            regex: r#"x?(nav_lon|lon|glam)[a-z0-9]*"#.to_string(), // codespell:ignore
+                            regex: r#"^x?(nav_lon|lon|glam)[a-z0-9]*$"#.to_string(), // codespell:ignore
                         },
                         ManifestPreloadCondition::NameMatches {
                             // X
-                            regex: r#"x|i|nlon|rlon|ni"#.to_string(), // codespell:ignore
+                            regex: r#"^(x|i|nlon|rlon|ni)$"#.to_string(), // codespell:ignore
                         },
                     ]),
                     ManifestPreloadCondition::NumRefs {
@@ -204,11 +218,6 @@ impl ManifestConfig {
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifst
     pub inline_chunk_threshold_bytes: Option<u16>,
-    /// Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    /// own risk in object stores for which we don't support write-object-if-not-exists. There is
-    /// the possibility of race conditions if this variable is set to true and there are concurrent
-    /// commit attempts.
-    pub unsafe_overwrite_refs: Option<bool>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
     pub get_partial_values_concurrency: Option<u16>,
@@ -234,9 +243,6 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
         self.inline_chunk_threshold_bytes.unwrap_or(512)
-    }
-    pub fn unsafe_overwrite_refs(&self) -> bool {
-        self.unsafe_overwrite_refs.unwrap_or(false)
     }
     pub fn get_partial_values_concurrency(&self) -> u16 {
         self.get_partial_values_concurrency.unwrap_or(10)
@@ -267,9 +273,6 @@ impl RepositoryConfig {
             inline_chunk_threshold_bytes: other
                 .inline_chunk_threshold_bytes
                 .or(self.inline_chunk_threshold_bytes),
-            unsafe_overwrite_refs: other
-                .unsafe_overwrite_refs
-                .or(self.unsafe_overwrite_refs),
             get_partial_values_concurrency: other
                 .get_partial_values_concurrency
                 .or(self.get_partial_values_concurrency),
@@ -365,38 +368,64 @@ pub struct S3StaticCredentials {
 }
 
 #[async_trait]
-#[typetag::serde(tag = "type")]
-pub trait CredentialsFetcher: fmt::Debug + Sync + Send {
+#[typetag::serde(tag = "s3_credentials_fetcher_type")]
+pub trait S3CredentialsFetcher: fmt::Debug + Sync + Send {
     async fn get(&self) -> Result<S3StaticCredentials, String>;
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
-#[serde(tag = "type")]
+#[serde(tag = "s3_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum S3Credentials {
     #[default]
     FromEnv,
     Anonymous,
     Static(S3StaticCredentials),
-    Refreshable(Arc<dyn CredentialsFetcher>),
+    Refreshable(Arc<dyn S3CredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "gcs_static_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
     ServiceAccountKey(String),
     ApplicationCredentials(PathBuf),
+    BearerToken(GcsBearerCredential),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "gcs_bearer_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub struct GcsBearerCredential {
+    pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
+}
+
+impl From<&GcsBearerCredential> for GcpCredential {
+    fn from(value: &GcsBearerCredential) -> Self {
+        GcpCredential { bearer: value.bearer.clone() }
+    }
+}
+
+#[async_trait]
+#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
+pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
+    async fn get(&self) -> Result<GcsBearerCredential, String>;
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(tag = "gcs_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsCredentials {
+    #[default]
     FromEnv,
     Static(GcsStaticCredentials),
+    Refreshable(Arc<dyn GcsCredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_static_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureStaticCredentials {
     AccessKey(String),
@@ -405,6 +434,7 @@ pub enum AzureStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureCredentials {
     FromEnv,
@@ -412,7 +442,7 @@ pub enum AzureCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum Credentials {
     S3(S3Credentials),

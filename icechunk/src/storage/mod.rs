@@ -1,7 +1,4 @@
-use ::object_store::{
-    azure::AzureConfigKey,
-    gcp::{GoogleCloudStorageBuilder, GoogleConfigKey},
-};
+use ::object_store::{azure::AzureConfigKey, gcp::GoogleConfigKey};
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
@@ -19,7 +16,6 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
 };
 use itertools::Itertools;
-use object_store::ObjectStorageConfig;
 use s3::S3Storage;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -49,17 +45,15 @@ pub mod s3;
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::{
-        AzureCredentials, AzureStaticCredentials, GcsCredentials, GcsStaticCredentials,
-        S3Credentials, S3Options,
-    },
+    config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
+    error::ICError,
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
 };
 
 #[derive(Debug, Error)]
-pub enum StorageError {
-    #[error("error contacting object store {0}")]
+pub enum StorageErrorKind {
+    #[error("object store error {0}")]
     ObjectStore(#[from] ::object_store::Error),
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
@@ -75,16 +69,23 @@ pub enum StorageError {
     S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] ByteStreamError),
-    #[error("cannot overwrite ref: {0}")]
-    RefAlreadyExists(String),
-    #[error("ref not found: {0}")]
-    RefNotFound(String),
-    #[error("the etag does not match")]
-    ConfigUpdateConflict,
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("unknown storage error: {0}")]
     Other(String),
+}
+
+pub type StorageError = ICError<StorageErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for StorageError
+where
+    E: Into<StorageErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
 }
 
 pub type StorageResult<A> = Result<A, StorageError>;
@@ -103,7 +104,38 @@ const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
 
-pub type ETag = String;
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
+pub struct ETag(pub String);
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct Generation(pub String);
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct VersionInfo {
+    pub etag: Option<ETag>,
+    pub generation: Option<Generation>,
+}
+
+impl VersionInfo {
+    pub fn for_creation() -> Self {
+        Self { etag: None, generation: None }
+    }
+
+    pub fn from_etag_only(etag: String) -> Self {
+        Self { etag: Some(ETag(etag)), generation: None }
+    }
+
+    pub fn is_create(&self) -> bool {
+        self.etag.is_none() && self.generation.is_none()
+    }
+
+    pub fn etag(&self) -> Option<&String> {
+        self.etag.as_ref().map(|e| &e.0)
+    }
+
+    pub fn generation(&self) -> Option<&String> {
+        self.generation.as_ref().map(|e| &e.0)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
@@ -142,6 +174,9 @@ impl ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: Option<ConcurrencySettings>,
+    pub unsafe_use_conditional_update: Option<bool>,
+    pub unsafe_use_conditional_create: Option<bool>,
+    pub unsafe_use_metadata: Option<bool>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -153,6 +188,18 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
     }
 
+    pub fn unsafe_use_conditional_create(&self) -> bool {
+        self.unsafe_use_conditional_create.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_conditional_update(&self) -> bool {
+        self.unsafe_use_conditional_update.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_metadata(&self) -> bool {
+        self.unsafe_use_metadata.unwrap_or(true)
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             concurrency: match (&self.concurrency, other.concurrency) {
@@ -160,6 +207,33 @@ impl Settings {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            unsafe_use_conditional_create: match (
+                &self.unsafe_use_conditional_create,
+                other.unsafe_use_conditional_create,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_conditional_update: match (
+                &self.unsafe_use_conditional_update,
+                other.unsafe_use_conditional_update,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_metadata: match (
+                &self.unsafe_use_metadata,
+                other.unsafe_use_metadata,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }
@@ -176,7 +250,9 @@ impl Reader {
             Reader::Asynchronous(mut read) => {
                 // add some extra space to the buffer to optimize conversion to bytes
                 let mut buffer = Vec::with_capacity(expected_size + 16);
-                tokio::io::copy(&mut read, &mut buffer).await?;
+                tokio::io::copy(&mut read, &mut buffer)
+                    .await
+                    .map_err(StorageErrorKind::IOError)?;
                 Ok(buffer.into())
             }
             Reader::Synchronous(mut buf) => Ok(buf.copy_to_bytes(buf.remaining())),
@@ -192,26 +268,48 @@ impl Reader {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchConfigResult {
+    Found { bytes: Bytes, version: VersionInfo },
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateConfigResult {
+    Updated { new_version: VersionInfo },
+    NotOnLatestVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GetRefResult {
+    Found { bytes: Bytes, version: VersionInfo },
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteRefResult {
+    Written,
+    WontOverwrite,
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
-pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
+pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     fn default_settings(&self) -> Settings {
         Default::default()
     }
-    async fn fetch_config(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<Option<(Bytes, ETag)>>;
+    async fn fetch_config(&self, settings: &Settings)
+        -> StorageResult<FetchConfigResult>;
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
-    ) -> StorageResult<ETag>;
+        previous_version: &VersionInfo,
+    ) -> StorageResult<UpdateConfigResult>;
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
@@ -273,20 +371,19 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         bytes: Bytes,
     ) -> StorageResult<()>;
 
-    async fn get_ref(&self, settings: &Settings, ref_key: &str) -> StorageResult<Bytes>;
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn ref_versions(
+    async fn get_ref(
         &self,
         settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>>;
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult>;
+    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
     async fn write_ref(
         &self,
         settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
-    ) -> StorageResult<()>;
+        previous_version: &VersionInfo,
+    ) -> StorageResult<WriteRefResult>;
 
     async fn list_objects<'a>(
         &'a self,
@@ -308,7 +405,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn root_is_clean(&self) -> StorageResult<bool>;
+    async fn root_is_clean(&self) -> StorageResult<bool> {
+        match self.list_objects(&Settings::default(), "").await?.next().await {
+            None => Ok(true),
+            Some(Ok(_)) => Ok(false),
+            Some(Err(err)) => Err(err),
+        }
+    }
 
     async fn list_chunks(
         &self,
@@ -546,127 +649,67 @@ pub fn new_tigris_storage(
     Ok(Arc::new(st))
 }
 
-pub fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
-    let st = ObjectStorage::new_in_memory()?;
+pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
+    let st = ObjectStorage::new_in_memory().await?;
     Ok(Arc::new(st))
 }
 
-pub fn new_local_filesystem_storage(path: &Path) -> StorageResult<Arc<dyn Storage>> {
-    let st = ObjectStorage::new_local_filesystem(path)?;
+pub async fn new_local_filesystem_storage(
+    path: &Path,
+) -> StorageResult<Arc<dyn Storage>> {
+    let st = ObjectStorage::new_local_filesystem(path).await?;
     Ok(Arc::new(st))
 }
 
-pub fn new_azure_blob_storage(
+pub async fn new_s3_object_store_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let storage =
+        ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
+    Ok(Arc::new(storage))
+}
+
+pub async fn new_azure_blob_storage(
+    account: String,
     container: String,
-    prefix: String,
+    prefix: Option<String>,
     credentials: Option<AzureCredentials>,
     config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    let url = format!("azure://{}/{}", container, prefix);
-    let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
-    // Either the account name should be provided or user_emulator should be set to true to use the default account
-    if !options.iter().any(|(k, _)| k == AzureConfigKey::AccountName.as_ref()) {
-        options
-            .push((AzureConfigKey::UseEmulator.as_ref().to_string(), "true".to_string()));
-    }
-
-    match credentials {
-        Some(AzureCredentials::Static(AzureStaticCredentials::AccessKey(key))) => {
-            options.push((AzureConfigKey::AccessKey.as_ref().to_string(), key));
-        }
-        Some(AzureCredentials::Static(AzureStaticCredentials::SASToken(token))) => {
-            options.push((AzureConfigKey::SasKey.as_ref().to_string(), token));
-        }
-        Some(AzureCredentials::Static(AzureStaticCredentials::BearerToken(token))) => {
-            options.push((AzureConfigKey::Token.as_ref().to_string(), token));
-        }
-        None | Some(AzureCredentials::FromEnv) => {
-            let builder = ::object_store::azure::MicrosoftAzureBuilder::from_env();
-
-            for key in &[
-                AzureConfigKey::AccessKey,
-                AzureConfigKey::SasKey,
-                AzureConfigKey::Token,
-            ] {
-                if let Some(value) = builder.get_config_value(key) {
-                    options.push((key.as_ref().to_string(), value));
-                }
-            }
-        }
-    };
-
-    let config = ObjectStorageConfig {
-        url,
-        prefix: "".to_string(), // it's embedded in the url
-        options,
-    };
-
-    Ok(Arc::new(ObjectStorage::from_config(config)?))
+    let config = config
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| key.parse::<AzureConfigKey>().map(|k| (k, value)).ok())
+        .collect();
+    let storage =
+        ObjectStorage::new_azure(account, container, prefix, credentials, Some(config))
+            .await?;
+    Ok(Arc::new(storage))
 }
 
-pub fn new_gcs_storage(
+pub async fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
     config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    let url = format!(
-        "gs://{}{}",
-        bucket,
-        prefix.map(|p| format!("/{}", p)).unwrap_or("".to_string())
-    );
-    let mut options = config.unwrap_or_default().into_iter().collect::<Vec<_>>();
-
-    match credentials {
-        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
-            options.push((
-                GoogleConfigKey::ServiceAccount.as_ref().to_string(),
-                path.into_os_string().into_string().map_err(|_| {
-                    StorageError::Other("invalid service account path".to_string())
-                })?,
-            ));
-        }
-        Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(key))) => {
-            options.push((GoogleConfigKey::ServiceAccountKey.as_ref().to_string(), key));
-        }
-        Some(GcsCredentials::Static(GcsStaticCredentials::ApplicationCredentials(
-            path,
-        ))) => {
-            options.push((
-                GoogleConfigKey::ApplicationCredentials.as_ref().to_string(),
-                path.into_os_string().into_string().map_err(|_| {
-                    StorageError::Other(
-                        "invalid application credentials path".to_string(),
-                    )
-                })?,
-            ));
-        }
-        None | Some(GcsCredentials::FromEnv) => {
-            let builder = GoogleCloudStorageBuilder::from_env();
-
-            for key in &[
-                GoogleConfigKey::ServiceAccount,
-                GoogleConfigKey::ServiceAccountKey,
-                GoogleConfigKey::ApplicationCredentials,
-            ] {
-                if let Some(value) = builder.get_config_value(key) {
-                    options.push((key.as_ref().to_string(), value));
-                }
-            }
-        }
-    };
-
-    let config = ObjectStorageConfig {
-        url,
-        prefix: "".to_string(), // it's embedded in the url
-        options,
-    };
-
-    Ok(Arc::new(ObjectStorage::from_config(config)?))
+    let config = config
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| {
+            key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
+        })
+        .collect();
+    let storage =
+        ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config)).await?;
+    Ok(Arc::new(storage))
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
     use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};

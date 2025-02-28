@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     fmt::Display,
     iter,
-    num::NonZeroU64,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -18,20 +17,18 @@ use serde::{de, Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::{
+    error::ICError,
     format::{
         manifest::{ChunkPayload, VirtualChunkRef},
-        snapshot::{NodeData, NodeSnapshot, UserAttributesSnapshot, ZarrArrayMetadata},
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError, Path, PathError,
+        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
+        ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
     },
-    metadata::{
-        ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames,
-        FillValue, StorageTransformer, UserAttributes,
-    },
-    refs::RefError,
-    repository::RepositoryError,
-    session::{get_chunk, is_prefix_match, Session, SessionError},
+    refs::{RefError, RefErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind},
+    session::{get_chunk, is_prefix_match, Session, SessionError, SessionErrorKind},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -45,7 +42,7 @@ pub type StoreResult<A> = Result<A, StoreError>;
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum KeyNotFoundError {
-    #[error("chunk cannot be find for key `{key}`")]
+    #[error("chunk cannot be find for key `{key}` (path={path}, coords={coords:?})")]
     ChunkNotFound { key: String, path: Path, coords: ChunkIndices },
     #[error("node not found at `{path}`")]
     NodeNotFound { path: Path },
@@ -55,32 +52,33 @@ pub enum KeyNotFoundError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum StoreError {
+pub enum StoreErrorKind {
+    #[error(transparent)]
+    SessionError(SessionErrorKind),
+    #[error(transparent)]
+    RepositoryError(RepositoryErrorKind),
+    #[error(transparent)]
+    RefError(RefErrorKind),
+
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
     #[error("this operation is not allowed: {0}")]
     NotAllowed(String),
-    #[error("object not found: `{0}`")]
+    #[error(transparent)]
     NotFound(#[from] KeyNotFoundError),
-    #[error("unsuccessful session operation: `{0}`")]
-    SessionError(#[from] SessionError),
-    #[error("unsuccessful repository operation: `{0}`")]
-    RepositoryError(#[from] RepositoryError),
     #[error("error merging stores: `{0}`")]
     MergeError(String),
-    #[error("unsuccessful ref operation: `{0}`")]
-    RefError(#[from] RefError),
     #[error("cannot commit when no snapshot is present")]
     NoSnapshot,
     #[error("could not create path from prefix")]
     PathError(#[from] PathError),
     #[error("all commits must be made on a branch")]
     NotOnBranch,
-    #[error("bad metadata: `{0}`")]
+    #[error("bad metadata")]
     BadMetadata(#[from] serde_json::Error),
-    #[error("deserialization error: `{0}`")]
+    #[error("deserialization error")]
     DeserializationError(#[from] rmp_serde::decode::Error),
-    #[error("serialization error: `{0}`")]
+    #[error("serialization error")]
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
@@ -98,8 +96,47 @@ pub enum StoreError {
         "invalid chunk location, no matching virtual chunk container: `{chunk_location}`"
     )]
     InvalidVirtualChunkContainer { chunk_location: String },
-    #[error("unknown store error: `{0}`")]
+    #[error("{0}")]
+    Other(String),
+    #[error("unknown store error")]
     Unknown(Box<dyn std::error::Error + Send + Sync>),
+}
+
+pub type StoreError = ICError<StoreErrorKind>;
+
+// it would be great to define this impl in error.rs, but it conflicts with the blanket
+// `impl From<T> for T`
+impl<E> From<E> for StoreError
+where
+    E: Into<StoreErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
+}
+
+impl From<RepositoryError> for StoreError {
+    fn from(value: RepositoryError) -> Self {
+        Self::with_context(StoreErrorKind::RepositoryError(value.kind), value.context)
+    }
+}
+
+impl From<RefError> for StoreError {
+    fn from(value: RefError) -> Self {
+        Self::with_context(StoreErrorKind::RefError(value.kind), value.context)
+    }
+}
+
+impl From<SessionError> for StoreError {
+    fn from(value: SessionError) -> Self {
+        Self::with_context(StoreErrorKind::SessionError(value.kind), value.context)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SetVirtualRefsResult {
+    Done,
+    FailedRefs(Vec<ChunkIndices>),
 }
 
 #[derive(Clone)]
@@ -121,12 +158,14 @@ impl Store {
         Self { session, get_partial_values_concurrency }
     }
 
+    #[instrument(skip(bytes))]
     pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 
+    #[instrument(skip(self))]
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
         let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
@@ -137,19 +176,23 @@ impl Store {
         Arc::clone(&self.session)
     }
 
+    #[instrument(skip(self))]
     pub async fn read_only(&self) -> bool {
         self.session.read().await.read_only()
     }
 
+    #[instrument(skip(self))]
     pub async fn is_empty(&self, prefix: &str) -> StoreResult<bool> {
         Ok(self.list_dir(prefix).await?.next().await.is_none())
     }
 
+    #[instrument(skip(self))]
     pub async fn clear(&self) -> StoreResult<()> {
         let mut repo = self.session.write().await;
         Ok(repo.clear().await?)
     }
 
+    #[instrument(skip(self))]
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
         let repo = self.session.read().await;
         get_key(key, byte_range, &repo).await
@@ -164,6 +207,7 @@ impl Store {
     ///
     /// Currently this function is using concurrency but not parallelism. To limit the number of
     /// concurrent tasks use the Store config value `get_partial_values_concurrency`.
+    #[instrument(skip(self, key_ranges))]
     pub async fn get_partial_values(
         &self,
         key_ranges: impl IntoIterator<Item = (String, ByteRange)>,
@@ -207,31 +251,35 @@ impl Store {
             .await;
 
         let results = Arc::into_inner(results)
-            .ok_or(StoreError::PartialValuesPanic)?
+            .ok_or(StoreErrorKind::PartialValuesPanic)?
             .into_inner()
-            .map_err(|_| StoreError::PartialValuesPanic)?;
+            .map_err(|_| StoreErrorKind::PartialValuesPanic)?;
 
         debug_assert!(results.len() == num_keys.into_inner());
         let res: Option<Vec<_>> = results.into_iter().collect();
-        res.ok_or(StoreError::PartialValuesPanic)
+        res.ok_or(StoreErrorKind::PartialValuesPanic.into())
     }
 
+    #[instrument(skip(self))]
     pub async fn exists(&self, key: &str) -> StoreResult<bool> {
         let guard = self.session.read().await;
         exists(key, guard.deref()).await
     }
 
+    #[instrument(skip(self))]
     pub fn supports_writes(&self) -> StoreResult<bool> {
         Ok(true)
     }
 
+    #[instrument(skip(self))]
     pub fn supports_deletes(&self) -> StoreResult<bool> {
         Ok(true)
     }
 
+    #[instrument(skip(self, value))]
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
         self.set_with_optional_locking(key, value, None).await
@@ -245,23 +293,23 @@ impl Store {
     ) -> StoreResult<()> {
         if let Some(session) = locked_session.as_ref() {
             if session.read_only() {
-                return Err(StoreError::ReadOnly);
+                return Err(StoreErrorKind::ReadOnly.into());
             }
         } else if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
-                    self.set_array_meta(node_path, array_meta, locked_session).await
+                    self.set_array_meta(node_path, value, array_meta, locked_session)
+                        .await
                 } else {
-                    match serde_json::from_slice(value.as_ref()) {
-                        Ok(group_meta) => {
-                            self.set_group_meta(node_path, group_meta, locked_session)
-                                .await
+                    match serde_json::from_slice::<GroupMetadata>(value.as_ref()) {
+                        Ok(_) => {
+                            self.set_group_meta(node_path, value, locked_session).await
                         }
-                        Err(err) => Err(StoreError::BadMetadata(err)),
+                        Err(err) => Err(StoreErrorKind::BadMetadata(err).into()),
                     }
                 }
             }
@@ -287,22 +335,25 @@ impl Store {
                 }
                 Ok(())
             }
-            Key::ZarrV2(_) => Err(StoreError::Unimplemented(
+            Key::ZarrV2(_) => Err(StoreErrorKind::Unimplemented(
                 "Icechunk cannot set Zarr V2 metadata keys",
-            )),
+            )
+            .into()),
         }
     }
 
-    pub async fn set_if_not_exists(&self, key: &str, value: Bytes) -> StoreResult<()> {
+    #[instrument(skip(self, bytes))]
+    pub async fn set_if_not_exists(&self, key: &str, bytes: Bytes) -> StoreResult<()> {
         let mut guard = self.session.write().await;
         if exists(key, guard.deref()).await? {
             Ok(())
         } else {
-            self.set_with_optional_locking(key, value, Some(guard.deref_mut())).await
+            self.set_with_optional_locking(key, bytes, Some(guard.deref_mut())).await
         }
     }
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
+    #[instrument(skip(self))]
     pub async fn set_virtual_ref(
         &self,
         key: &str,
@@ -310,7 +361,7 @@ impl Store {
         validate_container: bool,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
         match Key::parse(key)? {
@@ -319,9 +370,10 @@ impl Store {
                 if validate_container
                     && session.matching_container(&reference.location).is_none()
                 {
-                    return Err(StoreError::InvalidVirtualChunkContainer {
+                    return Err(StoreErrorKind::InvalidVirtualChunkContainer {
                         chunk_location: reference.location.0,
-                    });
+                    }
+                    .into());
                 }
                 session
                     .set_chunk_ref(
@@ -332,27 +384,67 @@ impl Store {
                     .await?;
                 Ok(())
             }
-            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreError::NotAllowed(
+            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreErrorKind::NotAllowed(
                 format!("use .set to modify metadata for key {}", key),
-            )),
+            )
+            .into()),
         }
     }
 
+    #[instrument(skip(self, references))]
+    pub async fn set_virtual_refs<I>(
+        &self,
+        array_path: &Path,
+        validate_container: bool,
+        references: I,
+    ) -> StoreResult<SetVirtualRefsResult>
+    where
+        I: IntoIterator<Item = (ChunkIndices, VirtualChunkRef)> + std::fmt::Debug,
+    {
+        if self.read_only().await {
+            return Err(StoreErrorKind::ReadOnly.into());
+        }
+
+        let mut session = self.session.write().await;
+        let mut failed = Vec::new();
+        for (index, reference) in references.into_iter() {
+            if validate_container
+                && session.matching_container(&reference.location).is_none()
+            {
+                failed.push(index);
+            } else {
+                session
+                    .set_chunk_ref(
+                        array_path.clone(),
+                        index,
+                        Some(ChunkPayload::Virtual(reference)),
+                    )
+                    .await?;
+            }
+        }
+        if failed.is_empty() {
+            Ok(SetVirtualRefsResult::Done)
+        } else {
+            Ok(SetVirtualRefsResult::FailedRefs(failed))
+        }
+    }
+
+    #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
         let prefix = prefix.trim_start_matches("/").trim_end_matches("/");
         // TODO: Handling preceding "/" is ugly!
         let path = format!("/{}", prefix)
             .try_into()
-            .map_err(|_| StoreError::BadKeyPrefix(prefix.to_owned()))?;
+            .map_err(|_| StoreErrorKind::BadKeyPrefix(prefix.to_owned()))?;
 
         let mut guard = self.session.write().await;
         let node = guard.get_node(&path).await;
         match node {
             Ok(node) => Ok(guard.deref_mut().delete_node(node).await?),
-            Err(SessionError::NodeNotFound { .. }) => {
+            Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 // other cases are
                 // 1. delete("/path/to/array/c")
                 // 2. delete("/path/to/array/c/0/0")
@@ -363,7 +455,7 @@ impl Store {
                 let node = guard.get_closest_ancestor_node(&path).await;
                 if let Ok(NodeSnapshot {
                     path: node_path,
-                    node_data: NodeData::Array(..),
+                    node_data: NodeData::Array { .. },
                     ..
                 }) = node
                 {
@@ -399,6 +491,7 @@ impl Store {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn delete(&self, key: &str) -> StoreResult<()> {
         // we need to hold the lock while we do the node search and the write
         // to avoid race conditions with other writers
@@ -409,10 +502,14 @@ impl Store {
                 let node = session.get_node(&node_path).await;
 
                 // When there is no node at the given key, we don't consider it an error, instead we just do nothing
-                if let Err(SessionError::NodeNotFound { path: _, message: _ }) = node {
+                if let Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { path: _, message: _ },
+                    ..
+                }) = node
+                {
                     return Ok(());
                 };
-                Ok(session.delete_node(node.map_err(StoreError::SessionError)?).await?)
+                Ok(session.delete_node(node.map_err(StoreError::from)?).await?)
             }
             Key::Chunk { node_path, coords } => {
                 Ok(session.delete_chunks(&node_path, vec![coords].into_iter()).await?)
@@ -425,15 +522,16 @@ impl Store {
         Ok(false)
     }
 
+    #[instrument(skip(self, _key_start_values))]
     pub async fn set_partial_values(
         &self,
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreErrorKind::ReadOnly.into());
         }
 
-        Err(StoreError::Unimplemented("set_partial_values"))
+        Err(StoreErrorKind::Unimplemented("set_partial_values").into())
     }
 
     pub fn supports_listing(&self) -> StoreResult<bool> {
@@ -446,6 +544,7 @@ impl Store {
         self.list_prefix("/").await
     }
 
+    #[instrument(skip(self))]
     pub async fn list_prefix(
         &self,
         prefix: &str,
@@ -470,6 +569,7 @@ impl Store {
         Ok(res)
     }
 
+    #[instrument(skip(self))]
     pub async fn list_dir_items(
         &self,
         prefix: &str,
@@ -481,7 +581,7 @@ impl Store {
         let path = Path::try_from(absolute_prefix)?;
         let session = Arc::clone(&self.session).read_owned().await;
         let results = match session.get_node(&path).await {
-            Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => {
+            Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => {
                 // if this is an array we know what to yield
                 vec![
                     ListDirItem::Key("zarr.json".to_string()),
@@ -492,7 +592,7 @@ impl Store {
                     ListDirItem::Prefix("c".to_string()),
                 ]
             }
-            Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => {
+            Ok(NodeSnapshot { node_data: NodeData::Group { .. }, .. }) => {
                 // if the prefix is the path to a group we need to discover any nodes with the prefix as node path
                 // listing chunks is unnecessary
                 self.list_metadata_prefix(prefix, true)
@@ -565,55 +665,72 @@ impl Store {
         Ok(futures::stream::iter(results.into_iter().map(Ok)))
     }
 
+    #[instrument(skip(self))]
     pub async fn getsize(&self, key: &str) -> StoreResult<u64> {
-        let repo = self.session.read().await;
-        get_key_size(key, &repo).await
+        let session = self.session.read().await;
+        get_key_size(key, &session).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn getsize_prefix(&self, prefix: &str) -> StoreResult<u64> {
+        let session_guard = Arc::clone(&self.session).read_owned().await;
+        let session = session_guard.deref();
+
+        let meta = self.list_metadata_prefix(prefix, false).await?;
+        let chunks = self.list_chunks_prefix(prefix).await?;
+        meta.chain(chunks)
+            .try_fold(0, move |accum, key| async move {
+                get_key_size(key.as_str(), session).await.map(|n| n + accum)
+            })
+            .await
     }
 
     async fn set_array_meta(
         &self,
         path: Path,
+        user_data: Bytes,
         array_meta: ArrayMetadata,
-        locked_repo: Option<&mut Session>,
+        locked_session: Option<&mut Session>,
     ) -> Result<(), StoreError> {
-        match locked_repo {
-            Some(repo) => set_array_meta(path, array_meta, repo).await,
-            None => self.set_array_meta_locking(path, array_meta).await,
+        match locked_session {
+            Some(session) => set_array_meta(path, user_data, array_meta, session).await,
+            None => self.set_array_meta_locking(path, user_data, array_meta).await,
         }
     }
 
     async fn set_array_meta_locking(
         &self,
         path: Path,
+        user_data: Bytes,
         array_meta: ArrayMetadata,
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         let mut guard = self.session.write().await;
-        set_array_meta(path, array_meta, guard.deref_mut()).await
+        set_array_meta(path, user_data, array_meta, guard.deref_mut()).await
     }
 
     async fn set_group_meta(
         &self,
         path: Path,
-        group_meta: GroupMetadata,
+        user_data: Bytes,
         locked_repo: Option<&mut Session>,
     ) -> Result<(), StoreError> {
         match locked_repo {
-            Some(repo) => set_group_meta(path, group_meta, repo).await,
-            None => self.set_group_meta_locking(path, group_meta).await,
+            Some(repo) => set_group_meta(path, user_data, repo).await,
+            None => self.set_group_meta_locking(path, user_data).await,
         }
     }
 
     async fn set_group_meta_locking(
         &self,
         path: Path,
-        group_meta: GroupMetadata,
+        user_data: Bytes,
     ) -> Result<(), StoreError> {
         // we need to hold the lock while we search the array and do the update to avoid race
         // conditions with other writers (notice we don't take &mut self)
         let mut guard = self.session.write().await;
-        set_group_meta(path, group_meta, guard.deref_mut()).await
+        set_group_meta(path, user_data, guard.deref_mut()).await
     }
 
     async fn list_metadata_prefix<'a, 'b: 'a>(
@@ -626,7 +743,7 @@ impl Store {
             let repository = Arc::clone(&self.session).read_owned().await;
             for node in repository.list_nodes().await? {
                 // TODO: handle non-utf8?
-                let meta_key = Key::Metadata { node_path: node.path }.to_string();
+                let meta_key = Key::Metadata { node_path: node?.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
                     if strip_prefix {
                         yield meta_key.trim_start_matches(prefix).trim_start_matches("/").to_string();
@@ -648,7 +765,7 @@ impl Store {
             let repository = Arc::clone(&self.session).read_owned().await;
             // TODO: this is inefficient because it filters based on the prefix, instead of only
             // generating items that could potentially match
-            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::SessionError)? {
+            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::from)? {
                 // FIXME: utf8 handling
                 match maybe_path_chunk {
                     Ok((path, chunk)) => {
@@ -667,60 +784,45 @@ impl Store {
 
 async fn set_array_meta(
     path: Path,
+    user_data: Bytes,
     array_meta: ArrayMetadata,
-    repo: &mut Session,
+    session: &mut Session,
 ) -> StoreResult<()> {
-    // TODO: Consider deleting all this logic?
-    // We try hard to not overwrite existing metadata here.
-    // I don't think this is actually useful because Zarr's
-    // Array/Group API will require that the user set `overwrite=True`
-    // which will delete any existing array metadata. This path is only
-    // applicable when using the explicit `store.set` interface.
-    if let Ok(node) = repo.get_array(&path).await {
-        // Check if the user attributes are different, if they are update them
-        let existing_attrs = match node.user_attributes {
-            None => None,
-            Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-            // FIXME: implement
-            Some(UserAttributesSnapshot::Ref(_)) => None,
-        };
-
-        if existing_attrs != array_meta.attributes {
-            repo.set_user_attributes(path.clone(), array_meta.attributes).await?;
-        }
-
-        // Check if the zarr metadata is different, if it is update it
-        if let NodeData::Array(existing_array_metadata, _) = node.node_data {
-            if existing_array_metadata != array_meta.zarr_metadata {
-                repo.update_array(path, array_meta.zarr_metadata).await?;
+    let shape = array_meta
+        .shape()
+        .ok_or(StoreErrorKind::Other("Invalid chunk grid metadata".to_string()))?;
+    if let Ok(node) = session.get_array(&path).await {
+        if let NodeData::Array { .. } = node.node_data {
+            if node.user_data != user_data {
+                session
+                    .update_array(&path, shape, array_meta.dimension_names(), user_data)
+                    .await?;
             }
-        } else {
-            // This should be unreachable, but just in case...
-            repo.update_array(path, array_meta.zarr_metadata).await?;
         }
-
+        // FIXME: don't ignore error
         Ok(())
     } else {
-        repo.add_array(path.clone(), array_meta.zarr_metadata).await?;
-        repo.set_user_attributes(path, array_meta.attributes).await?;
+        session
+            .add_array(path.clone(), shape, array_meta.dimension_names(), user_data)
+            .await?;
         Ok(())
     }
 }
 
 async fn set_group_meta(
     path: Path,
-    group_meta: GroupMetadata,
-    repo: &mut Session,
+    user_data: Bytes,
+    session: &mut Session,
 ) -> StoreResult<()> {
-    // we need to hold the lock while we search the group and do the update to avoid race
-    // conditions with other writers (notice we don't take &mut self)
-    //
-    if repo.get_group(&path).await.is_ok() {
-        repo.set_user_attributes(path, group_meta.attributes).await?;
+    if let Ok(node) = session.get_group(&path).await {
+        if let NodeData::Group = node.node_data {
+            if node.user_data != user_data {
+                session.update_group(&path, user_data).await?;
+            }
+        }
         Ok(())
     } else {
-        repo.add_group(path.clone()).await?;
-        repo.set_user_attributes(path, group_meta.attributes).await?;
+        session.add_group(path.clone(), user_data).await?;
         Ok(())
     }
 }
@@ -729,28 +831,13 @@ async fn get_metadata(
     _key: &str,
     path: &Path,
     range: &ByteRange,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<Bytes> {
-    let node = repo.get_node(path).await.map_err(|_| {
-        StoreError::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
+    // FIXME: don't skip errors
+    let node = session.get_node(path).await.map_err(|_| {
+        StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
     })?;
-    let user_attributes = match node.user_attributes {
-        None => None,
-        Some(UserAttributesSnapshot::Inline(atts)) => Some(atts),
-        // FIXME: implement
-        #[allow(clippy::unimplemented)]
-        Some(UserAttributesSnapshot::Ref(_)) => unimplemented!(),
-    };
-    let full_metadata = match node.node_data {
-        NodeData::Group => {
-            Ok::<Bytes, StoreError>(GroupMetadata::new(user_attributes).to_bytes())
-        }
-        NodeData::Array(zarr_metadata, _) => {
-            Ok(ArrayMetadata::new(user_attributes, zarr_metadata).to_bytes())
-        }
-    }?;
-
-    Ok(range.slice(full_metadata))
+    Ok(range.slice(node.user_data))
 }
 
 async fn get_chunk_bytes(
@@ -758,21 +845,28 @@ async fn get_chunk_bytes(
     path: Path,
     coords: ChunkIndices,
     byte_range: &ByteRange,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<Bytes> {
-    let reader = repo.get_chunk_reader(&path, &coords, byte_range).await?;
+    let reader = session.get_chunk_reader(&path, &coords, byte_range).await?;
 
     // then we can fetch the bytes without holding the lock
     let chunk = get_chunk(reader).await?;
-    chunk.ok_or(StoreError::NotFound(KeyNotFoundError::ChunkNotFound {
-        key: key.to_string(),
-        path,
-        coords,
-    }))
+    chunk.ok_or(
+        StoreErrorKind::NotFound(KeyNotFoundError::ChunkNotFound {
+            key: key.to_string(),
+            path,
+            coords,
+        })
+        .into(),
+    )
 }
 
-async fn get_metadata_size(key: &str, path: &Path, repo: &Session) -> StoreResult<u64> {
-    let bytes = get_metadata(key, path, &ByteRange::From(0), repo).await?;
+async fn get_metadata_size(
+    key: &str,
+    path: &Path,
+    session: &Session,
+) -> StoreResult<u64> {
+    let bytes = get_metadata(key, path, &ByteRange::From(0), session).await?;
     Ok(bytes.len() as u64)
 }
 
@@ -780,9 +874,9 @@ async fn get_chunk_size(
     _key: &str,
     path: &Path,
     coords: &ChunkIndices,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<u64> {
-    let chunk_ref = repo.get_chunk_ref(path, coords).await?;
+    let chunk_ref = session.get_chunk_ref(path, coords).await?;
     let size = chunk_ref
         .map(|payload| match payload {
             ChunkPayload::Inline(bytes) => bytes.len() as u64,
@@ -796,46 +890,61 @@ async fn get_chunk_size(
 async fn get_key(
     key: &str,
     byte_range: &ByteRange,
-    repo: &Session,
+    session: &Session,
 ) -> StoreResult<Bytes> {
     let bytes = match Key::parse(key)? {
         Key::Metadata { node_path } => {
-            get_metadata(key, &node_path, byte_range, repo).await
+            get_metadata(key, &node_path, byte_range, session).await
         }
         Key::Chunk { node_path, coords } => {
-            get_chunk_bytes(key, node_path, coords, byte_range, repo).await
+            get_chunk_bytes(key, node_path, coords, byte_range, session).await
         }
         Key::ZarrV2(key) => {
-            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
         }
     }?;
 
     Ok(bytes)
 }
 
-async fn get_key_size(key: &str, repo: &Session) -> StoreResult<u64> {
+async fn get_key_size(key: &str, session: &Session) -> StoreResult<u64> {
     let bytes = match Key::parse(key)? {
-        Key::Metadata { node_path } => get_metadata_size(key, &node_path, repo).await,
+        Key::Metadata { node_path } => get_metadata_size(key, &node_path, session).await,
         Key::Chunk { node_path, coords } => {
-            get_chunk_size(key, &node_path, &coords, repo).await
+            get_chunk_size(key, &node_path, &coords, session).await
         }
         Key::ZarrV2(key) => {
-            Err(StoreError::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
         }
     }?;
 
     Ok(bytes)
 }
 
-async fn exists(key: &str, repo: &Session) -> StoreResult<bool> {
-    match get_key(key, &ByteRange::ALL, repo).await {
-        Ok(_) => Ok(true),
-        Err(StoreError::NotFound(_)) => Ok(false),
-        Err(StoreError::SessionError(SessionError::NodeNotFound {
-            path: _,
-            message: _,
-        })) => Ok(false),
-        Err(other_error) => Err(other_error),
+async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
+    match Key::parse(key)? {
+        Key::Metadata { node_path } => match session.get_node(&node_path).await {
+            Ok(_) => Ok(true),
+            Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        },
+        Key::Chunk { node_path, coords } => {
+            match session.get_chunk_ref(&node_path, &coords).await {
+                Ok(r) => Ok(r.is_some()),
+                Err(SessionError {
+                    kind: SessionErrorKind::NodeNotFound { .. }, ..
+                }) => Ok(false),
+                Err(err) => Err(err.into()),
+            }
+        }
+        Key::ZarrV2(key) => {
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
+                .into())
+        }
     }
 }
 
@@ -876,17 +985,17 @@ impl Key {
                 if coords.is_empty() {
                     Ok(Key::Chunk {
                         node_path: format!("/{path}").try_into().map_err(|_| {
-                            StoreError::InvalidKey { key: key.to_string() }
+                            StoreErrorKind::InvalidKey { key: key.to_string() }
                         })?,
                         coords: ChunkIndices(vec![]),
                     })
                 } else {
-                    let absolute = format!("/{path}")
-                        .try_into()
-                        .map_err(|_| StoreError::InvalidKey { key: key.to_string() })?;
+                    let absolute = format!("/{path}").try_into().map_err(|_| {
+                        StoreErrorKind::InvalidKey { key: key.to_string() }
+                    })?;
                     coords
                         .strip_prefix('/')
-                        .ok_or(StoreError::InvalidKey { key: key.to_string() })?
+                        .ok_or(StoreErrorKind::InvalidKey { key: key.to_string() })?
                         .split('/')
                         .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
@@ -894,10 +1003,12 @@ impl Key {
                             node_path: absolute,
                             coords: ChunkIndices(coords),
                         })
-                        .map_err(|_| StoreError::InvalidKey { key: key.to_string() })
+                        .map_err(|_| {
+                            StoreErrorKind::InvalidKey { key: key.to_string() }.into()
+                        })
                 }
             } else {
-                Err(StoreError::InvalidKey { key: key.to_string() })
+                Err(StoreErrorKind::InvalidKey { key: key.to_string() }.into())
             }
         }
 
@@ -908,7 +1019,7 @@ impl Key {
             Ok(Key::Metadata {
                 node_path: format!("/{path}")
                     .try_into()
-                    .map_err(|_| StoreError::InvalidKey { key: key.to_string() })?,
+                    .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })?,
             })
         } else {
             parse_chunk(key)
@@ -942,152 +1053,39 @@ impl Display for Key {
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ArrayMetadata {
-    zarr_format: u8,
+    pub shape: Vec<u64>,
+
     #[serde(deserialize_with = "validate_array_node_type")]
     node_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<UserAttributes>,
-    #[serde(flatten)]
-    #[serde_as(as = "TryFromInto<ZarrArrayMetadataSerialzer>")]
-    zarr_metadata: ZarrArrayMetadata,
-}
-
-#[serde_as]
-#[derive(Serialize, Deserialize)]
-pub struct ZarrArrayMetadataSerialzer {
-    pub shape: ArrayShape,
-    pub data_type: DataType,
 
     #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
-    #[serde(rename = "chunk_grid")]
-    pub chunk_shape: ChunkShape,
+    pub chunk_grid: Vec<u64>,
 
-    #[serde_as(as = "TryFromInto<NameConfigSerializer>")]
-    pub chunk_key_encoding: ChunkKeyEncoding,
-    pub fill_value: serde_json::Value,
-    pub codecs: Vec<Codec>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_transformers: Option<Vec<StorageTransformer>>,
-    // each dimension name can be null in Zarr
-    pub dimension_names: Option<DimensionNames>,
+    pub dimension_names: Option<Vec<Option<String>>>,
 }
 
-impl TryFrom<ZarrArrayMetadataSerialzer> for ZarrArrayMetadata {
-    type Error = IcechunkFormatError;
-
-    fn try_from(value: ZarrArrayMetadataSerialzer) -> Result<Self, Self::Error> {
-        let ZarrArrayMetadataSerialzer {
-            shape,
-            data_type,
-            chunk_shape,
-            chunk_key_encoding,
-            fill_value,
-            codecs,
-            storage_transformers,
-            dimension_names,
-        } = value;
-        {
-            let fill_value = FillValue::from_data_type_and_json(&data_type, &fill_value)?;
-            Ok(ZarrArrayMetadata {
-                fill_value,
-                shape,
-                data_type,
-                chunk_shape,
-                chunk_key_encoding,
-                codecs,
-                storage_transformers,
-                dimension_names,
-            })
-        }
+impl ArrayMetadata {
+    fn dimension_names(&self) -> Option<Vec<DimensionName>> {
+        self.dimension_names
+            .as_ref()
+            .map(|ds| ds.iter().map(|d| d.as_ref().map(|s| s.as_str()).into()).collect())
     }
-}
 
-impl From<ZarrArrayMetadata> for ZarrArrayMetadataSerialzer {
-    fn from(value: ZarrArrayMetadata) -> Self {
-        let ZarrArrayMetadata {
-            shape,
-            data_type,
-            chunk_shape,
-            chunk_key_encoding,
-            fill_value,
-            codecs,
-            storage_transformers,
-            dimension_names,
-        } = value;
-        {
-            fn fill_value_to_json(f: FillValue) -> serde_json::Value {
-                match f {
-                    FillValue::Bool(b) => b.into(),
-                    FillValue::Int8(n) => n.into(),
-                    FillValue::Int16(n) => n.into(),
-                    FillValue::Int32(n) => n.into(),
-                    FillValue::Int64(n) => n.into(),
-                    FillValue::UInt8(n) => n.into(),
-                    FillValue::UInt16(n) => n.into(),
-                    FillValue::UInt32(n) => n.into(),
-                    FillValue::UInt64(n) => n.into(),
-                    FillValue::Float16(f) => {
-                        if f.is_nan() {
-                            FillValue::NAN_STR.into()
-                        } else if f == f32::INFINITY {
-                            FillValue::INF_STR.into()
-                        } else if f == f32::NEG_INFINITY {
-                            FillValue::NEG_INF_STR.into()
-                        } else {
-                            f.into()
-                        }
-                    }
-                    FillValue::Float32(f) => {
-                        if f.is_nan() {
-                            FillValue::NAN_STR.into()
-                        } else if f == f32::INFINITY {
-                            FillValue::INF_STR.into()
-                        } else if f == f32::NEG_INFINITY {
-                            FillValue::NEG_INF_STR.into()
-                        } else {
-                            f.into()
-                        }
-                    }
-                    FillValue::Float64(f) => {
-                        if f.is_nan() {
-                            FillValue::NAN_STR.into()
-                        } else if f == f64::INFINITY {
-                            FillValue::INF_STR.into()
-                        } else if f == f64::NEG_INFINITY {
-                            FillValue::NEG_INF_STR.into()
-                        } else {
-                            f.into()
-                        }
-                    }
-                    FillValue::Complex64(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::Complex128(r, i) => ([r, i].as_ref()).into(),
-                    FillValue::String(s) => s.into(),
-                    FillValue::Bytes(b) => b.into(),
-                }
-            }
-
-            let fill_value = fill_value_to_json(fill_value);
-            ZarrArrayMetadataSerialzer {
-                shape,
-                data_type,
-                chunk_shape,
-                chunk_key_encoding,
-                codecs,
-                storage_transformers,
-                dimension_names,
-                fill_value,
-            }
+    fn shape(&self) -> Option<ArrayShape> {
+        if self.shape.len() != self.chunk_grid.len() {
+            None
+        } else {
+            ArrayShape::new(
+                self.shape.iter().zip(self.chunk_grid.iter()).map(|(a, b)| (*a, *b)),
+            )
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GroupMetadata {
-    zarr_format: u8,
     #[serde(deserialize_with = "validate_group_node_type")]
     node_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attributes: Option<UserAttributes>,
 }
 
 fn validate_group_node_type<'de, D>(d: D) -> Result<String, D::Error>
@@ -1122,49 +1120,18 @@ where
     Ok(value)
 }
 
-impl ArrayMetadata {
-    fn new(attributes: Option<UserAttributes>, zarr_metadata: ZarrArrayMetadata) -> Self {
-        Self { zarr_format: 3, node_type: "array".to_string(), attributes, zarr_metadata }
-    }
-
-    fn to_bytes(&self) -> Bytes {
-        Bytes::from_iter(
-            // We can unpack because it comes from controlled datastructures that can be serialized
-            #[allow(clippy::expect_used)]
-            serde_json::to_vec(self).expect("bug in ArrayMetadata serialization"),
-        )
-    }
-}
-
-impl GroupMetadata {
-    fn new(attributes: Option<UserAttributes>) -> Self {
-        Self { zarr_format: 3, node_type: "group".to_string(), attributes }
-    }
-
-    fn to_bytes(&self) -> Bytes {
-        Bytes::from_iter(
-            // We can unpack because it comes from controlled datastructures that can be serialized
-            #[allow(clippy::expect_used)]
-            serde_json::to_vec(self).expect("bug in GroupMetadata serialization"),
-        )
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 struct NameConfigSerializer {
     name: String,
     configuration: serde_json::Value,
 }
 
-impl From<ChunkShape> for NameConfigSerializer {
-    fn from(value: ChunkShape) -> Self {
+impl From<Vec<u64>> for NameConfigSerializer {
+    fn from(value: Vec<u64>) -> Self {
         let arr = serde_json::Value::Array(
             value
-                .0
                 .iter()
-                .map(|v| {
-                    serde_json::Value::Number(serde_json::value::Number::from(v.get()))
-                })
+                .map(|v| serde_json::Value::Number(serde_json::value::Number::from(*v)))
                 .collect(),
         );
         let kvs = serde_json::value::Map::from_iter(iter::once((
@@ -1178,7 +1145,7 @@ impl From<ChunkShape> for NameConfigSerializer {
     }
 }
 
-impl TryFrom<NameConfigSerializer> for ChunkShape {
+impl TryFrom<NameConfigSerializer> for Vec<u64> {
     type Error = &'static str;
 
     fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
@@ -1193,48 +1160,12 @@ impl TryFrom<NameConfigSerializer> for ChunkShape {
                     .ok_or("cannot parse ChunkShape")?;
                 let shape = values
                     .iter()
-                    .map(|v| v.as_u64().and_then(|u64| NonZeroU64::try_from(u64).ok()))
+                    .map(|v| v.as_u64())
                     .collect::<Option<Vec<_>>>()
                     .ok_or("cannot parse ChunkShape")?;
-                Ok(ChunkShape(shape))
+                Ok(shape)
             }
             _ => Err("cannot parse ChunkShape"),
-        }
-    }
-}
-
-impl From<ChunkKeyEncoding> for NameConfigSerializer {
-    fn from(_value: ChunkKeyEncoding) -> Self {
-        let kvs = serde_json::value::Map::from_iter(iter::once((
-            "separator".to_string(),
-            serde_json::Value::String("/".to_string()),
-        )));
-        Self {
-            name: "default".to_string(),
-            configuration: serde_json::Value::Object(kvs),
-        }
-    }
-}
-
-impl TryFrom<NameConfigSerializer> for ChunkKeyEncoding {
-    type Error = &'static str;
-
-    fn try_from(value: NameConfigSerializer) -> Result<Self, Self::Error> {
-        //FIXME: we are hardcoding / as the separator
-        match value {
-            NameConfigSerializer {
-                name,
-                configuration: serde_json::Value::Object(kvs),
-            } if name == "default" => {
-                if let Some("/") =
-                    kvs.get("separator").ok_or("cannot parse ChunkKeyEncoding")?.as_str()
-                {
-                    Ok(ChunkKeyEncoding::Slash)
-                } else {
-                    Err("cannot parse ChunkKeyEncoding")
-                }
-            }
-            _ => Err("cannot parse ChunkKeyEncoding"),
         }
     }
 }
@@ -1274,7 +1205,8 @@ mod tests {
     }
 
     async fn create_memory_store_repository() -> Repository {
-        let storage = new_in_memory_storage().expect("failed to create in-memory store");
+        let storage =
+            new_in_memory_storage().await.expect("failed to create in-memory store");
         Repository::create(None, storage, HashMap::new()).await.unwrap()
     }
 
@@ -1440,97 +1372,28 @@ mod tests {
         .is_err());
 
         assert!(serde_json::from_str::<ArrayMetadata>(
-            r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-        )
-        .is_ok());
+                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            )
+            .is_ok());
         assert!(serde_json::from_str::<ArrayMetadata>(
-            r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-        )
-        .is_err());
+                r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+            )
+            .is_err());
 
         // deserialize with nan
-        assert!(matches!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float16(n) if n.is_nan()
-        ));
-        assert!(matches!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float32(n) if n.is_nan()
-        ));
-        assert!(matches!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float64(n) if n.is_nan()
-        ));
+        assert_eq!(
+                serde_json::from_str::<ArrayMetadata>(
+                    r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+                ).unwrap().dimension_names(),
+                Some(vec!["x".into(), "y".into(), "t".into()])
 
-        // deserialize with infinity
+            );
         assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float16(f32::INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float32(f32::INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float64(f64::INFINITY)
-        );
-
-        // deserialize with -infinity
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float16(f32::NEG_INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float32(f32::NEG_INFINITY)
-        );
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"-Infinity","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            ).unwrap().zarr_metadata.fill_value,
-            FillValue::Float64(f64::NEG_INFINITY)
-        );
-
-        // infinity roundtrip
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float16(f32::NEG_INFINITY),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
-        let zarr_meta = ArrayMetadata::new(None, zarr_meta);
-
-        assert_eq!(
-            serde_json::from_str::<ArrayMetadata>(
-                serde_json::to_string(&zarr_meta).unwrap().as_str()
-            )
-            .unwrap(),
-            zarr_meta,
-        )
+                serde_json::from_str::<ArrayMetadata>(
+                    r#"{"zarr_format":3,"node_type":"array","shape":[2,3,4],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,2,3]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
+                ).unwrap().shape(),
+                ArrayShape::new(vec![(2,1), (3,2), (4,3) ])
+            );
     }
 
     #[tokio::test]
@@ -1541,13 +1404,13 @@ mod tests {
 
         assert!(matches!(
             store.get("zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound {path})) if path.to_string() == "/"
+            Err(StoreError{kind: StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound {path}),..}) if path.to_string() == "/"
         ));
 
         store
             .set(
                 "zarr.json",
-                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+                Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#),
             )
             .await?;
         assert_eq!(
@@ -1555,13 +1418,13 @@ mod tests {
             Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
         );
 
-        store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#)).await?;
+        store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#)).await?;
         assert_eq!(
-            store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
-            Bytes::copy_from_slice(
-                br#"{"zarr_format":3,"node_type":"group","attributes":{"eggs":42,"spam":"ham"}}"#
-            )
-        );
+               store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
+               Bytes::copy_from_slice(
+                   br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#
+               )
+           );
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
@@ -1594,7 +1457,7 @@ mod tests {
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
             store.get("array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path }))
+            Err(StoreError{kind: StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path }),..})
                 if path.to_string() == "/array",
         ));
         // Deleting a non-existent key should not fail
@@ -1604,7 +1467,7 @@ mod tests {
         store.delete("array/zarr.json").await.unwrap();
         assert!(matches!(
             store.get("array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::NodeNotFound { path } ))
+            Err(StoreError{kind: StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path } ), ..})
                 if path.to_string() == "/array",
         ));
         store.set("array/zarr.json", Bytes::copy_from_slice(group_data)).await.unwrap();
@@ -1728,17 +1591,17 @@ mod tests {
         store.delete("array/c/1/1/1").await.unwrap();
         assert!(matches!(
             store.get("array/c/0/1/0", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }))
+            Err(StoreError{kind:StoreErrorKind::NotFound(KeyNotFoundError::ChunkNotFound { key, path, coords }),..})
                 if key == "array/c/0/1/0" && path.to_string() == "/array" && coords == ChunkIndices([0, 1, 0].to_vec())
         ));
         assert!(matches!(
             store.delete("array/foo").await,
-            Err(StoreError::InvalidKey { key }) if key == "array/foo",
+            Err(StoreError{kind: StoreErrorKind::InvalidKey { key }, ..}) if key == "array/foo",
         ));
 
         assert!(matches!(
             store.delete("array/c/10/1/1").await,
-            Err(StoreError::SessionError(SessionError::InvalidIndex { coords, path }))
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::InvalidIndex { coords, path }),..})
                 if path.to_string() == "/array" && coords == ChunkIndices([10, 1, 1].to_vec())
         ));
 
@@ -1758,18 +1621,18 @@ mod tests {
         store.delete_dir("group/array").await.unwrap();
         assert!(matches!(
             store.get("group/array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(..))
+            Err(StoreError { kind: StoreErrorKind::NotFound(..), .. })
         ));
 
         add_array_and_chunk(&store, "group/array").await.unwrap();
         store.delete_dir("group").await.unwrap();
         assert!(matches!(
             store.get("group/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(..))
+            Err(StoreError { kind: StoreErrorKind::NotFound(..), .. })
         ));
         assert!(matches!(
             store.get("group/array/zarr.json", &ByteRange::ALL).await,
-            Err(StoreError::NotFound(..))
+            Err(StoreError { kind: StoreErrorKind::NotFound(..), .. })
         ));
 
         add_group(&store, "group").await.unwrap();
@@ -2451,7 +2314,8 @@ mod tests {
                 Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
             )
             .await;
-        let correct_error = matches!(result, Err(StoreError::ReadOnly));
+        let correct_error =
+            matches!(result, Err(StoreError { kind: StoreErrorKind::ReadOnly, .. }));
         assert!(correct_error);
     }
 
@@ -2460,6 +2324,7 @@ mod tests {
         let repo_dir = TempDir::new().expect("could not create temp dir");
         let storage = Arc::new(
             ObjectStorage::new_local_filesystem(repo_dir.path())
+                .await
                 .expect("could not create storage"),
         );
 
@@ -2469,7 +2334,7 @@ mod tests {
         store
             .set(
                 "zarr.json",
-                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+                Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#),
             )
             .await
             .unwrap();

@@ -27,7 +27,7 @@ repo = icechunk.Repository.create(icechunk.in_memory_storage())
 On creating a new [`Repository`](../reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
 
 ```python
-repo.ancestry(branch="main")
+[ancestor for ancestor in repo.ancestry(branch="main")]
 
 # [SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,19,52,41,592998, tzinfo=datetime.timezone.utc), message="Repository...")]
 ```
@@ -36,8 +36,7 @@ repo.ancestry(branch="main")
 
     The [`ancestry`](./reference/#icechunk.Repository.ancestry) method can be used to inspect the ancestry of any branch, snapshot, or tag.
 
-We get back a list of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
-
+We get back an iterator of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
 
 ## Creating a snapshot
 
@@ -48,7 +47,7 @@ Now that we have a `Repository` with a `main` branch, we can modify the data in 
     Writable `Session` objects are required to create new snapshots, and can only be created from the tip of a branch. Checking out tags or other snapshots is read-only.
 
 ```python
-session = repo.writable_session(branch="main")
+session = repo.writable_session("main")
 ```
 
 We can now access the `zarr.Store` from the `Session` and create a new root group. Then we can modify the attributes of the root group and create a new snapshot.
@@ -68,7 +67,7 @@ Success! We've created a new snapshot with a new attribute on the root group.
 Once we've committed the snapshot, the `Session` will become read-only, and we can no longer modify the data using our existing `Session`. If we want to modify the data again, we need to create a new writable `Session` from the branch. Notice that we don't have to refresh the `Repository` to get the updates from the `main` branch. Instead, the `Repository` will automatically fetch the latest snapshot from the branch when we create a new writable `Session` from it.
 
 ```python
-session = repo.writable_session(branch="main")
+session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "baz"
 session.commit(message="Update foo attribute on root group")
@@ -123,7 +122,7 @@ repo.create_branch("dev", snapshot_id=main_branch_snapshot_id)
 We can now create a new writable `Session` from the `dev` branch and modify the data.
 
 ```python
-session = repo.writable_session(branch="dev")
+session = repo.writable_session("dev")
 root = zarr.group(session.store)
 root.attrs["foo"] = "balogna"
 session.commit(message="Update foo attribute on root group")
@@ -137,7 +136,7 @@ We can also create a new branch from the tip of the `main` branch if we want to 
 main_branch_snapshot_id = repo.lookup_branch("main")
 repo.create_branch("feature", snapshot_id=main_branch_snapshot_id)
 
-session = repo.writable_session(branch="feature")
+session = repo.writable_session("feature")
 root = zarr.group(session.store)
 root.attrs["foo"] = "cherry"
 session.commit(message="Update foo attribute on root group")
@@ -254,7 +253,7 @@ import numpy as np
 import zarr
 
 repo = icechunk.Repository.create(icechunk.in_memory_storage())
-session = repo.writable_session(branch="main")
+session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "bar"
 root.create_dataset("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
@@ -266,25 +265,21 @@ session.commit(message="Add foo attribute and data array")
 Lets try to modify the `data` array in two different sessions, created from the `main` branch.
 
 ```python
-session1 = repo.writable_session(branch="main")
-session2 = repo.writable_session(branch="main")
+session1 = repo.writable_session("main")
+session2 = repo.writable_session("main")
 
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
-```
 
-First, we'll modify the attributes of the root group from both sessions.
-
-```python
-root1.attrs["foo"] = "bar"
-root2.attrs["foo"] = "baz"
+root1["data"][0,0] = 1
+root2["data"][0,:] = 2
 ```
 
 and then try to commit the changes.
 
 ```python
-session1.commit(message="Update foo attribute on root group")
-session2.commit(message="Update foo attribute on root group")
+session1.commit(message="Update first element of data array")
+session2.commit(message="Update first row of data array")
 
 # AE9XS2ZWXT861KD2JGHG
 # ---------------------------------------------------------------------------
@@ -328,66 +323,7 @@ session2.rebase(icechunk.ConflictDetector())
 # RebaseFailedError: Rebase failed on snapshot AE9XS2ZWXT861KD2JGHG: 1 conflicts found
 ```
 
-This however fails because both sessions modified the `foo` attribute on the root group. We can use the `ConflictError` to get more information about the conflict.
-
-```python
-try:
-    session2.rebase(icechunk.ConflictDetector())
-except icechunk.RebaseFailedError as e:
-    print(e.conflicts)
-
-# [Conflict(UserAttributesDoubleUpdate, path=/)]
-```
-
-This tells us that the conflict is caused by the two sessions modifying the user attributes of the root group (`/`). In this casewe have decided that second session set the `foo` attribute to the correct value, so we can now try to rebase by instructing the `rebase` method to use the second session's changes with the [`BasicConflictSolver`](../reference/#icechunk.BasicConflictSolver).
-
-```python
-session2.rebase(icechunk.BasicConflictSolver(on_user_attributes_conflict=icechunk.VersionSelection.UseOurs))
-```
-
-Success! We can now try and commit the changes again.
-
-```python
-session2.commit(message="Update foo attribute on root group")
-
-# 'SY4WRE8A9TVYMTJPEAHG'
-```
-
-This same process can be used to resolve conflicts with arrays. Let's try to modify the `data` array from both sessions.
-
-```python
-session1 = repo.writable_session(branch="main")
-session2 = repo.writable_session(branch="main")
-
-root1 = zarr.group(session1.store)
-root2 = zarr.group(session2.store)
-
-root1["data"][0,0] = 1
-root2["data"][0,:] = 2
-```
-
-We have now created a conflict, because the first session modified the first element of the `data` array, and the second session modified the first row of the `data` array. Let's commit the changes from the second session first, then see what conflicts are reported when we try to commit the changes from the first session.
-
-
-```python
-print(session2.commit(message="Update first row of data array"))
-print(session1.commit(message="Update first element of data array"))
-
-# ---------------------------------------------------------------------------
-# ConflictError                             Traceback (most recent call last)
-# Cell In[15], line 2
-#      1 print(session2.commit(message="Update first row of data array"))
-# ----> 2 print(session1.commit(message="Update first element of data array"))
-
-# File ~/Developer/icechunk/icechunk-python/python/icechunk/session.py:224, in Session.commit(self, message, metadata)
-#     222     return self._session.commit(message, metadata)
-#     223 except PyConflictError as e:
-# --> 224     raise ConflictError(e) from None
-
-# ConflictError: Failed to commit, expected parent: Some("SY4WRE8A9TVYMTJPEAHG"), actual parent: Some("5XRDGZPSG747AMMRTWT0")
-```
-
-Okay! We have a conflict. Lets see what conflicts are reported.
+This however fails because both sessions modified metadata. We can use the `RebaseFailedError` to get more information about the conflict.
 
 ```python
 try:
@@ -413,18 +349,24 @@ Success! We have now resolved the conflict and committed the changes.
 Let's look at the value of the `data` array to confirm that the conflict was resolved correctly.
 
 ```python
-session = repo.readonly_session(branch="main")
+session = repo.readonly_session("main")
 root = zarr.open_group(session.store, mode="r")
 root["data"][0,:]
 
 # array([1, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=int32)
 ```
 
+As you can see, `readonly_session` accepts a string for a branch name, or you can also write:
+
+```python
+session = repo.readonly_session(branch="main")
+```
+
 Lastly, if you make changes to non-conflicting chunks or attributes, you can rebase without having to resolve any conflicts.
 
 ```python
-session1 = repo.writable_session(branch="main")
-session2 = repo.writable_session(branch="main")
+session1 = repo.writable_session("main")
+session2 = repo.writable_session("main")
 
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
@@ -466,4 +408,4 @@ root["data"][:,:]
 
 #### Limitations
 
-At the moment, the rebase functionality is limited to resolving conflicts with attributes on arrays and groups, and conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.
+At the moment, the rebase functionality is limited to resolving conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.

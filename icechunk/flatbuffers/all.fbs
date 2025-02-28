@@ -1,0 +1,14 @@
+// run this command in the directory icechunk/flatbuffers
+//
+// flatc --rust -o ../src/format/flatbuffers/ --gen-all all.fbs
+//
+// This will generate the file all_generated.rs
+
+include "object_ids.fbs";
+include "manifest.fbs";
+include "snapshot.fbs";
+include "transaction_log.fbs";
+
+// This is the way we have found to make it easy to generate code for all files
+// flatbuffers rust generation seems to have some issues trying to generate
+// separate files

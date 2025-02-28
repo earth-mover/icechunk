@@ -7,25 +7,23 @@ mod tests {
         format::{
             manifest::{
                 Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
-                VirtualChunkRef, VirtualReferenceError,
+                VirtualChunkRef, VirtualReferenceErrorKind,
             },
-            snapshot::ZarrArrayMetadata,
+            snapshot::ArrayShape,
             ByteRange, ChunkId, ChunkIndices, Path,
         },
-        metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::VersionInfo,
-        session::{get_chunk, SessionError},
+        session::{get_chunk, SessionErrorKind},
         storage::{
-            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ObjectStorage,
+            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ETag, ObjectStorage,
         },
-        store::StoreError,
+        store::{StoreError, StoreErrorKind},
         virtual_chunks::VirtualChunkContainer,
         ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     };
     use std::{
         collections::{HashMap, HashSet},
         error::Error,
-        num::NonZeroU64,
         path::PathBuf,
         vec,
     };
@@ -103,6 +101,7 @@ mod tests {
     async fn create_local_repository(path: &StdPath) -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
             ObjectStorage::new_local_filesystem(path)
+                .await
                 .expect("Creating local storage failed"),
         );
 
@@ -195,20 +194,9 @@ mod tests {
         let repo_dir = TempDir::new()?;
         let repo = create_local_repository(repo_dir.path()).await;
         let mut ds = repo.writable_session("main").await.unwrap();
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
+
+        let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+        let user_data = Bytes::new();
         let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
                 // intentional extra '/'
@@ -230,7 +218,7 @@ mod tests {
         });
 
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
+        ds.add_array(new_array_path.clone(), shape, None, user_data).await.unwrap();
 
         ds.set_chunk_ref(
             new_array_path.clone(),
@@ -312,20 +300,8 @@ mod tests {
         let repo = create_minio_repository().await;
         let mut ds = repo.writable_session("main").await.unwrap();
 
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
+        let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+        let user_data = Bytes::new();
         let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
                 // intentional extra '/'
@@ -347,7 +323,7 @@ mod tests {
         });
 
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
+        ds.add_array(new_array_path.clone(), shape, None, user_data).await.unwrap();
 
         ds.set_chunk_ref(
             new_array_path.clone(),
@@ -423,16 +399,19 @@ mod tests {
                 max_concurrent_requests_for_object: Some(100.try_into()?),
                 ideal_concurrent_request_size: Some(1.try_into()?),
             }),
+            ..repo.storage().default_settings()
         });
         let repo = repo.reopen(Some(config), None)?;
         assert_eq!(
             repo.config()
-                .storage()
+                .storage
                 .as_ref()
                 .unwrap()
-                .concurrency()
-                .ideal_concurrent_request_size(),
-            1.try_into()?
+                .concurrency
+                .as_ref()
+                .unwrap()
+                .ideal_concurrent_request_size,
+            Some(1.try_into()?)
         );
         let session = repo
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -526,7 +505,7 @@ mod tests {
         };
         assert!(matches!(
                 store.set_virtual_ref("array/c/0/0/0", bad_ref, true).await,
-                Err(StoreError::InvalidVirtualChunkContainer { chunk_location }) if chunk_location == bad_location.0));
+                Err(StoreError{kind: StoreErrorKind::InvalidVirtualChunkContainer { chunk_location },..}) if chunk_location == bad_location.0));
         Ok(())
     }
 
@@ -733,7 +712,7 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
-            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
+            checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
         };
 
         store.set_virtual_ref("array/c/0/0/2", ref1, false).await?;
@@ -755,7 +734,7 @@ mod tests {
             )?,
             offset: 22306,
             length: 288,
-            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
+            checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
         };
 
         store.set_virtual_ref("array/c/1/1/1", public_ref, false).await?;
@@ -772,9 +751,9 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/0/0", &ByteRange::ALL).await,
-            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
-                VirtualReferenceError::ObjectModified(location)
-            ))) if location == "s3://testbucket/path/to/chunk-3"
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            )),..}) if location == "s3://testbucket/path/to/chunk-3"
         ));
 
         // these are the local file chunks
@@ -786,9 +765,9 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/0/1", &ByteRange::ALL).await,
-            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
-                VirtualReferenceError::ObjectModified(location)
-            ))) if location.contains("chunk-3")
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            )),..}) if location.contains("chunk-3")
         ));
 
         // these are the public bucket chunks
@@ -804,9 +783,9 @@ mod tests {
         // try to fetch the modified chunk
         assert!(matches!(
             store.get("array/c/1/1/2", &ByteRange::ALL).await,
-            Err(StoreError::SessionError(SessionError::VirtualReferenceError(
-                VirtualReferenceError::ObjectModified(location)
-            ))) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
+            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            )),..}) if location == "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc"
         ));
 
         let session = store.session();

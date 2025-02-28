@@ -54,6 +54,8 @@ We can either check out a branch for [read-only access](../reference/#icechunk.R
 ```python
 # check out a branch for read-only access
 session = repo.readonly_session(branch="my-new-branch")
+# readonly_session accepts a branch name by default
+session = repo.readonly_session("my-new-branch")
 # check out a branch for read-write access
 session = repo.writable_session("my-new-branch")
 ```
@@ -79,7 +81,7 @@ At this point, the tip of the branch is now the snapshot `198273178639187` and a
 In Icechunk, you can view the history of a branch by using the [`repo.ancestry()`](../reference/#icechunk.Repository.ancestry) command, similar to the `git log` command.
 
 ```python
-repo.ancestry(branch="my-new-branch")
+[ancestor for ancestor in repo.ancestry(branch="my-new-branch")]
 
 #[Snapshot(id='198273178639187', ...), ...]
 ```
@@ -154,7 +156,7 @@ We can also view the history of a tag by using the [`repo.ancestry()`](../refere
 repo.ancestry(tag="my-new-tag")
 ```
 
-This will return a list of snapshots that are ancestors of the tag. Similar to branches we can lookup the snapshot that a tag is based on by using the [`repo.lookup_tag()`](../reference/#icechunk.Repository.lookup_tag) command.
+This will return an iterator of snapshots that are ancestors of the tag. Similar to branches we can lookup the snapshot that a tag is based on by using the [`repo.lookup_tag()`](../reference/#icechunk.Repository.lookup_tag) command.
 
 ```python
 repo.lookup_tag("my-new-tag")

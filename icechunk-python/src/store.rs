@@ -6,15 +6,17 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     format::{
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
-        ChunkLength, ChunkOffset,
+        ChunkIndices, ChunkLength, ChunkOffset, Path,
     },
-    store::StoreError,
+    storage::ETag,
+    store::{SetVirtualRefsResult, StoreError, StoreErrorKind},
     Store,
 };
+use itertools::Itertools as _;
 use pyo3::{
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
-    types::PyType,
+    types::{PyTuple, PyType},
 };
 use tokio::sync::Mutex;
 
@@ -37,11 +39,55 @@ enum ChecksumArgument {
 impl From<ChecksumArgument> for Checksum {
     fn from(value: ChecksumArgument) -> Self {
         match value {
-            ChecksumArgument::String(etag) => Checksum::ETag(etag),
+            ChecksumArgument::String(etag) => Checksum::ETag(ETag(etag)),
             ChecksumArgument::Datetime(date_time) => {
                 Checksum::LastModified(SecondsSinceEpoch(date_time.timestamp() as u32))
             }
         }
+    }
+}
+
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct VirtualChunkSpec {
+    #[pyo3(get)]
+    index: Vec<u32>,
+    #[pyo3(get)]
+    location: String,
+    #[pyo3(get)]
+    offset: ChunkOffset,
+    #[pyo3(get)]
+    length: ChunkLength,
+    #[pyo3(get)]
+    etag_checksum: Option<String>,
+    #[pyo3(get)]
+    last_updated_at_checksum: Option<chrono::DateTime<Utc>>,
+}
+
+impl VirtualChunkSpec {
+    fn checksum(&self) -> Option<Checksum> {
+        self.etag_checksum
+            .as_ref()
+            .map(|etag| Checksum::ETag(ETag(etag.clone())))
+            .or(self
+                .last_updated_at_checksum
+                .map(|t| Checksum::LastModified(SecondsSinceEpoch(t.timestamp() as u32))))
+    }
+}
+
+#[pymethods]
+impl VirtualChunkSpec {
+    #[new]
+    #[pyo3(signature = (index, location, offset, length, etag_checksum = None, last_updated_at_checksum = None))]
+    fn new(
+        index: Vec<u32>,
+        location: String,
+        offset: ChunkOffset,
+        length: ChunkLength,
+        etag_checksum: Option<String>,
+        last_updated_at_checksum: Option<chrono::DateTime<Utc>>,
+    ) -> Self {
+        Self { index, location, offset, length, etag_checksum, last_updated_at_checksum }
     }
 }
 
@@ -151,7 +197,9 @@ impl PyStore {
             // from other types of errors, we use PyKeyError exception for that
             match data {
                 Ok(data) => Ok(Vec::from(data)),
-                Err(StoreError::NotFound(_)) => Err(PyKeyError::new_err(key)),
+                Err(StoreError { kind: StoreErrorKind::NotFound(_), .. }) => {
+                    Err(PyKeyError::new_err(key))
+                }
                 Err(err) => Err(PyIcechunkStoreError::StoreError(err).into()),
             }
         })
@@ -275,6 +323,60 @@ impl PyStore {
                     .map_err(PyIcechunkStoreError::from)?;
                 Ok(())
             })
+        })
+    }
+
+    fn set_virtual_refs(
+        &self,
+        py: Python<'_>,
+        array_path: String,
+        chunks: Vec<VirtualChunkSpec>,
+        validate_containers: bool,
+    ) -> PyIcechunkStoreResult<Option<Vec<Py<PyTuple>>>> {
+        py.allow_threads(move || {
+            let store = Arc::clone(&self.0);
+
+            let res = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let vrefs = chunks.into_iter().map(|vcs| {
+                    let checksum = vcs.checksum();
+                    let index = ChunkIndices(vcs.index);
+                    let vref = VirtualChunkRef {
+                        location: VirtualChunkLocation(vcs.location),
+                        offset: vcs.offset,
+                        length: vcs.length,
+                        checksum,
+                    };
+                    (index, vref)
+                });
+
+                let array_path = if !array_path.starts_with("/") {
+                    format!("/{}", array_path)
+                } else {
+                    array_path.to_string()
+                };
+
+                let path = Path::try_from(array_path).map_err(|e| {
+                    PyValueError::new_err(format!("Invalid array path: {}", e))
+                })?;
+
+                let res = store
+                    .set_virtual_refs(&path, validate_containers, vrefs)
+                    .await
+                    .map_err(PyIcechunkStoreError::from)?;
+                Ok::<_, PyIcechunkStoreError>(res)
+            })?;
+
+            match res {
+                SetVirtualRefsResult::Done => Ok(None),
+                SetVirtualRefsResult::FailedRefs(vec) => Python::with_gil(|py| {
+                    let res = vec
+                        .into_iter()
+                        .map(|ci| PyTuple::new(py, ci.0).map(|tup| tup.unbind()))
+                        .try_collect()?;
+
+                    Ok(Some(res))
+                }),
+            }
         })
     }
 
@@ -417,6 +519,21 @@ impl PyStore {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let size = store.getsize(&key).await.map_err(PyIcechunkStoreError::from)?;
+            Ok(size)
+        })
+    }
+
+    fn getsize_prefix<'py>(
+        &self,
+        py: Python<'py>,
+        prefix: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let size = store
+                .getsize_prefix(prefix.as_str())
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
             Ok(size)
         })
     }

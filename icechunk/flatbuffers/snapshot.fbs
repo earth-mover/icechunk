@@ -1,0 +1,117 @@
+include "object_ids.fbs";
+
+namespace gen;
+
+// a single key-value of snapshot metadata
+table MetadataItem {
+  // the name of the attribute
+  name: string (required);
+
+  // the value, serialized as rmp_serde of the json value
+  // TODO: better serialization format
+  value: [uint8] (required);
+}
+
+// a pointer to a manifest file
+struct ManifestFileInfo {
+    // id of the object in the repo's object store
+    id: ObjectId12;
+
+    // size in bytes of the whole manifest
+    size_bytes: uint64;
+
+    // number of chunk refs in the manifest
+    num_chunk_refs: uint32;
+}
+
+// A range of chunk indexes
+struct ChunkIndexRange {
+  // inclusive
+  from: uint32;
+
+  // exclusive
+  to: uint32;
+}
+
+// a pointer to a manifest
+table ManifestRef {
+    // id of the object in the repo's object store
+    object_id: ObjectId12 (required);
+
+    // one element per dimension of the array, same order as in metadata
+    extents: [ChunkIndexRange] (required);
+}
+
+// the shape of the array along a given dimension
+struct DimensionShape {
+    array_length: uint64;
+    chunk_length: uint64;
+}
+
+table DimensionName {
+  // optional
+  name: string;
+}
+
+// a marker for a group node
+table GroupNodeData {}
+
+// data for an array node
+table ArrayNodeData {
+  shape: [DimensionShape] (required);
+
+  dimension_names: [DimensionName];
+
+  // pointers to all the manifests where this array has chunk references
+  manifests: [ManifestRef] (required);
+}
+
+// the node contents, that can be either a group or an array
+union NodeData {
+  Array :ArrayNodeData,
+  Group :GroupNodeData,
+}
+
+// a node
+table NodeSnapshot {
+    // id of the object in the repo's object store
+    id: ObjectId8 (required);
+
+    // absolute path of the node within the repo
+    path: string (required);
+
+    // the metadata for the node according to what the user passed
+    // this will generally be the full zarr metadata for the node
+    user_data: [uint8] (required);
+
+    // node's data
+    node_data: NodeData (required);
+}
+
+
+table Snapshot {
+  // the id of this snapshot
+  id: ObjectId12 (required);
+
+  // the id of the parent snapshot, can be null for a root snapshot
+  parent_id: ObjectId12;
+
+  nodes: [NodeSnapshot] (required);
+
+  // time at which this snapshot was generated
+  // non-leap microseconds since Jan 1, 1970 UTC
+  flushed_at: uint64;
+
+  // commit message
+  message: string (required);
+
+  // metadata for the snapshot
+  // sorted in ascending order of MetadataItem.name
+  metadata: [MetadataItem] (required);
+
+  // the list of all manifest files this snapshot points to
+  // sorted in ascending order of ManifestFileInfo.id
+  manifest_files: [ManifestFileInfo] (required);
+}
+
+root_type Snapshot;

@@ -1,10 +1,17 @@
 import pickle
+import time
 from pathlib import Path
 
 import pytest
 
 import zarr
-from icechunk import Repository, local_filesystem_storage
+from icechunk import (
+    Repository,
+    RepositoryConfig,
+    S3StaticCredentials,
+    local_filesystem_storage,
+    s3_storage,
+)
 
 
 def create_local_repo(path: str) -> Repository:
@@ -16,6 +23,18 @@ def tmp_repo(tmpdir: Path) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(store_path)
     return repo
+
+
+def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
+    pickled = pickle.dumps(tmp_repo)
+    roundtripped = pickle.loads(pickled)
+    assert tmp_repo.list_branches() == roundtripped.list_branches()
+
+    storage = tmp_repo.storage
+    assert (
+        repr(storage)
+        == f"ObjectStorage(backend=LocalFileSystemObjectStoreBackend(path={tmpdir}))"
+    )
 
 
 def test_pickle_read_only(tmp_repo: Repository) -> None:
@@ -38,7 +57,29 @@ def test_pickle_read_only(tmp_repo: Repository) -> None:
     assert tmp_store._read_only is False
 
 
-def test_pickle(tmp_repo: Repository) -> None:
+def get_credentials():
+    return S3StaticCredentials("minio123", "minio123")
+
+
+def test_pickle() -> None:
+    # we test with refreshable credentials because that gave us problems in the past
+
+    def mk_repo() -> tuple[str, Repository]:
+        prefix = "test-repo__" + str(time.time())
+        repo = Repository.create(
+            storage=s3_storage(
+                endpoint_url="http://localhost:9000",
+                allow_http=True,
+                region="us-east-1",
+                bucket="testbucket",
+                prefix=prefix,
+                get_credentials=get_credentials,
+            ),
+            config=RepositoryConfig(inline_chunk_threshold_bytes=0),
+        )
+        return (prefix, repo)
+
+    (_, tmp_repo) = mk_repo()
     tmp_session = tmp_repo.writable_session(branch="main")
     tmp_store = tmp_session.store
 
