@@ -30,7 +30,6 @@ use aws_sdk_s3::{
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto as _;
 use futures::{
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
@@ -150,10 +149,10 @@ impl S3Storage {
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
-        path.into_os_string()
-            .into_string()
-            .map_err(StorageErrorKind::BadPrefix)
-            .err_into()
+        let path_str =
+            path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
+
+        Ok(path_str.replace("\\", "/"))
     }
 
     fn get_path<const SIZE: usize, T: FileTypeTag>(
@@ -187,10 +186,10 @@ impl S3Storage {
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
-        path.into_os_string()
-            .into_string()
-            .map_err(StorageErrorKind::BadPrefix)
-            .err_into()
+        let path_str =
+            path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
+
+        Ok(path_str.replace("\\", "/"))
     }
 
     async fn get_object_reader(
@@ -612,10 +611,7 @@ impl Storage for S3Storage {
         _settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let prefix = PathBuf::from_iter([self.prefix.as_str(), prefix])
-            .into_os_string()
-            .into_string()
-            .map_err(StorageErrorKind::BadPrefix)?;
+        let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
         let stream = self
             .get_client()
             .await
@@ -797,5 +793,40 @@ mod tests {
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
         assert_eq!(storage.config, deserialized.config);
+    }
+
+    #[tokio::test]
+    async fn test_s3_paths() {
+        let storage = S3Storage::new(
+            S3Options {
+                region: Some("us-west-2".to_string()),
+                endpoint_url: None,
+                allow_http: true,
+                anonymous: false,
+            },
+            "bucket".to_string(),
+            Some("prefix".to_string()),
+            S3Credentials::FromEnv,
+        )
+        .unwrap();
+
+        let ref_path = storage.ref_key("ref_key").unwrap();
+        assert_eq!(ref_path, "prefix/refs/ref_key");
+
+        let snapshot_id = SnapshotId::random();
+        let snapshot_path = storage.get_snapshot_path(&snapshot_id).unwrap();
+        assert_eq!(snapshot_path, format!("prefix/snapshots/{snapshot_id}"));
+
+        let manifest_id = ManifestId::random();
+        let manifest_path = storage.get_manifest_path(&manifest_id).unwrap();
+        assert_eq!(manifest_path, format!("prefix/manifests/{manifest_id}"));
+
+        let chunk_id = ChunkId::random();
+        let chunk_path = storage.get_chunk_path(&chunk_id).unwrap();
+        assert_eq!(chunk_path, format!("prefix/chunks/{chunk_id}"));
+
+        let transaction_id = SnapshotId::random();
+        let transaction_path = storage.get_transaction_path(&transaction_id).unwrap();
+        assert_eq!(transaction_path, format!("prefix/transactions/{transaction_id}"));
     }
 }
