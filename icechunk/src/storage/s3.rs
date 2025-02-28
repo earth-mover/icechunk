@@ -2,7 +2,7 @@ use std::{
     fmt,
     future::ready,
     ops::Range,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -148,7 +148,11 @@ impl S3Storage {
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
-        Ok(format!("{}/{}/{}", self.prefix, file_prefix, id).replace("//", "/"))
+        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
+        let path_str =
+            path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
+
+        Ok(path_str.replace("\\", "/"))
     }
 
     fn get_path<const SIZE: usize, T: FileTypeTag>(
@@ -181,7 +185,11 @@ impl S3Storage {
     }
 
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        Ok(format!("{}/{}/{}", self.prefix, REF_PREFIX, ref_key).replace("//", "/"))
+        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
+        let path_str =
+            path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
+
+        Ok(path_str.replace("\\", "/"))
     }
 
     async fn get_object_reader(

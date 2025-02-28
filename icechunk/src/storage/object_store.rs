@@ -1021,6 +1021,8 @@ mod tests {
 
     use tempfile::TempDir;
 
+    use crate::format::{ChunkId, ManifestId, SnapshotId};
+
     use super::ObjectStorage;
 
     #[tokio::test]
@@ -1069,5 +1071,35 @@ mod tests {
         let store =
             ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path()).await;
         assert!(store.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_object_store_paths() {
+        let store = ObjectStorage::new_local_filesystem(PathBuf::from(".").as_path())
+            .await
+            .unwrap();
+
+        let ref_key = "ref_key";
+        let ref_path = store.ref_key(ref_key);
+        assert_eq!(ref_path.to_string(), format!("refs/{ref_key}"));
+
+        let snapshot_id = SnapshotId::random();
+        let snapshot_path = store.get_snapshot_path(&snapshot_id);
+        assert_eq!(snapshot_path.to_string(), format!("snapshots/{snapshot_id}"));
+
+        let manifest_id = ManifestId::random();
+        let manifest_path = store.get_manifest_path(&manifest_id);
+        assert_eq!(manifest_path.to_string(), format!("manifests/{manifest_id}"));
+
+        let chunk_id = ChunkId::random();
+        let chunk_path = store.get_chunk_path(&chunk_id);
+        assert_eq!(chunk_path.to_string(), format!("chunks/{chunk_id}"));
+
+        let transaction_id = SnapshotId::random();
+        let transaction_path = store.get_transaction_path(&transaction_id);
+        assert_eq!(
+            transaction_path.to_string(),
+            format!("transactions/{transaction_id}")
+        );
     }
 }
