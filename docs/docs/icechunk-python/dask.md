@@ -56,7 +56,11 @@ Now write
 ```python exec="on" session="dask" source="material-block"
 import icechunk.dask
 
-icechunk.dask.store_dask(icechunk_session, sources=[dask_array], targets=[zarray])
+icechunk.dask.store_dask(
+    icechunk_session,
+    sources=[dask_array],
+    targets=[zarray]
+)
 ```
 
 Finally commit your changes!
@@ -76,6 +80,7 @@ merging Sessions but it is required that you opt-in to pickling prior to creatin
 Here is an example:
 
 ```python exec="on" session="dask" source="material-block"
+
 from distributed import Client
 client = Client()
 
@@ -86,7 +91,10 @@ import icechunk.dask
 icechunk_session = icechunk_repo.writable_session("main")
 zarr_chunks = (10, 10)
 with icechunk_session.allow_pickling():
-    group = zarr.group(store=icechunk_session.store, overwrite=True)
+    group = zarr.group(
+        store=icechunk_session.store,
+        overwrite=True
+    )
 
     zarray = group.create_array(
         "array",
@@ -95,7 +103,12 @@ with icechunk_session.allow_pickling():
         dtype="f8",
         fill_value=float("nan"),
     )
-    icechunk.dask.store_dask(icechunk_session, sources=[dask_array], targets=[zarray])
+
+    icechunk.dask.store_dask(
+        icechunk_session,
+        sources=[dask_array],
+        targets=[zarray]
+    )
 print(icechunk_session.commit("wrote a dask array!"))
 ```
 
@@ -122,7 +135,10 @@ import xarray as xr
 icechunk_session = icechunk_repo.writable_session("main")
 # Assuming you have a valid writable Session named icechunk_session
 with icechunk_session.allow_pickling():
-    dataset = xr.tutorial.open_dataset("rasm", chunks={"time": 1}).isel(time=slice(24))
+    dataset = xr.tutorial.open_dataset(
+        "rasm",
+        chunks={"time": 1}).isel(time=slice(24)
+        )
 
     icechunk.xarray.to_icechunk(dataset, session)
 
