@@ -31,6 +31,7 @@ pooch = "^1.8.2"
 scipy = "^1.15.2"
 dask = "^2025.2.0"
 cftime = "^1.6.4.post1"
+distributed = "^2025.2.0"
 
 [tool.poetry.group.dev.dependencies]
 mike = "^2.1.3"
