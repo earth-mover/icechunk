@@ -100,10 +100,9 @@ to_icechunk(ds, session)
 
 After writing, we commit the changes using the session:
 
-```python exec="on" session="xarray" source="material-block"
+```python exec="on" session="xarray" source="material-block" result="code"
 first_snapshot = session.commit("add RASM data to store")
-first_snapshot
-# output: 'ME4VKFPA5QAY0B2YSG8G'
+print(first_snapshot)
 ```
 
 ## Append to an existing store
@@ -119,68 +118,24 @@ to_icechunk(ds2, session, append_dim='time')
 
 And then we'll commit the changes:
 
-```python exec="on" session="xarray" source="material-block"
+```python exec="on" session="xarray" source="material-block" result="code"
 print(session.commit("append more data"))
 ```
 
 ## Reading data with Xarray
 
 
-<!-- Intentionally hiding the output because the xarray does not
-render well with markdownexec -->
-```python exec="on" session="xarray" source="material-block"
-xr.open_zarr(session.store, consolidated=False)
-# output: <xarray.Dataset> Size: 17MB
-# Dimensions:  (time: 36, y: 205, x: 275)
-# Coordinates:
-#   * time     (time) object 288B 1980-09-16 12:00:00 ... 1983-08-17 00:00:00
-#     xc       (y, x) float64 451kB dask.array<chunksize=(103, 275), meta=np.ndarray>
-#     yc       (y, x) float64 451kB dask.array<chunksize=(103, 275), meta=np.ndarray>
-# Dimensions without coordinates: y, x
-# Data variables:
-#     Tair     (time, y, x) float64 16MB dask.array<chunksize=(5, 103, 138), meta=np.ndarray>
-# Attributes:
-#     NCO:                       netCDF Operators version 4.7.9 (Homepage = htt...
-#     comment:                   Output from the Variable Infiltration Capacity...
-#     convention:                CF-1.4
-#     history:                   Fri Aug  7 17:57:38 2020: ncatted -a bounds,,d...
-#     institution:               U.W.
-#     nco_openmp_thread_number:  1
-#     output_frequency:          daily
-#     output_mode:               averaged
-#     references:                Based on the initial model of Liang et al., 19...
-#     source:                    RACM R1002RBRxaaa01a
-#     title:                     /workspace/jhamman/processed/R1002RBRxaaa01a/l...
-
+```python exec="on" session="xarray" source="material-block" result="code"
+xr.set_options(display_style="text")
+print(xr.open_zarr(session.store, consolidated=False))
 ```
 
 We can also read data from previous snapshots by checking out prior versions:
 
-```python exec="on" session="xarray" source="material-block"
+```python exec="on" session="xarray" source="material-block" result="code"
 session = repo.readonly_session(snapshot_id=first_snapshot)
 
-xr.open_zarr(session.store, consolidated=False)
-# <xarray.Dataset> Size: 9MB
-# Dimensions:  (time: 18, y: 205, x: 275)
-# Coordinates:
-#     xc       (y, x) float64 451kB dask.array<chunksize=(103, 275), meta=np.ndarray>
-#     yc       (y, x) float64 451kB dask.array<chunksize=(103, 275), meta=np.ndarray>
-#   * time     (time) object 144B 1980-09-16 12:00:00 ... 1982-02-15 12:00:00
-# Dimensions without coordinates: y, x
-# Data variables:
-#     Tair     (time, y, x) float64 8MB dask.array<chunksize=(5, 103, 138), meta=np.ndarray>
-# Attributes:
-#     NCO:                       netCDF Operators version 4.7.9 (Homepage = htt...
-#     comment:                   Output from the Variable Infiltration Capacity...
-#     convention:                CF-1.4
-#     history:                   Fri Aug  7 17:57:38 2020: ncatted -a bounds,,d...
-#     institution:               U.W.
-#     nco_openmp_thread_number:  1
-#     output_frequency:          daily
-#     output_mode:               averaged
-#     references:                Based on the initial model of Liang et al., 19...
-#     source:                    RACM R1002RBRxaaa01a
-#     title:                     /workspace/jhamman/processed/R1002RBRxaaa01a/l...
+print(xr.open_zarr(session.store, consolidated=False))
 ```
 
 Notice that this second `xarray.Dataset` has a time dimension of length 18 whereas the
