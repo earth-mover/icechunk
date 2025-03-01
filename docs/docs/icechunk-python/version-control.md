@@ -133,7 +133,7 @@ root.attrs["foo"] = "cherry"
 print(session.commit(message="Update foo attribute on root group"))
 ```
 
-With these branches created, the hierarchy of the repository now looks like below. 
+With these branches created, the hierarchy of the repository now looks like below.
 
 ```python exec="on" result="mermaid" session="version"
 main_commits = [s.id[:6] for s in list(repo.ancestry(branch='main'))]
@@ -154,7 +154,7 @@ gitGraph
     checkout main
     branch feature
     commit id: "{}" type: NORMAL
-    
+
 """.format(*[main_commits[-2], main_commits[-1], dev_commits[0], main_commits[0],feature_commits[0]])
 )
 ```
