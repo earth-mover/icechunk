@@ -22,7 +22,7 @@ import tempfile
 from icechunk import Repository, local_filesystem_storage
 
 ds = xr.tutorial.open_dataset("rasm").isel(time=slice(24))
-repo = Repository.create(local_filesystem_storage(tempfile.mkdtemp()))
+repo = Repository.create(local_filesystem_storage(tempfile.TemporaryDirectory().name))
 session = repo.writable_session("main")
 ```
 
@@ -59,9 +59,9 @@ def write_timestamp(*, itime: int, session: Session) -> None:
 
 Now execute the writes.
 
-```python exec="on" session="parallel" source="material-block" result="code"
+<!-- ```python exec="on" session="parallel" source="material-block" result="code" -->
+```python
 from concurrent.futures import ThreadPoolExecutor, wait
-from icechunk.distributed import merge_sessions
 
 session = repo.writable_session("main")
 with ThreadPoolExecutor() as executor:
