@@ -29,7 +29,7 @@ session = repo.writable_session("main")
 We will orchestrate so that each task writes one timestep.
 This is an arbitrary choice but determines what we set for the Zarr chunk size.
 
-```python exec="on" session="parallel" source="material-block"
+```python exec="on" session="parallel" source="material-block" result="code"
 chunks = {1 if dim == "time" else ds.sizes[dim] for dim in ds.Tair.dims}
 ```
 
@@ -59,8 +59,7 @@ def write_timestamp(*, itime: int, session: Session) -> None:
 
 Now execute the writes.
 
-<!-- ```python exec="on" session="parallel" source="material-block" -->
-```python
+```python exec="on" session="parallel" source="material-block" result="code"
 from concurrent.futures import ThreadPoolExecutor, wait
 from icechunk.distributed import merge_sessions
 
@@ -75,8 +74,7 @@ print(session.commit("finished writes"))
 
 Verify that the writes worked as expected:
 
-<!-- ```python exec="on" session="parallel" source="material-block" -->
-```python
+```python exec="on" session="parallel" source="material-block" result="code"
 ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
 xr.testing.assert_identical(ds, ondisk)
 ```
@@ -141,7 +139,7 @@ print(session.commit("finished writes"))
 
 Verify that the writes worked as expected:
 
-```python exec="on" session="parallel" source="material-block"
+```python
 ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
 xr.testing.assert_identical(ds, ondisk)
 ```

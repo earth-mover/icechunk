@@ -132,21 +132,20 @@ import icechunk.xarray
 import xarray as xr
 
 icechunk_session = icechunk_repo.writable_session("main")
-# Assuming you have a valid writable Session named icechunk_session
+dataset = xr.tutorial.open_dataset(
+    "rasm",
+    chunks={"time": 1}).isel(time=slice(24)
+    )
+
+# `to_icechunk` takes care of "allow_pickling" for you
+icechunk.xarray.to_icechunk(dataset, icechunk_session, mode="w")
+
 with icechunk_session.allow_pickling():
-    dataset = xr.tutorial.open_dataset(
-        "rasm",
-        chunks={"time": 1}).isel(time=slice(24)
-        )
-
-    icechunk.xarray.to_icechunk(dataset, session)
-
     roundtripped = xr.open_zarr(icechunk_session.store, consolidated=False)
     print(dataset.identical(roundtripped))
 ```
 
 Finally commit your changes!
-<!-- Similar wait to exec as above-->
 ```python exec="on" session="dask" source="material-block" result="code"
 print(icechunk_session.commit("wrote an Xarray dataset!"))
 ```
