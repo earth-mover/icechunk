@@ -18,7 +18,7 @@ To get started, we can create a new `Repository`.
 
     This example uses an in-memory storage backend, but you can also use any other storage backend instead.
 
-```python
+```python exec="on" session="version" source="material-block"
 import icechunk
 
 repo = icechunk.Repository.create(icechunk.in_memory_storage())
@@ -27,9 +27,8 @@ repo = icechunk.Repository.create(icechunk.in_memory_storage())
 On creating a new [`Repository`](../reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
 
 ```python
-[ancestor for ancestor in repo.ancestry(branch="main")]
-
-# [SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,19,52,41,592998, tzinfo=datetime.timezone.utc), message="Repository...")]
+for ancestor in repo.ancestry(branch="main"):
+    print(ancestor)
 ```
 
 !!! note
@@ -46,54 +45,50 @@ Now that we have a `Repository` with a `main` branch, we can modify the data in 
 
     Writable `Session` objects are required to create new snapshots, and can only be created from the tip of a branch. Checking out tags or other snapshots is read-only.
 
-```python
+```python exec="on" session="version" source="material-block"
 session = repo.writable_session("main")
 ```
 
 We can now access the `zarr.Store` from the `Session` and create a new root group. Then we can modify the attributes of the root group and create a new snapshot.
 
-```python
+```python exec="on" session="version" source="material-block" result="code"
 import zarr
 
 root = zarr.group(session.store)
 root.attrs["foo"] = "bar"
-session.commit(message="Add foo attribute to root group")
-
-# 'J1ZJHS4EEQW3ATKMV9TG'
+print(session.commit(message="Add foo attribute to root group"))
 ```
 
 Success! We've created a new snapshot with a new attribute on the root group.
 
 Once we've committed the snapshot, the `Session` will become read-only, and we can no longer modify the data using our existing `Session`. If we want to modify the data again, we need to create a new writable `Session` from the branch. Notice that we don't have to refresh the `Repository` to get the updates from the `main` branch. Instead, the `Repository` will automatically fetch the latest snapshot from the branch when we create a new writable `Session` from it.
 
-```python
+```python exec="on" session="version" source="material-block"
 session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "baz"
-session.commit(message="Update foo attribute on root group")
-
-# 'BZ9YP38SWPW2E784VAB0'
+print(session.commit(message="Update foo attribute on root group"))
 ```
 
 With a few snapshots committed, we can take a look at the ancestry of the `main` branch:
 
-```python
+
+```python exec="on" session="version" source="material-block" result="code"
 for snapshot in repo.ancestry(branch="main"):
     print(snapshot)
-
-# SnapshotInfo(id="BZ9YP38SWPW2E784VAB0", parent_id="J1ZJHS4EEQW3ATKMV9TG", written_at=datetime.datetime(2025,1,30,20,26,51,115330, tzinfo=datetime.timezone.utc), message="Update foo...")
-# SnapshotInfo(id="J1ZJHS4EEQW3ATKMV9TG", parent_id="A840RMN5CF807CM66RY0", written_at=datetime.datetime(2025,1,30,20,26,50,9616, tzinfo=datetime.timezone.utc), message="Add foo at...")
-# SnapshotInfo(id="A840RMN5CF807CM66RY0", parent_id=None, written_at=datetime.datetime(2025,1,30,20,26,47,66157, tzinfo=datetime.timezone.utc), message="Repository...")
 ```
 
 Visually, this looks like below, where the arrows represent the parent-child relationship between snapshots.
 
-```mermaid
+```python exec="1" result="mermaid" session="version"
+print("""
 gitGraph
-    commit id: "A840RMN5" type: NORMAL
-    commit id: "J1ZJHS4" type: NORMAL
-    commit id: "BZ9YP38" type: NORMAL
+    commit id: "{}" type: NORMAL
+    commit id: "{}" type: NORMAL
+    commit id: "{}" type: NORMAL
+""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
+
 
 ## Time Travel
 
@@ -103,133 +98,130 @@ Now that we've created a new snapshot, we can time-travel back to the previous s
 
     It's important to note that because the `zarr Store` is read-only, we need to pass `mode="r"` to the `zarr.open_group` function.
 
-```python
-session = repo.readonly_session(snapshot_id="BSHY7B1AGAPWQC14Q18G")
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.readonly_session(snapshot_id=list(repo.ancestry(branch="main"))[1].id)
 root = zarr.open_group(session.store, mode="r")
-root.attrs["foo"]
-
-# 'bar'
+print(root.attrs["foo"])
 ```
 
 ## Branches
 
 If we want to modify the data from a previous snapshot, we can create a new branch from that snapshot with [`create_branch`](../reference/#icechunk.Repository.create_branch).
 
-```python
+```python exec="on" session="version" source="material-block"
+main_branch_snapshot_id = repo.lookup_branch("main")
 repo.create_branch("dev", snapshot_id=main_branch_snapshot_id)
 ```
 
 We can now create a new writable `Session` from the `dev` branch and modify the data.
 
-```python
+```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("dev")
 root = zarr.group(session.store)
 root.attrs["foo"] = "balogna"
-session.commit(message="Update foo attribute on root group")
-
-# 'H1M3R93ZW19MYKCYASH0'
+print(session.commit(message="Update foo attribute on root group"))
 ```
 
 We can also create a new branch from the tip of the `main` branch if we want to modify our current working branch without modifying the `main` branch.
 
-```python
-main_branch_snapshot_id = repo.lookup_branch("main")
+```python exec="on" session="version" source="material-block" result="code"
 repo.create_branch("feature", snapshot_id=main_branch_snapshot_id)
 
 session = repo.writable_session("feature")
 root = zarr.group(session.store)
 root.attrs["foo"] = "cherry"
-session.commit(message="Update foo attribute on root group")
-
-# 'S3QY2RDQQTRYFGJDTB6G'
+print(session.commit(message="Update foo attribute on root group"))
 ```
 
-With these branches created, the hierarchy of the repository now looks like below.
+With these branches created, the hierarchy of the repository now looks like below. 
 
-```mermaid
+```python exec="on" result="mermaid" session="version"
+main_commits = [s.id[:6] for s in list(repo.ancestry(branch='main'))]
+dev_commits = [s.id[:6] for s in list(repo.ancestry(branch='dev'))]
+feature_commits = [s.id[:6] for s in list(repo.ancestry(branch='feature'))]
+print(
+"""
 gitGraph
-    commit id: "A840RMN5" type: NORMAL
-    commit id: "J1ZJHS4" type: NORMAL
+    commit id: "{}" type: NORMAL
+    commit id: "{}" type: NORMAL
     branch dev
     checkout dev
-    commit id: "H1M3R93" type: NORMAL
+    commit id: "{}" type: NORMAL
 
     checkout main
-    commit id: "BZ9YP38" type: NORMAL
+    commit id: "{}" type: NORMAL
 
     checkout main
     branch feature
-    commit id: "S3QY2RD" type: NORMAL
+    commit id: "{}" type: NORMAL
+    
+""".format(*[main_commits[-2], main_commits[-1], dev_commits[0], main_commits[0],feature_commits[0]])
+)
 ```
 
 We can also [list all branches](../reference/#icechunk.Repository.list_branches) in the repository.
 
-```python
-repo.list_branches()
-
-# { 'dev', 'feature', 'main' }
+```python exec="on" session="version" source="material-block" result="code"
+print(repo.list_branches())
 ```
 
 If we need to find the snapshot that a branch is based on, we can use the [`lookup_branch`](../reference/#icechunk.Repository.lookup_branch) method.
 
-```python
-repo.lookup_branch("feature")
-
-# 'J1ZJHS4EEQW3ATKMV9TG'
+```python exec="on" session="version" source="material-block" result="code"
+print(repo.lookup_branch("feature"))
 ```
 
 We can also [delete a branch](../reference/#icechunk.Repository.delete_branch) with [`delete_branch`](../reference/#icechunk.Repository.delete_branch).
 
-```python
+```python exec="on" session="version" source="material-block"
 repo.delete_branch("feature")
 ```
 
 Finally, we can [reset a branch](../reference/#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](../reference/#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
 
-```python
-repo.reset_branch("dev", snapshot_id="J1ZJHS4EEQW3ATKMV9TG")
+```python exec="on" session="version" source="material-block"
+repo.reset_branch("dev", snapshot_id=main_branch_snapshot_id)
 ```
 
 ## Tags
 
 Tags are immutable references to a snapshot. They are created with [`create_tag`](../reference/#icechunk.Repository.create_tag).
 
-```python
-repo.create_tag("v1.0.0", snapshot_id="J1ZJHS4EEQW3ATKMV9TG")
+For example to tag the second commit in `main`'s history:
+
+```python exec="on" session="version" source="material-block"
+repo.create_tag("v1.0.0", snapshot_id=list(repo.ancestry(branch="main"))[1].id)
 ```
+
 
 Because tags are immutable, we need to use a readonly `Session` to access the data referenced by a tag.
 
-```python
+```python exec="on" session="version" source="material-block" result="code"
 session = repo.readonly_session(tag="v1.0.0")
 root = zarr.open_group(session.store, mode="r")
-root.attrs["foo"]
-
-# 'bar'
+print(root.attrs["foo"])
 ```
 
-```mermaid
+```python exec="1" result="mermaid" session="version"
+print("""
 gitGraph
-    commit id: "A840RMN5" type: NORMAL
-    commit id: "J1ZJHS4" type: NORMAL
+    commit id: "{}" type: NORMAL
+    commit id: "{}" type: NORMAL
     commit tag: "v1.0.0"
-    commit id: "BZ9YP38" type: NORMAL
+    commit id: "{}" type: NORMAL
+""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
 
 We can also [list all tags](../reference/#icechunk.Repository.list_tags) in the repository.
 
-```python
-repo.list_tags()
-
-# { 'v1.0.0' }
+```python exec="on" session="version" source="material-block" result="code"
+print(repo.list_tags())
 ```
 
 and we can look up the snapshot that a tag is based on with [`lookup_tag`](../reference/#icechunk.Repository.lookup_tag).
 
-```python
-repo.lookup_tag("v1.0.0")
-
-# 'J1ZJHS4EEQW3ATKMV9TG'
+```python exec="on" session="version" source="material-block" result="code"
+print(repo.lookup_tag("v1.0.0"))
 ```
 
 And then finally delete a tag with [`delete_tag`](../reference/#icechunk.Repository.delete_tag).
@@ -237,7 +229,7 @@ And then finally delete a tag with [`delete_tag`](../reference/#icechunk.Reposit
 !!! note
     Tags are immutable and once a tag is deleted, it can never be recreated.
 
-```python
+```python exec="on" session="version" source="material-block"
 repo.delete_tag("v1.0.0")
 ```
 
@@ -247,7 +239,7 @@ Icechunk is a serverless distributed system, and as such, it is possible to have
 
 Let's create a fresh repository, add some attributes to the root group and create an array named `data`.
 
-```python
+```python exec="on" session="version" source="material-block" result="code"
 import icechunk
 import numpy as np
 import zarr
@@ -257,14 +249,12 @@ session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "bar"
 root.create_dataset("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
-session.commit(message="Add foo attribute and data array")
-
-# 'BG0W943WSNFMMVD1FXJ0'
+print(session.commit(message="Add foo attribute and data array"))
 ```
 
 Lets try to modify the `data` array in two different sessions, created from the `main` branch.
 
-```python
+```python exec="on" session="version" source="material-block"
 session1 = repo.writable_session("main")
 session2 = repo.writable_session("main")
 
@@ -278,8 +268,8 @@ root2["data"][0,:] = 2
 and then try to commit the changes.
 
 ```python
-session1.commit(message="Update first element of data array")
-session2.commit(message="Update first row of data array")
+print(session1.commit(message="Update first element of data array"))
+print(session2.commit(message="Update first row of data array"))
 
 # AE9XS2ZWXT861KD2JGHG
 # ---------------------------------------------------------------------------
