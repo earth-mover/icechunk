@@ -63,7 +63,7 @@ Success! We've created a new snapshot with a new attribute on the root group.
 
 Once we've committed the snapshot, the `Session` will become read-only, and we can no longer modify the data using our existing `Session`. If we want to modify the data again, we need to create a new writable `Session` from the branch. Notice that we don't have to refresh the `Repository` to get the updates from the `main` branch. Instead, the `Repository` will automatically fetch the latest snapshot from the branch when we create a new writable `Session` from it.
 
-```python exec="on" session="version" source="material-block"
+```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.attrs["foo"] = "baz"
