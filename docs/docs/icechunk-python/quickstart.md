@@ -57,7 +57,7 @@ However, you can also create a repo on your local filesystem.
 
 === "Local Storage"
 
-    ```python exec="on" session="quickstart" source="above"
+    ```python exec="on" session="quickstart" source="material-block"
     import icechunk
     import tempfile
     storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
