@@ -73,7 +73,7 @@ print(icechunk_session.commit("wrote a dask array!"))
 
 In distributed contexts where the Session, and Zarr Array objects are sent across the network,
 you must opt-in to successful pickling of a writable store. This will happen when you have initialized a dask
-cluster. This will be case if you have intialized a  `distributed.Client`.
+cluster. This will be case if you have initialized a  `distributed.Client`.
 [`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) takes care of the hard bit of
 merging Sessions but it is required that you opt-in to pickling prior to creating the target Zarr array objects.
 
