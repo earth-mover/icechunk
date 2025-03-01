@@ -59,7 +59,8 @@ def write_timestamp(*, itime: int, session: Session) -> None:
 
 Now execute the writes.
 
-```python exec="on" session="parallel" source="material-block"
+<!-- ```python exec="on" session="parallel" source="material-block" -->
+```python
 from concurrent.futures import ThreadPoolExecutor, wait
 from icechunk.distributed import merge_sessions
 
@@ -74,7 +75,8 @@ print(session.commit("finished writes"))
 
 Verify that the writes worked as expected:
 
-```python exec="on" session="parallel" source="material-block"
+<!-- ```python exec="on" session="parallel" source="material-block" -->
+```python
 ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
 xr.testing.assert_identical(ds, ondisk)
 ```
@@ -102,7 +104,7 @@ There are three key points to keep in mind:
 
 First we modify `write_task` to return the `Session`:
 
-```python exec="on" session="parallel" source="material-block"
+```python
 from icechunk import Session
 
 def write_timestamp(*, itime: int, session: Session) -> Session:
@@ -116,7 +118,7 @@ def write_timestamp(*, itime: int, session: Session) -> Session:
 Now we issue write tasks within the [`session.allow_pickling()`](./reference/md#icechunk.Session.allow_pickling) context, gather the Sessions from individual tasks,
 merge them, and make a successful commit.
 
-```python exec="on" session="parallel" source="material-block"
+```python
 from concurrent.futures import ProcessPoolExecutor
 from icechunk.distributed import merge_sessions
 
