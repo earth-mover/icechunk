@@ -31,16 +31,6 @@ To get started, let's create a new Icechunk repository.
 We recommend creating your repo on a cloud storage platform to get the most out of Icechunk's cloud-native design.
 However, you can also create a repo on your local filesystem.
 
-```python exec="on"
-# remove local path if it already exists to prevent errors
-# this is hidden in the rendered docs
-from shutil import rmtree
-try:
-    rmtree("./icechunk-local");
-except FileNotFoundError:
-    pass
-```
-
 === "S3 Storage"
 
     ```python
@@ -69,7 +59,8 @@ except FileNotFoundError:
 
     ```python exec="on" session="quickstart" source="above"
     import icechunk
-    storage = icechunk.local_filesystem_storage("./icechunk-local")
+    import tempfile
+    storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
     repo = icechunk.Repository.create(storage)
     ```
 
@@ -107,7 +98,7 @@ array[:] = 1
 
 Now let's commit our update using the session
 
-```python exec="on" session="quickstart" source="material-block"
+```python exec="on" session="quickstart" source="material-block" result="code"
 snapshot_id_1 = session.commit("first commit")
 print(snapshot_id_1)
 ```
@@ -145,7 +136,7 @@ snapshot_id_2 = session_2.commit("overwrite some values")
 
 We can see the full version history of our repo:
 
-```python exec="on" session="quickstart" source="material-block"
+```python exec="on" session="quickstart" source="material-block" result="code"
 hist = repo.ancestry(snapshot_id=snapshot_id_2)
 for ancestor in hist:
     print(ancestor.id, ancestor.message, ancestor.written_at)
