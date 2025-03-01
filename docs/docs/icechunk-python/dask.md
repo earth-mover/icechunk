@@ -53,7 +53,7 @@ write task is independent, and will not conflict. It is your responsibility to e
 conflicts are avoided.
 
 Now write
-```python exec="on" session="dask" source="material-block"
+```python exec="on" session="dask" source="material-block" result="code"
 import icechunk.dask
 
 icechunk.dask.store_dask(
@@ -79,7 +79,7 @@ merging Sessions but it is required that you opt-in to pickling prior to creatin
 
 Here is an example:
 
-```python exec="on" session="dask" source="material-block"
+```python exec="on" session="dask" source="material-block" result="code"
 
 from distributed import Client
 client = Client()
@@ -126,9 +126,8 @@ Notably the ``compute`` kwarg is not supported.
 
 
 Now roundtrip an xarray dataset
-<!-- Waiting for fix of https://github.com/earth-mover/icechunk/issues/789  to execute-->
 
-```python
+```python exec="on" session="dask" source="material-block" result="code"
 import icechunk.xarray
 import xarray as xr
 
@@ -148,8 +147,8 @@ with icechunk_session.allow_pickling():
 
 Finally commit your changes!
 <!-- Similar wait to exec as above-->
-```python
-icechunk_session.commit("wrote an Xarray dataset!")
+```python exec="on" session="dask" source="material-block" result="code"
+print(icechunk_session.commit("wrote an Xarray dataset!"))
 ```
 
 ```python exec="on" session="dask"
