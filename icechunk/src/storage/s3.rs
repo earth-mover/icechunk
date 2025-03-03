@@ -78,6 +78,16 @@ pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client
         .unwrap_or_else(RegionProviderChain::default_provider);
 
     let endpoint = config.endpoint_url.clone();
+    let region = if endpoint.is_some() {
+        // GH793, the S3 SDK requires a region even though it may not make sense
+        // for S3-compatible object stores like Tigris or Ceph.
+        // So we set a fake region, using the `endpoint_url` as a sign that
+        // we are not talking to real S3
+        region.or_else(Region::new("region-was-not-set"))
+    } else {
+        region
+    };
+
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
