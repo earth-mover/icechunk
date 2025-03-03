@@ -29,7 +29,7 @@ session = repo.writable_session("main")
 We will orchestrate so that each task writes one timestep.
 This is an arbitrary choice but determines what we set for the Zarr chunk size.
 
-```python exec="on" session="parallel" source="material-block" result="code"
+```python exec="on" session="parallel" source="material-block"
 chunks = {1 if dim == "time" else ds.sizes[dim] for dim in ds.Tair.dims}
 ```
 
@@ -37,7 +37,7 @@ Initialize the dataset using [`Dataset.to_zarr`](https://docs.xarray.dev/en/stab
 and `compute=False`, this will NOT write any chunked array data, but will write all array metadata, and any
 in-memory arrays (only `time` in this case).
 
-```python exec="on" session="parallel" source="material-block"
+```python exec="on" session="parallel" source="material-block" result="code"
 ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w")
 # this commit is optional, but may be useful in your workflow
 print(session.commit("initialize store"))
@@ -59,8 +59,7 @@ def write_timestamp(*, itime: int, session: Session) -> None:
 
 Now execute the writes.
 
-<!-- ```python exec="on" session="parallel" source="material-block" result="code" -->
-```python
+```python exec="on" session="parallel" source="material-block" result="code"
 from concurrent.futures import ThreadPoolExecutor, wait
 
 session = repo.writable_session("main")
@@ -74,7 +73,7 @@ print(session.commit("finished writes"))
 
 Verify that the writes worked as expected:
 
-```python exec="on" session="parallel" source="material-block" result="code"
+```python exec="on" session="parallel" source="material-block"
 ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
 xr.testing.assert_identical(ds, ondisk)
 ```
