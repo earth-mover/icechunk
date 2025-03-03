@@ -27,17 +27,19 @@ First, we need to find all of the files we are interested in, we will do this wi
 ```python
 import fsspec
 
-fs = fsspec.filesystem('s3')
+fs = fsspec.filesystem("s3")
 
-oisst_files = fs.glob('s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/202408/oisst-avhrr-v02r01.*.nc')
+oisst_files = fs.glob(
+    "s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/202408/oisst-avhrr-v02r01.*.nc"
+)
 
-oisst_files = sorted(['s3://'+f for f in oisst_files])
-#['s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100101.nc',
+oisst_files = sorted(["s3://" + f for f in oisst_files])
+# ['s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100101.nc',
 # 's3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100102.nc',
 # 's3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100103.nc',
 # 's3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100104.nc',
-#...
-#]
+# ...
+# ]
 ```
 
 Now that we have the filenames of the data we need, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
@@ -45,10 +47,7 @@ Now that we have the filenames of the data we need, we can create virtual datase
 ```python
 from virtualizarr import open_virtual_dataset
 
-virtual_datasets =[
-    open_virtual_dataset(url, indexes={})
-    for url in oisst_files
-]
+virtual_datasets = [open_virtual_dataset(url, indexes={}) for url in oisst_files]
 ```
 
 We can now use `xarray` to combine these virtual datasets into one large virtual dataset (For more details on this operation see [`VirtualiZarr`'s documentation](https://virtualizarr.readthedocs.io/en/latest/usage.html#combining-virtual-datasets)). We know that each of our files share the same structure but with a different date. So we are going to concatenate these datasets on the `time` dimension.
@@ -58,20 +57,20 @@ import xarray as xr
 
 virtual_ds = xr.concat(
     virtual_datasets,
-    dim='time',
-    coords='minimal',
-    compat='override',
-    combine_attrs='override'
+    dim="time",
+    coords="minimal",
+    compat="override",
+    combine_attrs="override",
 )
 
-#<xarray.Dataset> Size: 257MB
-#Dimensions:  (time: 31, zlev: 1, lat: 720, lon: 1440)
-#Coordinates:
+# <xarray.Dataset> Size: 257MB
+# Dimensions:  (time: 31, zlev: 1, lat: 720, lon: 1440)
+# Coordinates:
 #    time     (time) float32 124B ManifestArray<shape=(31,), dtype=float32, ch...
 #    lat      (lat) float32 3kB ManifestArray<shape=(720,), dtype=float32, chu...
 #    zlev     (zlev) float32 4B ManifestArray<shape=(1,), dtype=float32, chunk...
 #    lon      (lon) float32 6kB ManifestArray<shape=(1440,), dtype=float32, ch...
-#Data variables:
+# Data variables:
 #    sst      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 #    anom     (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 #    ice      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
@@ -88,12 +87,16 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 import icechunk
 
 storage = icechunk.local_filesystem(
-    prefix='oisst',
+    prefix="oisst",
 )
 
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3", "s3://", icechunk.s3_store(region="us-east-1")))
-credentials = icechunk.containers_credentials(s3=icechunk.s3_credentials(anonymous=True))
+config.set_virtual_chunk_container(
+    icechunk.VirtualChunkContainer("s3", "s3://", icechunk.s3_store(region="us-east-1"))
+)
+credentials = icechunk.containers_credentials(
+    s3=icechunk.s3_credentials(anonymous=True)
+)
 repo = icechunk.Repository.create(storage, config, credentials)
 ```
 
@@ -126,14 +129,14 @@ ds = xr.open_zarr(
     chunks={},
 )
 
-#<xarray.Dataset> Size: 1GB
-#Dimensions:  (lon: 1440, time: 31, zlev: 1, lat: 720)
-#Coordinates:
+# <xarray.Dataset> Size: 1GB
+# Dimensions:  (lon: 1440, time: 31, zlev: 1, lat: 720)
+# Coordinates:
 #  * lon      (lon) float32 6kB 0.125 0.375 0.625 0.875 ... 359.4 359.6 359.9
 #  * zlev     (zlev) float32 4B 0.0
 #  * time     (time) datetime64[ns] 248B 2024-08-01T12:00:00 ... 2024-08-31T12...
 #  * lat      (lat) float32 3kB -89.88 -89.62 -89.38 -89.12 ... 89.38 89.62 89.88
-#Data variables:
+# Data variables:
 #    sst      (time, zlev, lat, lon) float64 257MB dask.array<chunksize=(1, 1, 720, 1440), meta=np.ndarray>
 #    ice      (time, zlev, lat, lon) float64 257MB dask.array<chunksize=(1, 1, 720, 1440), meta=np.ndarray>
 #    anom     (time, zlev, lat, lon) float64 257MB dask.array<chunksize=(1, 1, 720, 1440), meta=np.ndarray>
@@ -145,7 +148,7 @@ Success! We have created our full dataset with 31 timesteps spanning the month o
 Finally, let's make a plot of the sea surface temperature!
 
 ```python
-ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
+ds.sst.isel(time=26, zlev=0).plot(x="lon", y="lat", vmin=0)
 ```
 
 ![oisst](../assets/datasets/oisst.png)
@@ -167,13 +170,12 @@ References to files accessible via S3 compatible storage.
 Here is how we can set the chunk at key `c/0` to point to a file on an s3 bucket,`mybucket`, with the prefix `my/data/file.nc`:
 
 ```python
-store.set_virtual_ref('c/0', 's3://mybucket/my/data/file.nc', offset=1000, length=200)
+store.set_virtual_ref("c/0", "s3://mybucket/my/data/file.nc", offset=1000, length=200)
 ```
 
 ##### Configuration
 
 S3 virtual references require configuring credential for the store to be able to access the specified s3 bucket. See [the configuration docs](./configuration.md#virtual-reference-storage-config) for instructions.
-
 
 #### Local Filesystem
 
@@ -184,7 +186,7 @@ References to files accessible via local filesystem. This requires any file path
 Here is how we can set the chunk at key `c/0` to point to a file on my local filesystem located at `/path/to/my/file.nc`:
 
 ```python
-store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
+store.set_virtual_ref("c/0", "file:///path/to/my/file.nc", offset=20, length=100)
 ```
 
 No extra configuration is necessary for local filesystem references.

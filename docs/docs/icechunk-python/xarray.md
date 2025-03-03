@@ -12,7 +12,7 @@ and `icechunk.xarray.to_icechunk` methods.
     pip install "xarray>=2025.1.1"
     ```
 
-!!!note "`to_icechunk` vs `to_zarr`"
+!!! note "`to_icechunk` vs `to_zarr`"
 
     [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr)
     and [`to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
@@ -27,7 +27,6 @@ and `icechunk.xarray.to_icechunk` methods.
     is unnecessary (and unsupported) in Icechunk. Icechunk already organizes the dataset metadata
     in a way that makes it very fast to fetch from storage.
 
-
 In this example, we'll explain how to create a new Icechunk repo, write some sample data
 to it, and append data a second block of data using Icechunk's version control features.
 
@@ -37,7 +36,6 @@ Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll crea
 Icechunk repo in S3 or a local file system. You will need to replace the `StorageConfig`
 with a bucket or file path that you have access to.
 
-
 ```python exec="on" session="xarray" source="material-block"
 import xarray as xr
 import icechunk
@@ -46,10 +44,7 @@ import icechunk
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.s3_storage(
-        bucket="icechunk-test",
-        prefix="xarray-demo"
-    )
+    storage_config = icechunk.s3_storage(bucket="icechunk-test", prefix="xarray-demo")
     repo = icechunk.Repository.create(storage_config)
     ```
 
@@ -57,6 +52,7 @@ import icechunk
 
     ```python exec="on" session="xarray" source="material-block"
     import tempfile
+
     storage_config = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
     repo = icechunk.Repository.create(storage_config)
     ```
@@ -65,7 +61,6 @@ import icechunk
 
 For this demo, we'll open Xarray's RASM tutorial dataset and split it into two blocks.
 We'll write the two blocks to Icechunk in separate transactions later in the this example.
-
 
 !!! note
 
@@ -76,7 +71,7 @@ We'll write the two blocks to Icechunk in separate transactions later in the thi
     ```
 
 ```python exec="on" session="xarray" source="material-block"
-ds = xr.tutorial.open_dataset('rasm')
+ds = xr.tutorial.open_dataset("rasm")
 
 ds1 = ds.isel(time=slice(None, 18))  # part 1
 ds2 = ds.isel(time=slice(18, None))  # part 2
@@ -113,7 +108,7 @@ this reason. Again, we'll use `Dataset.to_zarr`, this time with `append_dim='tim
 ```python exec="on" session="xarray" source="material-block"
 # we have to get a new session after committing
 session = repo.writable_session("main")
-to_icechunk(ds2, session, append_dim='time')
+to_icechunk(ds2, session, append_dim="time")
 ```
 
 And then we'll commit the changes:
@@ -123,7 +118,6 @@ print(session.commit("append more data"))
 ```
 
 ## Reading data with Xarray
-
 
 ```python exec="on" session="xarray" source="material-block" result="code"
 xr.set_options(display_style="text")

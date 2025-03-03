@@ -72,7 +72,6 @@ print(session.commit(message="Update foo attribute on root group"))
 
 With a few snapshots committed, we can take a look at the ancestry of the `main` branch:
 
-
 ```python exec="on" session="version" source="material-block" result="code"
 for snapshot in repo.ancestry(branch="main"):
     print(snapshot)
@@ -81,14 +80,15 @@ for snapshot in repo.ancestry(branch="main"):
 Visually, this looks like below, where the arrows represent the parent-child relationship between snapshots.
 
 ```python exec="1" result="mermaid" session="version"
-print("""
+print(
+    """
 gitGraph
     commit id: "{}" type: NORMAL
     commit id: "{}" type: NORMAL
     commit id: "{}" type: NORMAL
-""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
+""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")])
+)
 ```
-
 
 ## Time Travel
 
@@ -136,11 +136,11 @@ print(session.commit(message="Update foo attribute on root group"))
 With these branches created, the hierarchy of the repository now looks like below.
 
 ```python exec="on" result="mermaid" session="version"
-main_commits = [s.id[:6] for s in list(repo.ancestry(branch='main'))]
-dev_commits = [s.id[:6] for s in list(repo.ancestry(branch='dev'))]
-feature_commits = [s.id[:6] for s in list(repo.ancestry(branch='feature'))]
+main_commits = [s.id[:6] for s in list(repo.ancestry(branch="main"))]
+dev_commits = [s.id[:6] for s in list(repo.ancestry(branch="dev"))]
+feature_commits = [s.id[:6] for s in list(repo.ancestry(branch="feature"))]
 print(
-"""
+    """
 gitGraph
     commit id: "{}" type: NORMAL
     commit id: "{}" type: NORMAL
@@ -155,7 +155,15 @@ gitGraph
     branch feature
     commit id: "{}" type: NORMAL
 
-""".format(*[main_commits[-2], main_commits[-1], dev_commits[0], main_commits[0],feature_commits[0]])
+""".format(
+        *[
+            main_commits[-2],
+            main_commits[-1],
+            dev_commits[0],
+            main_commits[0],
+            feature_commits[0],
+        ]
+    )
 )
 ```
 
@@ -193,7 +201,6 @@ For example to tag the second commit in `main`'s history:
 repo.create_tag("v1.0.0", snapshot_id=list(repo.ancestry(branch="main"))[1].id)
 ```
 
-
 Because tags are immutable, we need to use a readonly `Session` to access the data referenced by a tag.
 
 ```python exec="on" session="version" source="material-block" result="code"
@@ -203,13 +210,15 @@ print(root.attrs["foo"])
 ```
 
 ```python exec="1" result="mermaid" session="version"
-print("""
+print(
+    """
 gitGraph
     commit id: "{}" type: NORMAL
     commit id: "{}" type: NORMAL
     commit tag: "v1.0.0"
     commit id: "{}" type: NORMAL
-""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
+""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")])
+)
 ```
 
 We can also [list all tags](../reference/#icechunk.Repository.list_tags) in the repository.
@@ -227,6 +236,7 @@ print(repo.lookup_tag("v1.0.0"))
 And then finally delete a tag with [`delete_tag`](../reference/#icechunk.Repository.delete_tag).
 
 !!! note
+
     Tags are immutable and once a tag is deleted, it can never be recreated.
 
 ```python exec="on" session="version" source="material-block"
@@ -261,8 +271,8 @@ session2 = repo.writable_session("main")
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
 
-root1["data"][0,0] = 1
-root2["data"][0,:] = 2
+root1["data"][0, 0] = 1
+root2["data"][0, :] = 2
 ```
 
 and then try to commit the changes.
@@ -328,7 +338,9 @@ except icechunk.RebaseFailedError as e:
 We get a clear indication of the conflict, and the chunks that are conflicting. In this case we have decided that the first session's changes are correct, so we can again use the [`BasicConflictSolver`](../reference/#icechunk.BasicConflictSolver) to resolve the conflict.
 
 ```python
-session1.rebase(icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.UseOurs))
+session1.rebase(
+    icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.UseOurs)
+)
 session1.commit(message="Update first element of data array")
 
 # 'R4WXW2CYNAZTQ3HXTNK0'
@@ -341,7 +353,7 @@ Let's look at the value of the `data` array to confirm that the conflict was res
 ```python
 session = repo.readonly_session("main")
 root = zarr.open_group(session.store, mode="r")
-root["data"][0,:]
+root["data"][0, :]
 
 # array([1, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=int32)
 ```
@@ -361,8 +373,8 @@ session2 = repo.writable_session("main")
 root1 = zarr.group(session1.store)
 root2 = zarr.group(session2.store)
 
-root1["data"][3,:] = 3
-root2["data"][4,:] = 4
+root1["data"][3, :] = 3
+root2["data"][4, :] = 4
 
 session1.commit(message="Update fourth row of data array")
 
@@ -382,7 +394,7 @@ And now we can see the data in the `data` array to confirm that the changes were
 ```python
 session = repo.readonly_session(branch="main")
 root = zarr.open_group(session.store, mode="r")
-root["data"][:,:]
+root["data"][:, :]
 
 # array([[1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
 #        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
