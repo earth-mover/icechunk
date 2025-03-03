@@ -16,15 +16,19 @@ Tigris has built for us the ability to recover consistency by passing an `X-Tigr
 writes and reads are done with the same region in the header, consistency is recovered. We also need `Cache-Control:no-cache`
 in the get requests. Of course, this comes at the price of performance, because reads no longer happens from the closest region anywhere in the world.
 
-An alternative would be to set the bucket as region-restricted. In that case all writes and reads go to the single region,
-but Icechunk cannot control the bucket configuration.
+An alternative would be to set the bucket as region-restricted. In that case all writes and reads go to the single region.
+This doesn't work well for Icechunk because:
+
+* It doesn't have access to modifying the bucket configuration
+* Users may have other data in their buckets, data they don't want to serve from a single region
+* It's not flexible, we lose Tigris benefit of data locality
 
 ## What we want
 
 Ideally most of the time users can use Icechunk in the most performant way, at least for reads. Even if it's
 slightly unsafe, users will want to make all reads from the closest regions.
 
-By default Icechunk should be perfectly safe and consistency, even at the price of slower performance.
+By default Icechunk should be perfectly safe and consistent, even at the price of slower performance.
 
 ## How to achieve it
 
@@ -34,7 +38,7 @@ By default Icechunk should be perfectly safe and consistency, even at the price 
   * All reads use the `Cache-Control:no-cache` header.
   * This will make Icechunk safe, but it will direct all writes and reads to a single region, which may cause performance degradation.
   
-* Setting a `Storage` configuration variable to "`unsafe_use_distributed_reads: True`":
+* Setting a `Storage` configuration variable to "`unsafe_read_from_local_region: True`":
   * Region is ignored if passed
   * No `X-Tigris-Regions` header is passed.
   * No `Cache-Control:no-cache` header.
