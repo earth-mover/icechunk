@@ -18,8 +18,8 @@ name = "_icechunk_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-bytes = "1.9.0"
-chrono = { version = "0.4.39" }
+bytes = "1.10.0"
+chrono = { version = "0.4.40" }
 futures = "0.3.31"
 icechunk = { path = "../icechunk", version = "0.2.4", features = ["logs"] }
 itertools = "0.14.0"
@@ -31,12 +31,12 @@ pyo3 = { version = "0.23", features = [
 ] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
 async-stream = "0.3.6"
-thiserror = "2.0.11"
+thiserror = "2.0.12"
 tokio = "1.43"
-serde_json = "1.0.137"
-async-trait = "0.1.85"
-typetag = "0.2.19"
-serde = { version = "1.0.217", features = ["derive", "rc"] }
+serde_json = "1.0.140"
+async-trait = "0.1.87"
+typetag = "0.2.20"
+serde = { version = "1.0.218", features = ["derive", "rc"] }
 miette = { version = "7.5.0", features = ["fancy"] }
 
 [lints]
