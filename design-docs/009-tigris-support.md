@@ -24,7 +24,7 @@ but Icechunk cannot control the bucket configuration.
 Ideally most of the time users can use Icechunk in the most performant way, at least for reads. Even if it's
 slightly unsafe, users will want to make all reads from the closest regions.
 
-By default Icechunk should be perfectly safe and consistency, even at the price of slower performance.
+By default Icechunk should be perfectly safe and consistent, even at the price of slower performance.
 
 ## How to achieve it
 
