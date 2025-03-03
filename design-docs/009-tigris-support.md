@@ -37,7 +37,7 @@ By default Icechunk should be perfectly safe and consistent, even at the price o
   * All writes and reads use the `X-Tigris-Regions` header set to the initialized region.
   * All reads use the `Cache-Control:no-cache` header.
   * This will make Icechunk safe, but it will direct all writes and reads to a single region, which may cause performance degradation.
-  
+
 * Setting a `Storage` configuration variable to "`unsafe_read_from_local_region: True`":
   * Region is ignored if passed
   * No `X-Tigris-Regions` header is passed.
