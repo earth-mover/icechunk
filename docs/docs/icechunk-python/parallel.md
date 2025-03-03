@@ -16,20 +16,20 @@ including those executed remotely in a multi-processing or any other remote exec
 Here is how you can execute such writes with Icechunk, illustrate with a `ThreadPoolExecutor`.
 First read some example data, and create an Icechunk Repository.
 
-```python
+```python exec="on" session="parallel" source="material-block"
 import xarray as xr
 import tempfile
 from icechunk import Repository, local_filesystem_storage
 
 ds = xr.tutorial.open_dataset("rasm").isel(time=slice(24))
-repo = Repository.create(local_filesystem_storage(tempfile.mkdtemp()))
+repo = Repository.create(local_filesystem_storage(tempfile.TemporaryDirectory().name))
 session = repo.writable_session("main")
 ```
 
 We will orchestrate so that each task writes one timestep.
 This is an arbitrary choice but determines what we set for the Zarr chunk size.
 
-```python
+```python exec="on" session="parallel" source="material-block" result="code"
 chunks = {1 if dim == "time" else ds.sizes[dim] for dim in ds.Tair.dims}
 ```
 
@@ -37,17 +37,17 @@ Initialize the dataset using [`Dataset.to_zarr`](https://docs.xarray.dev/en/stab
 and `compute=False`, this will NOT write any chunked array data, but will write all array metadata, and any
 in-memory arrays (only `time` in this case).
 
-```python
+```python exec="on" session="parallel" source="material-block"
 ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w")
 # this commit is optional, but may be useful in your workflow
-session.commit("initialize store")
+print(session.commit("initialize store"))
 ```
 
 ## Multi-threading
 
 First define a function that constitutes one "write task".
 
-```python
+```python exec="on" session="parallel" source="material-block"
 from icechunk import Session
 
 def write_timestamp(*, itime: int, session: Session) -> None:
@@ -59,9 +59,9 @@ def write_timestamp(*, itime: int, session: Session) -> None:
 
 Now execute the writes.
 
+<!-- ```python exec="on" session="parallel" source="material-block" result="code" -->
 ```python
 from concurrent.futures import ThreadPoolExecutor, wait
-from icechunk.distributed import merge_sessions
 
 session = repo.writable_session("main")
 with ThreadPoolExecutor() as executor:
@@ -69,12 +69,12 @@ with ThreadPoolExecutor() as executor:
     futures = [executor.submit(write_timestamp, itime=i, session=session) for i in range(ds.sizes["time"])]
     wait(futures)
 
-session.commit("finished writes")
+print(session.commit("finished writes"))
 ```
 
 Verify that the writes worked as expected:
 
-```python
+```python exec="on" session="parallel" source="material-block" result="code"
 ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
 xr.testing.assert_identical(ds, ondisk)
 ```
@@ -134,7 +134,7 @@ with ProcessPoolExecutor() as executor:
 
 # manually merge the remote sessions in to the local session
 session = merge_sessions(session, *sessions)
-session.commit("finished writes")
+print(session.commit("finished writes"))
 ```
 
 Verify that the writes worked as expected:
