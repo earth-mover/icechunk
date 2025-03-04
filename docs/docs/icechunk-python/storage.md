@@ -12,11 +12,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.s3_storage)
 
     ```python
-    icechunk.s3_storage(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1",
-        from_env=True
-    )
+    icechunk.s3_storage(bucket="icechunk-test", prefix="quickstart-demo-1", from_env=True)
     ```
 
 === "Provide credentials"
@@ -27,11 +23,11 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     icechunk.s3_storage(
         bucket="icechunk-test",
         prefix="quickstart-demo-1",
-        region='us-east-1',
-        access_key_id='my-access-key',
-        secret_access_key='my-secret-key',
+        region="us-east-1",
+        access_key_id="my-access-key",
+        secret_access_key="my-secret-key",
         # session token is optional
-        session_token='my-token',
+        session_token="my-token",
         endpoint_url=None,  # if using a custom endpoint
         allow_http=False,  # allow http connections (default is False)
     )
@@ -46,7 +42,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     icechunk.s3_storage(
         bucket="icechunk-test",
         prefix="quickstart-demo-1",
-        region='us-east-1,
+        region="us-east-1",
         anonymous=True,
     )
     ```
@@ -61,14 +57,15 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
         # along with an optional expiration time which will trigger this callback to run again
         return icechunk.S3StaticCredentials(
             access_key_id="xyz",
-            secret_access_key="abc",å
-            expires_after=datetime.now(UTC) + timedelta(days=1)
+            secret_access_key="abc",
+            expires_after=datetime.now(UTC) + timedelta(days=1),
         )
+
 
     icechunk.s3_storage(
         bucket="icechunk-test",
         prefix="quickstart-demo-1",
-        region='us-east-1',
+        region="us-east-1",
         get_credentials=get_credentials,
     )
     ```
@@ -76,18 +73,20 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 #### Tigris
 
 [Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
+
 ```python
 icechunk.tigris_storage(
     bucket="icechunk-test",
     prefix="quickstart-demo-1",
-    access_key_id='my-access-key',
-    secret_access_key='my-secret-key',
+    access_key_id="my-access-key",
+    secret_access_key="my-secret-key",
 )
 ```
 
 There are a few things to be aware of when using Tigris:
+
 - Tigris is a globally distributed object store by default. The caveat is that Tigris does not currently support the full consistency guarantees when the store is distributed across multiple regions. For now, to get all the consistency guarantees Icechunk offers, you will need to setup your Tigris bucket as restricted to a single region. This can be done by setting the region in the Tigris bucket settings:
-![tigris bucket settings](../assets/storage/tigris-region-set.png)
+    ![tigris bucket settings](../assets/storage/tigris-region-set.png)
 
 #### Minio
 
@@ -100,18 +99,19 @@ secret key `minio123` we can create a storage configuration as follows:
 icechunk.s3_storage(
     bucket="icechunk-test",
     prefix="quickstart-demo-1",
-    region='us-east-1',
-    access_key_id='minio',
-    secret_access_key='minio123',
-    endpoint_url='http://localhost:9000',
+    region="us-east-1",
+    access_key_id="minio",
+    secret_access_key="minio123",
+    endpoint_url="http://localhost:9000",
     allow_http=True,
+)
 ```
 
 A few things to note:
 
 1. The `endpoint_url` parameter is set to the URL of the Minio server.
-2. If the Minio server is running over HTTP and not HTTPS, the `allow_http` parameter must be set to `True`.
-3. Even though this is running on a local server, the `region` parameter must still be set to a valid region. [By default use `us-east-1`](https://github.com/minio/minio/discussions/15063).
+1. If the Minio server is running over HTTP and not HTTPS, the `allow_http` parameter must be set to `True`.
+1. Even though this is running on a local server, the `region` parameter must still be set to a valid region. [By default use `us-east-1`](https://github.com/minio/minio/discussions/15063).
 
 ### Google Cloud Storage
 
@@ -119,14 +119,10 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "From environment"
 
-    With this option, the credentials for connecting to GCS are detected automatically from your environment.  [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, the credentials for connecting to GCS are detected automatically from your environment. [See the API](./reference.md#icechunk.gcs_storage)
 
     ```python
-    icechunk.gcs_storage(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1",
-        from_env=True
-    )
+    icechunk.gcs_storage(bucket="icechunk-test", prefix="quickstart-demo-1", from_env=True)
     ```
 
 === "Service Account File"
@@ -137,7 +133,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
     icechunk.gcs_storage(
         bucket="icechunk-test",
         prefix="quickstart-demo-1",
-        service_account_file="/path/to/service-account.json"
+        service_account_file="/path/to/service-account.json",
     )
     ```
 
@@ -154,22 +150,24 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
             "project_id": "my-project",
             "private_key_id": "my-private-key-id",
             "private_key": "-----BEGIN PRIVATE KEY-----\nmy-private-key\n-----END PRIVATE KEY-----\n",
-            "client_email": "
-            },
+            "client_email": "my-email",
+        },
     )
     ```
 
 === "Application Default Credentials"
 
-        With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
+    ````
+    With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
 
-        ```python
-        icechunk.gcs_storage(
-            bucket="icechunk-test",
-            prefix="quickstart-demo-1",
-            application_credentials="/path/to/application-credentials.json"
-        )
-        ```
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        application_credentials="/path/to/application-credentials.json"
+    )
+    ```
+    ````
 
 === "Bearer Token"
 
@@ -177,9 +175,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
     ```python
     icechunk.gcs_storage(
-        bucket="icechunk-test",
-        prefix="quickstart-demo-1",
-        bearer_token="my-bearer-token"
+        bucket="icechunk-test", prefix="quickstart-demo-1", bearer_token="my-bearer-token"
     )
     ```
 
@@ -191,7 +187,10 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
     def get_credentials() -> GcsBearerCredential:
         # In practice, you would use a function that actually fetches the credentials and returns them
         # along with an optional expiration time which will trigger this callback to run again
-        return icechunk.GcsBearerCredential(bearer="my-bearer-token", expires_after=datetime.now(UTC) + timedelta(days=1))
+        return icechunk.GcsBearerCredential(
+            bearer="my-bearer-token", expires_after=datetime.now(UTC) + timedelta(days=1)
+        )
+
 
     icechunk.gcs_storage(
         bucket="icechunk-test",
@@ -219,7 +218,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
         account="my-account-name",
         container="icechunk-test",
         prefix="quickstart-demo-1",
-        from_env=True
+        from_env=True,
     )
     ```
 
@@ -229,10 +228,10 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
     ```python
     icechunk.azure_storage(
-        account_name='my-account-name',
+        account_name="my-account-name",
         container="icechunk-test",
         prefix="quickstart-demo-1",
-        account_key='my-account-key',
+        account_key="my-account-key",
         access_token=None,  # optional
         sas_token=None,  # optional
         bearer_token=None,  # optional
