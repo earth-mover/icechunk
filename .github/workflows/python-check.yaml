@@ -65,7 +65,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall
+          pip install icechunk['test'] --find-links dist --force-reinstall --pre
           mypy python
 
       - name: pre-commit lint

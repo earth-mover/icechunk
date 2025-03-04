@@ -1,5 +1,19 @@
 # Changelog
 
+### Python Icechunk Library 1.0.0-rc.1
+
+This is Icechunk's first 1.0 release candidate. This release is backwards compatible with
+repositories created using any Icechunk version in the 0.2.X series.
+
+### Features
+
+- Result of garbage collection informs how many bytes were freed from storage.
+- Executable Python documentation.
+
+### Fixes
+
+- Support for `allow_pickling` in nested contexts.
+
 ### Python Icechunk Library 0.2.4
 
 ### Fixes
