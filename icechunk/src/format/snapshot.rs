@@ -37,6 +37,9 @@ impl DimensionShape {
 pub struct ArrayShape(Vec<DimensionShape>);
 
 impl ArrayShape {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
     pub fn new<I>(it: I) -> Option<Self>
     where
         I: IntoIterator<Item = (u64, u64)>,
