@@ -1,6 +1,6 @@
 # Changelog
 
-### Python Icechunk Library 1.0.0-rc.1
+### Python Icechunk Library 0.2.5
 
 This is Icechunk's first 1.0 release candidate. This release is backwards compatible with
 repositories created using any Icechunk version in the 0.2.X series.
