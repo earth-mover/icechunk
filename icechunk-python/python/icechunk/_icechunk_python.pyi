@@ -890,6 +890,12 @@ class Diff:
 class GCSummary:
     """Summarizes the results of a garbage collection operation on an icechunk repo"""
     @property
+    def bytes_deleted(self) -> int:
+        """
+        How many bytes were deleted.
+        """
+        ...
+    @property
     def chunks_deleted(self) -> int:
         """
         How many chunks were deleted.

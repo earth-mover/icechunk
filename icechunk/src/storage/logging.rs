@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
 
 use super::{
-    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, Storage, StorageError,
-    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult,
+    DeleteObjectsResult, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
+    Storage, StorageError, StorageResult, UpdateConfigResult, VersionInfo,
+    WriteRefResult,
 };
 use crate::{
     format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
@@ -204,13 +205,12 @@ impl Storage for LoggingStorage {
         self.backend.list_objects(settings, prefix).await
     }
 
-    async fn delete_objects(
+    async fn delete_batch(
         &self,
-        settings: &Settings,
         prefix: &str,
-        ids: BoxStream<'_, String>,
-    ) -> StorageResult<usize> {
-        self.backend.delete_objects(settings, prefix, ids).await
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.backend.delete_batch(prefix, batch).await
     }
 
     async fn get_snapshot_last_modified(

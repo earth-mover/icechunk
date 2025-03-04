@@ -317,26 +317,44 @@ impl PyDiff {
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct PyGCSummary {
     #[pyo3(get)]
-    pub chunks_deleted: usize,
+    pub bytes_deleted: u64,
     #[pyo3(get)]
-    pub manifests_deleted: usize,
+    pub chunks_deleted: u64,
     #[pyo3(get)]
-    pub snapshots_deleted: usize,
+    pub manifests_deleted: u64,
     #[pyo3(get)]
-    pub attributes_deleted: usize,
+    pub snapshots_deleted: u64,
     #[pyo3(get)]
-    pub transaction_logs_deleted: usize,
+    pub attributes_deleted: u64,
+    #[pyo3(get)]
+    pub transaction_logs_deleted: u64,
 }
 
 impl From<GCSummary> for PyGCSummary {
     fn from(value: GCSummary) -> Self {
         Self {
+            bytes_deleted: value.bytes_deleted,
             chunks_deleted: value.chunks_deleted,
             manifests_deleted: value.manifests_deleted,
             snapshots_deleted: value.snapshots_deleted,
             attributes_deleted: value.attributes_deleted,
             transaction_logs_deleted: value.transaction_logs_deleted,
         }
+    }
+}
+
+#[pymethods]
+impl PyGCSummary {
+    pub fn __repr__(&self) -> String {
+        format!(
+            r#"GCSummary(bytes_deleted={bytes}, chunks_deleted={chunks}, manifests_deleted={manifests}, snapshots_deleted={snapshots}, attributes_deleted={atts}, transaction_logs_deleted={txs})"#,
+            bytes = self.bytes_deleted,
+            chunks = self.chunks_deleted,
+            manifests = self.manifests_deleted,
+            snapshots = self.snapshots_deleted,
+            atts = self.attributes_deleted,
+            txs = self.transaction_logs_deleted,
+        )
     }
 }
 

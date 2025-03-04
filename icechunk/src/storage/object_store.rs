@@ -33,10 +33,7 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path as StdPath, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 use tokio::{
     io::AsyncRead,
@@ -46,10 +43,10 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    ConcurrencySettings, ETag, FetchConfigResult, Generation, GetRefResult, ListInfo,
-    Reader, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
-    UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX, CONFIG_PATH,
-    MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    ConcurrencySettings, DeleteObjectsResult, ETag, FetchConfigResult, Generation,
+    GetRefResult, ListInfo, Reader, Settings, Storage, StorageError, StorageErrorKind,
+    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX,
+    CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,17 +208,6 @@ impl ObjectStorage {
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
         // ObjectPath knows how to deal with empty path parts: bar//foo
         ObjectPath::from(format!("{}/{}/{}", self.backend.prefix(), REF_PREFIX, ref_key))
-    }
-
-    async fn delete_batch(
-        &self,
-        prefix: &str,
-        batch: Vec<String>,
-    ) -> StorageResult<usize> {
-        let keys = batch.iter().map(|id| Ok(self.get_path_str(prefix, id)));
-        let results = self.get_client().await.delete_stream(stream::iter(keys).boxed());
-        // FIXME: flag errors instead of skipping them
-        Ok(results.filter(|res| ready(res.is_ok())).count().await)
     }
 
     async fn get_object_reader(
@@ -559,26 +545,33 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
-    #[instrument(skip(self, _settings, ids))]
-    async fn delete_objects(
+    async fn delete_batch(
         &self,
-        _settings: &Settings,
         prefix: &str,
-        ids: BoxStream<'_, String>,
-    ) -> StorageResult<usize> {
-        let deleted = AtomicUsize::new(0);
-        ids.chunks(1_000)
-            // FIXME: configurable concurrency
-            .for_each_concurrent(10, |batch| {
-                let deleted = &deleted;
-                async move {
-                    // FIXME: handle error instead of skipping
-                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
-                    deleted.fetch_add(new_deletes, Ordering::Release);
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let mut sizes = HashMap::new();
+        let mut ids = Vec::new();
+        for (id, size) in batch {
+            let path = self.get_path_str(prefix, id.as_str());
+            ids.push(Ok(path.clone()));
+            sizes.insert(path, size);
+        }
+        let results = self.get_client().await.delete_stream(stream::iter(ids).boxed());
+        // FIXME: flag errors instead of skipping them
+        let res = results
+            .fold(DeleteObjectsResult::default(), |mut res, delete_result| {
+                if let Ok(deleted_path) = delete_result {
+                    if let Some(size) = sizes.get(&deleted_path) {
+                        res.deleted_objects += 1;
+                        res.deleted_bytes += *size;
+                    }
                 }
+                ready(res)
             })
             .await;
-        Ok(deleted.into_inner())
+        Ok(res)
+        //Ok(results.filter(|res| ready(res.is_ok())).count().await)
     }
 
     #[instrument(skip(self, _settings))]
@@ -1015,7 +1008,8 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
 fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
     let created_at = object.last_modified;
     let id = object.location.filename()?.to_string();
-    Some(ListInfo { id, created_at })
+    let size_bytes = object.size as u64;
+    Some(ListInfo { id, created_at, size_bytes })
 }
 
 #[cfg(test)]

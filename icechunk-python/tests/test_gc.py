@@ -103,7 +103,17 @@ def test_expire_and_gc() -> None:
     # empty array + 20 old versions
     assert len(expired_snapshots) == 21
 
+    space_before = 0
+    for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
+        space_before += obj["Size"]
+
     gc_result = repo.garbage_collect(old)
+
+    space_after = 0
+    for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
+        space_after += obj["Size"]
+
+    assert space_before - gc_result.bytes_deleted == space_after
     # there were 21 chunks, and we need 3 alive (for indexes 0..20 and 999)
     assert gc_result.chunks_deleted == 18
     # there were 23 snapshots, we need the initial one and the latest version only
