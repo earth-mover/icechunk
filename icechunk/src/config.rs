@@ -9,9 +9,11 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use object_store::gcp::GcpCredential;
+use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    format::{manifest::ManifestShards, Path},
     storage,
     virtual_chunks::{ContainerName, VirtualChunkContainer, mk_default_containers},
 };
@@ -128,6 +130,66 @@ impl CachingConfig {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Hash, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestShardCondition {
+    Or(Vec<ManifestShardCondition>),
+    And(Vec<ManifestShardCondition>),
+    PathMatches { regex: String },
+    NameMatches { regex: String },
+}
+
+impl ManifestShardCondition {
+    // from_yaml?
+    pub fn matches(&self, path: &Path) -> bool {
+        match self {
+            ManifestShardCondition::Or(vec) => vec.iter().any(|c| c.matches(path)),
+            ManifestShardCondition::And(vec) => vec.iter().all(|c| c.matches(path)),
+            // TODO: precompile the regex
+            ManifestShardCondition::PathMatches { regex } => Regex::new(regex)
+                .map(|regex| regex.is_match(path.to_string().as_bytes()))
+                .unwrap_or(false),
+            // TODO: precompile the regex
+            ManifestShardCondition::NameMatches { regex } => Regex::new(regex)
+                .map(|regex| {
+                    path.name()
+                        .map(|name| regex.is_match(name.as_bytes()))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+        }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub enum ShardDim {
+    Axis(u32),
+    DimensionName(String),
+    Any,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct ManifestShardingConfig {
+    shard_sizes: HashMap<ManifestShardCondition, HashMap<ShardDim, usize>>,
+}
+
+impl ManifestShardingConfig {
+    fn default() -> Self {
+        let mut new = HashMap::new();
+        let mut inner = HashMap::new();
+        inner.insert(ShardDim::Any, usize::MAX);
+        new.insert(
+            ManifestShardCondition::PathMatches { regex: r#"*"#.to_string() },
+            inner,
+        );
+        Self { shard_sizes: new }
+    }
+
+    fn manifest_shards(&self) -> ManifestShards {
+        todo!()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestPreloadCondition {
@@ -206,18 +268,31 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     pub preload: Option<ManifestPreloadConfig>,
+    pub sharding: Option<ManifestShardingConfig>,
 }
 
 static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
+static DEFAULT_MANIFEST_SHARDING_CONFIG: OnceLock<ManifestShardingConfig> =
+    OnceLock::new();
 
 impl ManifestConfig {
     pub fn merge(&self, other: Self) -> Self {
-        Self { preload: other.preload.or(self.preload.clone()) }
+        Self {
+            preload: other.preload.or(self.preload.clone()),
+            // FIXME: why prioritize one over the other?
+            sharding: other.sharding.or(self.sharding.clone()),
+        }
     }
 
     pub fn preload(&self) -> &ManifestPreloadConfig {
         self.preload.as_ref().unwrap_or_else(|| {
             DEFAULT_MANIFEST_PRELOAD_CONFIG.get_or_init(ManifestPreloadConfig::default)
+        })
+    }
+
+    pub fn sharding(&self) -> &ManifestShardingConfig {
+        self.sharding.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_SHARDING_CONFIG.get_or_init(ManifestShardingConfig::default)
         })
     }
 }
