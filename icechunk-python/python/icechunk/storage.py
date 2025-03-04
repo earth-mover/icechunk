@@ -70,6 +70,7 @@ def s3_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    force_path_style: bool | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -99,6 +100,8 @@ def s3_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    force_path_style: bool | None
+        Whether to force using path-style addressing for buckets
     """
 
     credentials = s3_credentials(
@@ -110,7 +113,12 @@ def s3_storage(
         from_env=from_env,
         get_credentials=get_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return Storage.new_s3(
         config=options,
         bucket=bucket,

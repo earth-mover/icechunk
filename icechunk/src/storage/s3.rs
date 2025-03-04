@@ -119,7 +119,9 @@ pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client
 
     let mut s3_builder = Builder::from(&aws_config.load().await);
 
-    if config.allow_http {
+    if config.force_path_style.is_some_and(|x| x)
+        || (config.force_path_style.is_none() && config.allow_http)
+    {
         s3_builder = s3_builder.force_path_style(true);
     }
 
@@ -774,6 +776,7 @@ mod tests {
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: None,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -794,7 +797,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
@@ -809,6 +812,7 @@ mod tests {
                 endpoint_url: None,
                 allow_http: true,
                 anonymous: false,
+                force_path_style: None,
             },
             "bucket".to_string(),
             Some("prefix".to_string()),

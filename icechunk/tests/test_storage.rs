@@ -32,6 +32,7 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: None,
         },
         "testbucket".to_string(),
         Some(prefix.to_string()),
@@ -66,6 +67,7 @@ async fn mk_s3_object_store_storage(
                 endpoint_url: Some("http://localhost:9000".to_string()),
                 allow_http: true,
                 anonymous: false,
+                force_path_style: None,
             }),
         )
         .await?,

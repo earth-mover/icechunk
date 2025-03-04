@@ -351,19 +351,22 @@ pub struct PyS3Options {
     pub allow_http: bool,
     #[pyo3(get, set)]
     pub anonymous: bool,
+    #[pyo3(get, set)]
+    pub force_path_style: Option<bool>,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=None))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
         allow_http: bool,
         anonymous: bool,
+        force_path_style: Option<bool>,
     ) -> Self {
-        Self { region, endpoint_url, allow_http, anonymous }
+        Self { region, endpoint_url, allow_http, anonymous, force_path_style }
     }
 
     pub fn __repr__(&self) -> String {
@@ -374,6 +377,7 @@ impl PyS3Options {
             url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
+            // force_path_style = format_option(self.force_path_style),
         )
     }
 }
@@ -385,6 +389,7 @@ impl From<&PyS3Options> for S3Options {
             endpoint_url: options.endpoint_url.clone(),
             allow_http: options.allow_http,
             anonymous: options.anonymous,
+            force_path_style: options.force_path_style,
         }
     }
 }
@@ -396,6 +401,7 @@ impl From<S3Options> for PyS3Options {
             endpoint_url: value.endpoint_url,
             allow_http: value.allow_http,
             anonymous: value.anonymous,
+            force_path_style: value.force_path_style,
         }
     }
 }

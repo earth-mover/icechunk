@@ -43,6 +43,7 @@ mod tests {
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: None,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "minio123".into(),
@@ -119,6 +120,7 @@ mod tests {
                     endpoint_url: None,
                     anonymous: true,
                     allow_http: false,
+                    force_path_style: None,
                 }),
             },
         ];
@@ -144,6 +146,7 @@ mod tests {
                 endpoint_url: Some("http://localhost:9000".to_string()),
                 anonymous: false,
                 allow_http: true,
+                force_path_style: None,
             }),
         }];
 
@@ -577,6 +580,7 @@ mod tests {
                     endpoint_url: Some("http://localhost:9000".to_string()),
                     anonymous: false,
                     allow_http: true,
+                    force_path_style: None,
                 }),
             },
             VirtualChunkContainer {
@@ -592,6 +596,7 @@ mod tests {
                     endpoint_url: None,
                     anonymous: true,
                     allow_http: false,
+                    force_path_style: None,
                 }),
             },
         ];
