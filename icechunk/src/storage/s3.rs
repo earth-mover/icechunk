@@ -117,12 +117,8 @@ pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client
         }
     }
 
-    let mut s3_builder = Builder::from(&aws_config.load().await);
-
-    if config.force_path_style.unwrap_or_else(|| config.allow_http) {
-        s3_builder = s3_builder.force_path_style(true);
-    }
-
+    let s3_builder =
+        Builder::from(&aws_config.load().await).force_path_style(config.force_path_style);
     let config = s3_builder.build();
 
     Client::from_conf(config)
@@ -774,7 +770,7 @@ mod tests {
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
-            force_path_style: None,
+            force_path_style: false,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -795,7 +791,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
@@ -810,7 +806,7 @@ mod tests {
                 endpoint_url: None,
                 allow_http: true,
                 anonymous: false,
-                force_path_style: None,
+                force_path_style: false,
             },
             "bucket".to_string(),
             Some("prefix".to_string()),

@@ -352,19 +352,19 @@ pub struct PyS3Options {
     #[pyo3(get, set)]
     pub anonymous: bool,
     #[pyo3(get, set)]
-    pub force_path_style: Option<bool>,
+    pub force_path_style: bool,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=None))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
         allow_http: bool,
         anonymous: bool,
-        force_path_style: Option<bool>,
+        force_path_style: bool,
     ) -> Self {
         Self { region, endpoint_url, allow_http, anonymous, force_path_style }
     }
@@ -377,8 +377,7 @@ impl PyS3Options {
             url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
-            force_path_style =
-                format_option(self.force_path_style.map(|x| x.to_string())),
+            force_path_style = format_bool(self.force_path_style),
         )
     }
 }

@@ -12,7 +12,7 @@ class S3Options:
         endpoint_url: str | None = None,
         allow_http: bool = False,
         anonymous: bool = False,
-        force_path_style: bool | None = None,
+        force_path_style: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object

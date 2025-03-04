@@ -22,7 +22,7 @@ pub struct S3Options {
     pub endpoint_url: Option<String>,
     pub anonymous: bool,
     pub allow_http: bool,
-    pub force_path_style: Option<bool>,
+    pub force_path_style: bool,
 }
 
 impl fmt::Display for S3Options {
@@ -34,7 +34,7 @@ impl fmt::Display for S3Options {
             self.endpoint_url.as_deref().unwrap_or("None"),
             self.anonymous,
             self.allow_http,
-            self.force_path_style.map(|x| x.to_string()).as_deref().unwrap_or("None"),
+            self.force_path_style,
         )
     }
 }
