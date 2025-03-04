@@ -88,6 +88,8 @@ pub enum RepositoryErrorKind {
     ConcurrencyError(#[from] JoinError),
     #[error("main branch cannot be deleted")]
     CannotDeleteMain,
+    #[error("the storage used by this Icechunk repository is read-only: {0}")]
+    ReadonlyStorage(String),
 }
 
 pub type RepositoryError = ICError<RepositoryErrorKind>;
@@ -685,6 +687,12 @@ impl Repository {
 
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot create writable_session".to_string(),
+            )
+            .into());
+        }
         let ref_data =
             fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
                 .await?;
