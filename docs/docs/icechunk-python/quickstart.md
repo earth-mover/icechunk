@@ -35,6 +35,7 @@ However, you can also create a repo on your local filesystem.
 
     ```python
     import icechunk
+
     storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -43,6 +44,7 @@ However, you can also create a repo on your local filesystem.
 
     ```python
     import icechunk
+
     storage = icechunk.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = icechunk.Repository.create(storage)
     ```
@@ -51,7 +53,10 @@ However, you can also create a repo on your local filesystem.
 
     ```python
     import icechunk
-    storage = icechunk.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
+
+    storage = icechunk.azure_storage(
+        container="my-container", prefix="my-prefix", from_env=True
+    )
     repo = icechunk.Repository.create(storage)
     ```
 
@@ -60,6 +65,7 @@ However, you can also create a repo on your local filesystem.
     ```python exec="on" session="quickstart" source="material-block"
     import icechunk
     import tempfile
+
     storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
     repo = icechunk.Repository.create(storage)
     ```
@@ -86,8 +92,9 @@ Let's first create a group and an array within it.
 
 ```python exec="on" session="quickstart" source="material-block"
 import zarr
+
 group = zarr.group(store)
-array = group.create("my_array", shape=10, dtype='int32', chunks=(5,))
+array = group.create("my_array", shape=10, dtype="int32", chunks=(5,))
 ```
 
 Now let's write some data
@@ -159,7 +166,7 @@ array = group["my_array"]
 assert array[0] == 1
 ```
 
----
+______________________________________________________________________
 
 That's it! You now know how to use Icechunk!
 For your next step, dig deeper into [configuration](./configuration.md),

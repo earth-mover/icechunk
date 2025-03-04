@@ -96,7 +96,9 @@ config.set_virtual_chunk_container(
         name="my-other-s3-bucket",
         url_prefix="s3://my-other-s3-bucket/",
         storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", region="us-west-2"),
+            storage=icechunk.s3_storage(
+                bucket="my-other-s3-bucket", region="us-west-2"
+            ),
         ),
     ),
 )
@@ -120,7 +122,9 @@ For example, if we have a repo which contains data that we plan to open as an [`
 config.manifest = icechunk.ManifestConfig(
     preload=icechunk.ManifestPreloadConfig(
         max_total_refs=1e8,
-        preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
+        preload_if=icechunk.ManifestPreloadCondition.name_matches(
+            ".*time|.*latitude|.*longitude"
+        ),
     ),
 )
 ```
@@ -141,9 +145,9 @@ If no config is provided, the repo will be created with the [default configurati
 
     ```python
     storage = icechunk.s3_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        region='us-east-1',
+        bucket="earthmover-sample-data",
+        prefix="icechunk/oisst.2020-2024/",
+        region="us-east-1",
         from_env=True,
     )
 
@@ -157,8 +161,8 @@ If no config is provided, the repo will be created with the [default configurati
 
     ```python
     storage = icechunk.gcs_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
+        bucket="earthmover-sample-data",
+        prefix="icechunk/oisst.2020-2024/",
         from_env=True,
     )
 
@@ -172,8 +176,8 @@ If no config is provided, the repo will be created with the [default configurati
 
     ```python
     storage = icechunk.azure_storage(
-        container='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
+        container="earthmover-sample-data",
+        prefix="icechunk/oisst.2020-2024/",
         from_env=True,
     )
 
@@ -187,8 +191,7 @@ If no config is provided, the repo will be created with the [default configurati
 
     ```python
     repo = icechunk.Repository.create(
-        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
-        config=config
+        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"), config=config
     )
     ```
 
@@ -202,9 +205,9 @@ However, if a config was specified when opening the repo AND a config was previo
 
     ```python
     storage = icechunk.s3_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
-        region='us-east-1',
+        bucket="earthmover-sample-data",
+        prefix="icechunk/oisst.2020-2024/",
+        region="us-east-1",
         from_env=True,
     )
 
@@ -218,8 +221,8 @@ However, if a config was specified when opening the repo AND a config was previo
 
     ```python
     storage = icechunk.gcs_storage(
-        bucket='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
+        bucket="earthmover-sample-data",
+        prefix="icechunk/oisst.2020-2024/",
         from_env=True,
     )
 
@@ -233,8 +236,8 @@ However, if a config was specified when opening the repo AND a config was previo
 
     ```python
     storage = icechunk.azure_storage(
-        container='earthmover-sample-data',
-        prefix='icechunk/oisst.2020-2024/',
+        container="earthmover-sample-data",
+        prefix="icechunk/oisst.2020-2024/",
         from_env=True,
     )
 
@@ -275,7 +278,9 @@ Expanding on the example from the [Virtual Chunk Containers](#virtual-chunk-cont
 ```python
 credentials = icechunk.containers_credentials(
     my_s3_bucket=icechunk.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
-    my_other_s3_bucket=icechunk.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+    my_other_s3_bucket=icechunk.s3_credentials(
+        bucket="my-other-s3-bucket", region="us-west-2"
+    ),
 )
 
 repo = icechunk.Repository.open(

@@ -35,5 +35,11 @@ repos:
         language: system
         pass_filenames: false
         files: "icechunk/"
-
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.19
+    hooks:
+      - id: mdformat
+        additional_dependencies:
+          - mdformat-mkdocs
+          - mdformat-ruff
 exclude: 'tests/data/.*'

@@ -38,7 +38,9 @@ and `compute=False`, this will NOT write any chunked array data, but will write 
 in-memory arrays (only `time` in this case).
 
 ```python exec="on" session="parallel" source="material-block"
-ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w")
+ds.to_zarr(
+    session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w"
+)
 # this commit is optional, but may be useful in your workflow
 print(session.commit("initialize store"))
 ```
@@ -50,6 +52,7 @@ First define a function that constitutes one "write task".
 ```python exec="on" session="parallel" source="material-block"
 from icechunk import Session
 
+
 def write_timestamp(*, itime: int, session: Session) -> None:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
@@ -60,13 +63,17 @@ def write_timestamp(*, itime: int, session: Session) -> None:
 Now execute the writes.
 
 <!-- ```python exec="on" session="parallel" source="material-block" result="code" -->
+
 ```python
 from concurrent.futures import ThreadPoolExecutor, wait
 
 session = repo.writable_session("main")
 with ThreadPoolExecutor() as executor:
     # submit the writes
-    futures = [executor.submit(write_timestamp, itime=i, session=session) for i in range(ds.sizes["time"])]
+    futures = [
+        executor.submit(write_timestamp, itime=i, session=session)
+        for i in range(ds.sizes["time"])
+    ]
     wait(futures)
 
 print(session.commit("finished writes"))
@@ -94,16 +101,17 @@ Icehunk being a "stateful" store that records changes executed in a write sessio
 There are three key points to keep in mind:
 
 1. The `write_task` function *must* return the `Session`. It contains a record of the changes executed by this task.
-   These changes *must* be manually communicated back to the coordinating process, since each of the distributed processes
-   are working with their own independent `Session` instance.
-2. Icechunk requires that users opt-in to pickling a *writable* `Session` using the `Session.allow_pickling()` context manager,
-   to remind the user that distributed writes with Icechunk require care.
-3. The user *must* manually merge the Session objects to create a meaningful commit.
+    These changes *must* be manually communicated back to the coordinating process, since each of the distributed processes
+    are working with their own independent `Session` instance.
+1. Icechunk requires that users opt-in to pickling a *writable* `Session` using the `Session.allow_pickling()` context manager,
+    to remind the user that distributed writes with Icechunk require care.
+1. The user *must* manually merge the Session objects to create a meaningful commit.
 
 First we modify `write_task` to return the `Session`:
 
 ```python
 from icechunk import Session
+
 
 def write_timestamp(*, itime: int, session: Session) -> Session:
     # pass a list to isel to preserve the time dimension
