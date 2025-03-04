@@ -1405,6 +1405,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
+        eventually_consistent: bool,
         credentials: AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
