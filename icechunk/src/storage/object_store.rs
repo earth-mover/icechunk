@@ -296,6 +296,10 @@ impl private::Sealed for ObjectStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
+    fn can_write(&self) -> bool {
+        true
+    }
+
     #[instrument(skip(self))]
     fn default_settings(&self) -> Settings {
         self.backend.default_settings()

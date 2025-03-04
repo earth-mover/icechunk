@@ -302,6 +302,9 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     fn default_settings(&self) -> Settings {
         Default::default()
     }
+
+    fn can_write(&self) -> bool;
+
     async fn fetch_config(&self, settings: &Settings)
         -> StorageResult<FetchConfigResult>;
     async fn update_config(
@@ -624,6 +627,7 @@ pub fn new_s3_storage(
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
     )?;
     Ok(Arc::new(st))
 }
@@ -645,6 +649,7 @@ pub fn new_tigris_storage(
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
     )?;
     Ok(Arc::new(st))
 }

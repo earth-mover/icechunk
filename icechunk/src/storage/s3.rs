@@ -51,6 +51,7 @@ pub struct S3Storage {
     credentials: S3Credentials,
     bucket: String,
     prefix: String,
+    can_write: bool,
 
     #[serde(skip)]
     /// We need to use OnceCell to allow async initialization, because serde
@@ -134,6 +135,7 @@ impl S3Storage {
         bucket: String,
         prefix: Option<String>,
         credentials: S3Credentials,
+        can_write: bool,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
         Ok(S3Storage {
@@ -142,6 +144,7 @@ impl S3Storage {
             bucket,
             prefix: prefix.unwrap_or_default(),
             credentials,
+            can_write,
         })
     }
 
@@ -290,6 +293,10 @@ impl private::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
+    fn can_write(&self) -> bool {
+        self.can_write
+    }
+
     #[instrument(skip(self, _settings))]
     async fn fetch_config(
         &self,
@@ -791,6 +798,7 @@ mod tests {
             "bucket".to_string(),
             Some("prefix".to_string()),
             credentials,
+            true,
         )
         .unwrap();
 
@@ -798,7 +806,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix"}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
@@ -817,6 +825,7 @@ mod tests {
             "bucket".to_string(),
             Some("prefix".to_string()),
             S3Credentials::FromEnv,
+            true,
         )
         .unwrap();
 

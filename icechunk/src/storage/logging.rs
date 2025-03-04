@@ -53,6 +53,11 @@ impl Storage for LoggingStorage {
     fn default_settings(&self) -> Settings {
         self.backend.default_settings()
     }
+
+    fn can_write(&self) -> bool {
+        self.backend.can_write()
+    }
+
     async fn fetch_config(
         &self,
         settings: &Settings,
