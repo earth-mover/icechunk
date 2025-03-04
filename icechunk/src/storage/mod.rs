@@ -27,10 +27,11 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
+use tracing::instrument;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -94,6 +95,7 @@ pub type StorageResult<A> = Result<A, StorageError>;
 pub struct ListInfo<Id> {
     pub id: Id,
     pub created_at: DateTime<Utc>,
+    pub size_bytes: u64,
 }
 
 const SNAPSHOT_PREFIX: &str = "snapshots/";
@@ -292,6 +294,19 @@ pub enum WriteRefResult {
     WontOverwrite,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeleteObjectsResult {
+    pub deleted_objects: u64,
+    pub deleted_bytes: u64,
+}
+
+impl DeleteObjectsResult {
+    pub fn merge(&mut self, other: &Self) {
+        self.deleted_objects += other.deleted_objects;
+        self.deleted_bytes += other.deleted_bytes;
+    }
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
@@ -394,13 +409,39 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    async fn delete_batch(
+        &self,
+        prefix: &str,
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult>;
+
     /// Delete a stream of objects, by their id string representations
+    /// Input stream includes sizes to get as result the total number of bytes deleted
+    #[instrument(skip(self, _settings, ids))]
     async fn delete_objects(
         &self,
-        settings: &Settings,
+        _settings: &Settings,
         prefix: &str,
-        ids: BoxStream<'_, String>,
-    ) -> StorageResult<usize>;
+        ids: BoxStream<'_, (String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let res = Arc::new(Mutex::new(DeleteObjectsResult::default()));
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let res = Arc::clone(&res);
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes =
+                        self.delete_batch(prefix, batch).await.unwrap_or_default();
+                    #[allow(clippy::expect_used)]
+                    res.lock().expect("Bug in delete objects").merge(&new_deletes);
+                }
+            })
+            .await;
+        #[allow(clippy::expect_used)]
+        let res = res.lock().expect("Bug in delete objects");
+        Ok(res.clone())
+    }
 
     async fn get_snapshot_last_modified(
         &self,
@@ -447,12 +488,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     async fn delete_chunks(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, ChunkId>,
-    ) -> StorageResult<usize> {
+        chunks: BoxStream<'_, (ChunkId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             CHUNK_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -460,12 +501,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     async fn delete_manifests(
         &self,
         settings: &Settings,
-        manifests: BoxStream<'_, ManifestId>,
-    ) -> StorageResult<usize> {
+        manifests: BoxStream<'_, (ManifestId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             MANIFEST_PREFIX,
-            manifests.map(|id| id.to_string()).boxed(),
+            manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -473,12 +514,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     async fn delete_snapshots(
         &self,
         settings: &Settings,
-        snapshots: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
+        snapshots: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             SNAPSHOT_PREFIX,
-            snapshots.map(|id| id.to_string()).boxed(),
+            snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -486,12 +527,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     async fn delete_transaction_logs(
         &self,
         settings: &Settings,
-        transaction_logs: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
+        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             TRANSACTION_PREFIX,
-            transaction_logs.map(|id| id.to_string()).boxed(),
+            transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -500,8 +541,9 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         refs: BoxStream<'_, String>,
-    ) -> StorageResult<usize> {
-        self.delete_objects(settings, REF_PREFIX, refs).await
+    ) -> StorageResult<u64> {
+        let refs = refs.map(|s| (s, 0)).boxed();
+        Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
     }
 
     async fn get_object_range_buf(
@@ -567,7 +609,7 @@ where
 {
     let id = Id::try_from(item.id.as_str()).ok()?;
     let created_at = item.created_at;
-    Some(ListInfo { created_at, id })
+    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
 }
 
 fn translate_list_infos<'a, Id>(

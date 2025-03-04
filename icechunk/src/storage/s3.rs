@@ -1,12 +1,10 @@
 use std::{
+    collections::HashMap,
     fmt,
     future::ready,
     ops::Range,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use crate::{
@@ -39,9 +37,10 @@ use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::instrument;
 
 use super::{
-    FetchConfigResult, GetRefResult, ListInfo, Reader, Settings, StorageErrorKind,
-    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX,
-    CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    DeleteObjectsResult, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
+    StorageErrorKind, StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult,
+    CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
+    TRANSACTION_PREFIX,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -241,38 +240,6 @@ impl S3Storage {
         }
         b.body(bytes.into()).send().await?;
         Ok(())
-    }
-
-    async fn delete_batch(
-        &self,
-        prefix: &str,
-        batch: Vec<String>,
-    ) -> StorageResult<usize> {
-        let keys = batch
-            .iter()
-            // FIXME: flag errors instead of skipping them
-            .filter_map(|id| {
-                let key = self.get_path_str(prefix, id).ok()?;
-                let ident = ObjectIdentifier::builder().key(key).build().ok()?;
-                Some(ident)
-            })
-            .collect();
-
-        let delete = Delete::builder()
-            .set_objects(Some(keys))
-            .build()
-            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
-
-        let res = self
-            .get_client()
-            .await
-            .delete_objects()
-            .bucket(self.bucket.clone())
-            .delete(delete)
-            .send()
-            .await?;
-
-        Ok(res.deleted().len())
     }
 
     fn get_ref_name<'a>(&self, key: Option<&'a str>) -> Option<&'a str> {
@@ -648,26 +615,46 @@ impl Storage for S3Storage {
         Ok(stream.boxed())
     }
 
-    #[instrument(skip(self, _settings, ids))]
-    async fn delete_objects(
+    #[instrument(skip(self, batch))]
+    async fn delete_batch(
         &self,
-        _settings: &Settings,
         prefix: &str,
-        ids: BoxStream<'_, String>,
-    ) -> StorageResult<usize> {
-        let deleted = AtomicUsize::new(0);
-        ids.chunks(1_000)
-            // FIXME: configurable concurrency
-            .for_each_concurrent(10, |batch| {
-                let deleted = &deleted;
-                async move {
-                    // FIXME: handle error instead of skipping
-                    let new_deletes = self.delete_batch(prefix, batch).await.unwrap_or(0);
-                    deleted.fetch_add(new_deletes, Ordering::Release);
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let mut sizes = HashMap::new();
+        let mut ids = Vec::new();
+        for (id, size) in batch.into_iter() {
+            if let Ok(key) = self.get_path_str(prefix, id.as_str()) {
+                if let Ok(ident) = ObjectIdentifier::builder().key(key.clone()).build() {
+                    ids.push(ident);
+                    sizes.insert(key, size);
                 }
-            })
-            .await;
-        Ok(deleted.into_inner())
+            }
+        }
+
+        let delete = Delete::builder()
+            .set_objects(Some(ids))
+            .build()
+            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+
+        let res = self
+            .get_client()
+            .await
+            .delete_objects()
+            .bucket(self.bucket.clone())
+            .delete(delete)
+            .send()
+            .await?;
+
+        let mut result = DeleteObjectsResult::default();
+        for deleted in res.deleted() {
+            if let Some(key) = deleted.key() {
+                let size = sizes.get(key).unwrap_or(&0);
+                result.deleted_bytes += *size;
+                result.deleted_objects += 1;
+            }
+        }
+        Ok(result)
     }
 
     #[instrument(skip(self, _settings))]
@@ -729,7 +716,8 @@ fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
     let last_modified = object.last_modified()?;
     let created_at = last_modified.to_chrono_utc().ok()?;
     let id = Path::new(key).file_name().and_then(|s| s.to_str())?.to_string();
-    Some(ListInfo { id, created_at })
+    let size_bytes = object.size.unwrap_or(0) as u64;
+    Some(ListInfo { id, created_at, size_bytes })
 }
 
 #[derive(Debug)]

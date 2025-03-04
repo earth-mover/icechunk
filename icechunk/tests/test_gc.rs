@@ -142,6 +142,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(summary.chunks_deleted, 10);
     assert_eq!(summary.manifests_deleted, 1);
     assert_eq!(summary.snapshots_deleted, 1);
+    assert!(summary.bytes_deleted > summary.chunks_deleted);
 
     // 10 chunks should be drop
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
