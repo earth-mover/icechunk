@@ -18,7 +18,7 @@ import xarray as xr
 
 storage = ic.s3_storage(
     bucket="icechunk-public-data",
-    prefix="v01/era5_weatherbench2",
+    prefix="v1/era5_weatherbench2",
     region="us-east-1",
     anonymous=True,
 )
@@ -47,6 +47,26 @@ ds = xr.open_dataset(
     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
 )
 ```
+
+<!-- === "Cloudflare R2" -->
+
+<!-- ```python -->
+<!-- import icechunk as ic -->
+<!-- import xarray as xr -->
+
+<!-- storage = ic.s3_storage( -->
+<!--     bucket="icechunk-public-data", -->
+<!--     prefix="v1/era5_weatherbench2", -->
+<!--     endpoint_url="foo", -->
+<!--     region="auto", -->
+<!-- ) -->
+
+<!-- repo = ic.Repository.open(storage=storage) -->
+<!-- session = repo.readonly_session("main") -->
+<!-- ds = xr.open_dataset( -->
+<!--     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False -->
+<!-- ) -->
+<!-- ``` -->
 
 <!-- === "Tigris" -->
 

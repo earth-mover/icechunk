@@ -18,16 +18,19 @@ def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
         "s3": "m5.4xlarge",
         "gcs": "n2-standard-16",
         "tigris": "m5.4xlarge",
+        "r2": "m5.4xlarge",
     }
     DEFAULT_REGIONS = {
         "s3": "us-east-1",
         "gcs": "us-east1",
         "tigris": "us-east-1",
+        "r2": "us-west-2",
         "az": "eastus",
     }
     WORKSPACES = {
         "s3": "earthmover-devs",
         "tigris": "earthmover-devs",
+        "r2": "earthmover-devs",
         "gcs": "earthmover-devs-gcp",
         "az": "earthmover-devs-azure",
     }
