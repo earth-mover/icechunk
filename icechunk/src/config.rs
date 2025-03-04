@@ -34,7 +34,7 @@ impl fmt::Display for S3Options {
             self.endpoint_url.as_deref().unwrap_or("None"),
             self.anonymous,
             self.allow_http,
-            self.force_path_style.map(|x| x.to_string()).unwrap_or("None".to_string()),
+            self.force_path_style.map(|x| x.to_string()).as_deref().unwrap_or("None"),
         )
     }
 }

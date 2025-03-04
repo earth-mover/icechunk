@@ -372,12 +372,13 @@ impl PyS3Options {
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon})"#,
+            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style})"#,
             region = format_option(self.region.as_ref()),
             url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
-            // force_path_style = format_option(self.force_path_style),
+            force_path_style =
+                format_option(self.force_path_style.map(|x| x.to_string())),
         )
     }
 }

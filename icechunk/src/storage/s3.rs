@@ -119,9 +119,7 @@ pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client
 
     let mut s3_builder = Builder::from(&aws_config.load().await);
 
-    if config.force_path_style.is_some_and(|x| x)
-        || (config.force_path_style.is_none() && config.allow_http)
-    {
+    if config.force_path_style.unwrap_or_else(|| config.allow_http) {
         s3_builder = s3_builder.force_path_style(true);
     }
 
