@@ -46,9 +46,15 @@ def s3_store(
     allow_http: bool = False,
     anonymous: bool = False,
     s3_compatible: bool = False,
+    force_path_style: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return (
         ObjectStoreConfig.S3Compatible(options)
         if s3_compatible

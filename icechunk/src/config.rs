@@ -22,7 +22,13 @@ pub struct S3Options {
     pub endpoint_url: Option<String>,
     pub anonymous: bool,
     pub allow_http: bool,
+    // field was added in v0.2.6
+    #[serde(default = "default_force_path_style")]
     pub force_path_style: bool,
+}
+
+fn default_force_path_style() -> bool {
+    false
 }
 
 impl fmt::Display for S3Options {
