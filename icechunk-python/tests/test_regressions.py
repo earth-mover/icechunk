@@ -39,6 +39,7 @@ async def test_issue_418() -> None:
         endpoint_url="http://localhost:9000",
         allow_http=True,
         s3_compatible=True,
+        force_path_style=True,
     )
     container = VirtualChunkContainer("s3", "s3://", store_config)
     config.set_virtual_chunk_container(container)

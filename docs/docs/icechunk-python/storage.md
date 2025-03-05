@@ -105,6 +105,7 @@ icechunk.s3_storage(
     secret_access_key='minio123',
     endpoint_url='http://localhost:9000',
     allow_http=True,
+    force_path_style=True,
 ```
 
 A few things to note:

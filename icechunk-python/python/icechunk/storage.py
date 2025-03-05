@@ -146,6 +146,7 @@ def s3_object_store_storage(
     expires_after: datetime | None = None,
     anonymous: bool | None = None,
     from_env: bool | None = None,
+    force_path_style: bool = False,
 ) -> Storage:
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -156,7 +157,12 @@ def s3_object_store_storage(
         from_env=from_env,
         get_credentials=None,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return Storage.new_s3_object_store(
         config=options,
         bucket=bucket,

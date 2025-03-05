@@ -26,6 +26,7 @@ def test_refreshable_credentials_grant_access() -> None:
         region="us-east-1",
         endpoint_url="http://localhost:9000",
         allow_http=True,
+        force_path_style=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
         get_credentials=get_good_credentials,
@@ -34,6 +35,7 @@ def test_refreshable_credentials_grant_access() -> None:
         region="us-east-1",
         endpoint_url="http://localhost:9000",
         allow_http=True,
+        force_path_style=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
         get_credentials=get_bad_credentials,
@@ -68,7 +70,10 @@ def test_refreshable_credentials_errors() -> None:
 
     st = Storage.new_s3(
         config=S3Options(
-            region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            force_path_style=True,
         ),
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
@@ -80,7 +85,10 @@ def test_refreshable_credentials_errors() -> None:
 
     st = Storage.new_s3(
         config=S3Options(
-            region="us-east-1", endpoint_url="http://localhost:9000", allow_http=True
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            force_path_style=True,
         ),
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
@@ -121,6 +129,7 @@ def test_s3_refreshable_credentials_refresh(tmp_path: Path) -> None:
         region="us-east-1",
         endpoint_url="http://localhost:9000",
         allow_http=True,
+        force_path_style=True,
         bucket="testbucket",
         prefix="this-repo-does-not-exist",
         get_credentials=creds_obj,
