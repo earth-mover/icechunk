@@ -25,7 +25,7 @@ async fn mk_storage(
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
-            force_path_style: false,
+            force_path_style: true,
         },
         "testbucket".to_string(),
         Some(prefix.to_string()),
