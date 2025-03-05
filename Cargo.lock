@@ -1641,14 +1641,11 @@ dependencies = [
 name = "icechunk-python"
 version = "0.1.2"
 dependencies = [
- "anyhow",
  "async-stream",
  "async-trait",
  "bytes",
  "chrono",
  "clap",
- "dialoguer",
- "dirs",
  "futures",
  "icechunk",
  "itertools 0.14.0",

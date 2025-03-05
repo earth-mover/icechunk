@@ -39,12 +39,9 @@ typetag = "0.2.19"
 serde = { version = "1.0.217", features = ["derive", "rc"] }
 miette = { version = "7.5.0", features = ["fancy"] }
 clap = { version = "4.5", features = ["derive"], optional = true }
-anyhow = { version = "1.0.95", optional = true }
-dialoguer = { version = "0.11.0", optional = true }
-dirs = { version = "6.0.0", optional = true }
 
 [features]
-cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "icechunk/cli"]
+cli = ["clap", "icechunk/cli"]
 
 [lints]
 workspace = true
