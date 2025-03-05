@@ -70,6 +70,7 @@ def test_pickle() -> None:
             storage=s3_storage(
                 endpoint_url="http://localhost:9000",
                 allow_http=True,
+                force_path_style=True,
                 region="us-east-1",
                 bucket="testbucket",
                 prefix=prefix,

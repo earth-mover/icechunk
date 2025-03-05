@@ -12,6 +12,7 @@ class S3Options:
         endpoint_url: str | None = None,
         allow_http: bool = False,
         anonymous: bool = False,
+        force_path_style: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object
@@ -26,6 +27,8 @@ class S3Options:
             Whether to allow HTTP requests to the storage backend.
         anonymous: bool
             Whether to use anonymous credentials to the storage backend. When `True`, the s3 requests will not be signed.
+        force_path_style: bool
+            Whether to force use of path-style addressing for buckets.
         """
 
 class ObjectStoreConfig:

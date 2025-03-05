@@ -46,9 +46,15 @@ def s3_store(
     allow_http: bool = False,
     anonymous: bool = False,
     s3_compatible: bool = False,
+    force_path_style: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return (
         ObjectStoreConfig.S3Compatible(options)
         if s3_compatible
@@ -70,6 +76,7 @@ def s3_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    force_path_style: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -99,6 +106,8 @@ def s3_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    force_path_style: bool
+        Whether to force using path-style addressing for buckets
     """
 
     credentials = s3_credentials(
@@ -110,7 +119,12 @@ def s3_storage(
         from_env=from_env,
         get_credentials=get_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return Storage.new_s3(
         config=options,
         bucket=bucket,
@@ -132,6 +146,7 @@ def s3_object_store_storage(
     expires_after: datetime | None = None,
     anonymous: bool | None = None,
     from_env: bool | None = None,
+    force_path_style: bool = False,
 ) -> Storage:
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -142,7 +157,12 @@ def s3_object_store_storage(
         from_env=from_env,
         get_credentials=None,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return Storage.new_s3_object_store(
         config=options,
         bucket=bucket,
