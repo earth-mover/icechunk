@@ -28,7 +28,7 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         endpoint_url: Some("http://localhost:9000".to_string()),
         allow_http: true,
         anonymous: false,
-        force_path_style: false,
+        force_path_style: true,
     };
     let credentials = S3Credentials::Static(S3StaticCredentials {
         access_key_id: "minio123".into(),
