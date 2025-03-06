@@ -6,12 +6,8 @@ use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
-use crate::format::snapshot::ZarrArrayMetadata;
+use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
-use crate::metadata::{
-    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DimensionNames, FillValue,
-    StorageTransformer,
-};
 use crate::session::Session;
 use crate::storage::new_in_memory_storage;
 use crate::Repository;
@@ -62,25 +58,10 @@ prop_compose! {
 }
 }
 
-pub fn codecs() -> impl Strategy<Value = Vec<Codec>> {
-    prop_oneof![Just(vec![Codec { name: "mycodec".to_string(), configuration: None }]),]
-}
-
-pub fn storage_transformers() -> impl Strategy<Value = Option<Vec<StorageTransformer>>> {
-    prop_oneof![
-        Just(Some(vec![StorageTransformer {
-            name: "mytransformer".to_string(),
-            configuration: None,
-        }])),
-        Just(None),
-    ]
-}
-
 #[derive(Debug)]
 pub struct ShapeDim {
-    shape: ArrayShape,
-    chunk_shape: ChunkShape,
-    dimension_names: Option<DimensionNames>,
+    pub shape: ArrayShape,
+    pub dimension_names: Option<Vec<DimensionName>>,
 }
 
 pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDim> {
@@ -105,32 +86,37 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
             (Just(shape), chunk_shape, option::of(vec(option::of(any::<String>()), ndim)))
         })
         .prop_map(|(shape, chunk_shape, dimension_names)| ShapeDim {
-            shape,
-            chunk_shape: ChunkShape(chunk_shape),
-            dimension_names,
+            #[allow(clippy::expect_used)]
+            shape: ArrayShape::new(
+                shape.into_iter().zip(chunk_shape.iter().map(|n| n.get())),
+            )
+            .expect("Invalid array shape"),
+            dimension_names: dimension_names.map(|ds| {
+                ds.iter().map(|s| From::from(s.as_ref().map(|s| s.as_str()))).collect()
+            }),
         })
 }
 
-prop_compose! {
-    pub fn zarr_array_metadata()(
-        chunk_key_encoding: ChunkKeyEncoding,
-        fill_value: FillValue,
-        shape_and_dim in shapes_and_dims(None),
-        storage_transformers in storage_transformers(),
-        codecs in codecs(),
-    ) -> ZarrArrayMetadata {
-        ZarrArrayMetadata {
-            shape: shape_and_dim.shape,
-            data_type: fill_value.get_data_type(),
-            chunk_shape: shape_and_dim.chunk_shape,
-            chunk_key_encoding,
-            fill_value,
-            codecs,
-            storage_transformers,
-            dimension_names: shape_and_dim.dimension_names,
-        }
-    }
-}
+//prop_compose! {
+//    pub fn zarr_array_metadata()(
+//        chunk_key_encoding: ChunkKeyEncoding,
+//        fill_value: FillValue,
+//        shape_and_dim in shapes_and_dims(None),
+//        storage_transformers in storage_transformers(),
+//        codecs in codecs(),
+//    ) -> ZarrArrayMetadata {
+//        ZarrArrayMetadata {
+//            shape: shape_and_dim.shape,
+//            data_type: fill_value.get_data_type(),
+//            chunk_shape: shape_and_dim.chunk_shape,
+//            chunk_key_encoding,
+//            fill_value,
+//            codecs,
+//            storage_transformers,
+//            dimension_names: shape_and_dim.dimension_names,
+//        }
+//    }
+//}
 
 prop_compose! {
     pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in proptest::collection::vec(values_in, dim..(dim+1))) -> ChunkIndices {

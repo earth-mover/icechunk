@@ -73,10 +73,6 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     )
     ```
 
-#### AWS Limitations
-
-- Icechunk is currently incompatible with [S3 Express One Zone](https://aws.amazon.com/s3/storage-classes/express-one-zone/). See [this issue](https://github.com/earth-mover/icechunk/issues/667) for more discussion.
-
 #### Tigris
 
 [Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
@@ -109,6 +105,7 @@ icechunk.s3_storage(
     secret_access_key='minio123',
     endpoint_url='http://localhost:9000',
     allow_http=True,
+    force_path_style=True,
 ```
 
 A few things to note:
@@ -174,6 +171,18 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
             application_credentials="/path/to/application-credentials.json"
         )
         ```
+
+=== "Bearer Token"
+
+    With this option, you provide a bearer token to use for the object store. This is useful for short lived workflows where expiration is not relevant or when the bearer token will not expire [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        bearer_token="my-bearer-token"
+    )
+    ```
 
 === "Refreshable Credentials"
 

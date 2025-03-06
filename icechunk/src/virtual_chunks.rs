@@ -71,6 +71,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ),
@@ -100,6 +101,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
                     endpoint_url: Some("https://fly.storage.tigris.dev".to_string()),
                     anonymous: false,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ),
@@ -325,7 +327,7 @@ impl S3Fetcher {
                         )
                     }
                     Some(Checksum::ETag(etag)) => {
-                        b = b.if_match(etag);
+                        b = b.if_match(&etag.0);
                     }
                     None => {}
                 };
@@ -459,7 +461,7 @@ impl ChunkFetcher for LocalFSFetcher {
                     .expect("Bad last modified field in virtual chunk reference");
                 options.if_unmodified_since = Some(d);
             }
-            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.clone()),
+            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.0.clone()),
             None => {}
         }
 

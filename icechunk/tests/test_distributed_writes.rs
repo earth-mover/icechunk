@@ -1,12 +1,11 @@
 #![allow(clippy::unwrap_used)]
 use pretty_assertions::assert_eq;
-use std::{collections::HashMap, num::NonZeroU64, ops::Range, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId},
-    metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
+    format::{snapshot::ArrayShape, ByteRange, ChunkIndices, Path, SnapshotId},
     repository::VersionInfo,
     session::{get_chunk, Session},
     storage::new_s3_storage,
@@ -26,6 +25,7 @@ async fn mk_storage(
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: true,
         },
         "testbucket".to_string(),
         Some(prefix.to_string()),
@@ -124,22 +124,11 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
 
     let mut ds1 = repo1.writable_session("main").await?;
 
-    let zarr_meta = ZarrArrayMetadata {
-        shape: vec![SIZE as u64, SIZE as u64],
-        data_type: DataType::Float64,
-        chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-        ]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Float64(f64::NAN),
-        codecs: vec![],
-        storage_transformers: None,
-        dimension_names: None,
-    };
+    let shape = ArrayShape::new(vec![(SIZE as u64, 1), (SIZE as u64, 1)]).unwrap();
+    let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();
-    ds1.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+    ds1.add_array(new_array_path.clone(), shape, None, user_data).await?;
     ds1.commit("create array", None).await?;
 
     let repo2 = mk_repo(storage2, false).await?;

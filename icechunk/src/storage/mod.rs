@@ -27,10 +27,11 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
+use tracing::instrument;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -94,6 +95,7 @@ pub type StorageResult<A> = Result<A, StorageError>;
 pub struct ListInfo<Id> {
     pub id: Id,
     pub created_at: DateTime<Utc>,
+    pub size_bytes: u64,
 }
 
 const SNAPSHOT_PREFIX: &str = "snapshots/";
@@ -104,7 +106,38 @@ const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
 
-pub type ETag = String;
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
+pub struct ETag(pub String);
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct Generation(pub String);
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct VersionInfo {
+    pub etag: Option<ETag>,
+    pub generation: Option<Generation>,
+}
+
+impl VersionInfo {
+    pub fn for_creation() -> Self {
+        Self { etag: None, generation: None }
+    }
+
+    pub fn from_etag_only(etag: String) -> Self {
+        Self { etag: Some(ETag(etag)), generation: None }
+    }
+
+    pub fn is_create(&self) -> bool {
+        self.etag.is_none() && self.generation.is_none()
+    }
+
+    pub fn etag(&self) -> Option<&String> {
+        self.etag.as_ref().map(|e| &e.0)
+    }
+
+    pub fn generation(&self) -> Option<&String> {
+        self.generation.as_ref().map(|e| &e.0)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
@@ -143,6 +176,9 @@ impl ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: Option<ConcurrencySettings>,
+    pub unsafe_use_conditional_update: Option<bool>,
+    pub unsafe_use_conditional_create: Option<bool>,
+    pub unsafe_use_metadata: Option<bool>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -154,6 +190,18 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
     }
 
+    pub fn unsafe_use_conditional_create(&self) -> bool {
+        self.unsafe_use_conditional_create.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_conditional_update(&self) -> bool {
+        self.unsafe_use_conditional_update.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_metadata(&self) -> bool {
+        self.unsafe_use_metadata.unwrap_or(true)
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             concurrency: match (&self.concurrency, other.concurrency) {
@@ -161,6 +209,33 @@ impl Settings {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            unsafe_use_conditional_create: match (
+                &self.unsafe_use_conditional_create,
+                other.unsafe_use_conditional_create,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_conditional_update: match (
+                &self.unsafe_use_conditional_update,
+                other.unsafe_use_conditional_update,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_metadata: match (
+                &self.unsafe_use_metadata,
+                other.unsafe_use_metadata,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }
@@ -197,19 +272,19 @@ impl Reader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchConfigResult {
-    Found { bytes: Bytes, etag: ETag },
+    Found { bytes: Bytes, version: VersionInfo },
     NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateConfigResult {
-    Updated { new_etag: ETag },
+    Updated { new_version: VersionInfo },
     NotOnLatestVersion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetRefResult {
-    Found { bytes: Bytes },
+    Found { bytes: Bytes, version: VersionInfo },
     NotFound,
 }
 
@@ -219,23 +294,39 @@ pub enum WriteRefResult {
     WontOverwrite,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeleteObjectsResult {
+    pub deleted_objects: u64,
+    pub deleted_bytes: u64,
+}
+
+impl DeleteObjectsResult {
+    pub fn merge(&mut self, other: &Self) {
+        self.deleted_objects += other.deleted_objects;
+        self.deleted_bytes += other.deleted_bytes;
+    }
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
-pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
+pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     fn default_settings(&self) -> Settings {
         Default::default()
     }
+
+    fn can_write(&self) -> bool;
+
     async fn fetch_config(&self, settings: &Settings)
         -> StorageResult<FetchConfigResult>;
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult>;
     async fn fetch_snapshot(
         &self,
@@ -304,17 +395,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         ref_key: &str,
     ) -> StorageResult<GetRefResult>;
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn ref_versions(
-        &self,
-        settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>>;
     async fn write_ref(
         &self,
         settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult>;
 
     async fn list_objects<'a>(
@@ -323,13 +409,39 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    async fn delete_batch(
+        &self,
+        prefix: &str,
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult>;
+
     /// Delete a stream of objects, by their id string representations
+    /// Input stream includes sizes to get as result the total number of bytes deleted
+    #[instrument(skip(self, _settings, ids))]
     async fn delete_objects(
         &self,
-        settings: &Settings,
+        _settings: &Settings,
         prefix: &str,
-        ids: BoxStream<'_, String>,
-    ) -> StorageResult<usize>;
+        ids: BoxStream<'_, (String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let res = Arc::new(Mutex::new(DeleteObjectsResult::default()));
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let res = Arc::clone(&res);
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes =
+                        self.delete_batch(prefix, batch).await.unwrap_or_default();
+                    #[allow(clippy::expect_used)]
+                    res.lock().expect("Bug in delete objects").merge(&new_deletes);
+                }
+            })
+            .await;
+        #[allow(clippy::expect_used)]
+        let res = res.lock().expect("Bug in delete objects");
+        Ok(res.clone())
+    }
 
     async fn get_snapshot_last_modified(
         &self,
@@ -337,7 +449,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn root_is_clean(&self) -> StorageResult<bool>;
+    async fn root_is_clean(&self) -> StorageResult<bool> {
+        match self.list_objects(&Settings::default(), "").await?.next().await {
+            None => Ok(true),
+            Some(Ok(_)) => Ok(false),
+            Some(Err(err)) => Err(err),
+        }
+    }
 
     async fn list_chunks(
         &self,
@@ -370,12 +488,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_chunks(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, ChunkId>,
-    ) -> StorageResult<usize> {
+        chunks: BoxStream<'_, (ChunkId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             CHUNK_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -383,12 +501,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_manifests(
         &self,
         settings: &Settings,
-        manifests: BoxStream<'_, ManifestId>,
-    ) -> StorageResult<usize> {
+        manifests: BoxStream<'_, (ManifestId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             MANIFEST_PREFIX,
-            manifests.map(|id| id.to_string()).boxed(),
+            manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -396,12 +514,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_snapshots(
         &self,
         settings: &Settings,
-        snapshots: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
+        snapshots: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             SNAPSHOT_PREFIX,
-            snapshots.map(|id| id.to_string()).boxed(),
+            snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -409,12 +527,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_transaction_logs(
         &self,
         settings: &Settings,
-        transaction_logs: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
+        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             TRANSACTION_PREFIX,
-            transaction_logs.map(|id| id.to_string()).boxed(),
+            transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -423,8 +541,9 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         refs: BoxStream<'_, String>,
-    ) -> StorageResult<usize> {
-        self.delete_objects(settings, REF_PREFIX, refs).await
+    ) -> StorageResult<u64> {
+        let refs = refs.map(|s| (s, 0)).boxed();
+        Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
     }
 
     async fn get_object_range_buf(
@@ -490,7 +609,7 @@ where
 {
     let id = Id::try_from(item.id.as_str()).ok()?;
     let created_at = item.created_at;
-    Some(ListInfo { created_at, id })
+    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
 }
 
 fn translate_list_infos<'a, Id>(
@@ -550,6 +669,7 @@ pub fn new_s3_storage(
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
     )?;
     Ok(Arc::new(st))
 }
@@ -571,6 +691,7 @@ pub fn new_tigris_storage(
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
     )?;
     Ok(Arc::new(st))
 }
@@ -585,6 +706,17 @@ pub async fn new_local_filesystem_storage(
 ) -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_local_filesystem(path).await?;
     Ok(Arc::new(st))
+}
+
+pub async fn new_s3_object_store_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let storage =
+        ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
+    Ok(Arc::new(storage))
 }
 
 pub async fn new_azure_blob_storage(
@@ -627,10 +759,27 @@ pub async fn new_gcs_storage(
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
-    use std::collections::HashSet;
+    use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
     use super::*;
     use proptest::prelude::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_is_clean() {
+        let repo_dir = TempDir::new().unwrap();
+        let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
+        assert!(s.root_is_clean().await.unwrap());
+
+        let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
+        write!(file, "hello").unwrap();
+        assert!(!s.root_is_clean().await.unwrap());
+
+        let inside_existing =
+            PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
+        let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
+        assert!(s.root_is_clean().await.unwrap());
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig {

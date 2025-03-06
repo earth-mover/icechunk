@@ -126,11 +126,14 @@ class Session:
         """
         Context manager to allow unpickling this store if writable.
         """
+        # While this property can only be changed by this context manager,
+        # it can be nested (sometimes unintentionally since `to_icechunk` does it)
+        current = self._allow_pickling
         try:
             self._allow_pickling = True
             yield
         finally:
-            self._allow_pickling = False
+            self._allow_pickling = current
 
     @property
     def read_only(self) -> bool:

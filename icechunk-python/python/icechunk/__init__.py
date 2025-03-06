@@ -14,6 +14,7 @@ from icechunk._icechunk_python import (
     ConflictType,
     Credentials,
     Diff,
+    GcsBearerCredential,
     GcsCredentials,
     GcsStaticCredentials,
     GCSummary,
@@ -33,6 +34,7 @@ from icechunk._icechunk_python import (
     StorageSettings,
     VersionSelection,
     VirtualChunkContainer,
+    VirtualChunkSpec,
     __version__,
     initialize_logs,
     spec_version,
@@ -50,6 +52,7 @@ from icechunk.credentials import (
     containers_credentials,
     gcs_credentials,
     gcs_from_env_credentials,
+    gcs_refreshable_credentials,
     gcs_static_credentials,
     s3_anonymous_credentials,
     s3_credentials,
@@ -94,6 +97,7 @@ __all__ = [
     "Credentials",
     "Diff",
     "GCSummary",
+    "GcsBearerCredential",
     "GcsCredentials",
     "GcsStaticCredentials",
     "IcechunkError",
@@ -116,6 +120,7 @@ __all__ = [
     "StorageSettings",
     "VersionSelection",
     "VirtualChunkContainer",
+    "VirtualChunkSpec",
     "__version__",
     "azure_credentials",
     "azure_from_env_credentials",
@@ -124,13 +129,14 @@ __all__ = [
     "containers_credentials",
     "gcs_credentials",
     "gcs_from_env_credentials",
+    "gcs_refreshable_credentials",
     "gcs_static_credentials",
     "gcs_storage",
     "in_memory_storage",
     "initialize_logs",
     "local_filesystem_storage",
+    "print_debug_info",
     "s3_anonymous_credentials",
-    "s3_credentials",
     "s3_credentials",
     "s3_from_env_credentials",
     "s3_refreshable_credentials",
@@ -140,5 +146,20 @@ __all__ = [
     "spec_version",
     "tigris_storage",
 ]
+
+
+def print_debug_info() -> None:
+    import platform
+    from importlib import import_module
+
+    print(f"platform:  {platform.platform()}")
+    print(f"python:  {platform.python_version()}")
+    print(f"icechunk:  {__version__}")
+    for package in ["zarr", "numcodecs", "xarray", "virtualizarr"]:
+        try:
+            print(f"{package}:  {import_module(package).__version__}")
+        except ModuleNotFoundError:
+            continue
+
 
 initialize_logs()

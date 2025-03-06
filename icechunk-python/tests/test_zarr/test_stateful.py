@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import hypothesis.strategies as st
@@ -70,13 +71,22 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f"listing changed before ({len(lsbefore)} items) and after ({len(lsafter)} items) committing."
                 f" \n\n Before : {lsbefore!r} \n\n After: {lsafter!r}, \n\n Expected: {lsexpect!r}"
             )
+
+        # if it's metadata, we need to compare the data parsed, not raw (because of map ordering)
+        if path.endswith(".json"):
+            get_after = json.loads(get_after.to_bytes())
+            get_before = json.loads(get_before.to_bytes())
+        else:
+            get_after = get_after.to_bytes()
+            get_before = get_before.to_bytes()
+
         if get_before != get_after:
             get_expect = self._sync(self.model.get(path, prototype=PROTOTYPE))
             assert get_expect
             raise ValueError(
                 f"Value changed before and after commit for path {path}"
-                f" \n\n Before : {get_before.to_bytes()!r} \n\n "
-                f"After: {get_after.to_bytes()!r}, \n\n "
+                f" \n\n Before : {get_before!r} \n\n "
+                f"After: {get_after!r}, \n\n "
                 f"Expected: {get_expect.to_bytes()!r}"
             )
 
@@ -96,8 +106,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         array, _ = array_and_chunks
         # TODO: support size-0 arrays GH392
         assume(array.size > 0)
-        # TODO: fix complex fill values GH391
-        assume(not np.iscomplexobj(array))
         super().add_array(data, name, array_and_chunks)
 
     #####  TODO: port everything below to zarr

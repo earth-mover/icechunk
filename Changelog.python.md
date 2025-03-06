@@ -1,5 +1,124 @@
 # Changelog
 
+### Python Icechunk Library 0.2.5
+
+This is Icechunk's first 1.0 release candidate. This release is backwards compatible with
+repositories created using any Icechunk version in the 0.2.X series.
+
+### Features
+
+- Result of garbage collection informs how many bytes were freed from storage.
+- Executable Python documentation.
+
+### Fixes
+
+- Support for `allow_pickling` in nested contexts.
+
+### Python Icechunk Library 0.2.4
+
+### Fixes
+
+- Fixes a bug where object storage paths were incorrectly formatted when using Windows.
+
+## Python Icechunk Library 0.2.3
+
+### Features
+
+- `Repository` can now be pickled.
+- `icechunk.print_debug_info()` now prints out relative information about the installed version of icechunk and relative dependencies.
+- `icechunk.Storage` now supports `__repr__`. Only configuration values will be printed, no credentials.
+
+### Fixes
+
+- Fixes a missing export for Google Cloud Storage credentials.
+
+## Python Icechunk Library 0.2.2
+
+### Features
+
+- Added the ability to checkout a session `as_of` a specific time. This is useful for replaying what the repo would be at a specific point in time.
+- Support for refreshable Google Cloud Storage credentials.
+
+### Fixes
+
+- Fix a bug where the clean prefix detection was hiding other errors when creating repositories.
+- API now correctly uses `snapshot_id` instead of `snapshot` consistently.
+- Only write `content-type` to metadata files if the target object store supports it.
+
+## Python Icechunk Library 0.2.1
+
+### Features
+
+- Users can now override consistency defaults. With this Icechunk is usable in a larger set of object stores,
+including those without support for conditional updates. In this setting, Icechunk loses some of its consistency guarantees.
+This configuration variables are for advanced users only, and should only be changed if necessary for compatibility.
+
+  ```python
+  class StorageSettings:
+    ...
+
+    @property
+    def unsafe_use_conditional_update(self) -> bool | None:
+        ...
+    @property
+    def unsafe_use_conditional_create(self) -> bool | None:
+        ...
+    @property
+    def unsafe_use_metadata(self) -> bool | None:
+        ...
+  ```
+
+## Python Icechunk Library 0.2.0
+
+This release is focused on stabilizing Icechunk's on-disk serialization format. It's a non-backwards
+compatible change, hopefully the last one. Data written with previous versions must be reingested to be read with
+Icechunk 0.2.0.
+
+### Features
+
+- `Repository.ancestry` now returns an iterator, allowing interrupting the traversal of the version tree at any point.
+- New on-disk format using [flatbuffers](https://flatbuffers.dev/) makes it easier to document and implement
+(de-)serialization. This enables the creation of alternative readers and writers for the Icechunk format.
+- `Repository.readonly_session` interprets its first positional argument as a branch name:
+
+```python
+# before:
+repo.readonly_session(branch="dev")
+
+# after:
+repo.readonly_session("dev")
+
+# still possible:
+repo.readonly_session(tag="v0.1")
+repo.readonly_session(branch="foo")
+repo.readonly_session(snapshot_id="NXH3M0HJ7EEJ0699DPP0")
+```
+
+- Icechunk is now more resilient to changes in Zarr metadata spec, and can handle Zarr extensions.
+- More documentation.
+
+### Performance
+
+- We have improved our benchmarks, making them more flexible and effective at finding possible regressions.
+- New `Store.set_virtual_refs` method allows setting multiple virtual chunks for the same array. This
+significantly speeds up the creation of virtual datasets.
+
+### Fixes
+
+- Fix a bug in clean prefix detection
+
+## Python Icechunk Library 0.1.3
+
+### Features
+
+- Repositories can now evaluate the `diff` between two snapshots.
+- Sessions can show the current `status` of the working copy.
+- Adds the ability to specify bearer tokens for authenticating with Google Cloud Storage.
+
+### Fixes
+
+- Dont write `dimension_names` to the zarr metadata if no dimension names are set. Previously, `null` was written.
+
 ## Python Icechunk Library 0.1.2
 
 ### Features
@@ -10,10 +129,13 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 - Icechunk generates logs now. Set the environment variable `ICECHUNK_LOG=icechunk=debug` to print debug logs to stdout. Available "levels" in order of increasing verbosity are `error`, `warn`, `info`, `debug`, `trace`. The default level is `error`. Example log:
   ![image](https://private-user-images.githubusercontent.com/20792/411051729-7e6de243-73f4-4863-ba79-2dde204fe6e5.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Mzg5NTY3NTQsIm5iZiI6MTczODk1NjQ1NCwicGF0aCI6Ii8yMDc5Mi80MTEwNTE3MjktN2U2ZGUyNDMtNzNmNC00ODYzLWJhNzktMmRkZTIwNGZlNmU1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjA3VDE5MjczNFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTQ1MzdmMDY2MDA2YjdiNzUzM2RhMGE5ZDAxZDA2NWI4ZWU3MjcyZTE0YjRkY2U0ZTZkMTcxMzQzMDVjOGQ0NGQmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.LnILQIXxOjkR1y6P5w6k9UREm0zOH1tIzt2vrjVcRKM)
 - Icechunk can now be installed using `conda`:
+
   ```shell
   conda install -c conda-forge icechunk
   ```
+
 - Optionally delete branches and tags that point to expired snapshots:
+
   ```python
     def expire_snapshots(
         self,
@@ -23,19 +145,17 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
         delete_expired_tags: bool = False,
     ) -> set[str]: ...
   ```
-- More documentation. See [the Icechunk website](https://icechunk.io/)
 
+- More documentation. See [the Icechunk website](https://icechunk.io/)
 
 ### Performance
 
 - Faster `exists` zarr `Store` method.
 - Implement `Store.getsize_prefix` method. This significantly speeds up `info_complete`.
 
-
 ### Fixes
 
 - Default regular expression to preload manifests.
-
 
 ## Python Icechunk Library 0.1.1
 
@@ -43,16 +163,17 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 
 - Session deserialization error when using distributed writes
 
-
 ## Python Icechunk Library 0.1.0
 
 ### Features
 
 - Expiration and garbage collection. It's now possible to maintain only recent versions of the repository, reclaiming the storage used exclusively by expired versions.
 - Allow an arbitrary map of properties to commits. Example:
+
   ```
   session.commit("some message", metadata={"author": "icechunk-team"})
   ```
+
   This properties can be retrieved via `ancestry`.
 - New `chunk_coordinates` function to list all initialized chunks in an array.
 - It's now possible to delete tags. New tags with the same name won't be allowed to preserve the immutability of snapshots pointed by a tag.
@@ -77,7 +198,6 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 - Bad manifest split in unmodified arrays
 - Documentation was updated to the latest API.
 
-
 ## Python Icechunk Library 0.1.0a15
 
 ### Fixes
@@ -92,6 +212,7 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
 - The snapshot now keeps track of the chunk space bounding box for each manifest
 - Configuration settings can now be overridden in a field-by-field basis
   Example:
+
   ```python
    config = icechunk.RepositoryConfig(inline_chunk_threshold_byte=0)
    storage = ...
@@ -101,6 +222,7 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
        config=config,
    )
   ```
+
   will use 0 for `inline_chunk_threshold_byte` but all other configuration fields will come from
   the repository persistent config. If persistent config is not set, configuration defaults will
   take its place.
@@ -135,6 +257,7 @@ on what happened, and what was Icechunk doing when the exception was raised. Exa
        config=config,
    )
 - `ancestry` function can now receive a branch/tag name or a snapshot id
+
 - `set_virtual_ref` can now validate the virtual chunk container exists
 
   ```

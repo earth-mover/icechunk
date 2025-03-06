@@ -12,7 +12,7 @@ use crate::{
     },
     refs::{delete_branch, delete_tag, list_refs, Ref, RefError},
     repository::RepositoryError,
-    storage::{self, ListInfo},
+    storage::{self, DeleteObjectsResult, ListInfo},
     Storage, StorageError,
 };
 
@@ -129,11 +129,12 @@ impl GCConfig {
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct GCSummary {
-    pub chunks_deleted: usize,
-    pub manifests_deleted: usize,
-    pub snapshots_deleted: usize,
-    pub attributes_deleted: usize,
-    pub transaction_logs_deleted: usize,
+    pub bytes_deleted: u64,
+    pub chunks_deleted: u64,
+    pub manifests_deleted: u64,
+    pub snapshots_deleted: u64,
+    pub attributes_deleted: u64,
+    pub transaction_logs_deleted: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -182,25 +183,33 @@ pub async fn garbage_collect(
         }
 
         if config.deletes_manifests() {
-            keep_manifests.extend(snap.manifest_files().keys().cloned());
+            keep_manifests.extend(snap.manifest_files().map(|mf| mf.id));
         }
 
         if config.deletes_chunks() {
-            for manifest_id in snap.manifest_files().keys() {
-                let manifest_info = snap.manifest_info(manifest_id).ok_or_else(|| {
-                    IcechunkFormatError::from(
-                        IcechunkFormatErrorKind::ManifestInfoNotFound {
-                            manifest_id: manifest_id.clone(),
-                        },
-                    )
-                })?;
+            for manifest_id in snap.manifest_files().map(|mf| mf.id) {
+                let manifest_info =
+                    snap.manifest_info(&manifest_id).ok_or_else(|| {
+                        IcechunkFormatError::from(
+                            IcechunkFormatErrorKind::ManifestInfoNotFound {
+                                manifest_id: manifest_id.clone(),
+                            },
+                        )
+                    })?;
                 let manifest = asset_manager
-                    .fetch_manifest(manifest_id, manifest_info.size_bytes)
+                    .fetch_manifest(&manifest_id, manifest_info.size_bytes)
                     .await?;
                 let chunk_ids =
                     manifest.chunk_payloads().filter_map(|payload| match payload {
-                        ChunkPayload::Ref(chunk_ref) => Some(chunk_ref.id.clone()),
-                        _ => None,
+                        Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                        Ok(_) => None,
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "Error in chunk payload iterator"
+                            );
+                            None
+                        }
                     });
                 keep_chunks.extend(chunk_ids);
             }
@@ -210,21 +219,27 @@ pub async fn garbage_collect(
     let mut summary = GCSummary::default();
 
     if config.deletes_snapshots() {
-        summary.snapshots_deleted =
+        let res =
             gc_snapshots(storage, storage_settings, config, &keep_snapshots).await?;
+        summary.snapshots_deleted = res.deleted_objects;
+        summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_transaction_logs() {
-        summary.transaction_logs_deleted =
-            gc_transaction_logs(storage, storage_settings, config, &keep_snapshots)
-                .await?;
+        let res = gc_transaction_logs(storage, storage_settings, config, &keep_snapshots)
+            .await?;
+        summary.transaction_logs_deleted = res.deleted_objects;
+        summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_manifests() {
-        summary.manifests_deleted =
+        let res =
             gc_manifests(storage, storage_settings, config, &keep_manifests).await?;
+        summary.manifests_deleted = res.deleted_objects;
+        summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_chunks() {
-        summary.chunks_deleted =
-            gc_chunks(storage, storage_settings, config, &keep_chunks).await?;
+        let res = gc_chunks(storage, storage_settings, config, &keep_chunks).await?;
+        summary.chunks_deleted = res.deleted_objects;
+        summary.bytes_deleted += res.deleted_bytes;
     }
 
     Ok(summary)
@@ -260,7 +275,7 @@ async fn pointed_snapshots<'a>(
             async move {
                 let snap = asset_manager.fetch_snapshot(&snap_id).await?;
                 let parents = Arc::clone(&asset_manager)
-                    .snapshot_ancestry(snap.id())
+                    .snapshot_ancestry(&snap.id())
                     .await?
                     .map_ok(|parent| parent.id)
                     .err_into();
@@ -275,7 +290,7 @@ async fn gc_chunks(
     storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<ChunkId>,
-) -> GCResult<usize> {
+) -> GCResult<DeleteObjectsResult> {
     let to_delete = storage
         .list_chunks(storage_settings)
         .await?
@@ -283,7 +298,7 @@ async fn gc_chunks(
         .filter_map(move |chunk| {
             ready(chunk.ok().and_then(|chunk| {
                 if config.must_delete_chunk(&chunk) && !keep_ids.contains(&chunk.id) {
-                    Some(chunk.id.clone())
+                    Some((chunk.id.clone(), chunk.size_bytes))
                 } else {
                     None
                 }
@@ -298,7 +313,7 @@ async fn gc_manifests(
     storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
-) -> GCResult<usize> {
+) -> GCResult<DeleteObjectsResult> {
     let to_delete = storage
         .list_manifests(storage_settings)
         .await?
@@ -308,7 +323,7 @@ async fn gc_manifests(
                 if config.must_delete_manifest(&manifest)
                     && !keep_ids.contains(&manifest.id)
                 {
-                    Some(manifest.id.clone())
+                    Some((manifest.id.clone(), manifest.size_bytes))
                 } else {
                     None
                 }
@@ -323,7 +338,7 @@ async fn gc_snapshots(
     storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
-) -> GCResult<usize> {
+) -> GCResult<DeleteObjectsResult> {
     let to_delete = storage
         .list_snapshots(storage_settings)
         .await?
@@ -333,7 +348,7 @@ async fn gc_snapshots(
                 if config.must_delete_snapshot(&snapshot)
                     && !keep_ids.contains(&snapshot.id)
                 {
-                    Some(snapshot.id.clone())
+                    Some((snapshot.id.clone(), snapshot.size_bytes))
                 } else {
                     None
                 }
@@ -348,7 +363,7 @@ async fn gc_transaction_logs(
     storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
-) -> GCResult<usize> {
+) -> GCResult<DeleteObjectsResult> {
     let to_delete = storage
         .list_transaction_logs(storage_settings)
         .await?
@@ -356,7 +371,7 @@ async fn gc_transaction_logs(
         .filter_map(move |tx| {
             ready(tx.ok().and_then(|tx| {
                 if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
-                    Some(tx.id.clone())
+                    Some((tx.id.clone(), tx.size_bytes))
                 } else {
                     None
                 }
@@ -440,7 +455,7 @@ pub async fn expire_ref(
 
     let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
     let parent_id = editable_snap.parent_id();
-    if editable_snap.id() == &root || Some(&root) == parent_id.as_ref() {
+    if editable_snap.id() == root || Some(&root) == parent_id.as_ref() {
         // Either the reference is the root, or it is pointing to the root as first parent
         // Nothing to do
         return Ok(ExpireRefResult::NothingToDo);
@@ -448,7 +463,7 @@ pub async fn expire_ref(
 
     let root = asset_manager.fetch_snapshot(&root).await?;
     // TODO: add properties to the snapshot that tell us it was history edited
-    let new_snapshot = Arc::new(editable_snap.adopt(root.as_ref()));
+    let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
     asset_manager.write_snapshot(new_snapshot).await?;
 
     Ok(ExpireRefResult::Done {
@@ -519,7 +534,7 @@ pub async fn expire(
                 ExpireRefResult::RefIsExpired => match &r {
                     Ref::Tag(name) => {
                         if expired_tags == ExpiredRefAction::Delete {
-                            delete_tag(storage, storage_settings, name.as_str(), false)
+                            delete_tag(storage, storage_settings, name.as_str())
                                 .await
                                 .map_err(GCError::Ref)?;
                             result.deleted_refs.insert(r);

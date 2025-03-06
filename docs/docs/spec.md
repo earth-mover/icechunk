@@ -72,7 +72,6 @@ Finally, in an atomic put-if-not-exists operation, to commit the transaction, it
 This operation may fail if a different client has already committed the next snapshot.
 In this case, the client may attempt to resolve the conflicts and retry the commit.
 
-
 ```mermaid
 flowchart TD
     subgraph metadata[Metadata]
@@ -121,13 +120,13 @@ All data and metadata files are stored within a root directory (typically a pref
 - `$ROOT/snapshots/` snapshot files
 - `$ROOT/attributes/` attribute files
 - `$ROOT/manifests/` chunk manifests
+- `$ROOT/transactions/` transaction log files
 - `$ROOT/chunks/` chunks
 
 ### File Formats
 
 !!! warning
     The actual file formats used for each type of metadata file are in flux. The spec currently describes the data structures encoded in these files, rather than a specific file format.
-
 
 ### Reference Files
 
@@ -149,9 +148,8 @@ Different client sessions may simultaneously create two inconsistent snapshots; 
 
 References (both branches and tags) are stored as JSON files, the content is a JSON object with:
 
-* keys: a single key `"snapshot"`,
-* value: a string representation of the snapshot id, using [Base 32 Crockford](https://www.crockford.com/base32.html) encoding. The snapshot id is 12 byte random binary, so the encoded string has 20 characters.
-
+- keys: a single key `"snapshot"`,
+- value: a string representation of the snapshot id, using [Base 32 Crockford](https://www.crockford.com/base32.html) encoding. The snapshot id is 12 byte random binary, so the encoded string has 20 characters.
 
 Here is an example of a JSON file corresponding to a tag or branch:
 
@@ -186,6 +184,7 @@ Branch references are stored in the `refs/` directory within a subdirectory corr
 Branch names may not contain the `/` character.
 
 To facilitate easy lookups of the latest branch reference, we use the following encoding for the sequence number:
+
 - subtract the sequence number from the integer `1099511627775`
 - encode the resulting integer as a string using [Base 32 Crockford](https://www.crockford.com/base32.html)
 - left-padding the string with 0s to a length of 8 characters
@@ -216,30 +215,8 @@ Tags cannot be deleted once created.
 
 The snapshot file fully describes the schema of the repository, including all arrays and groups.
 
-The snapshot file is currently encoded using [MessagePack](https://msgpack.org/), but this may change before Icechunk version 1.0. Given the alpha status of this spec, the best way to understand the information stored
-in the snapshot file is through the data structure used internally by the Icechunk library for serialization. This data structure will most certainly change before the spec stabilization:
-
-```rust
-pub struct Snapshot {
-    pub icechunk_snapshot_format_version: IcechunkFormatVersion,
-    pub icechunk_snapshot_format_flags: BTreeMap<String, rmpv::Value>,
-
-    pub manifest_files: Vec<ManifestFileInfo>,
-    pub attribute_files: Vec<AttributeFileInfo>,
-
-    pub total_parents: u32,
-    pub short_term_parents: u16,
-    pub short_term_history: VecDeque<SnapshotMetadata>,
-
-    pub metadata: SnapshotMetadata,
-    pub started_at: DateTime<Utc>,
-    pub properties: SnapshotProperties,
-    nodes: BTreeMap<Path, NodeSnapshot>,
-}
-```
-
-To get full details on what each field contains, please refer to the [Icechunk library code](https://github.com/earth-mover/icechunk/blob/f460a56577ec560c4debfd89e401a98153cd3560/icechunk/src/format/snapshot.rs#L97).
-
+The snapshot file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
+on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/snapshot.fbs)
 
 ### Attributes Files
 
@@ -248,8 +225,7 @@ Attribute files hold user-defined attributes separately from the snapshot file.
 !!! warning
     Attribute files have not been implemented.
 
-The on-disk format for attribute files has not been defined yet, but it will probably be a
-MessagePack serialization of the attributes map.
+The on-disk format for attribute files has not been defined in full yet.
 
 ### Chunk Manifest Files
 
@@ -257,28 +233,14 @@ A chunk manifest file stores chunk references.
 Chunk references from multiple arrays can be stored in the same chunk manifest.
 The chunks from a single array can also be spread across multiple manifests.
 
-Manifest files are currently encoded using [MessagePack](https://msgpack.org/), but this may change before Icechunk version 1.0. Given the alpha status of this spec, the best way to understand the information stored
-in the snapshot file is through the data structure used internally by the Icechunk library. This data structure will most certainly change before the spec stabilization:
-
-```rust
-pub struct Manifest {
-    pub icechunk_manifest_format_version: IcechunkFormatVersion,
-    pub icechunk_manifest_format_flags: BTreeMap<String, rmpv::Value>,
-    chunks: BTreeMap<(NodeId, ChunkIndices), ChunkPayload>,
-}
-
-pub enum ChunkPayload {
-    Inline(Bytes),
-    Virtual(VirtualChunkRef),
-    Ref(ChunkRef),
-}
-```
+Manifest files are encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
+on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/manifest.fbs)
 
 The most important part to understand from the data structure is the fact that manifests can hold three types of references:
 
-* Native (`Ref`), pointing to the id of a chunk within the Icechunk repository.
-* Inline (`Inline`), an optimization for very small chunks that can be embedded directly in the manifest. Mostly used for coordinate arrays.
-* Virtual (`Virtual`), pointing to a region of a file outside of the Icechunk repository, for example,
+- Native (`Ref`), pointing to the id of a chunk within the Icechunk repository.
+- Inline (`Inline`), an optimization for very small chunks that can be embedded directly in the manifest. Mostly used for coordinate arrays.
+- Virtual (`Virtual`), pointing to a region of a file outside of the Icechunk repository, for example,
   a chunk that is inside a NetCDF file in object store
 
 To get full details on what each field contains, please refer to the [Icechunk library code](https://github.com/earth-mover/icechunk/blob/f460a56577ec560c4debfd89e401a98153cd3560/icechunk/src/format/manifest.rs#L106).

@@ -9,14 +9,13 @@ mod tests {
                 Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
                 VirtualChunkRef, VirtualReferenceErrorKind,
             },
-            snapshot::ZarrArrayMetadata,
+            snapshot::ArrayShape,
             ByteRange, ChunkId, ChunkIndices, Path,
         },
-        metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
         repository::VersionInfo,
         session::{get_chunk, SessionErrorKind},
         storage::{
-            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ObjectStorage,
+            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ETag, ObjectStorage,
         },
         store::{StoreError, StoreErrorKind},
         virtual_chunks::VirtualChunkContainer,
@@ -25,7 +24,6 @@ mod tests {
     use std::{
         collections::{HashMap, HashSet},
         error::Error,
-        num::NonZeroU64,
         path::PathBuf,
         vec,
     };
@@ -45,6 +43,7 @@ mod tests {
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: true,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "minio123".into(),
@@ -121,6 +120,7 @@ mod tests {
                     endpoint_url: None,
                     anonymous: true,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ];
@@ -146,6 +146,7 @@ mod tests {
                 endpoint_url: Some("http://localhost:9000".to_string()),
                 anonymous: false,
                 allow_http: true,
+                force_path_style: true,
             }),
         }];
 
@@ -196,20 +197,9 @@ mod tests {
         let repo_dir = TempDir::new()?;
         let repo = create_local_repository(repo_dir.path()).await;
         let mut ds = repo.writable_session("main").await.unwrap();
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
+
+        let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+        let user_data = Bytes::new();
         let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
                 // intentional extra '/'
@@ -231,7 +221,7 @@ mod tests {
         });
 
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
+        ds.add_array(new_array_path.clone(), shape, None, user_data).await.unwrap();
 
         ds.set_chunk_ref(
             new_array_path.clone(),
@@ -313,20 +303,8 @@ mod tests {
         let repo = create_minio_repository().await;
         let mut ds = repo.writable_session("main").await.unwrap();
 
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
+        let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+        let user_data = Bytes::new();
         let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(&format!(
                 // intentional extra '/'
@@ -348,7 +326,7 @@ mod tests {
         });
 
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await.unwrap();
+        ds.add_array(new_array_path.clone(), shape, None, user_data).await.unwrap();
 
         ds.set_chunk_ref(
             new_array_path.clone(),
@@ -424,6 +402,7 @@ mod tests {
                 max_concurrent_requests_for_object: Some(100.try_into()?),
                 ideal_concurrent_request_size: Some(1.try_into()?),
             }),
+            ..repo.storage().default_settings()
         });
         let repo = repo.reopen(Some(config), None)?;
         assert_eq!(
@@ -601,6 +580,7 @@ mod tests {
                     endpoint_url: Some("http://localhost:9000".to_string()),
                     anonymous: false,
                     allow_http: true,
+                    force_path_style: true,
                 }),
             },
             VirtualChunkContainer {
@@ -616,6 +596,7 @@ mod tests {
                     endpoint_url: None,
                     anonymous: true,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ];
@@ -736,7 +717,7 @@ mod tests {
             ))?,
             offset: 1,
             length: 5,
-            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
+            checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
         };
 
         store.set_virtual_ref("array/c/0/0/2", ref1, false).await?;
@@ -758,7 +739,7 @@ mod tests {
             )?,
             offset: 22306,
             length: 288,
-            checksum: Some(Checksum::ETag(String::from("invalid etag"))),
+            checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
         };
 
         store.set_virtual_ref("array/c/1/1/1", public_ref, false).await?;

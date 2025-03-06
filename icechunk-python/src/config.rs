@@ -88,13 +88,13 @@ impl PyS3StaticCredentials {
             r#"S3StaticCredentials(access_key_id="{ak}", secret_access_key="{sk}", session_token={st}, expires_after={ea})"#,
             ak = self.access_key_id.as_str(),
             sk = self.secret_access_key.as_str(),
-            st = format_option_string(self.session_token.as_ref()),
+            st = format_option(self.session_token.as_ref()),
             ea = format_option(self.expires_after.as_ref().map(datetime_repr))
         )
     }
 }
 
-fn format_option_to_string<T: Display>(o: Option<T>) -> String {
+pub(crate) fn format_option_to_string<T: Display>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => s.to_string(),
@@ -105,13 +105,6 @@ fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => s.as_ref().to_string(),
-    }
-}
-
-pub(crate) fn format_option_string<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
-    match o.as_ref() {
-        None => "None".to_string(),
-        Some(s) => format!(r#""{}""#, s.as_ref()),
     }
 }
 
@@ -214,6 +207,7 @@ pub enum PyGcsStaticCredentials {
     ServiceAccount(String),
     ServiceAccountKey(String),
     ApplicationCredentials(String),
+    BearerToken(String),
 }
 
 impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
@@ -227,6 +221,12 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
             }
             PyGcsStaticCredentials::ApplicationCredentials(path) => {
                 GcsStaticCredentials::ApplicationCredentials(path.into())
+            }
+            PyGcsStaticCredentials::BearerToken(token) => {
+                GcsStaticCredentials::BearerToken(GcsBearerCredential {
+                    bearer: token,
+                    expires_after: None,
+                })
             }
         }
     }
@@ -351,29 +351,33 @@ pub struct PyS3Options {
     pub allow_http: bool,
     #[pyo3(get, set)]
     pub anonymous: bool,
+    #[pyo3(get, set)]
+    pub force_path_style: bool,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
         allow_http: bool,
         anonymous: bool,
+        force_path_style: bool,
     ) -> Self {
-        Self { region, endpoint_url, allow_http, anonymous }
+        Self { region, endpoint_url, allow_http, anonymous, force_path_style }
     }
 
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon})"#,
-            region = format_option_string(self.region.as_ref()),
-            url = format_option_string(self.endpoint_url.as_ref()),
+            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style})"#,
+            region = format_option(self.region.as_ref()),
+            url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
+            force_path_style = format_bool(self.force_path_style),
         )
     }
 }
@@ -385,6 +389,7 @@ impl From<&PyS3Options> for S3Options {
             endpoint_url: options.endpoint_url.clone(),
             allow_http: options.allow_http,
             anonymous: options.anonymous,
+            force_path_style: options.force_path_style,
         }
     }
 }
@@ -396,6 +401,7 @@ impl From<S3Options> for PyS3Options {
             endpoint_url: value.endpoint_url,
             allow_http: value.allow_http,
             anonymous: value.anonymous,
+            force_path_style: value.force_path_style,
         }
     }
 }
@@ -700,6 +706,12 @@ fn storage_concurrency_settings_repr(s: &PyStorageConcurrencySettings) -> String
 pub struct PyStorageSettings {
     #[pyo3(get, set)]
     pub concurrency: Option<Py<PyStorageConcurrencySettings>>,
+    #[pyo3(get, set)]
+    pub unsafe_use_conditional_update: Option<bool>,
+    #[pyo3(get, set)]
+    pub unsafe_use_conditional_create: Option<bool>,
+    #[pyo3(get, set)]
+    pub unsafe_use_metadata: Option<bool>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
@@ -710,6 +722,9 @@ impl From<storage::Settings> for PyStorageSettings {
                 Py::new(py, Into::<PyStorageConcurrencySettings>::into(c))
                     .expect("Cannot create instance of StorageConcurrencySettings")
             }),
+            unsafe_use_conditional_create: value.unsafe_use_conditional_create,
+            unsafe_use_conditional_update: value.unsafe_use_conditional_update,
+            unsafe_use_metadata: value.unsafe_use_metadata,
         })
     }
 }
@@ -718,6 +733,9 @@ impl From<&PyStorageSettings> for storage::Settings {
     fn from(value: &PyStorageSettings) -> Self {
         Python::with_gil(|py| Self {
             concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
+            unsafe_use_conditional_create: value.unsafe_use_conditional_create,
+            unsafe_use_conditional_update: value.unsafe_use_conditional_update,
+            unsafe_use_metadata: value.unsafe_use_metadata,
         })
     }
 }
@@ -734,10 +752,20 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None))]
+    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None))]
     #[new]
-    pub fn new(concurrency: Option<Py<PyStorageConcurrencySettings>>) -> Self {
-        Self { concurrency }
+    pub fn new(
+        concurrency: Option<Py<PyStorageConcurrencySettings>>,
+        unsafe_use_conditional_create: Option<bool>,
+        unsafe_use_conditional_update: Option<bool>,
+        unsafe_use_metadata: Option<bool>,
+    ) -> Self {
+        Self {
+            concurrency,
+            unsafe_use_conditional_create,
+            unsafe_use_metadata,
+            unsafe_use_conditional_update,
+        }
     }
 
     pub fn __repr__(&self) -> String {
@@ -749,7 +777,13 @@ impl PyStorageSettings {
             }),
         };
 
-        format!(r#"StorageSettings(concurrency={conc})"#, conc = inner)
+        format!(
+            r#"StorageSettings(concurrency={conc}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me})"#,
+            conc = inner,
+            cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
+            up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
+            me = format_option(self.unsafe_use_metadata.map(format_bool))
+        )
     }
 }
 
@@ -962,8 +996,6 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub inline_chunk_threshold_bytes: Option<u16>,
     #[pyo3(get, set)]
-    pub unsafe_overwrite_refs: Option<bool>,
-    #[pyo3(get, set)]
     pub get_partial_values_concurrency: Option<u16>,
     #[pyo3(get, set)]
     pub compression: Option<Py<PyCompressionConfig>>,
@@ -989,7 +1021,6 @@ impl From<&PyRepositoryConfig> for RepositoryConfig {
     fn from(value: &PyRepositoryConfig) -> Self {
         Python::with_gil(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
             caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
@@ -1007,7 +1038,6 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
         #[allow(clippy::expect_used)]
         Python::with_gil(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs: value.unsafe_overwrite_refs,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             compression: value.compression.map(|c| {
                 Py::new(py, Into::<PyCompressionConfig>::into(c))
@@ -1042,11 +1072,10 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, unsafe_overwrite_refs = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
-        unsafe_overwrite_refs: Option<bool>,
         get_partial_values_concurrency: Option<u16>,
         compression: Option<Py<PyCompressionConfig>>,
         caching: Option<Py<PyCachingConfig>>,
@@ -1056,7 +1085,6 @@ impl PyRepositoryConfig {
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,
-            unsafe_overwrite_refs,
             get_partial_values_concurrency,
             compression,
             caching,
@@ -1122,9 +1150,8 @@ impl PyRepositoryConfig {
             }));
             // TODO: virtual chunk containers
             format!(
-                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, unsafe_overwrite_refs={uns}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest})"#,
+                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest})"#,
                 inl = format_option_to_string(self.inline_chunk_threshold_bytes),
-                uns = format_option(self.unsafe_overwrite_refs.map(format_bool)),
                 partial = format_option_to_string(self.get_partial_values_concurrency),
                 comp = comp,
                 caching = caching,
@@ -1159,6 +1186,32 @@ impl PyStorage {
         .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
+    }
+
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[classmethod]
+    pub fn new_s3_object_store(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        config: &PyS3Options,
+        bucket: String,
+        prefix: Option<String>,
+        credentials: Option<PyS3Credentials>,
+    ) -> PyResult<Self> {
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_s3_object_store_storage(
+                    config.into(),
+                    bucket,
+                    prefix,
+                    credentials.map(|cred| cred.into()),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+
+                Ok(PyStorage(storage))
+            })
+        })
     }
 
     #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
@@ -1263,6 +1316,10 @@ impl PyStorage {
                 Ok(PyStorage(storage))
             })
         })
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("{}", self.0)
     }
 
     pub fn default_settings(&self) -> PyStorageSettings {

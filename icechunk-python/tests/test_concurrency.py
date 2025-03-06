@@ -120,6 +120,7 @@ async def test_thread_concurrency() -> None:
         region="us-east-1",
         endpoint_url="http://localhost:9000",
         allow_http=True,
+        force_path_style=True,
         s3_compatible=True,
     )
     container = icechunk.VirtualChunkContainer("s3", "s3://", store_config)
@@ -133,6 +134,7 @@ async def test_thread_concurrency() -> None:
         region="us-east-1",
         endpoint_url="http://localhost:9000",
         allow_http=True,
+        force_path_style=True,
         bucket="testbucket",
         prefix="multithreaded-test__" + str(time.time()),
         access_key_id="minio123",
