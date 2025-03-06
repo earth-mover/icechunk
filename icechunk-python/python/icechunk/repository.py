@@ -71,6 +71,10 @@ class Repository:
 
         If no repository exists at the given storage location, an error will be raised.
 
+        !!! warning
+            This method must be used with care in a multiprocessing context.
+            Read more in our [Parallel Write Guide](/icechunk-python/parallel#uncooperative-distributed-writes).
+
         Parameters
         ----------
         storage : Storage
@@ -105,6 +109,9 @@ class Repository:
         Open an existing Icechunk repository or create a new one if it does not exist.
 
         !!! warning
+            This method must be used with care in a multiprocessing context.
+            Read more in our [Parallel Write Guide](/icechunk-python/parallel#uncooperative-distributed-writes).
+            
             Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
             Instead, create a Repo once and then open it concurrently.
 
