@@ -84,8 +84,8 @@ xr.testing.assert_identical(ds, ondisk)
 There are fundamentally two different modes for distributed writes in Icechunk:
 
 - "Cooperative" distributed writes, in which all of the changes being written are part of the same transaction.
-  The point of this is to allow large scale, massively parallel writing to the store as part of a single coordinated job.
-  In this scenario, it's the user's job to align the writing process with the Zarr chunks.
+  The point of this is to allow large-scale, massively-parallel writing to the store as part of a single coordinated job.
+  In this scenario, it's the user's job to align the writing process with the Zarr chunks and avoid inconsistent metadata updates.
 - "Uncooperative" writes, in which multiple workers are attempting to write to the same store in an uncoordinated way.
   This path relies on the optimistic concurrency mechanism to detect and resolve conflicts.
 
@@ -166,7 +166,7 @@ xr.testing.assert_identical(ds, ondisk)
     Putting `mp.set_start_method('forkserver')` at the beginning of the script will solve this issue.
     Only necessary for POSIX systems except MacOS, because MacOS and Windows do not support the `fork` method.
 
-Here is an example of uncooperative distributed writes using `multiprocessing`, base on [this discussion](https://github.com/earth-mover/icechunk/discussions/802).
+Here is an example of uncooperative distributed writes using `multiprocessing`, based on [this discussion](https://github.com/earth-mover/icechunk/discussions/802).
 
 ```python
 import multiprocessing as mp
@@ -175,7 +175,7 @@ import zarr
 
 
 def get_storage():
-    return ic.s3_storage(bucket="icechunk-test", prefix="zarr_issue_2868", from_env=True)
+    return ic.s3_storage(bucket="icechunk-test", prefix="test-prefix", from_env=True)
 
 
 def worker(i):
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     main()
 ```
 
-This should output something like, note that the order of the writes is not guaranteed:
+This should output something like the following. (Note that the order of the writes is not guaranteed.)
 
 ```sh
 Stated worker 1
