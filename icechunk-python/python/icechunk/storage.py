@@ -177,6 +177,7 @@ def tigris_storage(
     prefix: str | None,
     region: str | None = None,
     endpoint_url: str | None = None,
+    use_weak_consistency: bool = False,
     allow_http: bool = False,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
@@ -198,6 +199,10 @@ def tigris_storage(
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
         Optional endpoint where the object store serves data, example: http://localhost:9000
+    use_weak_consistency: bool
+        If set to True it will return a Storage instance that is read only, and can read from the
+        the closest Tigris region. Behavior is undefined if objects haven't propagated to the region yet.
+        This option is for experts only.
     allow_http: bool
         If the object store can be accessed using http protocol instead of https
     access_key_id: str | None
@@ -229,6 +234,7 @@ def tigris_storage(
         config=options,
         bucket=bucket,
         prefix=prefix,
+        use_weak_consistency=use_weak_consistency,
         credentials=credentials,
     )
 

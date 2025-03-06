@@ -292,7 +292,12 @@ impl S3Fetcher {
         credentials: &S3Credentials,
         settings: storage::Settings,
     ) -> Self {
-        Self { settings, client: Arc::new(mk_client(opts, credentials.clone()).await) }
+        Self {
+            settings,
+            client: Arc::new(
+                mk_client(opts, credentials.clone(), Vec::new(), Vec::new()).await,
+            ),
+        }
     }
 
     async fn get_object_concurrently(

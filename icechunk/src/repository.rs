@@ -143,6 +143,13 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
+        if !storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot create repository".to_string(),
+            )
+            .into());
+        }
+
         let has_overriden_config = match config {
             Some(ref config) => config != &RepositoryConfig::default(),
             None => false,
@@ -372,6 +379,13 @@ impl Repository {
         config: &RepositoryConfig,
         previous_version: &storage::VersionInfo,
     ) -> RepositoryResult<storage::VersionInfo> {
+        if !storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot save configuration".to_string(),
+            )
+            .into());
+        }
+
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         match storage
             .update_config(&storage.default_settings(), bytes, previous_version)
@@ -444,6 +458,12 @@ impl Repository {
         branch_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot create branch".to_string(),
+            )
+            .into());
+        }
         // TODO: The parent snapshot should exist?
         update_branch(
             self.storage.as_ref(),
@@ -488,6 +508,12 @@ impl Repository {
         branch: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot reset branch".to_string(),
+            )
+            .into());
+        }
         raise_if_invalid_snapshot_id(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -511,6 +537,12 @@ impl Repository {
     /// chunks or snapshots associated with the branch.
     #[instrument(skip(self))]
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot delete branch".to_string(),
+            )
+            .into());
+        }
         if branch != Ref::DEFAULT_BRANCH {
             delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
             Ok(())
@@ -524,6 +556,12 @@ impl Repository {
     /// chunks or snapshots associated with the tag.
     #[instrument(skip(self))]
     pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot delete tag".to_string(),
+            )
+            .into());
+        }
         Ok(delete_tag(self.storage.as_ref(), &self.storage_settings, tag).await?)
     }
 
@@ -534,6 +572,12 @@ impl Repository {
         tag_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot create tag".to_string(),
+            )
+            .into());
+        }
         create_tag(
             self.storage.as_ref(),
             &self.storage_settings,
