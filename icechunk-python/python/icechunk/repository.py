@@ -67,6 +67,11 @@ class Repository:
 
         If no repository exists at the given storage location, an error will be raised.
 
+        !!! warning
+            In multiprocessing environments this method can end up in a deadlock, if multiprocessing start method of processes is set to 'fork', which is the default on POSIX systems except MacOS.
+            Change the start method to 'forkserver' is recommended: `mp.set_start_method('forkserver')`.
+            Read more in our [Parallel Write Guide](/icechunk-python/parallel#uncooperative-distributed-writes).
+
         Parameters
         ----------
         storage : Storage
@@ -99,6 +104,11 @@ class Repository:
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
+
+        !!! warning
+            In multiprocessing environments this method can end up in a deadlock, if multiprocessing start method of processes is set to 'fork', which is the default on POSIX systems except MacOS.
+            Change the start method to 'forkserver' is recommended: `mp.set_start_method('forkserver')`.
+            Read more in our [Parallel Write Guide](/icechunk-python/parallel#uncooperative-distributed-writes).
 
         Parameters
         ----------
