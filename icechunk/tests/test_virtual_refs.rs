@@ -168,7 +168,7 @@ mod tests {
 
     async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
         let (opts, creds) = minio_s3_config();
-        let client = mk_client(&opts, creds).await;
+        let client = mk_client(&opts, creds, Vec::new(), Vec::new()).await;
 
         let bucket_name = "testbucket".to_string();
         for (key, bytes) in chunks {
