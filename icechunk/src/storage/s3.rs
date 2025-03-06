@@ -169,10 +169,6 @@ pub async fn mk_client(
         })
     }
 
-    if config.allow_http {
-        s3_builder = s3_builder.force_path_style(true);
-    }
-
     let config = s3_builder.build();
 
     Client::from_conf(config)

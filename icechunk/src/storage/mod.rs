@@ -681,7 +681,7 @@ pub fn new_tigris_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
-    eventually_consistent: bool,
+    use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = S3Options {
         endpoint_url: Some(
@@ -692,7 +692,7 @@ pub fn new_tigris_storage(
     let mut extra_write_headers = Vec::with_capacity(1);
     let mut extra_read_headers = Vec::with_capacity(2);
 
-    if !eventually_consistent {
+    if !use_weak_consistency {
         // TODO: Tigris will need more than this to offer good eventually consistent behavior
         // For example: we should use no-cache for branches and config file
         if let Some(region) = config.region.as_ref() {
@@ -701,7 +701,7 @@ pub fn new_tigris_storage(
             extra_read_headers
                 .push(("Cache-Control".to_string(), "no-cache".to_string()));
         } else {
-            return Err(StorageErrorKind::Other("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `eventually_consistent=True` (experts only)".to_string()).into());
+            return Err(StorageErrorKind::Other("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()).into());
         }
     }
 
@@ -710,7 +710,7 @@ pub fn new_tigris_storage(
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
-        !eventually_consistent, // notice eventually consistent storage can't do writes
+        !use_weak_consistency, // notice eventually consistent storage can't do writes
         extra_read_headers,
         extra_write_headers,
     )?;
