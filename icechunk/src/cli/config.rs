@@ -80,6 +80,7 @@ pub struct CliConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::env::temp_dir;
     use std::fs::File;
@@ -101,6 +102,7 @@ mod tests {
             endpoint_url: None,
             anonymous: false,
             allow_http: false,
+            force_path_style: false,
         };
         let credentials = S3Credentials::FromEnv;
         let repo_config = RepositoryConfig::default();

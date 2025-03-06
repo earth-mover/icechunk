@@ -108,15 +108,16 @@ struct ListCommand {
 const CONFIG_DIR: &str = "icechunk";
 const CONFIG_NAME: &str = "cli-config.yaml";
 
-fn config_path() -> PathBuf {
-    let mut path = config_dir().unwrap();
+fn config_path() -> Result<PathBuf, anyhow::Error> {
+    let mut path =
+        config_dir().ok_or(anyhow::anyhow!("Config file path cannot be found"))?;
     path.push(CONFIG_DIR);
     path.push(CONFIG_NAME);
-    path
+    Ok(path)
 }
 
 fn load_config() -> Result<CliConfig> {
-    let path = config_path();
+    let path = config_path()?;
     let file = File::open(path).context("Failed to open config")?;
     let deserialized: CliConfig =
         serde_yaml_ng::from_reader(file).context("Failed to parse config")?;
@@ -124,8 +125,8 @@ fn load_config() -> Result<CliConfig> {
 }
 
 fn write_config(config: &CliConfig) -> Result<(), anyhow::Error> {
-    let path = config_path();
-    create_dir_all(path.parent().unwrap())
+    let path = config_path()?;
+    create_dir_all(path.parent().ok_or(anyhow::anyhow!("No parent directory"))?)
         .context("Failed to create config directory")?;
     let file = File::create(path).context("Failed to create config file")?;
     serde_yaml_ng::to_writer(file, &config).context("Failed to write config to file")?;
@@ -165,6 +166,7 @@ async fn get_storage(
                 location.bucket.clone(),
                 location.prefix.clone(),
                 Some(credentials.clone()),
+                false,
             )
             .context("Failed to create Tigris storage")?;
             Ok(storage)
@@ -317,6 +319,7 @@ fn add_repo_to_config(
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
+                    force_path_style: false,
                 },
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
@@ -347,6 +350,7 @@ fn add_repo_to_config(
                     endpoint_url: Some(endpoint_url),
                     anonymous: false,
                     allow_http: false,
+                    force_path_style: false,
                 },
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
@@ -432,6 +436,7 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::fs::read_dir;
 
