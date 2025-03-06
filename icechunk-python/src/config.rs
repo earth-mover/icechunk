@@ -351,29 +351,33 @@ pub struct PyS3Options {
     pub allow_http: bool,
     #[pyo3(get, set)]
     pub anonymous: bool,
+    #[pyo3(get, set)]
+    pub force_path_style: bool,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
         allow_http: bool,
         anonymous: bool,
+        force_path_style: bool,
     ) -> Self {
-        Self { region, endpoint_url, allow_http, anonymous }
+        Self { region, endpoint_url, allow_http, anonymous, force_path_style }
     }
 
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon})"#,
+            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style})"#,
             region = format_option(self.region.as_ref()),
             url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
+            force_path_style = format_bool(self.force_path_style),
         )
     }
 }
@@ -385,6 +389,7 @@ impl From<&PyS3Options> for S3Options {
             endpoint_url: options.endpoint_url.clone(),
             allow_http: options.allow_http,
             anonymous: options.anonymous,
+            force_path_style: options.force_path_style,
         }
     }
 }
@@ -396,6 +401,7 @@ impl From<S3Options> for PyS3Options {
             endpoint_url: value.endpoint_url,
             allow_http: value.allow_http,
             anonymous: value.anonymous,
+            force_path_style: value.force_path_style,
         }
     }
 }
@@ -1208,13 +1214,14 @@ impl PyStorage {
         })
     }
 
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None))]
     #[classmethod]
     pub fn new_tigris(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
         bucket: String,
         prefix: Option<String>,
+        use_weak_consistency: bool,
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_tigris_storage(
@@ -1222,6 +1229,7 @@ impl PyStorage {
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
+            use_weak_consistency,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 

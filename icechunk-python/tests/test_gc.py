@@ -15,6 +15,7 @@ def mk_repo() -> tuple[str, ic.Repository]:
         storage=ic.s3_storage(
             endpoint_url="http://localhost:9000",
             allow_http=True,
+            force_path_style=True,
             region="us-east-1",
             bucket="testbucket",
             prefix=prefix,

@@ -323,6 +323,7 @@ def containers_credentials(
         endpoint_url="http://localhost:9000",
         allow_http=True,
         s3_compatible=True,
+        force_path_style=True,
     )
     container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
     config.set_virtual_chunk_container(container)

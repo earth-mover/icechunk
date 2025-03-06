@@ -75,7 +75,8 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 #### Tigris
 
-[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
+[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
+
 ```python
 icechunk.tigris_storage(
     bucket="icechunk-test",
@@ -85,9 +86,7 @@ icechunk.tigris_storage(
 )
 ```
 
-There are a few things to be aware of when using Tigris:
-- Tigris is a globally distributed object store by default. The caveat is that Tigris does not currently support the full consistency guarantees when the store is distributed across multiple regions. For now, to get all the consistency guarantees Icechunk offers, you will need to setup your Tigris bucket as restricted to a single region. This can be done by setting the region in the Tigris bucket settings:
-![tigris bucket settings](../assets/storage/tigris-region-set.png)
+Even is Tigris is API-compatible with S3, this function is needed because Tigris implements a different form of consistency. If instead you use `s3_storage` with the Tigris endpoint, Icechunk won't be able to achieve all its consistency guarantees.
 
 #### Minio
 
@@ -105,6 +104,7 @@ icechunk.s3_storage(
     secret_access_key='minio123',
     endpoint_url='http://localhost:9000',
     allow_http=True,
+    force_path_style=True,
 ```
 
 A few things to note:

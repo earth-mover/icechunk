@@ -71,6 +71,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ),
@@ -100,6 +101,7 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
                     endpoint_url: Some("https://fly.storage.tigris.dev".to_string()),
                     anonymous: false,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ),
@@ -290,7 +292,12 @@ impl S3Fetcher {
         credentials: &S3Credentials,
         settings: storage::Settings,
     ) -> Self {
-        Self { settings, client: Arc::new(mk_client(opts, credentials.clone()).await) }
+        Self {
+            settings,
+            client: Arc::new(
+                mk_client(opts, credentials.clone(), Vec::new(), Vec::new()).await,
+            ),
+        }
     }
 
     async fn get_object_concurrently(

@@ -6,15 +6,12 @@ replicated to other regions.
 
 ## Why is support needed
 
-Tigris doesn't offer read-after-create or read-after-update consistency by default. Data may be written to a region
-and read from another, where the data hasn't replicated yet.
+Tigris offers strong consistency within the same region and eventual consistency globally. This means that if write happens in region 'A' and read from the same region, the read data will be up to date. However, if the read happens from a different region, such as region 'B', there is a possibility that the data may be stale, and an older version could be served.
 
 This means basic Icechunk guarantees cannot be hold. For example, something as simple as creating a repo can fails
 a high percentage of the time in certain geographic configurations.
 
-Tigris has built for us the ability to recover consistency by passing an `X-Tigris-Regions` header in the request. If
-writes and reads are done with the same region in the header, consistency is recovered. We also need `Cache-Control:no-cache`
-in the get requests. Of course, this comes at the price of performance, because reads no longer happens from the closest region anywhere in the world.
+Tigris has built for us the ability to recover consistency by passing an `X-Tigris-Regions` header in the request which allows writes and reads to be served by the same region. This allows requests to be strongly consistent. We also need to send `Cache-Control:no-cache` in the get requests in order to avoid reading from the cache. Of course, this comes at the price of performance, because reads no longer happen from the closest region anywhere in the world.
 
 An alternative would be to set the bucket as region-restricted. In that case all writes and reads go to the single region.
 This doesn't work well for Icechunk because:

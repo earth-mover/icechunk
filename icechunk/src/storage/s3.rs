@@ -18,8 +18,11 @@ use aws_config::{
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
-    config::{Builder, ProvideCredentials, Region},
-    error::SdkError,
+    config::{
+        interceptors::BeforeTransmitInterceptorContextMut, Builder, ConfigBag, Intercept,
+        ProvideCredentials, Region, RuntimeComponents,
+    },
+    error::{BoxError, SdkError},
     operation::put_object::PutObjectError,
     primitives::ByteStream,
     types::{Delete, Object, ObjectIdentifier},
@@ -51,7 +54,8 @@ pub struct S3Storage {
     bucket: String,
     prefix: String,
     can_write: bool,
-
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
     #[serde(skip)]
     /// We need to use OnceCell to allow async initialization, because serde
     /// does not support async cfunction calls from deserialization. This gives
@@ -68,9 +72,47 @@ impl fmt::Display for S3Storage {
         )
     }
 }
+#[derive(Debug)]
+struct ExtraHeadersInterceptor {
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+}
+
+impl Intercept for ExtraHeadersInterceptor {
+    fn name(&self) -> &'static str {
+        "ExtraHeaders"
+    }
+
+    fn modify_before_retry_loop(
+        &self,
+        context: &mut BeforeTransmitInterceptorContextMut<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let request = context.request_mut();
+        match request.method() {
+            "GET" | "HEAD" | "OPTIONS" | "TRACE" => {
+                for (k, v) in self.extra_read_headers.iter() {
+                    request.headers_mut().insert(k.clone(), v.clone());
+                }
+            }
+            _ => {
+                for (k, v) in self.extra_write_headers.iter() {
+                    request.headers_mut().insert(k.clone(), v.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 #[instrument(skip(credentials))]
-pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client {
+pub async fn mk_client(
+    config: &S3Options,
+    credentials: S3Credentials,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+) -> Client {
     let region = config
         .region
         .as_ref()
@@ -117,10 +159,14 @@ pub async fn mk_client(config: &S3Options, credentials: S3Credentials) -> Client
         }
     }
 
-    let mut s3_builder = Builder::from(&aws_config.load().await);
+    let mut s3_builder =
+        Builder::from(&aws_config.load().await).force_path_style(config.force_path_style);
 
-    if config.allow_http {
-        s3_builder = s3_builder.force_path_style(true);
+    if !extra_read_headers.is_empty() || !extra_write_headers.is_empty() {
+        s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
+            extra_read_headers,
+            extra_write_headers,
+        })
     }
 
     let config = s3_builder.build();
@@ -135,6 +181,8 @@ impl S3Storage {
         prefix: Option<String>,
         credentials: S3Credentials,
         can_write: bool,
+        extra_read_headers: Vec<(String, String)>,
+        extra_write_headers: Vec<(String, String)>,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
         Ok(S3Storage {
@@ -144,6 +192,8 @@ impl S3Storage {
             prefix: prefix.unwrap_or_default(),
             credentials,
             can_write,
+            extra_read_headers,
+            extra_write_headers,
         })
     }
 
@@ -154,7 +204,15 @@ impl S3Storage {
     async fn get_client(&self) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
-                Arc::new(mk_client(&self.config, self.credentials.clone()).await)
+                Arc::new(
+                    mk_client(
+                        &self.config,
+                        self.credentials.clone(),
+                        self.extra_read_headers.clone(),
+                        self.extra_write_headers.clone(),
+                    )
+                    .await,
+                )
             })
             .await
     }
@@ -774,6 +832,7 @@ mod tests {
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: false,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -787,6 +846,8 @@ mod tests {
             Some("prefix".to_string()),
             credentials,
             true,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
 
@@ -794,7 +855,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
@@ -809,11 +870,14 @@ mod tests {
                 endpoint_url: None,
                 allow_http: true,
                 anonymous: false,
+                force_path_style: false,
             },
             "bucket".to_string(),
             Some("prefix".to_string()),
             S3Credentials::FromEnv,
             true,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
 

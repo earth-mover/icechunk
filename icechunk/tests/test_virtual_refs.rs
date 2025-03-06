@@ -43,6 +43,7 @@ mod tests {
             endpoint_url: Some("http://localhost:9000".to_string()),
             allow_http: true,
             anonymous: false,
+            force_path_style: true,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "minio123".into(),
@@ -119,6 +120,7 @@ mod tests {
                     endpoint_url: None,
                     anonymous: true,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ];
@@ -144,6 +146,7 @@ mod tests {
                 endpoint_url: Some("http://localhost:9000".to_string()),
                 anonymous: false,
                 allow_http: true,
+                force_path_style: true,
             }),
         }];
 
@@ -165,7 +168,7 @@ mod tests {
 
     async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
         let (opts, creds) = minio_s3_config();
-        let client = mk_client(&opts, creds).await;
+        let client = mk_client(&opts, creds, Vec::new(), Vec::new()).await;
 
         let bucket_name = "testbucket".to_string();
         for (key, bytes) in chunks {
@@ -577,6 +580,7 @@ mod tests {
                     endpoint_url: Some("http://localhost:9000".to_string()),
                     anonymous: false,
                     allow_http: true,
+                    force_path_style: true,
                 }),
             },
             VirtualChunkContainer {
@@ -592,6 +596,7 @@ mod tests {
                     endpoint_url: None,
                     anonymous: true,
                     allow_http: false,
+                    force_path_style: false,
                 }),
             },
         ];
