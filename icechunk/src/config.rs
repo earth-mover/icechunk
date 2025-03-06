@@ -13,7 +13,7 @@ use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    format::{manifest::ManifestShards, Path},
+    format::Path,
     storage,
     virtual_chunks::{ContainerName, VirtualChunkContainer, mk_default_containers},
 };
@@ -139,6 +139,24 @@ pub enum ManifestShardCondition {
     NameMatches { regex: String },
 }
 
+//```yaml
+//rules:
+//  - path: ./2m_temperature  # regex, 3D variable: (null, latitude, longitude)
+//    manifest-split-sizes:
+//      - 0: 120
+//  - path: ./temperature  # 4D variable: (time, level, latitude, longitude)
+//    manifest-split-sizes:
+//      - "level": 1  # alternatively 0: 1
+//      - "time": 12  #           and 1: 12
+//  - path: ./temperature
+//    manifest-split-sizes:
+//      - "level": 1
+//      - "time": 8760  # ~1 year
+//      - "latitude": null  # for unspecified, default is null, which means never split.
+//  - path: ./*   # the default rules
+//    manifest-split-sizes: null  # no splitting, just a single manifest per array
+//```
+
 impl ManifestShardCondition {
     // from_yaml?
     pub fn matches(&self, path: &Path) -> bool {
@@ -161,32 +179,32 @@ impl ManifestShardCondition {
     }
 }
 
+// FIXME: isn't this really another condition?
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub enum ShardDim {
-    Axis(u32),
+pub enum ShardDimCondition {
+    Axis(usize),
     DimensionName(String),
+    // TODO: Since dimension name can be null,
+    // i don't think we can have DimensionName(r"*") catch the "Any" case
     Any,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ManifestShardingConfig {
-    shard_sizes: HashMap<ManifestShardCondition, HashMap<ShardDim, usize>>,
+    // TODO: need to preserve insertion order of conditions, so hashmap doesn't work
+    pub shard_sizes: Vec<(ManifestShardCondition, Vec<(ShardDimCondition, usize)>)>,
 }
 
 impl ManifestShardingConfig {
-    fn default() -> Self {
-        let mut new = HashMap::new();
-        let mut inner = HashMap::new();
-        inner.insert(ShardDim::Any, usize::MAX);
-        new.insert(
+    pub fn default() -> Self {
+        let mut new = Vec::new();
+        let mut inner = Vec::new();
+        inner.push((ShardDimCondition::Any, usize::MAX));
+        new.push((
             ManifestShardCondition::PathMatches { regex: r#"*"#.to_string() },
             inner,
-        );
+        ));
         Self { shard_sizes: new }
-    }
-
-    fn manifest_shards(&self) -> ManifestShards {
-        todo!()
     }
 }
 

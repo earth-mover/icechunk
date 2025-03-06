@@ -12,8 +12,8 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
-use itertools::Itertools as _;
+use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use itertools::{repeat_n, Itertools as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -23,6 +23,7 @@ use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
+    config::{ManifestShardingConfig, ShardDimCondition},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
@@ -1377,13 +1378,12 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node_id: &NodeId,
         node_path: &Path,
+        shards: ManifestShards,
     ) -> SessionResult<()> {
         let mut from = vec![];
         let mut to = vec![];
 
         let mut chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
-
-        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20], vec![0, 10, 20]]);
 
         let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
         sharded_refs.reserve(shards.len());
@@ -1513,6 +1513,53 @@ impl<'a> FlushProcess<'a> {
     }
 }
 
+impl ShardDimCondition {
+    fn matches(&self, axis: usize, dimname: Option<String>) -> bool {
+        match self {
+            ShardDimCondition::Axis(ax) => ax == &axis,
+            ShardDimCondition::DimensionName(name) => Some(name) == dimname.as_ref(),
+            ShardDimCondition::Any => true,
+        }
+    }
+}
+
+impl ManifestShardingConfig {
+    pub fn get_shard_sizes(&self, node: &NodeSnapshot) -> SessionResult<ManifestShards> {
+        match &node.node_data {
+            NodeData::Group => Err(SessionErrorKind::NotAnArray {
+                node: node.clone(),
+                message: "attempting to shard manifest for group".to_string(),
+            }
+            .into()),
+            NodeData::Array { shape, dimension_names, .. } => {
+                let ndim = shape.len();
+                let num_chunks = shape.num_chunks();
+                let mut edges = Vec::with_capacity(ndim);
+
+                for (condition, dim_specs) in self.shard_sizes.iter() {
+                    if condition.matches(&node.path) {
+                        let dimension_names = dimension_names.clone().unwrap_or(
+                            repeat_n(DimensionName::NotSpecified, ndim).collect(),
+                        );
+                        for (axis, dimname) in itertools::enumerate(dimension_names) {
+                            for (dim_condition, shard_size) in dim_specs.iter() {
+                                if dim_condition.matches(axis, dimname.clone().into()) {
+                                    edges.push(
+                                        (0..num_chunks[axis])
+                                            .step_by(shard_size.clone())
+                                            .collect(),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(ManifestShards::from_edges(edges))
+            }
+        }
+    }
+}
+
 async fn flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
@@ -1555,7 +1602,17 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
+        // FIXME: grab the config
+        let config = ManifestShardingConfig::default();
+        let node = get_node(
+            &flush_data.asset_manager,
+            &flush_data.change_set,
+            &flush_data.parent_id,
+            node_path,
+        )
+        .await?;
+        let shards = config.get_shard_sizes(&node)?;
+        flush_data.write_manifest_for_new_node(node_id, node_path, shards).await?;
     }
 
     trace!("Building new snapshot");
