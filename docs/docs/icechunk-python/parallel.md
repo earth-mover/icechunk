@@ -175,7 +175,7 @@ import zarr
 
 
 def get_storage():
-    return ic.s3_storage(bucket="icechunk-test", prefix="test-prefix", from_env=True)
+    return ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
 
 
 def worker(i):
@@ -199,6 +199,7 @@ def worker(i):
 
 
 def main():
+    # This is necessary on linux systems 
     mp.set_start_method('forkserver')
     storage = get_storage()
     repo = ic.Repository.create(storage)
