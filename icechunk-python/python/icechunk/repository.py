@@ -33,6 +33,10 @@ class Repository:
         Create a new Icechunk repository.
         If one already exists at the given store location, an error will be raised.
 
+        !!! warning
+            Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
+            Instead, create a Repo once and then open it concurrently.
+
         Parameters
         ----------
         storage : Storage
@@ -99,6 +103,10 @@ class Repository:
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
+
+        !!! warning
+            Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
+            Instead, create a Repo once and then open it concurrently.
 
         Parameters
         ----------
