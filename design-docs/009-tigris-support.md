@@ -6,7 +6,7 @@ replicated to other regions.
 
 ## Why is support needed
 
-Tigris offers strong consistency within the same region and eventual consistency globally. This means that if write happens in region 'A' and read from the same region, the data will be strongly consistent. However, if the read happens from a different region, such as region 'B', there is a possibility that the data may be stale, and an older version could be served.
+Tigris offers strong consistency within the same region and eventual consistency globally. This means that if write happens in region 'A' and read from the same region, the read data will be up to date. However, if the read happens from a different region, such as region 'B', there is a possibility that the data may be stale, and an older version could be served.
 
 This means basic Icechunk guarantees cannot be hold. For example, something as simple as creating a repo can fails
 a high percentage of the time in certain geographic configurations.
