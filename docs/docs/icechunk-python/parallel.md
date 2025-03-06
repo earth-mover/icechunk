@@ -194,7 +194,7 @@ def worker(i):
             session.commit(f"wrote from worker {i}")
             break
         except ic.ConflictError:
-            print(f"Conflict for {i}, retying")
+            print(f"Conflict for {i}, retrying")
             pass
 
 
@@ -237,7 +237,7 @@ Stated worker 1
 Stated worker 2
 Opened store for 1 | {}
 Opened store for 2 | {}
-Conflict for 1, retying
+Conflict for 1, retrying
 Opened store for 1 | {'done': [2]}
 [2, 1]
 [SnapshotInfo(id="MGPV1YE1SY0799AZFFB0", parent_id=YAN3D2N7ANCNKCFN3JSG, written_at=datetime.datetime(2025,3,4,21,40,57,19985, tzinfo=datetime.timezone.utc), message="wrote from..."), SnapshotInfo(id="YAN3D2N7ANCNKCFN3JSG", parent_id=0M5H3J6SC8MYBQYWACC0, written_at=datetime.datetime(2025,3,4,21,40,56,734126, tzinfo=datetime.timezone.utc), message="wrote from..."), SnapshotInfo(id="0M5H3J6SC8MYBQYWACC0", parent_id=WKKQ9K7ZFXZER26SES5G, written_at=datetime.datetime(2025,3,4,21,40,56,47192, tzinfo=datetime.timezone.utc), message="initialize..."), SnapshotInfo(id="WKKQ9K7ZFXZER26SES5G", parent_id=None, written_at=datetime.datetime(2025,3,4,21,40,55,868277, tzinfo=datetime.timezone.utc), message="Repository...")]
