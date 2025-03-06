@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "0.2.5"
+version = "0.2.6"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -72,9 +72,7 @@ workspace = true
 
 [features]
 logs = ["dep:tracing-subscriber"]
-cli = [
-  "dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "dep:assert_fs"
-]
+cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "dep:assert_fs"]
 
 [[bin]]
 name = "icechunk"
