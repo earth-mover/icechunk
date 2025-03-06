@@ -27,9 +27,42 @@ use errors::{
 };
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
 use repository::{PyDiff, PyGCSummary, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::{PyStore, VirtualChunkSpec};
+
+#[cfg(feature = "cli")]
+use clap::Parser;
+#[cfg(feature = "cli")]
+use icechunk::cli::interface::{run_cli, IcechunkCLI};
+
+#[cfg(feature = "cli")]
+#[pyfunction]
+fn cli_entrypoint(py: Python) -> PyResult<()> {
+    let sys = py.import("sys")?;
+    let args: Vec<String> = sys.getattr("argv")?.extract()?;
+    match IcechunkCLI::try_parse_from(args.to_vec()) {
+        Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            if let Err(e) = run_cli(cli_args).await {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            Ok(())
+        }),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(feature = "cli"))]
+#[pyfunction]
+fn cli_entrypoint(_py: Python) -> PyResult<()> {
+    println!("Must install the optional `cli` feature to use the Icechunk CLI.");
+    Ok(())
+}
 
 #[pyfunction]
 fn initialize_logs() -> PyResult<()> {
@@ -85,6 +118,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
+    m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;

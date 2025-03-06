@@ -33,6 +33,10 @@ class Repository:
         Create a new Icechunk repository.
         If one already exists at the given store location, an error will be raised.
 
+        !!! warning
+            Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
+            Instead, create a Repo once and then open it concurrently.
+
         Parameters
         ----------
         storage : Storage
@@ -109,6 +113,9 @@ class Repository:
             In multiprocessing environments this method can end up in a deadlock, if multiprocessing start method of processes is set to 'fork', which is the default on POSIX systems except MacOS.
             Change the start method to 'forkserver' is recommended: `mp.set_start_method('forkserver')`.
             Read more in our [Parallel Write Guide](/icechunk-python/parallel#uncooperative-distributed-writes).
+            
+            Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
+            Instead, create a Repo once and then open it concurrently.
 
         Parameters
         ----------

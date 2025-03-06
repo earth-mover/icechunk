@@ -72,7 +72,7 @@ pub enum StorageErrorKind {
     S3StreamError(#[from] ByteStreamError),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
-    #[error("unknown storage error: {0}")]
+    #[error("storage error: {0}")]
     Other(String),
 }
 
@@ -335,7 +335,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
     /// Returns whatever reader is more efficient.
     ///
-    /// For example, if processesed with multiple requests, it will return a synchronous `Buf`
+    /// For example, if processed with multiple requests, it will return a synchronous `Buf`
     /// instance pointing the different parts. If it was executed in a single request, it's more
     /// efficient to return the network `AsyncRead` directly
     async fn fetch_manifest_known_size(
@@ -670,6 +670,8 @@ pub fn new_s3_storage(
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
         true,
+        Vec::new(),
+        Vec::new(),
     )?;
     Ok(Arc::new(st))
 }
@@ -679,6 +681,7 @@ pub fn new_tigris_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
+    use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = S3Options {
         endpoint_url: Some(
@@ -686,12 +689,30 @@ pub fn new_tigris_storage(
         ),
         ..config
     };
+    let mut extra_write_headers = Vec::with_capacity(1);
+    let mut extra_read_headers = Vec::with_capacity(2);
+
+    if !use_weak_consistency {
+        // TODO: Tigris will need more than this to offer good eventually consistent behavior
+        // For example: we should use no-cache for branches and config file
+        if let Some(region) = config.region.as_ref() {
+            extra_write_headers.push(("X-Tigris-Region".to_string(), region.clone()));
+            extra_read_headers.push(("X-Tigris-Region".to_string(), region.clone()));
+            extra_read_headers
+                .push(("Cache-Control".to_string(), "no-cache".to_string()));
+        } else {
+            return Err(StorageErrorKind::Other("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()).into());
+        }
+    }
+
     let st = S3Storage::new(
         config,
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
-        true,
+        !use_weak_consistency, // notice eventually consistent storage can't do writes
+        extra_read_headers,
+        extra_write_headers,
     )?;
     Ok(Arc::new(st))
 }

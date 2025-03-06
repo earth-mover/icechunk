@@ -99,7 +99,7 @@ There are fundamentally two different modes for distributed writes in Icechunk:
 
 Any task execution framework (e.g. `ProcessPoolExecutor`, Joblib, Lithops, Dask Distributed, Ray, etc.)
 can be used instead of the `ThreadPoolExecutor`. However such workloads should account for
-Icehunk being a "stateful" store that records changes executed in a write session.
+Icechunk being a "stateful" store that records changes executed in a write session.
 
 There are three key points to keep in mind:
 

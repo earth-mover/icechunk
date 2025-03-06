@@ -38,6 +38,10 @@ async-trait = "0.1.87"
 typetag = "0.2.20"
 serde = { version = "1.0.218", features = ["derive", "rc"] }
 miette = { version = "7.5.0", features = ["fancy"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
+
+[features]
+cli = ["clap", "icechunk/cli"]
 
 [lints]
 workspace = true

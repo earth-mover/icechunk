@@ -224,7 +224,7 @@ impl ManifestConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
-    /// Chunks smaller than this will be stored inline in the manifst
+    /// Chunks smaller than this will be stored inline in the manifest
     pub inline_chunk_threshold_bytes: Option<u16>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
