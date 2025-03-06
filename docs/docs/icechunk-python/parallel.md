@@ -199,7 +199,7 @@ def worker(i):
 
 
 def main():
-    # This is necessary on linux systems 
+    # This is necessary on linux systems
     mp.set_start_method('forkserver')
     storage = get_storage()
     repo = ic.Repository.create(storage)

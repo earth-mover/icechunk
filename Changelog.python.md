@@ -1,5 +1,17 @@
 # Changelog
 
+### Python Icechunk Library 0.2.6
+
+This is Icechunk's second 1.0 release candidate. This release is backwards compatible with
+repositories created using any Icechunk version in the 0.2.X series.
+
+### Features
+
+- Icechunk got a new CLI executable that allows basic management of repos. Try it by running `icechunk --help`.
+- Use new Tigris features to provide consistency guarantees on par with other object stores.
+- New `force_path_style` option for S3 Storage. Used by certain object stores that cannot use the more modern addressing style.
+- More documentation.
+
 ### Python Icechunk Library 0.2.5
 
 This is Icechunk's first 1.0 release candidate. This release is backwards compatible with
