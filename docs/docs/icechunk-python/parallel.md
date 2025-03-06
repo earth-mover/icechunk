@@ -162,7 +162,7 @@ xr.testing.assert_identical(ds, ondisk)
     This happens because the files behind the repository needs to be locked.
     The 'fork' start method will copying not only the lock, but also the state of the lock.
     Thus all child processes will copy the file lock in an acquired state, leaving them hanging indefinitely waiting for the file lock to be released, which never happens.
-    Polars has a similar issue, which is descriped in their [documentation about multiprocessing](https://docs.pola.rs/user-guide/misc/multiprocessing/).
+    Polars has a similar issue, which is described in their [documentation about multiprocessing](https://docs.pola.rs/user-guide/misc/multiprocessing/).
     Putting `mp.set_start_method('forkserver')` at the beginning of the script will solve this issue.
     Only necessary for POSIX systems except MacOS, because MacOS and Windows do not support the `fork` method.
 
