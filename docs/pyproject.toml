@@ -40,3 +40,6 @@ shtab = "^1.7.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.maturin]
+features = ["cli"]
