@@ -1214,13 +1214,14 @@ impl PyStorage {
         })
     }
 
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None))]
     #[classmethod]
     pub fn new_tigris(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
         bucket: String,
         prefix: Option<String>,
+        use_weak_consistency: bool,
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
         let storage = icechunk::storage::new_tigris_storage(
@@ -1228,6 +1229,7 @@ impl PyStorage {
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
+            use_weak_consistency,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
