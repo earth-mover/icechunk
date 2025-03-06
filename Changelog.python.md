@@ -1,6 +1,12 @@
 # Changelog
 
-### Python Icechunk Library 0.2.6
+## Python Icechunk Library 0.2.7
+
+### Fixes
+
+- Install Icechunk CLI by default.
+
+## Python Icechunk Library 0.2.6
 
 This is Icechunk's second 1.0 release candidate. This release is backwards compatible with
 repositories created using any Icechunk version in the 0.2.X series.
@@ -12,7 +18,7 @@ repositories created using any Icechunk version in the 0.2.X series.
 - New `force_path_style` option for S3 Storage. Used by certain object stores that cannot use the more modern addressing style.
 - More documentation.
 
-### Python Icechunk Library 0.2.5
+## Python Icechunk Library 0.2.5
 
 This is Icechunk's first 1.0 release candidate. This release is backwards compatible with
 repositories created using any Icechunk version in the 0.2.X series.
@@ -26,7 +32,7 @@ repositories created using any Icechunk version in the 0.2.X series.
 
 - Support for `allow_pickling` in nested contexts.
 
-### Python Icechunk Library 0.2.4
+## Python Icechunk Library 0.2.4
 
 ### Fixes
 
