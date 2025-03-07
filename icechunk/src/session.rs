@@ -13,7 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
-use itertools::Itertools as _;
+use itertools::{repeat_n, Itertools as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -22,12 +22,13 @@ use tracing::{debug, info, instrument, trace, warn, Instrument};
 use crate::{
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
+    config::{ManifestShardingConfig, ShardDimCondition},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+            ManifestShards, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
         snapshot::{
@@ -818,6 +819,7 @@ impl Session {
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
+                    &self.config,
                     message,
                     properties,
                 )
@@ -840,6 +842,7 @@ impl Session {
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
+                        &self.config,
                         message,
                         properties,
                     )
@@ -1348,6 +1351,7 @@ struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
+    config: &'a RepositoryConfig,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1357,11 +1361,13 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
+        config: &'a RepositoryConfig,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
+            config,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -1373,35 +1379,60 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node_id: &NodeId,
         node_path: &Path,
+        shards: ManifestShards,
     ) -> SessionResult<()> {
         let mut from = vec![];
         let mut to = vec![];
-        let chunks = stream::iter(
-            self.change_set
-                .new_array_chunk_iterator(node_id, node_path)
-                .map(Ok::<ChunkInfo, Infallible>),
-        );
-        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
+        let mut chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
 
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
-
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-
-            self.manifest_refs
-                .entry(node_id.clone())
-                .and_modify(|v| v.push(new_ref.clone()))
-                .or_insert_with(|| vec![new_ref]);
+        let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
+        sharded_refs.reserve(shards.len());
+        // TODO: what is a good capacity
+        let ref_capacity = 8_192;
+        sharded_refs.insert(0, Vec::with_capacity(ref_capacity));
+        while let Some(chunk) = chunks.next() {
+            let shard_index = shards.which(&chunk.coord).unwrap();
+            sharded_refs
+                .entry(shard_index)
+                .or_insert_with(|| Vec::with_capacity(ref_capacity))
+                .push(chunk);
         }
+
+        for i in 0..shards.len() {
+            if let Some(shard_chunks) = sharded_refs.remove(&i) {
+                let shard_chunks = stream::iter(
+                    shard_chunks.into_iter().map(Ok::<ChunkInfo, Infallible>),
+                );
+                let shard_chunks =
+                    aggregate_extents(&mut from, &mut to, shard_chunks, |ci| &ci.coord);
+
+                if let Some(new_manifest) =
+                    Manifest::from_stream(shard_chunks).await.unwrap()
+                {
+                    let new_manifest = Arc::new(new_manifest);
+                    let new_manifest_size = self
+                        .asset_manager
+                        .write_manifest(Arc::clone(&new_manifest))
+                        .await?;
+
+                    let file_info =
+                        ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+                    self.manifest_files.insert(file_info);
+
+                    let new_ref = ManifestRef {
+                        object_id: new_manifest.id().clone(),
+                        extents: ManifestExtents::new(&from, &to),
+                    };
+
+                    self.manifest_refs
+                        .entry(node_id.clone())
+                        .and_modify(|v| v.push(new_ref.clone()))
+                        .or_insert_with(|| vec![new_ref]);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1424,6 +1455,15 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let updated_chunks =
             aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
+
+        // // FIXME
+        // let shards = {
+        //     if let NodeData::Array { shape, .. } = node.node_data.clone() {
+        //         ManifestShards::default(shape.len())
+        //     } else {
+        //         todo!()
+        //     }
+        // };
 
         if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
             let new_manifest = Arc::new(new_manifest);
@@ -1474,6 +1514,53 @@ impl<'a> FlushProcess<'a> {
     }
 }
 
+impl ShardDimCondition {
+    fn matches(&self, axis: usize, dimname: Option<String>) -> bool {
+        match self {
+            ShardDimCondition::Axis(ax) => ax == &axis,
+            ShardDimCondition::DimensionName(name) => Some(name) == dimname.as_ref(),
+            ShardDimCondition::Any => true,
+        }
+    }
+}
+
+impl ManifestShardingConfig {
+    pub fn get_shard_sizes(&self, node: &NodeSnapshot) -> SessionResult<ManifestShards> {
+        match &node.node_data {
+            NodeData::Group => Err(SessionErrorKind::NotAnArray {
+                node: node.clone(),
+                message: "attempting to shard manifest for group".to_string(),
+            }
+            .into()),
+            NodeData::Array { shape, dimension_names, .. } => {
+                let ndim = shape.len();
+                let num_chunks = shape.num_chunks();
+                let mut edges = Vec::with_capacity(ndim);
+
+                for (condition, dim_specs) in self.shard_sizes.iter() {
+                    if condition.matches(&node.path) {
+                        let dimension_names = dimension_names.clone().unwrap_or(
+                            repeat_n(DimensionName::NotSpecified, ndim).collect(),
+                        );
+                        for (axis, dimname) in itertools::enumerate(dimension_names) {
+                            for (dim_condition, shard_size) in dim_specs.iter() {
+                                if dim_condition.matches(axis, dimname.clone().into()) {
+                                    edges.push(
+                                        (0..num_chunks[axis])
+                                            .step_by(shard_size.clone())
+                                            .collect(),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(ManifestShards::from_edges(edges))
+            }
+        }
+    }
+}
+
 async fn flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
@@ -1516,7 +1603,16 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
+        let config = flush_data.config.manifest().sharding();
+        let node = get_node(
+            &flush_data.asset_manager,
+            &flush_data.change_set,
+            &flush_data.parent_id,
+            node_path,
+        )
+        .await?;
+        let shards = config.get_shard_sizes(&node)?;
+        flush_data.write_manifest_for_new_node(node_id, node_path, shards).await?;
     }
 
     trace!("Building new snapshot");
@@ -1628,13 +1724,14 @@ async fn do_commit(
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
+    config: &RepositoryConfig,
     message: &str,
     properties: Option<SnapshotProperties>,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, config);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
@@ -1742,7 +1839,7 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::ManifestExtents,
+        format::manifest::{ManifestExtents, ManifestShards},
         refs::{fetch_tag, Ref},
         repository::VersionInfo,
         storage::new_in_memory_storage,
@@ -1936,6 +2033,24 @@ mod tests {
 
         prop_assert_eq!(from, expected_from);
         prop_assert_eq!(to, expected_to);
+    }
+
+    #[tokio::test]
+    async fn test_which_shard() -> Result<(), Box<dyn Error>> {
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
+
+        assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![11])).unwrap(), 1);
+
+        let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
+
+        let shards = ManifestShards::from_edges(edges);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
+        assert!(shards.which(&ChunkIndices(vec![21, 21])).is_err());
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]

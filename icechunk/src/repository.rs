@@ -899,7 +899,8 @@ mod tests {
 
     use crate::{
         config::{
-            CachingConfig, ManifestConfig, ManifestPreloadConfig, RepositoryConfig,
+            CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestShardingConfig,
+            RepositoryConfig,
         },
         format::{manifest::ChunkPayload, snapshot::ArrayShape, ChunkIndices},
         new_local_filesystem_storage,
@@ -1194,6 +1195,7 @@ mod tests {
                 max_total_refs: Some(2),
                 preload_if: None,
             }),
+            sharding: Some(ManifestShardingConfig { shard_sizes: vec![] }),
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
