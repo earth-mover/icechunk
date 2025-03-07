@@ -823,6 +823,7 @@ impl Session {
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
+                    &self.config,
                     message,
                     properties,
                 )
@@ -845,6 +846,7 @@ impl Session {
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
+                        &self.config,
                         message,
                         properties,
                     )
@@ -1353,6 +1355,7 @@ struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
+    config: &'a RepositoryConfig,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1362,11 +1365,13 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
+        config: &'a RepositoryConfig,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
+            config,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -1602,8 +1607,7 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        // FIXME: grab the config
-        let config = ManifestShardingConfig::default();
+        let config = flush_data.config.manifest().sharding();
         let node = get_node(
             &flush_data.asset_manager,
             &flush_data.change_set,
@@ -1724,13 +1728,14 @@ async fn do_commit(
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
+    config: &RepositoryConfig,
     message: &str,
     properties: Option<SnapshotProperties>,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, config);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
