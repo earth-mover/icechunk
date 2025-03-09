@@ -48,25 +48,27 @@ ds = xr.open_dataset(
 )
 ```
 
-<!-- === "Cloudflare R2" -->
+=== "Cloudflare R2"
 
-<!-- ```python -->
-<!-- import icechunk as ic -->
-<!-- import xarray as xr -->
+```python
+import icechunk as ic
+import xarray as xr
 
-<!-- storage = ic.s3_storage( -->
-<!--     bucket="icechunk-public-data", -->
-<!--     prefix="v1/era5_weatherbench2", -->
-<!--     endpoint_url="foo", -->
-<!--     region="auto", -->
-<!-- ) -->
+storage = ic.s3_storage(
+    bucket="v1",
+    prefix="era5_weatherbench2",
+    endpoint_url="https://data.icechunk.cloud",
+    region="auto",
+    force_path_style=True,
+)
 
-<!-- repo = ic.Repository.open(storage=storage) -->
-<!-- session = repo.readonly_session("main") -->
-<!-- ds = xr.open_dataset( -->
-<!--     session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False -->
-<!-- ) -->
-<!-- ``` -->
+repo = ic.Repository.open(storage=storage)
+session = repo.readonly_session("main")
+ds = xr.open_dataset(
+    session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
+)
+```
+
 
 <!-- === "Tigris" -->
 
