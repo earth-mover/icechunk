@@ -26,7 +26,7 @@ from icechunk.xarray import to_icechunk
 
 logger = helpers.setup_logger()
 
-ICECHUNK_FORMAT = f"v{ic.spec_version():02d}"
+ICECHUNK_FORMAT = f"v{ic.spec_version():d}"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 
@@ -216,7 +216,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--nyears", help="number of years to write (from start)", default=None, type=int
     )
-    parser.add_argument("--dry-run", action="store_true", help="dry run/?", default=False)
+    parser.add_argument("--dry-run", action="store_true", help="dry run?", default=False)
     parser.add_argument(
         "--append", action="store_true", help="append or create?", default=False
     )
