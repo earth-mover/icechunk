@@ -386,7 +386,9 @@ def test_group_update_attributes(store: IcechunkStore, zarr_format: ZarrFormat) 
     assert group.attrs == attrs
     new_attrs = {"bar": 100}
     new_group = group.update_attributes(new_attrs)
-    assert new_group.attrs == new_attrs
+    updated_attrs = attrs.copy()
+    updated_attrs.update(new_attrs)
+    assert new_group.attrs == updated_attrs
 
 
 async def test_group_update_attributes_async(
@@ -570,7 +572,7 @@ async def test_asyncgroup_update_attributes(
     )
 
     agroup_new_attributes = await agroup.update_attributes(attributes_new)
-    assert agroup_new_attributes.attrs == attributes_new
+    assert agroup_new_attributes.attrs == attributes_old | attributes_new
 
 
 async def test_group_members_async(store: IcechunkStore) -> None:
