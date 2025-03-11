@@ -176,15 +176,15 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Application Default Credentials"
 
-        With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
 
-        ```python
-        icechunk.gcs_storage(
-            bucket="icechunk-test",
-            prefix="quickstart-demo-1",
-            application_credentials="/path/to/application-credentials.json"
-        )
-        ```
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        application_credentials="/path/to/application-credentials.json"
+    )
+    ```
 
 === "Bearer Token"
 
