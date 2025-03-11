@@ -54,12 +54,9 @@ ds = xr.open_dataset(
 import icechunk as ic
 import xarray as xr
 
-storage = ic.s3_storage(
-    bucket="v1",
-    prefix="era5_weatherbench2",
+storage = ic.r2_storage(
+    prefix="v1/era5_weatherbench2",
     endpoint_url="https://data.icechunk.cloud",
-    region="auto",
-    force_path_style=True,
 )
 
 repo = ic.Repository.open(storage=storage)

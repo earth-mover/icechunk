@@ -676,6 +676,33 @@ pub fn new_s3_storage(
     Ok(Arc::new(st))
 }
 
+pub fn new_r2_storage(
+    config: S3Options,
+    prefix: String,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let (bucket, prefix) = match prefix.split_once("/") {
+        Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
+        None => (prefix, None),
+    };
+
+    let config = S3Options {
+        region: config.region.or(Some("auto".to_string())),
+        force_path_style: true,
+        ..config
+    };
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    Ok(Arc::new(st))
+}
+
 pub fn new_tigris_storage(
     config: S3Options,
     bucket: String,
