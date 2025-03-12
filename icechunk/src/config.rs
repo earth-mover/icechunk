@@ -9,9 +9,11 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use object_store::gcp::GcpCredential;
+use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    format::Path,
     storage,
     virtual_chunks::{mk_default_containers, ContainerName, VirtualChunkContainer},
 };
@@ -128,6 +130,84 @@ impl CachingConfig {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Hash, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestShardCondition {
+    Or(Vec<ManifestShardCondition>),
+    And(Vec<ManifestShardCondition>),
+    PathMatches { regex: String },
+    NameMatches { regex: String },
+}
+
+//```yaml
+//rules:
+//  - path: ./2m_temperature  # regex, 3D variable: (null, latitude, longitude)
+//    manifest-split-sizes:
+//      - 0: 120
+//  - path: ./temperature  # 4D variable: (time, level, latitude, longitude)
+//    manifest-split-sizes:
+//      - "level": 1  # alternatively 0: 1
+//      - "time": 12  #           and 1: 12
+//  - path: ./temperature
+//    manifest-split-sizes:
+//      - "level": 1
+//      - "time": 8760  # ~1 year
+//      - "latitude": null  # for unspecified, default is null, which means never split.
+//  - path: ./*   # the default rules
+//    manifest-split-sizes: null  # no splitting, just a single manifest per array
+//```
+
+impl ManifestShardCondition {
+    // from_yaml?
+    pub fn matches(&self, path: &Path) -> bool {
+        match self {
+            ManifestShardCondition::Or(vec) => vec.iter().any(|c| c.matches(path)),
+            ManifestShardCondition::And(vec) => vec.iter().all(|c| c.matches(path)),
+            // TODO: precompile the regex
+            ManifestShardCondition::PathMatches { regex } => Regex::new(regex)
+                .map(|regex| regex.is_match(path.to_string().as_bytes()))
+                .unwrap_or(false),
+            // TODO: precompile the regex
+            ManifestShardCondition::NameMatches { regex } => Regex::new(regex)
+                .map(|regex| {
+                    path.name()
+                        .map(|name| regex.is_match(name.as_bytes()))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+        }
+    }
+}
+
+// FIXME: isn't this really another condition?
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub enum ShardDimCondition {
+    Axis(usize),
+    DimensionName(String),
+    // TODO: Since dimension name can be null,
+    // i don't think we can have DimensionName(r"*") catch the "Any" case
+    Any,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct ManifestShardingConfig {
+    // TODO: need to preserve insertion order of conditions, so hashmap doesn't work
+    pub shard_sizes: Vec<(ManifestShardCondition, Vec<(ShardDimCondition, usize)>)>,
+}
+
+impl ManifestShardingConfig {
+    pub fn default() -> Self {
+        let mut new = Vec::new();
+        let mut inner = Vec::new();
+        inner.push((ShardDimCondition::Any, usize::MAX));
+        new.push((
+            ManifestShardCondition::PathMatches { regex: r#"*"#.to_string() },
+            inner,
+        ));
+        Self { shard_sizes: new }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestPreloadCondition {
@@ -206,18 +286,31 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     pub preload: Option<ManifestPreloadConfig>,
+    pub sharding: Option<ManifestShardingConfig>,
 }
 
 static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
+static DEFAULT_MANIFEST_SHARDING_CONFIG: OnceLock<ManifestShardingConfig> =
+    OnceLock::new();
 
 impl ManifestConfig {
     pub fn merge(&self, other: Self) -> Self {
-        Self { preload: other.preload.or(self.preload.clone()) }
+        Self {
+            preload: other.preload.or(self.preload.clone()),
+            // FIXME: why prioritize one over the other?
+            sharding: other.sharding.or(self.sharding.clone()),
+        }
     }
 
     pub fn preload(&self) -> &ManifestPreloadConfig {
         self.preload.as_ref().unwrap_or_else(|| {
             DEFAULT_MANIFEST_PRELOAD_CONFIG.get_or_init(ManifestPreloadConfig::default)
+        })
+    }
+
+    pub fn sharding(&self) -> &ManifestShardingConfig {
+        self.sharding.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_SHARDING_CONFIG.get_or_init(ManifestShardingConfig::default)
         })
     }
 }
