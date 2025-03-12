@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
+        ChunkIndices, NodeId, Path,
         manifest::{ChunkInfo, ChunkPayload},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
-        ChunkIndices, NodeId, Path,
     },
     session::SessionResult,
 };
@@ -200,7 +200,7 @@ impl ChangeSet {
         &self,
         node_id: &NodeId,
         node_path: &Path,
-    ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> {
+    ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> + use<'_> {
         if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
         }
@@ -212,7 +212,7 @@ impl ChangeSet {
 
     pub fn new_arrays_chunk_iterator(
         &self,
-    ) -> impl Iterator<Item = (Path, ChunkInfo)> + '_ {
+    ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
             self.new_array_chunk_iterator(node_id, path).map(|ci| (path.clone(), ci))
         })
@@ -222,7 +222,7 @@ impl ChangeSet {
         &'a self,
         node_id: &'a NodeId,
         node_path: &Path,
-    ) -> impl Iterator<Item = ChunkInfo> + 'a {
+    ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
         self.array_chunks_iterator(node_id, node_path).filter_map(
             move |(coords, payload)| {
                 payload.as_ref().map(|p| ChunkInfo {
@@ -355,7 +355,7 @@ impl ChangeSet {
         })
     }
 
-    pub fn new_nodes_iterator(&self) -> impl Iterator<Item = NodeSnapshot> + '_ {
+    pub fn new_nodes_iterator(&self) -> impl Iterator<Item = NodeSnapshot> {
         self.new_nodes().filter_map(move |(path, node_id)| {
             if self.is_deleted(path, node_id) {
                 return None;
@@ -415,9 +415,9 @@ mod tests {
     use crate::{
         change_set::ArrayData,
         format::{
+            ChunkIndices, NodeId,
             manifest::{ChunkInfo, ChunkPayload},
             snapshot::ArrayShape,
-            ChunkIndices, NodeId,
         },
     };
 

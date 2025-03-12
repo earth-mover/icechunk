@@ -6,18 +6,18 @@ use std::{
 
 use bytes::Bytes;
 use icechunk::{
+    ObjectStorage, Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, ManifestId, SnapshotId},
     new_local_filesystem_storage,
     refs::{
-        create_tag, fetch_branch_tip, fetch_tag, list_refs, update_branch, Ref, RefError,
-        RefErrorKind,
+        Ref, RefError, RefErrorKind, create_tag, fetch_branch_tip, fetch_tag, list_refs,
+        update_branch,
     },
     storage::{
-        self, new_in_memory_storage, new_s3_storage, ETag, FetchConfigResult, Generation,
-        StorageResult, UpdateConfigResult, VersionInfo,
+        self, ETag, FetchConfigResult, Generation, StorageResult, UpdateConfigResult,
+        VersionInfo, new_in_memory_storage, new_s3_storage,
     },
-    ObjectStorage, Storage,
 };
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
@@ -427,8 +427,8 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio::test]
-pub async fn test_write_config_fails_on_bad_version_when_non_existing(
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_fails_on_bad_version_when_non_existing()
+-> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MiniIO but seems to work on S3
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
@@ -447,8 +447,8 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
 
 #[tokio::test]
 #[allow(clippy::panic)]
-pub async fn test_write_config_fails_on_bad_version_when_existing(
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_fails_on_bad_version_when_existing()
+-> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage_type, storage| async move {
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
@@ -493,8 +493,8 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
 
 #[tokio::test]
 #[allow(clippy::panic)]
-pub async fn test_write_config_can_overwrite_with_unsafe_config(
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_can_overwrite_with_unsafe_config()
+-> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),

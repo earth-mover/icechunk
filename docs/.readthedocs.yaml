@@ -13,6 +13,7 @@ build:
       - asdf install poetry latest
       - asdf global poetry latest
       - poetry config virtualenvs.create false
+      - rustup update
     post_install:
       # Install deps and build using poetry
       - . "$READTHEDOCS_VIRTUALENV_PATH/bin/activate" && cd docs && poetry install && cd ../icechunk-python && maturin develop && cd ../docs

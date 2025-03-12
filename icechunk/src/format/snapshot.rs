@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    flatbuffers::gen,
-    manifest::{Manifest, ManifestExtents, ManifestRef},
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
+    flatbuffers::generated,
+    manifest::{Manifest, ManifestExtents, ManifestRef},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,26 +145,26 @@ impl NodeSnapshot {
     }
 }
 
-impl From<&gen::ObjectId8> for NodeId {
-    fn from(value: &gen::ObjectId8) -> Self {
+impl From<&generated::ObjectId8> for NodeId {
+    fn from(value: &generated::ObjectId8) -> Self {
         NodeId::new(value.0)
     }
 }
 
-impl From<&gen::ObjectId12> for ManifestId {
-    fn from(value: &gen::ObjectId12) -> Self {
+impl From<&generated::ObjectId12> for ManifestId {
+    fn from(value: &generated::ObjectId12) -> Self {
         ManifestId::new(value.0)
     }
 }
 
-impl From<&gen::ObjectId12> for AttributesId {
-    fn from(value: &gen::ObjectId12) -> Self {
+impl From<&generated::ObjectId12> for AttributesId {
+    fn from(value: &generated::ObjectId12) -> Self {
         AttributesId::new(value.0)
     }
 }
 
-impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
-    fn from(value: gen::ManifestRef<'a>) -> Self {
+impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
+    fn from(value: generated::ManifestRef<'a>) -> Self {
         let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
         let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
         let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
@@ -172,8 +172,8 @@ impl<'a> From<gen::ManifestRef<'a>> for ManifestRef {
     }
 }
 
-impl From<&gen::DimensionShape> for DimensionShape {
-    fn from(value: &gen::DimensionShape) -> Self {
+impl From<&generated::DimensionShape> for DimensionShape {
+    fn from(value: &generated::DimensionShape) -> Self {
         DimensionShape {
             dim_length: value.array_length(),
             chunk_length: value.chunk_length(),
@@ -181,8 +181,8 @@ impl From<&gen::DimensionShape> for DimensionShape {
     }
 }
 
-impl<'a> From<gen::ArrayNodeData<'a>> for NodeData {
-    fn from(value: gen::ArrayNodeData<'a>) -> Self {
+impl<'a> From<generated::ArrayNodeData<'a>> for NodeData {
+    fn from(value: generated::ArrayNodeData<'a>) -> Self {
         let dimension_names = value
             .dimension_names()
             .map(|dn| dn.iter().map(|name| name.name().into()).collect());
@@ -192,22 +192,22 @@ impl<'a> From<gen::ArrayNodeData<'a>> for NodeData {
     }
 }
 
-impl<'a> From<gen::GroupNodeData<'a>> for NodeData {
-    fn from(_: gen::GroupNodeData<'a>) -> Self {
+impl<'a> From<generated::GroupNodeData<'a>> for NodeData {
+    fn from(_: generated::GroupNodeData<'a>) -> Self {
         Self::Group
     }
 }
 
-impl<'a> TryFrom<gen::NodeSnapshot<'a>> for NodeSnapshot {
+impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
     type Error = IcechunkFormatError;
 
-    fn try_from(value: gen::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: generated::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
         #[allow(clippy::expect_used, clippy::panic)]
         let node_data: NodeData = match value.node_data_type() {
-            gen::NodeData::Array => {
+            generated::NodeData::Array => {
                 value.node_data_as_array().expect("Bug in flatbuffers library").into()
             }
-            gen::NodeData::Group => {
+            generated::NodeData::Group => {
                 value.node_data_as_group().expect("Bug in flatbuffers library").into()
             }
             x => panic!("Invalid node data type in flatbuffers file {:?}", x),
@@ -222,8 +222,8 @@ impl<'a> TryFrom<gen::NodeSnapshot<'a>> for NodeSnapshot {
     }
 }
 
-impl From<&gen::ManifestFileInfo> for ManifestFileInfo {
-    fn from(value: &gen::ManifestFileInfo) -> Self {
+impl From<&generated::ManifestFileInfo> for ManifestFileInfo {
+    fn from(value: &generated::ManifestFileInfo) -> Self {
         Self {
             id: value.id().into(),
             size_bytes: value.size_bytes(),
@@ -296,7 +296,7 @@ impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
-        let _ = flatbuffers::root_with_opts::<gen::Snapshot>(
+        let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -326,8 +326,8 @@ impl Snapshot {
         let manifest_files = manifest_files
             .iter()
             .map(|mfi| {
-                let id = gen::ObjectId12::new(&mfi.id.0);
-                gen::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_chunk_refs)
+                let id = generated::ObjectId12::new(&mfi.id.0);
+                generated::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_chunk_refs)
             })
             .collect::<Vec<_>>();
         let manifest_files = builder.create_vector(&manifest_files);
@@ -339,18 +339,18 @@ impl Snapshot {
                 let name = builder.create_shared_string(k.as_str());
                 let serialized = rmp_serde::to_vec(v)?;
                 let value = builder.create_vector(serialized.as_slice());
-                Ok::<_, IcechunkFormatError>(gen::MetadataItem::create(
+                Ok::<_, IcechunkFormatError>(generated::MetadataItem::create(
                     &mut builder,
-                    &gen::MetadataItemArgs { name: Some(name), value: Some(value) },
+                    &generated::MetadataItemArgs { name: Some(name), value: Some(value) },
                 ))
             })
             .try_collect()?;
         let metadata_items = builder.create_vector(metadata_items.as_slice());
 
         let message = builder.create_string(&message);
-        let parent_id = parent_id.map(|oid| gen::ObjectId12::new(&oid.0));
+        let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
         let flushed_at = Utc::now().timestamp_micros() as u64;
-        let id = gen::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
+        let id = generated::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
 
         let nodes: Vec<_> = sorted_iter
             .into_iter()
@@ -358,9 +358,9 @@ impl Snapshot {
             .try_collect()?;
         let nodes = builder.create_vector(&nodes);
 
-        let snap = gen::Snapshot::create(
+        let snap = generated::Snapshot::create(
             &mut builder,
-            &gen::SnapshotArgs {
+            &generated::SnapshotArgs {
                 id: Some(&id),
                 parent_id: parent_id.as_ref(),
                 nodes: Some(nodes),
@@ -391,10 +391,10 @@ impl Snapshot {
         )
     }
 
-    fn root(&self) -> gen::Snapshot {
+    fn root(&self) -> generated::Snapshot {
         // without the unsafe version this is too slow
         // if we try to keep the root in the Manifest struct, we would need a lifetime
-        unsafe { flatbuffers::root_unchecked::<gen::Snapshot>(&self.buffer) }
+        unsafe { flatbuffers::root_unchecked::<generated::Snapshot>(&self.buffer) }
     }
 
     pub fn id(&self) -> SnapshotId {
@@ -525,14 +525,14 @@ impl Iterator for NodeIterator {
 fn mk_node<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     node: &NodeSnapshot,
-) -> IcechunkResult<flatbuffers::WIPOffset<gen::NodeSnapshot<'bldr>>> {
-    let id = gen::ObjectId8::new(&node.id.0);
+) -> IcechunkResult<flatbuffers::WIPOffset<generated::NodeSnapshot<'bldr>>> {
+    let id = generated::ObjectId8::new(&node.id.0);
     let path = builder.create_string(node.path.to_string().as_str());
     let (node_data_type, node_data) = mk_node_data(builder, &node.node_data)?;
     let user_data = Some(builder.create_vector(&node.user_data));
-    Ok(gen::NodeSnapshot::create(
+    Ok(generated::NodeSnapshot::create(
         builder,
-        &gen::NodeSnapshotArgs {
+        &generated::NodeSnapshotArgs {
             id: Some(&id),
             path: Some(path),
             node_data_type,
@@ -546,7 +546,7 @@ fn mk_node_data(
     builder: &mut FlatBufferBuilder<'_>,
     node_data: &NodeData,
 ) -> IcechunkResult<(
-    gen::NodeData,
+    generated::NodeData,
     Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
 )> {
     match node_data {
@@ -554,16 +554,18 @@ fn mk_node_data(
             let manifests = manifests
                 .iter()
                 .map(|manref| {
-                    let object_id = gen::ObjectId12::new(&manref.object_id.0);
+                    let object_id = generated::ObjectId12::new(&manref.object_id.0);
                     let extents = manref
                         .extents
                         .iter()
-                        .map(|range| gen::ChunkIndexRange::new(range.start, range.end))
+                        .map(|range| {
+                            generated::ChunkIndexRange::new(range.start, range.end)
+                        })
                         .collect::<Vec<_>>();
                     let extents = builder.create_vector(&extents);
-                    gen::ManifestRef::create(
+                    generated::ManifestRef::create(
                         builder,
-                        &gen::ManifestRefArgs {
+                        &generated::ManifestRefArgs {
                             object_id: Some(&object_id),
                             extents: Some(extents),
                         },
@@ -577,14 +579,14 @@ fn mk_node_data(
                     .map(|n| match n {
                         DimensionName::Name(s) => {
                             let n = builder.create_shared_string(s.as_str());
-                            gen::DimensionName::create(
+                            generated::DimensionName::create(
                                 builder,
-                                &gen::DimensionNameArgs { name: Some(n) },
+                                &generated::DimensionNameArgs { name: Some(n) },
                             )
                         }
-                        DimensionName::NotSpecified => gen::DimensionName::create(
+                        DimensionName::NotSpecified => generated::DimensionName::create(
                             builder,
-                            &gen::DimensionNameArgs { name: None },
+                            &generated::DimensionNameArgs { name: None },
                         ),
                     })
                     .collect::<Vec<_>>();
@@ -593,15 +595,15 @@ fn mk_node_data(
             let shape = shape
                 .0
                 .iter()
-                .map(|ds| gen::DimensionShape::new(ds.dim_length, ds.chunk_length))
+                .map(|ds| generated::DimensionShape::new(ds.dim_length, ds.chunk_length))
                 .collect::<Vec<_>>();
             let shape = builder.create_vector(shape.as_slice());
             Ok((
-                gen::NodeData::Array,
+                generated::NodeData::Array,
                 Some(
-                    gen::ArrayNodeData::create(
+                    generated::ArrayNodeData::create(
                         builder,
-                        &gen::ArrayNodeDataArgs {
+                        &generated::ArrayNodeDataArgs {
                             manifests: Some(manifests),
                             shape: Some(shape),
                             dimension_names: dimensions,
@@ -612,10 +614,13 @@ fn mk_node_data(
             ))
         }
         NodeData::Group => Ok((
-            gen::NodeData::Group,
+            generated::NodeData::Group,
             Some(
-                gen::GroupNodeData::create(builder, &gen::GroupNodeDataArgs {})
-                    .as_union_value(),
+                generated::GroupNodeData::create(
+                    builder,
+                    &generated::GroupNodeDataArgs {},
+                )
+                .as_union_value(),
             ),
         )),
     }

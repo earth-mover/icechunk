@@ -8,11 +8,13 @@ use itertools::{Either, Itertools as _};
 
 use crate::{
     change_set::ChangeSet,
-    format::flatbuffers::gen::ObjectId12,
+    format::flatbuffers::generated::ObjectId12,
     session::{Session, SessionResult},
 };
 
-use super::{flatbuffers::gen, ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId};
+use super::{
+    ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId, flatbuffers::generated,
+};
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionLog {
@@ -22,18 +24,18 @@ pub struct TransactionLog {
 impl TransactionLog {
     pub fn new(id: &SnapshotId, cs: &ChangeSet) -> Self {
         let mut new_groups: Vec<_> =
-            cs.new_groups().map(|(_, id)| gen::ObjectId8::new(&id.0)).collect();
+            cs.new_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut new_arrays: Vec<_> =
-            cs.new_arrays().map(|(_, id)| gen::ObjectId8::new(&id.0)).collect();
+            cs.new_arrays().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut deleted_groups: Vec<_> =
-            cs.deleted_groups().map(|(_, id)| gen::ObjectId8::new(&id.0)).collect();
+            cs.deleted_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut deleted_arrays: Vec<_> =
-            cs.deleted_arrays().map(|(_, id)| gen::ObjectId8::new(&id.0)).collect();
+            cs.deleted_arrays().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
 
         let mut updated_arrays: Vec<_> =
-            cs.updated_arrays().map(|id| gen::ObjectId8::new(&id.0)).collect();
+            cs.updated_arrays().map(|id| generated::ObjectId8::new(&id.0)).collect();
         let mut updated_groups: Vec<_> =
-            cs.updated_groups().map(|id| gen::ObjectId8::new(&id.0)).collect();
+            cs.updated_groups().map(|id| generated::ObjectId8::new(&id.0)).collect();
 
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1_024 * 1_024);
@@ -42,22 +44,22 @@ impl TransactionLog {
         let updated_chunks = cs
             .chunk_changes()
             .map(|(node_id, chunks)| {
-                let node_id = gen::ObjectId8::new(&node_id.0);
+                let node_id = generated::ObjectId8::new(&node_id.0);
                 let node_id = Some(&node_id);
                 let chunks = chunks
                     .keys()
                     .map(|indices| {
                         let coords = Some(builder.create_vector(indices.0.as_slice()));
-                        gen::ChunkIndices::create(
+                        generated::ChunkIndices::create(
                             &mut builder,
-                            &gen::ChunkIndicesArgs { coords },
+                            &generated::ChunkIndicesArgs { coords },
                         )
                     })
                     .collect::<Vec<_>>();
                 let chunks = Some(builder.create_vector(chunks.as_slice()));
-                gen::ArrayUpdatedChunks::create(
+                generated::ArrayUpdatedChunks::create(
                     &mut builder,
-                    &gen::ArrayUpdatedChunksArgs { node_id, chunks },
+                    &generated::ArrayUpdatedChunksArgs { node_id, chunks },
                 )
             })
             .collect::<Vec<_>>();
@@ -80,9 +82,9 @@ impl TransactionLog {
 
         let id = ObjectId12::new(&id.0);
         let id = Some(&id);
-        let tx = gen::TransactionLog::create(
+        let tx = generated::TransactionLog::create(
             &mut builder,
-            &gen::TransactionLogArgs {
+            &generated::TransactionLogArgs {
                 id,
                 new_groups,
                 new_arrays,
@@ -102,7 +104,7 @@ impl TransactionLog {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<TransactionLog> {
-        let _ = flatbuffers::root_with_opts::<gen::TransactionLog>(
+        let _ = flatbuffers::root_with_opts::<generated::TransactionLog>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -147,7 +149,7 @@ impl TransactionLog {
     pub fn updated_chunks_for(
         &self,
         node: &NodeId,
-    ) -> impl Iterator<Item = ChunkIndices> + '_ {
+    ) -> impl Iterator<Item = ChunkIndices> + '_ + use<'_> {
         let arr = self
             .root()
             .updated_chunks()
@@ -190,10 +192,10 @@ impl TransactionLog {
             .is_some()
     }
 
-    fn root(&self) -> gen::TransactionLog {
+    fn root(&self) -> generated::TransactionLog {
         // without the unsafe version this is too slow
         // if we try to keep the root in the TransactionLog struct, we would need a lifetime
-        unsafe { flatbuffers::root_unchecked::<gen::TransactionLog>(&self.buffer) }
+        unsafe { flatbuffers::root_unchecked::<generated::TransactionLog>(&self.buffer) }
     }
 
     pub fn bytes(&self) -> &[u8] {

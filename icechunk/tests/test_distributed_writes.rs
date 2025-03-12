@@ -4,12 +4,12 @@ use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{snapshot::ArrayShape, ByteRange, ChunkIndices, Path, SnapshotId},
-    repository::VersionInfo,
-    session::{get_chunk, Session},
-    storage::new_s3_storage,
     Repository, Storage,
+    config::{S3Credentials, S3Options, S3StaticCredentials},
+    format::{ByteRange, ChunkIndices, Path, SnapshotId, snapshot::ArrayShape},
+    repository::VersionInfo,
+    session::{Session, get_chunk},
+    storage::new_s3_storage,
 };
 use tokio::task::JoinSet;
 

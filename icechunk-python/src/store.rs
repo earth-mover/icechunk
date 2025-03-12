@@ -4,13 +4,13 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
+    Store,
     format::{
-        manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
         ChunkIndices, ChunkLength, ChunkOffset, Path,
+        manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
     },
     storage::ETag,
     store::{SetVirtualRefsResult, StoreError, StoreErrorKind},
-    Store,
 };
 use itertools::Itertools as _;
 use pyo3::{
