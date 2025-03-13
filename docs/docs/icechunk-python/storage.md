@@ -91,17 +91,27 @@ Even is Tigris is API-compatible with S3, this function is needed because Tigris
 #### Cloudflare R2
 
 Icechunk can use Cloudflare R2's S3-compatible API. You will need to:
-1. set the [endpoint URL](https://developers.cloudflare.com/r2/api/s3/api/) specific to your bucket: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`;
+1. provide either the account ID or set the [endpoint URL](https://developers.cloudflare.com/r2/api/s3/api/) specific to your bucket: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`;
 2. [create an API token](https://developers.cloudflare.com/r2/api/s3/tokens/) to generate a secret access key and access key ID; and
 
 ```python
 icechunk.r2_storage(
+    bucket="bucket-name",
     prefix="icechunk-test/quickstart-demo-1",
     access_key_id='my-access-key',
     secret_access_key='my-secret-key',
-    endpoint_url='https://<ACCOUNT_ID>.r2.cloudflarestorage.com',
+    account_id='my-account-id',
 )
 ```
+
+For buckets with public access,
+```python
+icechunk.r2_storage(
+    prefix="icechunk-test/quickstart-demo-1",
+    endpoint_url="https://public-url,
+)
+```
+
 
 #### Minio
 

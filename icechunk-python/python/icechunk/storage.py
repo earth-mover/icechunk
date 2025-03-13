@@ -241,8 +241,10 @@ def tigris_storage(
 
 def r2_storage(
     *,
-    prefix: str,
-    endpoint_url: str,
+    bucket: str | None = None,
+    prefix: str | None = None,
+    account_id: str | None = None,
+    endpoint_url: str | None = None,
     region: str | None = None,
     allow_http: bool = False,
     access_key_id: str | None = None,
@@ -257,9 +259,15 @@ def r2_storage(
 
     Parameters
     ----------
-    prefix: str
+    bucket: str | Nne
+        The bucket name
+    prefix: str | None
         The prefix within the bucket that is the root directory of the repository
-    endpoint_url: str
+    account_id: str | None
+        Cloudflare account ID. When provided, a default endpoint URL is constructed as
+        `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. If not provided, `endpoint_url`
+        must be provided instead.
+    endpoint_url: str | None
         Endpoint where the object store serves data, example: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
     region: str | None
         The region to use in the object store, if `None` the default region 'auto' will be used
@@ -292,7 +300,9 @@ def r2_storage(
     options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
     return Storage.new_r2(
         config=options,
+        bucket=bucket,
         prefix=prefix,
+        account_id=account_id,
         credentials=credentials,
     )
 

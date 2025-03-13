@@ -72,10 +72,11 @@ pub enum StorageErrorKind {
     S3StreamError(#[from] ByteStreamError),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
+    #[error("storage configuration rror: {0}")]
+    R2ConfigurationError(String),
     #[error("storage error: {0}")]
     Other(String),
 }
-
 pub type StorageError = ICError<StorageErrorKind>;
 
 // it would be great to define this impl in error.rs, but it conflicts with the blanket
@@ -678,16 +679,38 @@ pub fn new_s3_storage(
 
 pub fn new_r2_storage(
     config: S3Options,
-    prefix: String,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    account_id: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    let (bucket, prefix) = match prefix.split_once("/") {
-        Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
-        None => (prefix, None),
+    let (bucket, prefix) = match (bucket, prefix) {
+        (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
+        (None, Some(prefix)) => match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
+            None => (prefix, None),
+        },
+        (Some(bucket), None) => (bucket, None),
+        (None, None) => {
+            return Err(StorageErrorKind::R2ConfigurationError(
+                "Either bucket or prefix must be provided.".to_string(),
+            )
+            .into());
+        }
     };
+
+    if config.endpoint_url.is_none() && account_id.is_none() {
+        return Err(StorageErrorKind::R2ConfigurationError(
+            "Either endpoint_url or account_id must be provided.".to_string(),
+        )
+        .into());
+    }
 
     let config = S3Options {
         region: config.region.or(Some("auto".to_string())),
+        endpoint_url: config
+            .endpoint_url
+            .or(account_id.map(|x| format!("https://{0}.r2.cloudflarestorage.com", x))),
         force_path_style: true,
         ..config
     };
