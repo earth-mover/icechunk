@@ -8,12 +8,11 @@ build:
   jobs:
      pre_create_environment:
        - conda update --yes --quiet --name=base --channel=defaults conda
+     install:
+      - cd ../icechunk-python && maturin develop && cd ../docs
+
 
 conda:
   environment: docs/doc-env.yml
-  jobs:
-    post_create_environment:
-      - cd ../icechunk-python && maturin develop && cd ../docs
-
 mkdocs:
   configuration: docs/mkdocs.yml
