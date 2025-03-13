@@ -12,8 +12,7 @@ build:
 conda:
   environment: docs/doc-env.yml
   jobs:
-    # post_create_environment:
-    install:
+    post_create_environment:
       - cd ../icechunk-python && maturin develop && cd ../docs
 
 mkdocs:
