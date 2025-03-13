@@ -9,7 +9,9 @@ build:
      pre_create_environment:
        - conda update --yes --quiet --name=base --channel=defaults conda
      install:
-      - cd icechunk-python && maturin develop && cd ../docs
+      - which mamba
+      - cd icechunk-python && maturin build && pip install ../target/wheels/*.whl && cd ../docs
+      # - cd icechunk-python && maturin develop && cd ../docs
 
 
 conda:
