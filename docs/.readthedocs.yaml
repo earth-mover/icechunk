@@ -3,12 +3,12 @@ version: 2
 build:
   os: ubuntu-24.04
   tools:
-    python: "miniconda3-4.7"
+    python: "mambaforge-latest"
 
   jobs:
      pre_create_environment:
        - conda update --yes --quiet --name=base --channel=defaults conda
-     post_create_environment:
+     install:
       - cd icechunk-python && maturin develop && cd ../docs
 
 
