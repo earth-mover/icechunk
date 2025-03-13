@@ -454,7 +454,7 @@ impl ChunkFetcher for LocalFSFetcher {
     ) -> Result<Bytes, VirtualReferenceError> {
         let url =
             Url::parse(location).map_err(VirtualReferenceErrorKind::CannotParseUrl)?;
-        let usize_range = range.start as usize..range.end as usize;
+        let usize_range = range.start..range.end;
         let mut options =
             GetOptions { range: Some(usize_range.into()), ..Default::default() };
 

@@ -592,7 +592,7 @@ impl Storage for ObjectStorage {
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
         let path = ObjectPath::from(key);
-        let usize_range = range.start as usize..range.end as usize;
+        let usize_range = range.start..range.end;
         let range = Some(usize_range.into());
         let opts = GetOptions { range, ..Default::default() };
         Ok(Box::new(self.get_client().await.get_opts(&path, opts).await?.bytes().await?))
@@ -605,7 +605,7 @@ impl Storage for ObjectStorage {
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let path = ObjectPath::from(key);
-        let usize_range = range.start as usize..range.end as usize;
+        let usize_range = range.start..range.end;
         let range = Some(usize_range.into());
         let opts = GetOptions { range, ..Default::default() };
         let res: Box<dyn AsyncRead + Unpin + Send> = Box::new(
@@ -1008,7 +1008,7 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
 fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
     let created_at = object.last_modified;
     let id = object.location.filename()?.to_string();
-    let size_bytes = object.size as u64;
+    let size_bytes = object.size;
     Some(ListInfo { id, created_at, size_bytes })
 }
 
