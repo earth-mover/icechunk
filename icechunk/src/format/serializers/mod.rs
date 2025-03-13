@@ -43,8 +43,8 @@
 use std::io::{Read, Write};
 
 use super::{
-    format_constants::SpecVersionBin, manifest::Manifest, snapshot::Snapshot,
-    transaction_log::TransactionLog, IcechunkFormatError,
+    IcechunkFormatError, format_constants::SpecVersionBin, manifest::Manifest,
+    snapshot::Snapshot, transaction_log::TransactionLog,
 };
 
 pub fn serialize_snapshot(

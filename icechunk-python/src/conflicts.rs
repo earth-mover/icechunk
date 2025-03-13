@@ -1,9 +1,9 @@
 use std::{fmt::Display, sync::Arc};
 
 use icechunk::conflicts::{
+    Conflict, ConflictSolver,
     basic_solver::{BasicConflictSolver, VersionSelection},
     detector::ConflictDetector,
-    Conflict, ConflictSolver,
 };
 use pyo3::prelude::*;
 

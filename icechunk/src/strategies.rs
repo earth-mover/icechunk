@@ -6,11 +6,11 @@ use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
+use crate::Repository;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
 use crate::session::Session;
 use crate::storage::new_in_memory_storage;
-use crate::Repository;
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths

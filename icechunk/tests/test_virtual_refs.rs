@@ -3,23 +3,23 @@
 mod tests {
     use futures::TryStreamExt;
     use icechunk::{
+        ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
         config::{Credentials, S3Credentials, S3Options, S3StaticCredentials},
         format::{
+            ByteRange, ChunkId, ChunkIndices, Path,
             manifest::{
                 Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
                 VirtualChunkRef, VirtualReferenceErrorKind,
             },
             snapshot::ArrayShape,
-            ByteRange, ChunkId, ChunkIndices, Path,
         },
         repository::VersionInfo,
-        session::{get_chunk, SessionErrorKind},
+        session::{SessionErrorKind, get_chunk},
         storage::{
-            self, new_s3_storage, s3::mk_client, ConcurrencySettings, ETag, ObjectStorage,
+            self, ConcurrencySettings, ETag, ObjectStorage, new_s3_storage, s3::mk_client,
         },
         store::{StoreError, StoreErrorKind},
         virtual_chunks::VirtualChunkContainer,
-        ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     };
     use std::{
         collections::{HashMap, HashSet},
@@ -33,7 +33,7 @@ mod tests {
 
     use bytes::Bytes;
     use object_store::{
-        local::LocalFileSystem, ObjectStore, PutMode, PutOptions, PutPayload,
+        ObjectStore, PutMode, PutOptions, PutPayload, local::LocalFileSystem,
     };
     use pretty_assertions::assert_eq;
 
@@ -439,8 +439,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zarr_store_virtual_refs_minio_set_and_get(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_zarr_store_virtual_refs_minio_set_and_get()
+    -> Result<(), Box<dyn std::error::Error>> {
         let bytes1 = Bytes::copy_from_slice(b"first");
         let bytes2 = Bytes::copy_from_slice(b"second0000");
         let chunks = [
@@ -513,8 +513,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zarr_store_virtual_refs_from_public_s3(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_zarr_store_virtual_refs_from_public_s3()
+    -> Result<(), Box<dyn std::error::Error>> {
         let repo_dir = TempDir::new()?;
         let repo = create_local_repository(repo_dir.path()).await;
         let ds = repo.writable_session("main").await.unwrap();
@@ -556,8 +556,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zarr_store_with_multiple_virtual_chunk_containers(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_zarr_store_with_multiple_virtual_chunk_containers()
+    -> Result<(), Box<dyn std::error::Error>> {
         // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
         // local filesystem chunks and one for chunks in a public S3 bucket.
 

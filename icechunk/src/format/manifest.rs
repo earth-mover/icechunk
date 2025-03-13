@@ -1,6 +1,6 @@
 use std::{borrow::Cow, convert::Infallible, ops::Range, sync::Arc};
 
-use crate::format::flatbuffers::gen;
+use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
@@ -61,7 +61,9 @@ pub enum VirtualReferenceErrorKind {
     FetchError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
     ObjectModified(String),
-    #[error("error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})")]
+    #[error(
+        "error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})"
+    )]
     InvalidObjectSize { expected: u64, available: u64 },
     #[error("error parsing virtual reference")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
@@ -168,7 +170,7 @@ impl Manifest {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Manifest, IcechunkFormatError> {
-        let _ = flatbuffers::root_with_opts::<gen::Manifest>(
+        let _ = flatbuffers::root_with_opts::<generated::Manifest>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -194,11 +196,11 @@ impl Manifest {
                 refs.push(mk_chunk_ref(&mut builder, chunk));
             }
 
-            let node_id = Some(gen::ObjectId8::new(&current_node.0));
+            let node_id = Some(generated::ObjectId8::new(&current_node.0));
             let refs = Some(builder.create_vector(refs.as_slice()));
-            let array_manifest = gen::ArrayManifest::create(
+            let array_manifest = generated::ArrayManifest::create(
                 &mut builder,
-                &gen::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
+                &generated::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
             );
             array_manifests.push(array_manifest);
         }
@@ -210,11 +212,11 @@ impl Manifest {
 
         let arrays = builder.create_vector(array_manifests.as_slice());
         let manifest_id = ManifestId::random();
-        let bin_manifest_id = gen::ObjectId12::new(&manifest_id.0);
+        let bin_manifest_id = generated::ObjectId12::new(&manifest_id.0);
 
-        let manifest = gen::Manifest::create(
+        let manifest = generated::Manifest::create(
             &mut builder,
-            &gen::ManifestArgs { id: Some(&bin_manifest_id), arrays: Some(arrays) },
+            &generated::ManifestArgs { id: Some(&bin_manifest_id), arrays: Some(arrays) },
         );
 
         builder.finish(manifest, Some("Ichk"));
@@ -240,10 +242,10 @@ impl Manifest {
         self.len() == 0
     }
 
-    fn root(&self) -> gen::Manifest {
+    fn root(&self) -> generated::Manifest {
         // without the unsafe version this is too slow
         // if we try to keep the root in the Manifest struct, we would need a lifetime
-        unsafe { flatbuffers::root_unchecked::<gen::Manifest>(&self.buffer) }
+        unsafe { flatbuffers::root_unchecked::<generated::Manifest>(&self.buffer) }
     }
 
     pub fn get_chunk_payload(
@@ -282,16 +284,16 @@ impl Manifest {
 }
 
 fn lookup_node<'a>(
-    manifest: gen::Manifest<'a>,
+    manifest: generated::Manifest<'a>,
     node: &NodeId,
-) -> Option<gen::ArrayManifest<'a>> {
+) -> Option<generated::ArrayManifest<'a>> {
     manifest.arrays().lookup_by_key(node.0, |am, id| am.node_id().0.cmp(id))
 }
 
 fn lookup_ref<'a>(
-    array_manifest: gen::ArrayManifest<'a>,
+    array_manifest: generated::ArrayManifest<'a>,
     coord: &ChunkIndices,
-) -> Option<gen::ChunkRef<'a>> {
+) -> Option<generated::ChunkRef<'a>> {
     let res =
         array_manifest.refs().lookup_by_key(coord.0.as_slice(), |chunk_ref, coords| {
             chunk_ref.index().iter().cmp(coords.iter().copied())
@@ -333,7 +335,7 @@ impl Iterator for PayloadIterator {
 }
 
 fn ref_to_payload(
-    chunk_ref: gen::ChunkRef<'_>,
+    chunk_ref: generated::ChunkRef<'_>,
 ) -> Result<ChunkPayload, IcechunkFormatError> {
     if let Some(chunk_id) = chunk_ref.chunk_id() {
         let id = ChunkId::new(chunk_id.0);
@@ -364,7 +366,7 @@ fn ref_to_payload(
     }
 }
 
-fn checksum(payload: &gen::ChunkRef<'_>) -> Option<Checksum> {
+fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
     if let Some(etag) = payload.checksum_etag() {
         Some(Checksum::ETag(ETag(etag.to_string())))
     } else if payload.checksum_last_modified() > 0 {
@@ -377,17 +379,20 @@ fn checksum(payload: &gen::ChunkRef<'_>) -> Option<Checksum> {
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     chunk: &ChunkInfo,
-) -> flatbuffers::WIPOffset<gen::ChunkRef<'bldr>> {
+) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
     match &chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
-            let args =
-                gen::ChunkRefArgs { inline: Some(bytes), index, ..Default::default() };
-            gen::ChunkRef::create(builder, &args)
+            let args = generated::ChunkRefArgs {
+                inline: Some(bytes),
+                index,
+                ..Default::default()
+            };
+            generated::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Virtual(virtual_chunk_ref) => {
-            let args = gen::ChunkRefArgs {
+            let args = generated::ChunkRefArgs {
                 index,
                 location: Some(
                     builder.create_string(virtual_chunk_ref.location.0.as_str()),
@@ -412,18 +417,18 @@ fn mk_chunk_ref<'bldr>(
                 },
                 ..Default::default()
             };
-            gen::ChunkRef::create(builder, &args)
+            generated::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Ref(chunk_ref) => {
-            let id = gen::ObjectId12::new(&chunk_ref.id.0);
-            let args = gen::ChunkRefArgs {
+            let id = generated::ObjectId12::new(&chunk_ref.id.0);
+            let args = generated::ChunkRefArgs {
                 index,
                 offset: chunk_ref.offset,
                 length: chunk_ref.length,
                 chunk_id: Some(&id),
                 ..Default::default()
             };
-            gen::ChunkRef::create(builder, &args)
+            generated::ChunkRef::create(builder, &args)
         }
     }
 }

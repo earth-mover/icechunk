@@ -9,7 +9,7 @@ license = "Apache-2.0"
 keywords = ["zarr", "xarray", "database"]
 categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
-edition = "2021"
+edition = "2024"
 publish = true
 
 [dependencies]

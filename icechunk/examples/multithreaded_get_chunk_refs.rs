@@ -18,18 +18,18 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use icechunk::{
+    Repository, RepositoryConfig,
     config::CompressionConfig,
     format::{
+        ChunkId, ChunkIndices, Path,
         manifest::{ChunkPayload, ChunkRef},
         snapshot::ArrayShape,
-        ChunkId, ChunkIndices, Path,
     },
     new_local_filesystem_storage,
     repository::VersionInfo,
     session::Session,
-    Repository, RepositoryConfig,
 };
 use itertools::iproduct;
 use rand::random_range;
@@ -127,7 +127,9 @@ async fn do_reads(path: &std::path::Path) -> Result<(), Box<dyn std::error::Erro
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().collect();
     if args.len() != 3 {
-        println!("Error: Pass either\n --write path/to/repo\n or\n --read path/to/repo\n as command line argument.");
+        println!(
+            "Error: Pass either\n --write path/to/repo\n or\n --read path/to/repo\n as command line argument."
+        );
         return Err("Invalid arguments".into());
     }
 

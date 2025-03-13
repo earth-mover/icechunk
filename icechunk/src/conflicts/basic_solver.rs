@@ -6,7 +6,7 @@ use crate::{
     session::{Session, SessionResult},
 };
 
-use super::{detector::ConflictDetector, Conflict, ConflictResolution, ConflictSolver};
+use super::{Conflict, ConflictResolution, ConflictSolver, detector::ConflictDetector};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionSelection {
@@ -104,13 +104,16 @@ impl BasicConflictSolver {
                         VersionSelection::UseOurs => {
                             // this is a no-op, our change will override the conflicting change
                         }
-                        VersionSelection::UseTheirs => {
-                            current_changes.drop_chunk_changes(&node_id, |coord| chunk_coordinates.contains(coord))
-                        }
+                        VersionSelection::UseTheirs => current_changes
+                            .drop_chunk_changes(&node_id, |coord| {
+                                chunk_coordinates.contains(coord)
+                            }),
                         // we can panic here because we have returned from the function if there
                         // were any unsolvable conflicts
                         #[allow(clippy::panic)]
-                        VersionSelection::Fail => panic!("Bug in conflict resolution: ChunkDoubleUpdate flagged as unrecoverable")
+                        VersionSelection::Fail => panic!(
+                            "Bug in conflict resolution: ChunkDoubleUpdate flagged as unrecoverable"
+                        ),
                     }
                 }
                 DeleteOfUpdatedArray { .. } => {

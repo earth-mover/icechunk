@@ -9,13 +9,13 @@ use std::{
 
 use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
-use flatbuffers::gen;
+use flatbuffers::generated;
 use format_constants::FileTypeBin;
 use itertools::Itertools;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, TryFromInto};
+use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
 
@@ -167,8 +167,8 @@ pub struct ChunkIndices(pub Vec<u32>);
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
 
-impl<'a> From<gen::ChunkIndices<'a>> for ChunkIndices {
-    fn from(value: gen::ChunkIndices<'a>) -> Self {
+impl<'a> From<generated::ChunkIndices<'a>> for ChunkIndices {
+    fn from(value: generated::ChunkIndices<'a>) -> Self {
         ChunkIndices(value.coords().iter().collect())
     }
 }

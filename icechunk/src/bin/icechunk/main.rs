@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use icechunk::cli::interface::{run_cli, IcechunkCLI};
+use icechunk::cli::interface::{IcechunkCLI, run_cli};
 
 #[tokio::main]
 async fn main() -> Result<()> {

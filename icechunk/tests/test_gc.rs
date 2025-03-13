@@ -6,19 +6,19 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
+    Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{snapshot::ArrayShape, ByteRange, ChunkId, ChunkIndices, Path},
+    format::{ByteRange, ChunkId, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
     ops::gc::{
-        expire, expire_ref, garbage_collect, ExpireRefResult, ExpiredRefAction, GCConfig,
-        GCSummary,
+        ExpireRefResult, ExpiredRefAction, GCConfig, GCSummary, expire, expire_ref,
+        garbage_collect,
     },
-    refs::{update_branch, Ref},
+    refs::{Ref, update_branch},
     repository::VersionInfo,
     session::get_chunk,
     storage::new_s3_storage,
-    Repository, RepositoryConfig, Storage,
 };
 use pretty_assertions::assert_eq;
 

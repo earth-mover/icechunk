@@ -5,11 +5,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 
 use crate::{
     change_set::ChangeSet,
-    format::{snapshot::NodeSnapshot, transaction_log::TransactionLog, NodeId, Path},
+    format::{NodeId, Path, snapshot::NodeSnapshot, transaction_log::TransactionLog},
     session::{Session, SessionError, SessionErrorKind, SessionResult},
 };
 
@@ -260,7 +260,7 @@ impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
         #![allow(clippy::expect_used)]
         let mut guard = self.0.lock().expect("Concurrency bug in PathFinder");
 
-        let (ref mut cache, ref mut iter) = guard.deref_mut();
+        let (cache, iter) = guard.deref_mut();
         if let Some(cached) = cache.get(node_id) {
             Ok(cached.clone())
         } else if let Some(iterator) = iter {

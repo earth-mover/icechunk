@@ -3,11 +3,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    format::{manifest::ChunkPayload, snapshot::ArrayShape, ChunkIndices, Path},
+    Repository, Storage,
+    format::{ChunkIndices, Path, manifest::ChunkPayload, snapshot::ArrayShape},
     repository::VersionInfo,
     session::{Session, SessionError},
     storage::new_in_memory_storage,
-    Repository, Storage,
 };
 use itertools::Itertools;
 

@@ -3,8 +3,8 @@ use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures::StreamExt;
 use icechunk::{
-    format::ByteRange, storage::new_in_memory_storage, Repository, RepositoryConfig,
-    Store,
+    Repository, RepositoryConfig, Store, format::ByteRange,
+    storage::new_in_memory_storage,
 };
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 
@@ -83,7 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while (set.join_next().await).is_some() {}
 
     let all_keys = store.list().await?.count().await;
-    println!("Found {all_keys} keys in the store: 100 chunks + 1 root group metadata + 1 array metadata");
+    println!(
+        "Found {all_keys} keys in the store: 100 chunks + 1 root group metadata + 1 array metadata"
+    );
 
     Ok(())
 }

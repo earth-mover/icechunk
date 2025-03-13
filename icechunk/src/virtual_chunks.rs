@@ -1,21 +1,22 @@
 use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError, Client};
+use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
-use futures::{stream::FuturesOrdered, TryStreamExt};
-use object_store::{local::LocalFileSystem, path::Path, GetOptions, ObjectStore};
+use futures::{TryStreamExt, stream::FuturesOrdered};
+use object_store::{GetOptions, ObjectStore, local::LocalFileSystem, path::Path};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use url::Url;
 
 use crate::{
+    ObjectStoreConfig,
     config::{Credentials, S3Credentials, S3Options},
     format::{
+        ChunkOffset,
         manifest::{
             Checksum, SecondsSinceEpoch, VirtualReferenceError, VirtualReferenceErrorKind,
         },
-        ChunkOffset,
     },
     private,
     storage::{
@@ -23,7 +24,6 @@ use crate::{
         s3::{mk_client, range_to_header},
         split_in_multiple_requests,
     },
-    ObjectStoreConfig,
 };
 
 pub type ContainerName = String;

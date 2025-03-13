@@ -1,13 +1,13 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
-    format::{snapshot::ArrayShape, ByteRange, ChunkIndices, Path},
-    session::{get_chunk, Session},
-    storage::new_in_memory_storage,
     Repository, Storage,
+    format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
+    session::{Session, get_chunk},
+    storage::new_in_memory_storage,
 };
 use pretty_assertions::assert_eq;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,

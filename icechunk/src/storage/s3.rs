@@ -8,42 +8,43 @@ use std::{
 };
 
 use crate::{
+    Storage, StorageError,
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
-    private, Storage, StorageError,
+    private,
 };
 use async_trait::async_trait;
 use aws_config::{
-    meta::region::RegionProviderChain, retry::ProvideErrorKind, AppName, BehaviorVersion,
+    AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::ProvideErrorKind,
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
+    Client,
     config::{
-        interceptors::BeforeTransmitInterceptorContextMut, Builder, ConfigBag, Intercept,
-        ProvideCredentials, Region, RuntimeComponents,
+        Builder, ConfigBag, Intercept, ProvideCredentials, Region, RuntimeComponents,
+        interceptors::BeforeTransmitInterceptorContextMut,
     },
     error::{BoxError, SdkError},
     operation::put_object::PutObjectError,
     primitives::ByteStream,
     types::{Delete, Object, ObjectIdentifier},
-    Client,
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use futures::{
-    stream::{self, BoxStream},
     StreamExt, TryStreamExt,
+    stream::{self, BoxStream},
 };
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::instrument;
 
 use super::{
-    DeleteObjectsResult, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
-    StorageErrorKind, StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult,
-    CHUNK_PREFIX, CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX,
-    TRANSACTION_PREFIX,
+    CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, FetchConfigResult, GetRefResult,
+    ListInfo, MANIFEST_PREFIX, REF_PREFIX, Reader, SNAPSHOT_PREFIX, Settings,
+    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
+    WriteRefResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -813,7 +814,7 @@ async fn get_object_range(
     bucket: String,
     key: &str,
     range: &Range<ChunkOffset>,
-) -> StorageResult<impl AsyncRead> {
+) -> StorageResult<impl AsyncRead + use<>> {
     let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
     Ok(b.send().await?.body.into_async_read())
 }

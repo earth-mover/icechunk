@@ -35,7 +35,7 @@ use store::{PyStore, VirtualChunkSpec};
 #[cfg(feature = "cli")]
 use clap::Parser;
 #[cfg(feature = "cli")]
-use icechunk::cli::interface::{run_cli, IcechunkCLI};
+use icechunk::cli::interface::{IcechunkCLI, run_cli};
 
 #[cfg(feature = "cli")]
 #[pyfunction]

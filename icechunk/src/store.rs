@@ -4,8 +4,8 @@ use std::{
     iter,
     ops::{Deref, DerefMut},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -13,8 +13,8 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use serde::{de, Deserialize, Serialize};
-use serde_with::{serde_as, TryFromInto};
+use serde::{Deserialize, Serialize, de};
+use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::instrument;
@@ -22,13 +22,13 @@ use tracing::instrument;
 use crate::{
     error::ICError,
     format::{
+        ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
-        ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
     },
     refs::{RefError, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
-    session::{get_chunk, is_prefix_match, Session, SessionError, SessionErrorKind},
+    session::{Session, SessionError, SessionErrorKind, get_chunk, is_prefix_match},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -540,7 +540,7 @@ impl Store {
 
     pub async fn list(
         &self,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send + use<>> {
         self.list_prefix("/").await
     }
 
@@ -548,7 +548,7 @@ impl Store {
     pub async fn list_prefix(
         &self,
         prefix: &str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send + use<>> {
         // TODO: this is inefficient because it filters based on the prefix, instead of only
         // generating items that could potentially match
         let meta = self.list_metadata_prefix(prefix, false).await?;
@@ -561,7 +561,7 @@ impl Store {
     pub async fn list_dir(
         &self,
         prefix: &str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send + use<>> {
         let res = self.list_dir_items(prefix).await?.map_ok(|item| match item {
             ListDirItem::Key(k) => k,
             ListDirItem::Prefix(p) => p,
@@ -573,7 +573,7 @@ impl Store {
     pub async fn list_dir_items(
         &self,
         prefix: &str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>> + Send + use<>> {
         let prefix = prefix.trim_end_matches("/");
         let absolute_prefix =
             if !prefix.starts_with("/") { &format!("/{}", prefix) } else { prefix };
@@ -737,7 +737,7 @@ impl Store {
         &'a self,
         prefix: &'b str,
         strip_prefix: bool,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
             let repository = Arc::clone(&self.session).read_owned().await;
@@ -759,7 +759,7 @@ impl Store {
     async fn list_chunks_prefix<'a, 'b: 'a>(
         &'a self,
         prefix: &'b str,
-    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a> {
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
             let repository = Arc::clone(&self.session).read_owned().await;
@@ -1177,8 +1177,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        repository::VersionInfo, storage::new_in_memory_storage, ObjectStorage,
-        Repository,
+        ObjectStorage, Repository, repository::VersionInfo,
+        storage::new_in_memory_storage,
     };
 
     use super::*;
@@ -1362,14 +1362,18 @@ mod tests {
 
     #[test]
     fn test_metadata_serialization() {
-        assert!(serde_json::from_str::<GroupMetadata>(
-            r#"{"zarr_format":3, "node_type":"group"}"#
-        )
-        .is_ok());
-        assert!(serde_json::from_str::<GroupMetadata>(
-            r#"{"zarr_format":3, "node_type":"array"}"#
-        )
-        .is_err());
+        assert!(
+            serde_json::from_str::<GroupMetadata>(
+                r#"{"zarr_format":3, "node_type":"group"}"#
+            )
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_str::<GroupMetadata>(
+                r#"{"zarr_format":3, "node_type":"array"}"#
+            )
+            .is_err()
+        );
 
         assert!(serde_json::from_str::<ArrayMetadata>(
                 r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#

@@ -10,33 +10,33 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto as _;
 use futures::{
-    stream::{FuturesOrdered, FuturesUnordered},
     Stream, StreamExt, TryStreamExt,
+    stream::{FuturesOrdered, FuturesUnordered},
 };
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{debug, error, instrument, trace, Instrument};
+use tracing::{Instrument, debug, error, instrument, trace};
 
 use crate::{
+    Storage, StorageError,
     asset_manager::AssetManager,
     config::{Credentials, ManifestPreloadCondition, RepositoryConfig},
     error::ICError,
     format::{
-        snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
-        transaction_log::{Diff, DiffBuilder},
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
+        snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
+        transaction_log::{Diff, DiffBuilder},
     },
     refs::{
-        create_tag, delete_branch, delete_tag, fetch_branch_tip, fetch_tag,
-        list_branches, list_tags, update_branch, Ref, RefError, RefErrorKind,
+        Ref, RefError, RefErrorKind, create_tag, delete_branch, delete_tag,
+        fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
     },
     session::{Session, SessionErrorKind, SessionResult},
     storage::{self, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
     virtual_chunks::{ContainerName, VirtualChunkResolver},
-    Storage, StorageError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +74,9 @@ pub enum RepositoryErrorKind {
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("error in repository deserialization")]
     DeserializationError(#[from] rmp_serde::decode::Error),
-    #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
+    #[error(
+        "error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`"
+    )]
     ConflictingPathNotFound(NodeId),
     #[error("error in config deserialization")]
     ConfigDeserializationError(#[from] serde_yaml_ng::Error),
@@ -419,7 +421,8 @@ impl Repository {
     pub async fn snapshot_ancestry(
         &self,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_ + use<'_>>
+    {
         Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
     }
 
@@ -427,7 +430,8 @@ impl Repository {
     pub async fn snapshot_ancestry_arc(
         self: Arc<Self>,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
+    {
         Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
     }
 
@@ -437,7 +441,8 @@ impl Repository {
     pub async fn ancestry<'a>(
         &'a self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a + use<'a>>
+    {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_ancestry(&snapshot_id).await
     }
@@ -446,7 +451,8 @@ impl Repository {
     pub async fn ancestry_arc(
         self: Arc<Self>,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
+    {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_ancestry_arc(&snapshot_id).await
     }
@@ -898,13 +904,13 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
+        Repository, Storage,
         config::{
             CachingConfig, ManifestConfig, ManifestPreloadConfig, RepositoryConfig,
         },
-        format::{manifest::ChunkPayload, snapshot::ArrayShape, ChunkIndices},
+        format::{ChunkIndices, manifest::ChunkPayload, snapshot::ArrayShape},
         new_local_filesystem_storage,
         storage::new_in_memory_storage,
-        Repository, Storage,
     };
 
     use super::*;
@@ -1242,9 +1248,9 @@ mod tests {
                 .expect("Creating local storage failed");
 
         Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
-        assert!(Repository::create(None, Arc::clone(&storage), HashMap::new())
-            .await
-            .is_err());
+        assert!(
+            Repository::create(None, Arc::clone(&storage), HashMap::new()).await.is_err()
+        );
 
         let inner_path: PathBuf =
             [repo_dir.path().to_string_lossy().into_owned().as_str(), "snapshots"]
@@ -1255,9 +1261,9 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        assert!(Repository::create(None, Arc::clone(&storage), HashMap::new())
-            .await
-            .is_err());
+        assert!(
+            Repository::create(None, Arc::clone(&storage), HashMap::new()).await.is_err()
+        );
 
         Ok(())
     }
