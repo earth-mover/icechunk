@@ -9,7 +9,7 @@ build:
      pre_create_environment:
        - conda update --yes --quiet --name=base --channel=defaults conda
      install:
-      - cd ../icechunk-python && maturin develop && cd ../docs
+      - cd icechunk-python && maturin develop && cd ../docs
 
 
 conda:
