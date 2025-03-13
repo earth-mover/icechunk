@@ -10,6 +10,7 @@ use std::{
 };
 
 use icechunk::{
+    ObjectStoreConfig, RepositoryConfig, Storage,
     config::{
         AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
         CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
@@ -19,12 +20,10 @@ use icechunk::{
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
-    ObjectStoreConfig, RepositoryConfig, Storage,
 };
 use pyo3::{
-    pyclass, pymethods,
+    Bound, Py, PyErr, PyResult, Python, pyclass, pymethods,
     types::{PyAnyMethods, PyModule, PyType},
-    Bound, Py, PyErr, PyResult, Python,
 };
 
 use crate::errors::PyIcechunkStoreError;
@@ -116,14 +115,15 @@ fn format_bool(b: bool) -> &'static str {
 }
 
 pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
-    format!("datetime.datetime({y},{month},{d},{h},{min},{sec},{micro}, tzinfo=datetime.timezone.utc)",
-        y=d.year(),
-        month=d.month(),
-        d=d.day(),
-        h=d.hour(),
-        min=d.minute(),
-        sec=d.second(),
-        micro=(d.nanosecond()/1000),
+    format!(
+        "datetime.datetime({y},{month},{d},{h},{min},{sec},{micro}, tzinfo=datetime.timezone.utc)",
+        y = d.year(),
+        month = d.month(),
+        d = d.day(),
+        h = d.hour(),
+        min = d.minute(),
+        sec = d.second(),
+        micro = (d.nanosecond() / 1000),
     )
 }
 

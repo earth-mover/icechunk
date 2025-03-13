@@ -12,8 +12,8 @@ use aws_sdk_s3::{
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
-    stream::{BoxStream, FuturesOrdered},
     Stream, StreamExt, TryStreamExt,
+    stream::{BoxStream, FuturesOrdered},
 };
 use itertools::Itertools;
 use s3::S3Storage;
@@ -321,7 +321,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     fn can_write(&self) -> bool;
 
     async fn fetch_config(&self, settings: &Settings)
-        -> StorageResult<FetchConfigResult>;
+    -> StorageResult<FetchConfigResult>;
     async fn update_config(
         &self,
         settings: &Settings,
@@ -636,7 +636,7 @@ pub fn split_in_multiple_requests(
     range: &Range<u64>,
     ideal_req_size: u64,
     max_requests: u16,
-) -> impl Iterator<Item = Range<u64>> {
+) -> impl Iterator<Item = Range<u64>> + use<> {
     let size = max(0, range.end - range.start);
     // we do a ceiling division, rounding always up
     let num_parts = size.div_ceil(ideal_req_size);

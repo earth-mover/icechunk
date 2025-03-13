@@ -1,19 +1,19 @@
 use std::{collections::HashSet, future::ready, sync::Arc};
 
 use chrono::{DateTime, Utc};
-use futures::{stream, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use tokio::pin;
 
 use crate::{
+    Storage, StorageError,
     asset_manager::AssetManager,
     format::{
-        manifest::ChunkPayload, ChunkId, IcechunkFormatError, IcechunkFormatErrorKind,
-        ManifestId, SnapshotId,
+        ChunkId, IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
+        manifest::ChunkPayload,
     },
-    refs::{delete_branch, delete_tag, list_refs, Ref, RefError},
+    refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
     repository::RepositoryError,
     storage::{self, DeleteObjectsResult, ListInfo},
-    Storage, StorageError,
 };
 
 #[derive(Debug, PartialEq, Eq)]

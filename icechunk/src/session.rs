@@ -2,7 +2,7 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     convert::Infallible,
-    future::{ready, Future},
+    future::{Future, ready},
     ops::Range,
     pin::Pin,
     sync::Arc,
@@ -12,19 +12,22 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{debug, info, instrument, trace, warn, Instrument};
+use tracing::{Instrument, debug, info, instrument, trace, warn};
 
 use crate::{
+    RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
+        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
+        IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
@@ -35,14 +38,11 @@ use crate::{
             NodeType, Snapshot, SnapshotProperties,
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
-        IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
     },
-    refs::{fetch_branch_tip, update_branch, RefError, RefErrorKind},
+    refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
-    RepositoryConfig, Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -75,9 +75,7 @@ pub enum SessionErrorKind {
     AlreadyExists { node: NodeSnapshot, message: String },
     #[error("cannot commit, no changes made to the session")]
     NoChangesToCommit,
-    #[error(
-        "invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` "
-    )]
+    #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
     InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
     #[error(
         "snapshot timestamp is invalid: timestamp: `{snapshot_time}`, object store clock: `{object_store_time}` "
@@ -98,7 +96,9 @@ pub enum SessionErrorKind {
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("error in session deserialization")]
     DeserializationError(#[from] rmp_serde::decode::Error),
-    #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
+    #[error(
+        "error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`"
+    )]
     ConflictingPathNotFound(NodeId),
     #[error(
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
@@ -517,7 +517,7 @@ impl Session {
     pub async fn array_chunk_iterator<'a>(
         &'a self,
         path: &Path,
-    ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
+    ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
         node_chunk_iterator(
             &self.asset_manager,
             &self.change_set,
@@ -656,8 +656,11 @@ impl Session {
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
-    ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
-    {
+    ) -> impl FnOnce(
+        Bytes,
+    )
+        -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+    + use<> {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         move |data: Bytes| {
@@ -736,7 +739,8 @@ impl Session {
     pub async fn chunk_coordinates<'a, 'b: 'a>(
         &'a self,
         array_path: &'b Path,
-    ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a> {
+    ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a + use<'a>>
+    {
         let node = self.get_array(array_path).await?;
         let updated_chunks = updated_node_chunks_iterator(
             self.asset_manager.as_ref(),
@@ -1046,7 +1050,7 @@ async fn node_chunk_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     path: &Path,
-) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
+) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
     match get_node(asset_manager, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
             verified_node_chunk_iterator(asset_manager, snapshot_id, change_set, node)
@@ -1154,8 +1158,8 @@ pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
             prefix.is_empty()   // if prefix was empty anything matches
                 || rest.is_empty()  // if stripping prefix left empty we have a match
                 || rest.starts_with('/') // next component so we match
-                                         // what we don't include is other matches,
-                                         // we want to catch prefix/foo but not prefix-foo
+            // what we don't include is other matches,
+            // we want to catch prefix/foo but not prefix-foo
         }
     }
 }
@@ -1187,7 +1191,7 @@ async fn updated_existing_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a + use<'a>> {
     let updated_nodes = asset_manager
         .fetch_snapshot(parent_id)
         .await?
@@ -1207,7 +1211,7 @@ async fn updated_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a + use<'a>> {
     Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
         .await?
         .chain(change_set.new_nodes_iterator().map(Ok)))
@@ -1738,18 +1742,18 @@ mod tests {
     use std::{collections::HashMap, error::Error};
 
     use crate::{
+        ObjectStorage, Repository,
         conflicts::{
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
         format::manifest::ManifestExtents,
-        refs::{fetch_tag, Ref},
+        refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{
-            chunk_indices, empty_writable_session, node_paths, shapes_and_dims, ShapeDim,
+            ShapeDim, chunk_indices, empty_writable_session, node_paths, shapes_and_dims,
         },
-        ObjectStorage, Repository,
     };
 
     use super::*;
@@ -1816,26 +1820,30 @@ mod tests {
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // new array must always succeed
-        prop_assert!(session
-            .add_array(
-                path.clone(),
-                metadata.shape.clone(),
-                metadata.dimension_names.clone(),
-                Bytes::new()
-            )
-            .await
-            .is_ok());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_ok()
+        );
 
         // adding to the same path must fail
-        prop_assert!(session
-            .add_array(
-                path.clone(),
-                metadata.shape.clone(),
-                metadata.dimension_names.clone(),
-                Bytes::new()
-            )
-            .await
-            .is_err());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_err()
+        );
 
         // first delete must succeed
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
@@ -1844,15 +1852,17 @@ mod tests {
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
 
         // adding again must succeed
-        prop_assert!(session
-            .add_array(
-                path.clone(),
-                metadata.shape.clone(),
-                metadata.dimension_names.clone(),
-                Bytes::new()
-            )
-            .await
-            .is_ok());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_ok()
+        );
 
         // deleting again must succeed
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
@@ -1865,15 +1875,17 @@ mod tests {
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // adding a group at an existing array node must fail
-        prop_assert!(session
-            .add_array(
-                path.clone(),
-                metadata.shape.clone(),
-                metadata.dimension_names.clone(),
-                Bytes::new()
-            )
-            .await
-            .is_ok());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_ok()
+        );
         let matches = matches!(
             session.add_group(path.clone(), Bytes::new()).await.unwrap_err(),
             SessionError{kind: SessionErrorKind::AlreadyExists{node, ..},..} if node.path == path
@@ -2645,11 +2657,9 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         // there should be no manifests yet
-        assert!(!in_mem_storage
-            .all_keys()
-            .await?
-            .iter()
-            .any(|key| key.contains("manifest")));
+        assert!(
+            !in_mem_storage.all_keys().await?.iter().any(|key| key.contains("manifest"))
+        );
 
         // initialization creates one snapshot
         assert_eq!(
@@ -3009,22 +3019,24 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
 
-        assert!(ds
-            .set_chunk_ref(
+        assert!(
+            ds.set_chunk_ref(
                 apath.clone(),
                 ChunkIndices(vec![0, 0]),
                 Some(ChunkPayload::Inline("hello".into())),
             )
             .await
-            .is_ok());
-        assert!(ds
-            .set_chunk_ref(
+            .is_ok()
+        );
+        assert!(
+            ds.set_chunk_ref(
                 apath.clone(),
                 ChunkIndices(vec![2, 2]),
                 Some(ChunkPayload::Inline("hello".into())),
             )
             .await
-            .is_ok());
+            .is_ok()
+        );
 
         let bad_result = ds
             .set_chunk_ref(
@@ -3101,8 +3113,8 @@ mod tests {
     ///
     /// This session: add array
     /// Previous commit: add group on same path
-    async fn test_conflict_detection_node_conflict_with_existing_node(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_node_conflict_with_existing_node()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
@@ -3146,8 +3158,8 @@ mod tests {
     ///
     /// This session: update array metadata
     /// Previous commit: update array metadata
-    async fn test_conflict_detection_double_zarr_metadata_edit(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_double_zarr_metadata_edit()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
@@ -3168,8 +3180,8 @@ mod tests {
     ///
     /// This session: delete array
     /// Previous commit: update same array metadata
-    async fn test_conflict_detection_metadata_edit_of_deleted(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_metadata_edit_of_deleted()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
@@ -3190,8 +3202,8 @@ mod tests {
     ///
     /// This session: delete array
     /// Previous commit: update same array metadata
-    async fn test_conflict_detection_delete_when_array_metadata_updated(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_delete_when_array_metadata_updated()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
@@ -3213,8 +3225,8 @@ mod tests {
     ///
     /// This session: delete array
     /// Previous commit: update same array chunks
-    async fn test_conflict_detection_delete_when_chunks_updated(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_delete_when_chunks_updated()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
@@ -3241,8 +3253,8 @@ mod tests {
     ///
     /// This session: delete group
     /// Previous commit: update same group user attributes
-    async fn test_conflict_detection_delete_when_group_user_data_updated(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_delete_when_group_user_data_updated()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar".try_into().unwrap();
@@ -3542,8 +3554,8 @@ mod tests {
     /// One session deletes an array, the other updates its metadata.
     /// We attempt to recover using the default [`BasicConflictSolver`]
     /// Array should still be deleted
-    async fn test_conflict_resolution_delete_of_updated_array(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_resolution_delete_of_updated_array()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
@@ -3570,8 +3582,8 @@ mod tests {
     /// Verify we can rebase over multiple commits if they are all fast-forwardable.
     /// We have multiple commits with chunk writes, and then a session has to rebase
     /// writing to the same chunks.
-    async fn test_conflict_resolution_success_through_multiple_commits(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_resolution_success_through_multiple_commits()
+    -> Result<(), Box<dyn Error>> {
         let repo = get_repo_for_conflict().await?;
         let mut ds2 = repo.writable_session("main").await?;
 
@@ -3618,8 +3630,8 @@ mod tests {
     /// Rebase over multiple commits with partial failure
     ///
     /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
-    async fn test_conflict_resolution_failure_in_multiple_commits(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_resolution_failure_in_multiple_commits()
+    -> Result<(), Box<dyn Error>> {
         let repo = get_repo_for_conflict().await?;
 
         let mut ds1 = repo.writable_session("main").await?;
@@ -3679,15 +3691,15 @@ mod tests {
 
     #[cfg(test)]
     mod state_machine_test {
-        use crate::format::snapshot::NodeData;
         use crate::format::Path;
+        use crate::format::snapshot::NodeData;
         use bytes::Bytes;
         use futures::Future;
         use proptest::prelude::*;
         use proptest::sample;
         use proptest::strategy::{BoxedStrategy, Just};
         use proptest_state_machine::{
-            prop_state_machine, ReferenceStateMachine, StateMachineTest,
+            ReferenceStateMachine, StateMachineTest, prop_state_machine,
         };
         use std::collections::HashMap;
         use std::fmt::Debug;
@@ -3695,10 +3707,10 @@ mod tests {
 
         use proptest::test_runner::Config;
 
-        use super::create_memory_store_repository;
         use super::ArrayShape;
         use super::DimensionName;
         use super::Session;
+        use super::create_memory_store_repository;
         use super::{node_paths, shapes_and_dims};
 
         #[derive(Clone, Debug)]

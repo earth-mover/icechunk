@@ -37,8 +37,8 @@ pub mod virtual_chunks;
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
 pub use storage::{
-    new_in_memory_storage, new_local_filesystem_storage, new_s3_storage, ObjectStorage,
-    Storage, StorageError,
+    ObjectStorage, Storage, StorageError, new_in_memory_storage,
+    new_local_filesystem_storage, new_s3_storage,
 };
 pub use store::Store;
 
@@ -52,7 +52,7 @@ mod private {
 pub fn initialize_tracing() {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
-        layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
+        EnvFilter, Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt,
     };
 
     // We have two Layers. One keeps track of the spans to feed the ICError instances.

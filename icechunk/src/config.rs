@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     storage,
-    virtual_chunks::{mk_default_containers, ContainerName, VirtualChunkContainer},
+    virtual_chunks::{ContainerName, VirtualChunkContainer, mk_default_containers},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -9,7 +9,7 @@ extern crate flatbuffers;
 use self::flatbuffers::{EndianScalar, Follow};
 
 #[allow(unused_imports, dead_code)]
-pub mod gen {
+pub mod generated {
 
     use core::cmp::Ordering;
     use core::mem;
@@ -70,8 +70,10 @@ pub mod gen {
         type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
-            Self(b)
+            unsafe {
+                let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+                Self(b)
+            }
         }
     }
 
@@ -79,7 +81,9 @@ pub mod gen {
         type Output = NodeData;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            unsafe {
+                flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            }
         }
     }
 
@@ -131,25 +135,27 @@ pub mod gen {
         type Inner = &'a ObjectId12;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ObjectId12>::follow(buf, loc)
+            unsafe { <&'a ObjectId12>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ObjectId12 {
         type Inner = &'a ObjectId12;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ObjectId12 {
         type Output = ObjectId12;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ObjectId12 as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
-            dst.copy_from_slice(src);
+            unsafe {
+                let src = ::core::slice::from_raw_parts(
+                    self as *const ObjectId12 as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                );
+                dst.copy_from_slice(src);
+            }
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -211,25 +217,27 @@ pub mod gen {
         type Inner = &'a ObjectId8;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ObjectId8>::follow(buf, loc)
+            unsafe { <&'a ObjectId8>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ObjectId8 {
         type Inner = &'a ObjectId8;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ObjectId8 {
         type Output = ObjectId8;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ObjectId8 as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
-            dst.copy_from_slice(src);
+            unsafe {
+                let src = ::core::slice::from_raw_parts(
+                    self as *const ObjectId8 as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                );
+                dst.copy_from_slice(src);
+            }
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -295,25 +303,27 @@ pub mod gen {
         type Inner = &'a ManifestFileInfo;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ManifestFileInfo>::follow(buf, loc)
+            unsafe { <&'a ManifestFileInfo>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ManifestFileInfo {
         type Inner = &'a ManifestFileInfo;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ManifestFileInfo>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ManifestFileInfo>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ManifestFileInfo {
         type Output = ManifestFileInfo;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ManifestFileInfo as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
-            dst.copy_from_slice(src);
+            unsafe {
+                let src = ::core::slice::from_raw_parts(
+                    self as *const ManifestFileInfo as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                );
+                dst.copy_from_slice(src);
+            }
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -438,25 +448,27 @@ pub mod gen {
         type Inner = &'a ChunkIndexRange;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ChunkIndexRange>::follow(buf, loc)
+            unsafe { <&'a ChunkIndexRange>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ChunkIndexRange {
         type Inner = &'a ChunkIndexRange;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ChunkIndexRange {
         type Output = ChunkIndexRange;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ChunkIndexRange as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
-            dst.copy_from_slice(src);
+            unsafe {
+                let src = ::core::slice::from_raw_parts(
+                    self as *const ChunkIndexRange as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                );
+                dst.copy_from_slice(src);
+            }
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -568,25 +580,27 @@ pub mod gen {
         type Inner = &'a DimensionShape;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a DimensionShape>::follow(buf, loc)
+            unsafe { <&'a DimensionShape>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a DimensionShape {
         type Inner = &'a DimensionShape;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<DimensionShape>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<DimensionShape>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for DimensionShape {
         type Output = DimensionShape;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const DimensionShape as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
-            dst.copy_from_slice(src);
+            unsafe {
+                let src = ::core::slice::from_raw_parts(
+                    self as *const DimensionShape as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                );
+                dst.copy_from_slice(src);
+            }
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -686,7 +700,7 @@ pub mod gen {
         type Inner = ChunkRef<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -967,7 +981,7 @@ pub mod gen {
         type Inner = ArrayManifest<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1115,7 +1129,7 @@ pub mod gen {
         type Inner = Manifest<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1265,7 +1279,7 @@ pub mod gen {
         type Inner = MetadataItem<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1420,7 +1434,7 @@ pub mod gen {
         type Inner = ManifestRef<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1556,7 +1570,7 @@ pub mod gen {
         type Inner = DimensionName<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1669,7 +1683,7 @@ pub mod gen {
         type Inner = GroupNodeData<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1748,7 +1762,7 @@ pub mod gen {
         type Inner = ArrayNodeData<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1944,7 +1958,7 @@ pub mod gen {
         type Inner = NodeSnapshot<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2223,7 +2237,7 @@ pub mod gen {
         type Inner = Snapshot<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2511,7 +2525,7 @@ pub mod gen {
         type Inner = ChunkIndices<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2628,7 +2642,7 @@ pub mod gen {
         type Inner = ArrayUpdatedChunks<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2781,7 +2795,7 @@ pub mod gen {
         type Inner = TransactionLog<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -3098,4 +3112,4 @@ pub mod gen {
             ds.finish()
         }
     }
-} // pub mod gen
+} // pub mod generated

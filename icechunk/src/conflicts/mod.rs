@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::{
     change_set::ChangeSet,
-    format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path},
+    format::{ChunkIndices, NodeId, Path, transaction_log::TransactionLog},
     session::{Session, SessionResult},
 };
 

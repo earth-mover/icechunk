@@ -4,7 +4,7 @@ use dialoguer::{Input, Select};
 use futures::stream::StreamExt;
 use serde_yaml_ng;
 use std::collections::HashMap;
-use std::fs::{create_dir_all, File};
+use std::fs::{File, create_dir_all};
 use std::io::stdout;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use crate::storage::{
     new_azure_blob_storage, new_gcs_storage, new_local_filesystem_storage,
     new_tigris_storage,
 };
-use crate::{new_s3_storage, Repository, RepositoryConfig, Storage};
+use crate::{Repository, RepositoryConfig, Storage, new_s3_storage};
 
 use crate::cli::config::{CliConfig, RepositoryAlias, RepositoryDefinition};
 use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};

@@ -1,26 +1,26 @@
 use std::{
     collections::BTreeSet,
-    future::{ready, Future},
+    future::{Future, ready},
     pin::Pin,
 };
 
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use futures::{
-    stream::{FuturesOrdered, FuturesUnordered},
     FutureExt, StreamExt,
+    stream::{FuturesOrdered, FuturesUnordered},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, TryFromInto};
+use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
 use tracing::instrument;
 
 use crate::{
+    Storage, StorageError,
     error::ICError,
     format::SnapshotId,
     storage::{self, GetRefResult, StorageErrorKind, VersionInfo, WriteRefResult},
-    Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -417,7 +417,7 @@ mod tests {
 
     use futures::Future;
     use pretty_assertions::assert_eq;
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
 
     use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
 

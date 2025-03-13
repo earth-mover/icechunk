@@ -2,18 +2,20 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use quick_cache::{sync::Cache, Weighter};
+use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufReader, Read},
     ops::Range,
     sync::Arc,
 };
-use tracing::{debug, instrument, trace, Span};
+use tracing::{Span, debug, instrument, trace};
 
 use crate::{
+    Storage,
     config::CachingConfig,
     format::{
+        ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId, SnapshotId,
         format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
         manifest::Manifest,
         serializers::{
@@ -22,12 +24,10 @@ use crate::{
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
-        ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId, SnapshotId,
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, Reader},
-    Storage,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -296,7 +296,8 @@ impl AssetManager {
     pub async fn snapshot_ancestry(
         self: Arc<Self>,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>>> {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
+    {
         let mut this = self.fetch_snapshot(snapshot_id).await?;
         let stream = try_stream! {
             let info: SnapshotInfo = this.as_ref().try_into()?;
@@ -675,15 +676,15 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
-    use itertools::{assert_equal, Itertools};
+    use itertools::{Itertools, assert_equal};
 
     use super::*;
     use crate::{
         format::{
-            manifest::{ChunkInfo, ChunkPayload},
             ChunkIndices, NodeId,
+            manifest::{ChunkInfo, ChunkPayload},
         },
-        storage::{logging::LoggingStorage, new_in_memory_storage, Storage},
+        storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
 
     #[tokio::test(flavor = "multi_thread")]

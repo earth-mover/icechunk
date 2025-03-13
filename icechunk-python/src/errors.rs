@@ -1,17 +1,16 @@
 use icechunk::{
+    StorageError,
     format::IcechunkFormatError,
     ops::gc::GCError,
     repository::RepositoryError,
     session::{SessionError, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
-    StorageError,
 };
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
-    create_exception,
+    PyErr, create_exception,
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
-    PyErr,
 };
 use thiserror::Error;
 

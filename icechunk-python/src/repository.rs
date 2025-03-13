@@ -9,28 +9,28 @@ use itertools::Itertools;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
+    Repository,
     config::Credentials,
     format::{
+        SnapshotId,
         snapshot::{SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
-        SnapshotId,
     },
-    ops::gc::{expire, garbage_collect, ExpiredRefAction, GCConfig, GCSummary},
+    ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
     repository::{RepositoryErrorKind, VersionInfo},
-    Repository,
 };
 use pyo3::{
+    IntoPyObjectExt,
     exceptions::PyValueError,
     prelude::*,
     types::{PyDict, PyNone, PyType},
-    IntoPyObjectExt,
 };
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        datetime_repr, format_option_to_string, PyCredentials, PyRepositoryConfig,
-        PyStorage, PyStorageSettings,
+        PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
+        format_option_to_string,
     },
     errors::PyIcechunkStoreError,
     session::PySession,

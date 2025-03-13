@@ -10,19 +10,19 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use futures::{
-    stream::{self, BoxStream},
     StreamExt, TryStreamExt,
+    stream::{self, BoxStream},
 };
 use object_store::{
+    Attribute, AttributeValue, Attributes, CredentialProvider, GetOptions, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutPayload, StaticCredentialProvider,
+    UpdateVersion,
     aws::AmazonS3Builder,
     azure::{AzureConfigKey, MicrosoftAzureBuilder},
     gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
     local::LocalFileSystem,
     memory::InMemory,
     path::Path as ObjectPath,
-    Attribute, AttributeValue, Attributes, CredentialProvider, GetOptions, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutPayload, StaticCredentialProvider,
-    UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -43,10 +43,10 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, FetchConfigResult, Generation,
-    GetRefResult, ListInfo, Reader, Settings, Storage, StorageError, StorageErrorKind,
-    StorageResult, UpdateConfigResult, VersionInfo, WriteRefResult, CHUNK_PREFIX,
-    CONFIG_PATH, MANIFEST_PREFIX, REF_PREFIX, SNAPSHOT_PREFIX, TRANSACTION_PREFIX,
+    CHUNK_PREFIX, CONFIG_PATH, ConcurrencySettings, DeleteObjectsResult, ETag,
+    FetchConfigResult, Generation, GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX,
+    Reader, SNAPSHOT_PREFIX, Settings, Storage, StorageError, StorageErrorKind,
+    StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo, WriteRefResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -214,7 +214,7 @@ impl ObjectStorage {
         &self,
         _settings: &Settings,
         path: &ObjectPath,
-    ) -> StorageResult<impl AsyncRead> {
+    ) -> StorageResult<impl AsyncRead + use<>> {
         Ok(self
             .get_client()
             .await
