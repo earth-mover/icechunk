@@ -133,7 +133,7 @@ pub async fn mk_client(
 
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
-    let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
+    let mut aws_config = aws_config::defaults(BehaviorVersion::v2025_01_17())
         .region(region)
         .app_name(app_name);
 
