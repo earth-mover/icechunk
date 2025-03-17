@@ -1377,18 +1377,14 @@ impl<'a> FlushProcess<'a> {
         }
     }
 
-    /// Write a manifest for a node that was created in this session
-    /// It doesn't need to look at previous manifests because the node is new
-    async fn write_manifest_for_new_node(
+    async fn write_manifest_from_iterator(
         &mut self,
         node_id: &NodeId,
-        node_path: &Path,
+        chunks: impl Iterator<Item = ChunkInfo>,
         shards: ManifestShards,
     ) -> SessionResult<()> {
         let mut from = vec![];
         let mut to = vec![];
-
-        let chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
 
         let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
         sharded_refs.reserve(shards.len());
@@ -1440,12 +1436,25 @@ impl<'a> FlushProcess<'a> {
         Ok(())
     }
 
+    /// Write a manifest for a node that was created in this session
+    /// It doesn't need to look at previous manifests because the node is new
+    async fn write_manifest_for_new_node(
+        &mut self,
+        node_id: &NodeId,
+        node_path: &Path,
+        shards: ManifestShards,
+    ) -> SessionResult<()> {
+        let chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
+        self.write_manifest_from_iterator(node_id, chunks, shards).await
+    }
+
     /// Write a manifest for a node that was modified in this session
     /// It needs to update the chunks according to the change set
     /// and record the new manifest
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
+        shards: ManifestShards,
     ) -> SessionResult<()> {
         let updated_chunks = updated_node_chunks_iterator(
             self.asset_manager.as_ref(),
@@ -1455,39 +1464,12 @@ impl<'a> FlushProcess<'a> {
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
-        let mut from = vec![];
-        let mut to = vec![];
-        let updated_chunks =
-            aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
 
-        // // FIXME
-        // let shards = {
-        //     if let NodeData::Array { shape, .. } = node.node_data.clone() {
-        //         ManifestShards::default(shape.len())
-        //     } else {
-        //         todo!()
-        //     }
-        // };
+        // FIXME
+        let as_iter =
+            updated_chunks.collect::<Vec<_>>().await.into_iter().map(|x| x.unwrap());
 
-        if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
-
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
-
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-            self.manifest_refs
-                .entry(node.id.clone())
-                .and_modify(|v| v.push(new_ref.clone()))
-                .or_insert_with(|| vec![new_ref]);
-        }
-        Ok(())
+        self.write_manifest_from_iterator(&node.id, as_iter, shards).await
     }
 
     /// Record the previous manifests for an array that was not modified in the session
@@ -1549,11 +1531,18 @@ impl ManifestShardingConfig {
                         for (axis, dimname) in itertools::enumerate(dimension_names) {
                             for (dim_condition, shard_size) in dim_specs.iter() {
                                 if dim_condition.matches(axis, dimname.clone().into()) {
-                                    edges.push(
-                                        (0..num_chunks[axis])
-                                            .step_by(*shard_size)
-                                            .collect(),
-                                    )
+                                    edges.push({
+                                        (0..=num_chunks[axis])
+                                            .step_by(*shard_size as usize)
+                                            .chain(
+                                                if num_chunks[axis] % shard_size != 0 {
+                                                    Some(num_chunks[axis])
+                                                } else {
+                                                    None
+                                                },
+                                            )
+                                            .collect()
+                                    })
                                 }
                             }
                         }
@@ -1576,6 +1565,7 @@ async fn flush(
 
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
+    let sharding_config = flush_data.config.manifest().sharding();
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
@@ -1593,7 +1583,8 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            flush_data.write_manifest_for_existing_node(&node).await?;
+            let shards = sharding_config.get_shard_sizes(&node)?;
+            flush_data.write_manifest_for_existing_node(&node, shards).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
@@ -1607,7 +1598,6 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        let config = flush_data.config.manifest().sharding();
         let node = get_node(
             &flush_data.asset_manager,
             flush_data.change_set,
@@ -1615,7 +1605,7 @@ async fn flush(
             node_path,
         )
         .await?;
-        let shards = config.get_shard_sizes(&node)?;
+        let shards = sharding_config.get_shard_sizes(&node)?;
         flush_data.write_manifest_for_new_node(node_id, node_path, shards).await?;
     }
 

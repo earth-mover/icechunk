@@ -192,14 +192,14 @@ pub enum ShardDimCondition {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ManifestShardingConfig {
     // TODO: need to preserve insertion order of conditions, so hashmap doesn't work
-    pub shard_sizes: Vec<(ManifestShardCondition, Vec<(ShardDimCondition, usize)>)>,
+    pub shard_sizes: Vec<(ManifestShardCondition, Vec<(ShardDimCondition, u32)>)>,
 }
 
 impl Default for ManifestShardingConfig {
     fn default() -> Self {
-        let inner = vec![(ShardDimCondition::Any, usize::MAX)];
+        let inner = vec![(ShardDimCondition::Any, u32::MAX)];
         let new = vec![(
-            ManifestShardCondition::PathMatches { regex: r#"*"#.to_string() },
+            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
             inner,
         )];
         Self { shard_sizes: new }

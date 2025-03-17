@@ -906,8 +906,8 @@ mod tests {
     use crate::{
         Repository, Storage,
         config::{
-            CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestShardingConfig,
-            RepositoryConfig,
+            CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestShardCondition,
+            ManifestShardingConfig, RepositoryConfig, ShardDimCondition,
         },
         format::{ChunkIndices, manifest::ChunkPayload, snapshot::ArrayShape},
         new_local_filesystem_storage,
@@ -915,6 +915,21 @@ mod tests {
     };
 
     use super::*;
+
+    async fn assert_manifest_count(
+        storage: &Arc<dyn Storage + Send + Sync>,
+        total_manifests: usize,
+    ) {
+        assert_eq!(
+            storage
+                .list_manifests(&storage.default_settings())
+                .await
+                .unwrap()
+                .count()
+                .await,
+            total_manifests
+        );
+    }
 
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
@@ -1084,6 +1099,96 @@ mod tests {
                 num_chunk_refs: 1_000_000
             }
         ));
+    }
+    #[tokio::test]
+    async fn test_manifest_sharding() -> Result<(), Box<dyn Error>> {
+        // initialize_tracing();
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let storage = Arc::clone(&backend);
+
+        let dim_size = 25u32;
+        let chunk_size = 1u32;
+        let shard_size = 3u32;
+
+        let shape =
+            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (1, 1), (1, 1)])
+                .unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+
+        let shard_sizes = vec![(
+            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+            vec![(ShardDimCondition::Any, shard_size)],
+        )];
+        let man_config = ManifestConfig {
+            sharding: Some(ManifestShardingConfig { shard_sizes }),
+            ..ManifestConfig::default()
+        };
+        let config = RepositoryConfig {
+            manifest: Some(man_config),
+            ..RepositoryConfig::default()
+        };
+        let repository =
+            Repository::create(Some(config), storage, HashMap::new()).await?;
+
+        let mut session = repository.writable_session("main").await?;
+
+        let def = Bytes::from_static(br#"{"this":"array"}"#);
+        session.add_group(Path::root(), def.clone()).await?;
+        session
+            .add_array(
+                temp_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
+
+        let storage = Arc::clone(&backend);
+        let mut total_manifests = 0;
+
+        for i in 0..2 {
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i, 0, 0]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        session.commit("first shard", None).await?;
+        total_manifests += 1;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        let mut session = repository.writable_session("main").await?;
+        for i in (0..dim_size).step_by(shard_size as usize) {
+            total_manifests += 1;
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i, 0, 0]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        session.commit("first shard", None).await?;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        let mut session = repository.writable_session("main").await?;
+        for i in 0..dim_size {
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i, 0, 0]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        total_manifests += dim_size.div_ceil(shard_size) as usize;
+        session.commit("full overwrite", None).await?;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        Ok(())
     }
 
     #[tokio::test]
