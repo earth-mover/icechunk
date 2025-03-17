@@ -72,7 +72,7 @@ pub enum StorageErrorKind {
     S3StreamError(#[from] ByteStreamError),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
-    #[error("storage configuration rror: {0}")]
+    #[error("storage configuration error: {0}")]
     R2ConfigurationError(String),
     #[error("storage error: {0}")]
     Other(String),
