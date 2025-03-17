@@ -8,6 +8,13 @@ import xarray as xr
     "storage",
     [
         pytest.param(
+            ic.r2_storage(
+                prefix="v1/era5_weatherbench2",
+                endpoint_url="https://data.icechunk.cloud",
+            ),
+            id="public-url",
+        ),
+        pytest.param(
             ic.s3_storage(
                 bucket="icechunk-public-data-r2",
                 prefix="v1/era5_weatherbench2",
