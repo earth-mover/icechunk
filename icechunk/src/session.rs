@@ -2047,23 +2047,8 @@ mod tests {
         prop_assert_eq!(to, expected_to);
     }
 
-    // #[proptest(async = "tokio")]
-    // async fn test_which_shard(
-    //     #[strategy(chunk_indices(3, 0..1_000_000))] index: ChunkIndices,
-    //     #[strategy(shapes_and_dims(3))] shape_dim: ShapeDim,
-    // ) {
-    //     let ShapeDim { shape: shape, manifest_shard_size: manifest_shard_size, .. } =
-    //         shape_dim;
-
-
-
-    //     // let shard_sizes =
-    //     // let shards = ManifestShards::from_sizes(shard_sizes);
-    //     todo!()
-    // }
-
     #[tokio::test]
-    async fn test_which_shard_simple() -> Result<(), Box<dyn Error>> {
+    async fn test_which_shard() -> Result<(), Box<dyn Error>> {
         let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
 
         assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
