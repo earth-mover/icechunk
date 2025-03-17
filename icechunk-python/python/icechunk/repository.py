@@ -558,3 +558,17 @@ class Repository:
         """
 
         return self._repository.garbage_collect(delete_object_older_than)
+
+    def total_chunks_storage(self) -> int:
+        """Calculate the total storage used for chunks, in bytes .
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result includes only native chunks, not adding virtual or inline chunks.
+        """
+
+        return self._repository.total_chunks_storage()

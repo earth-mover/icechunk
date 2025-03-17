@@ -1008,6 +1008,7 @@ class PyRepository:
     def garbage_collect(
         self, delete_object_older_than: datetime.datetime
     ) -> GCSummary: ...
+    def total_chunks_storage(self) -> int: ...
 
 class PySession:
     @classmethod

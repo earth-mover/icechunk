@@ -1,7 +1,7 @@
 use std::{collections::HashSet, future::ready, sync::Arc};
 
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use tokio::pin;
 
 use crate::{
@@ -11,6 +11,7 @@ use crate::{
         ChunkId, IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
         manifest::ChunkPayload,
     },
+    ops::pointed_snapshots,
     refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
     repository::RepositoryError,
     storage::{self, DeleteObjectsResult, ListInfo},
@@ -243,46 +244,6 @@ pub async fn garbage_collect(
     }
 
     Ok(summary)
-}
-
-async fn all_roots<'a>(
-    storage: &'a (dyn Storage + Send + Sync),
-    storage_settings: &'a storage::Settings,
-    extra_roots: &'a HashSet<SnapshotId>,
-) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
-    let all_refs = list_refs(storage, storage_settings).await?;
-    // TODO: this could be optimized by not following the ancestry of snapshots that we have
-    // already seen
-    let roots = stream::iter(all_refs)
-        .then(move |r| async move {
-            r.fetch(storage, storage_settings).await.map(|ref_data| ref_data.snapshot)
-        })
-        .err_into()
-        .chain(stream::iter(extra_roots.iter().cloned()).map(Ok));
-    Ok(roots)
-}
-
-async fn pointed_snapshots<'a>(
-    storage: &'a (dyn Storage + Send + Sync),
-    storage_settings: &'a storage::Settings,
-    asset_manager: Arc<AssetManager>,
-    extra_roots: &'a HashSet<SnapshotId>,
-) -> GCResult<impl Stream<Item = GCResult<SnapshotId>> + 'a> {
-    let roots = all_roots(storage, storage_settings, extra_roots).await?;
-    Ok(roots
-        .and_then(move |snap_id| {
-            let asset_manager = Arc::clone(&asset_manager.clone());
-            async move {
-                let snap = asset_manager.fetch_snapshot(&snap_id).await?;
-                let parents = Arc::clone(&asset_manager)
-                    .snapshot_ancestry(&snap.id())
-                    .await?
-                    .map_ok(|parent| parent.id)
-                    .err_into();
-                Ok(stream::once(ready(Ok(snap_id))).chain(parents))
-            }
-        })
-        .try_flatten())
 }
 
 async fn gc_chunks(
