@@ -4,7 +4,7 @@ use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::{multiunzip, repeat_n, Itertools};
+use itertools::{Itertools, multiunzip, repeat_n};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -42,6 +42,10 @@ impl ManifestExtents {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,13 +61,15 @@ impl ManifestShards {
     pub fn default(ndim: usize) -> Self {
         Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
     }
-
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
     pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
         let res = iter
             .into_iter()
             .map(|x| x.into_iter().tuple_windows())
             .multi_cartesian_product()
-            .map(|x| multiunzip(x))
+            .map(multiunzip)
             .map(|(from, to): (Vec<u32>, Vec<u32>)| {
                 ManifestExtents::new(from.as_slice(), to.as_slice())
             });
@@ -87,7 +93,7 @@ impl ManifestShards {
         self.iter()
             .enumerate()
             .find(|(_, e)| e.contains(coord.0.as_slice()))
-            .map(|(i, _)| i as usize)
+            .map(|(i, _)| i)
             .ok_or(IcechunkFormatError::from(
                 IcechunkFormatErrorKind::InvalidIndexForSharding {
                     coords: coord.clone(),

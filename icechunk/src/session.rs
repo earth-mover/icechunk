@@ -12,8 +12,8 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
-use itertools::{repeat_n, Itertools as _};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
+use itertools::{Itertools as _, repeat_n};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -1388,15 +1388,15 @@ impl<'a> FlushProcess<'a> {
         let mut from = vec![];
         let mut to = vec![];
 
-        let mut chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
+        let chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
 
         let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
         sharded_refs.reserve(shards.len());
         // TODO: what is a good capacity
         let ref_capacity = 8_192;
         sharded_refs.insert(0, Vec::with_capacity(ref_capacity));
-        while let Some(chunk) = chunks.next() {
-            let shard_index = shards.which(&chunk.coord).unwrap();
+        for chunk in chunks {
+            let shard_index = shards.which(&chunk.coord)?;
             sharded_refs
                 .entry(shard_index)
                 .or_insert_with(|| Vec::with_capacity(ref_capacity))
@@ -1551,7 +1551,7 @@ impl ManifestShardingConfig {
                                 if dim_condition.matches(axis, dimname.clone().into()) {
                                     edges.push(
                                         (0..num_chunks[axis])
-                                            .step_by(shard_size.clone())
+                                            .step_by(*shard_size)
                                             .collect(),
                                     )
                                 }
@@ -1610,8 +1610,8 @@ async fn flush(
         let config = flush_data.config.manifest().sharding();
         let node = get_node(
             &flush_data.asset_manager,
-            &flush_data.change_set,
-            &flush_data.parent_id,
+            flush_data.change_set,
+            flush_data.parent_id,
             node_path,
         )
         .await?;
@@ -1845,7 +1845,7 @@ mod tests {
             detector::ConflictDetector,
         },
         format::manifest::{ManifestExtents, ManifestShards},
-        refs::{fetch_tag, Ref},
+        refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{

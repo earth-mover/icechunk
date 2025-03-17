@@ -195,15 +195,13 @@ pub struct ManifestShardingConfig {
     pub shard_sizes: Vec<(ManifestShardCondition, Vec<(ShardDimCondition, usize)>)>,
 }
 
-impl ManifestShardingConfig {
-    pub fn default() -> Self {
-        let mut new = Vec::new();
-        let mut inner = Vec::new();
-        inner.push((ShardDimCondition::Any, usize::MAX));
-        new.push((
+impl Default for ManifestShardingConfig {
+    fn default() -> Self {
+        let inner = vec![(ShardDimCondition::Any, usize::MAX)];
+        let new = vec![(
             ManifestShardCondition::PathMatches { regex: r#"*"#.to_string() },
             inner,
-        ));
+        )];
         Self { shard_sizes: new }
     }
 }

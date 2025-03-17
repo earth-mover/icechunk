@@ -42,6 +42,9 @@ impl ArrayShape {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 
     pub fn num_chunks(&self) -> Vec<u32> {
         self.max_chunk_indices_permitted().collect()
