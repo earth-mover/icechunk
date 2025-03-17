@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::ops::Range;
 
+use itertools::zip_eq;
 use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
@@ -58,10 +59,26 @@ prop_compose! {
 }
 }
 
+fn chunks_from_shape(shape: &Vec<u64>) -> Vec<BoxedStrategy<NonZeroU64>> {
+    shape
+        .clone()
+        .into_iter()
+        .map(|size| {
+            (1u64..=size)
+                .prop_map(|chunk_size| {
+                    #[allow(clippy::expect_used)] // no zeroes in the range above
+                    NonZeroU64::new(chunk_size).expect("logic bug no zeros allowed")
+                })
+                .boxed()
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 pub struct ShapeDim {
     pub shape: ArrayShape,
     pub dimension_names: Option<Vec<DimensionName>>,
+    pub manifest_shard_size: Vec<NonZeroU64>,
 }
 
 pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDim> {
@@ -70,22 +87,16 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
     vec(1u64..26u64, 1..max_ndim)
         .prop_flat_map(|shape| {
             let ndim = shape.len();
-            let chunk_shape: Vec<BoxedStrategy<NonZeroU64>> = shape
-                .clone()
-                .into_iter()
-                .map(|size| {
-                    (1u64..=size)
-                        .prop_map(|chunk_size| {
-                            #[allow(clippy::expect_used)] // no zeroes in the range above
-                            NonZeroU64::new(chunk_size)
-                                .expect("logic bug no zeros allowed")
-                        })
-                        .boxed()
-                })
-                .collect();
+            let chunk_shape = chunks_from_shape(&shape);
             (Just(shape), chunk_shape, option::of(vec(option::of(any::<String>()), ndim)))
         })
-        .prop_map(|(shape, chunk_shape, dimension_names)| ShapeDim {
+        .prop_flat_map(|(shape, chunk_shape, dimension_names)| {
+            let shard_shape = chunks_from_shape(
+                &chunk_shape.iter().map(|c| c.clone().into()).collect::<Vec<u64>>(),
+            );
+            (Just(shape), Just(chunk_shape), shard_shape, Just(dimension_names))
+        })
+        .prop_map(|(shape, chunk_shape, shard_shape, dimension_names)| ShapeDim {
             #[allow(clippy::expect_used)]
             shape: ArrayShape::new(
                 shape.into_iter().zip(chunk_shape.iter().map(|n| n.get())),
@@ -94,6 +105,7 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
             dimension_names: dimension_names.map(|ds| {
                 ds.iter().map(|s| From::from(s.as_ref().map(|s| s.as_str()))).collect()
             }),
+            manifest_shard_size: shard_shape,
         })
 }
 
@@ -122,5 +134,4 @@ prop_compose! {
     pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in proptest::collection::vec(values_in, dim..(dim+1))) -> ChunkIndices {
         ChunkIndices(v)
     }
-
 }

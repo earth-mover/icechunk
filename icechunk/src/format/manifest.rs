@@ -61,9 +61,17 @@ impl ManifestShards {
     pub fn default(ndim: usize) -> Self {
         Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
     }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    // pub fn from_sizes() -> Self {
+    //     todo!();
+    // }
+
+    // FIXME: we shouln't need realized edges in memory,
+    // an iterator of edge locations should be fine.
     pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
         let res = iter
             .into_iter()
