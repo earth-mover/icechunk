@@ -271,7 +271,7 @@ impl VirtualChunkResolver {
                 unimplemented!("support for virtual chunks on gcs")
             }
             ObjectStoreConfig::Azure { .. } => {
-                unimplemented!("support for virtual chunks on gcs")
+                unimplemented!("support for virtual chunks on azure")
             }
             ObjectStoreConfig::InMemory {} => {
                 unimplemented!("support for virtual chunks in Memory")
