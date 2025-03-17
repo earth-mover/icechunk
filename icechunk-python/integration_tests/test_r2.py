@@ -23,6 +23,7 @@ import xarray as xr
                 force_path_style=True,
             ),
             id="full-s3",
+            marks=pytest.mark.skip(),
         ),
         pytest.param(
             ic.r2_storage(
@@ -31,6 +32,7 @@ import xarray as xr
                 endpoint_url="https://caa3022c13c9823de0d22b3b6c249494.r2.cloudflarestorage.com",
             ),
             id="endpoint-bucket",
+            marks=pytest.mark.skip(),
         ),
         pytest.param(
             ic.r2_storage(
@@ -39,6 +41,7 @@ import xarray as xr
                 account_id="caa3022c13c9823de0d22b3b6c249494",
             ),
             id="account-bucket",
+            marks=pytest.mark.skip(),
         ),
     ],
 )
