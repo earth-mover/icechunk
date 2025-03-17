@@ -1422,6 +1422,16 @@ class Storage:
         config: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
+    def new_r2(
+        cls,
+        bucket: str | None,
+        prefix: str | None,
+        account_id: str | None,
+        credentials: AnyS3Credential | None = None,
+        *,
+        config: S3Options,
+    ) -> Storage: ...
+    @classmethod
     def new_azure_blob(
         cls,
         account: str,

@@ -259,7 +259,7 @@ def r2_storage(
 
     Parameters
     ----------
-    bucket: str | Nne
+    bucket: str | None
         The bucket name
     prefix: str | None
         The prefix within the bucket that is the root directory of the repository
