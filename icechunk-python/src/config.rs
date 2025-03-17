@@ -1236,6 +1236,28 @@ impl PyStorage {
         Ok(PyStorage(storage))
     }
 
+    #[pyo3(signature = ( config, bucket=None, prefix=None, account_id=None, credentials=None))]
+    #[classmethod]
+    pub fn new_r2(
+        _cls: &Bound<'_, PyType>,
+        config: &PyS3Options,
+        bucket: Option<String>,
+        prefix: Option<String>,
+        account_id: Option<String>,
+        credentials: Option<PyS3Credentials>,
+    ) -> PyResult<Self> {
+        let storage = icechunk::storage::new_r2_storage(
+            config.into(),
+            bucket,
+            prefix,
+            account_id,
+            credentials.map(|cred| cred.into()),
+        )
+        .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
     #[classmethod]
     pub fn new_in_memory(_cls: &Bound<'_, PyType>, py: Python<'_>) -> PyResult<Self> {
         py.allow_threads(move || {

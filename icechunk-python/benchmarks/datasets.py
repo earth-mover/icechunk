@@ -26,10 +26,13 @@ CONSTRUCTORS = {
     "gcs": ic.gcs_storage,
     "tigris": ic.tigris_storage,
     "local": ic.local_filesystem_storage,
+    "r2": ic.s3_storage,
 }
 TEST_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
+    # not using region="auto", because for now we pass this directly to coiled.
+    "r2": dict(store="r2", bucket="icechunk-test-r2", region="us-east-1"),
     # "tigris": dict(
     #     store="tigris", bucket="deepak-private-bucket" + "-test", region="iad"
     # ),
@@ -40,17 +43,23 @@ BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
     "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
     "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="iad"),
+    "r2": dict(store="r2", bucket=PUBLIC_DATA_BUCKET + "-r2", region="us-east-1"),
 }
 
 logger = setup_logger()
 
 
-def tigris_credentials() -> tuple[str, str]:
+def set_env_credentials() -> tuple[str, str]:
     import boto3
 
     session = boto3.Session()
     creds = session.get_credentials()
-    return {"access_key_id": creds.access_key, "secret_access_key": creds.secret_key}
+    client = boto3.client("s3")
+    return {
+        "access_key_id": creds.access_key,
+        "secret_access_key": creds.secret_key,
+        "endpoint_url": client.meta.endpoint_url,
+    }
 
 
 @dataclass
@@ -82,8 +91,9 @@ class StorageConfig:
                 kwargs["prefix"] = self.prefix
             if self.region is not None and self.store not in ["gcs"]:
                 kwargs["region"] = self.region
-            if self.store == "tigris":
-                kwargs.update(tigris_credentials())
+            if self.store in ["tigris", "r2"]:
+                # {"from_env": True} fails on coiled because the credentials aren't shipped
+                kwargs.update(set_env_credentials())
         return CONSTRUCTORS[self.store](**self.config, **kwargs)
 
     def with_overwrite(
@@ -185,6 +195,7 @@ class Dataset:
                     fs.rm(clear_uri, recursive=True)
                 except FileNotFoundError:
                     pass
+        logger.info(repr(self.storage))
         return ic.Repository.create(self.storage)
 
     @property

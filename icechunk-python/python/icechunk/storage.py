@@ -239,6 +239,74 @@ def tigris_storage(
     )
 
 
+def r2_storage(
+    *,
+    bucket: str | None = None,
+    prefix: str | None = None,
+    account_id: str | None = None,
+    endpoint_url: str | None = None,
+    region: str | None = None,
+    allow_http: bool = False,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    anonymous: bool | None = None,
+    from_env: bool | None = None,
+    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in Tigris object store.
+
+    Parameters
+    ----------
+    bucket: str | None
+        The bucket name
+    prefix: str | None
+        The prefix within the bucket that is the root directory of the repository
+    account_id: str | None
+        Cloudflare account ID. When provided, a default endpoint URL is constructed as
+        `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. If not provided, `endpoint_url`
+        must be provided instead.
+    endpoint_url: str | None
+        Endpoint where the object store serves data, example: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
+    region: str | None
+        The region to use in the object store, if `None` the default region 'auto' will be used
+    allow_http: bool
+        If the object store can be accessed using http protocol instead of https
+    access_key_id: str | None
+        S3 credential access key
+    secret_access_key: str | None
+        S3 credential secret access key
+    session_token: str | None
+        Optional S3 credential session token
+    expires_after: datetime | None
+        Optional expiration for the object store credentials
+    anonymous: bool | None
+        If set to True requests to the object store will not be signed
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    get_credentials: Callable[[], S3StaticCredentials] | None
+        Use this function to get and refresh object store credentials
+    """
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        anonymous=anonymous,
+        from_env=from_env,
+        get_credentials=get_credentials,
+    )
+    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    return Storage.new_r2(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        account_id=account_id,
+        credentials=credentials,
+    )
+
+
 def gcs_storage(
     *,
     bucket: str,
