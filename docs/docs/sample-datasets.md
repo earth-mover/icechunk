@@ -57,6 +57,7 @@ import xarray as xr
 storage = ic.r2_storage(
     prefix="v1/era5_weatherbench2",
     endpoint_url="https://data.icechunk.cloud",
+    anonymous=True,
 )
 
 repo = ic.Repository.open(storage=storage)

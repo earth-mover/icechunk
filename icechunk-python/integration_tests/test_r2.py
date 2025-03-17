@@ -11,6 +11,7 @@ import xarray as xr
             ic.r2_storage(
                 prefix="v1/era5_weatherbench2",
                 endpoint_url="https://data.icechunk.cloud",
+                anonymous=True,
             ),
             id="public-url",
         ),
