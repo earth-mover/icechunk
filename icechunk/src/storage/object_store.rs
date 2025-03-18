@@ -459,11 +459,7 @@ impl Storage for ObjectStorage {
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let path = self.get_chunk_path(&id);
-        let upload = self.get_client().await.put_multipart(&path).await?;
-        // TODO: new_with_chunk_size?
-        let mut write = object_store::WriteMultipart::new(upload);
-        write.write(&bytes);
-        write.finish().await?;
+        self.get_client().await.put(&path, bytes.into()).await?;
         Ok(())
     }
 
