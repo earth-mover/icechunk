@@ -8,7 +8,10 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
-    config::{S3Credentials, S3Options, S3StaticCredentials},
+    config::{
+        ManifestConfig, ManifestShardCondition, ManifestShardingConfig, S3Credentials,
+        S3Options, S3StaticCredentials, ShardDimCondition,
+    },
     format::{ByteRange, ChunkId, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
     ops::gc::{
@@ -56,9 +59,21 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
         1,
     ));
 
+    let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
+    let manifest_shard_size = 10;
+    let shard_sizes = vec![(
+        ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+        vec![(ShardDimCondition::Any, manifest_shard_size)],
+    )];
+    let man_config = ManifestConfig {
+        sharding: Some(ManifestShardingConfig { shard_sizes }),
+        ..ManifestConfig::default()
+    };
+
     let repo = Repository::create(
         Some(RepositoryConfig {
             inline_chunk_threshold_bytes: Some(0),
+            manifest: Some(man_config),
             ..Default::default()
         }),
         Arc::clone(&storage),
@@ -70,8 +85,6 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
 
     let user_data = Bytes::new();
     ds.add_group(Path::root(), user_data.clone()).await?;
-
-    let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
 
     let array_path: Path = "/array".try_into().unwrap();
     ds.add_array(array_path.clone(), shape, None, user_data.clone()).await?;

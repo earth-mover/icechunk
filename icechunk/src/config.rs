@@ -206,6 +206,16 @@ impl Default for ManifestShardingConfig {
     }
 }
 
+impl ManifestShardingConfig {
+    pub fn with_size(shard_size: u32) -> Self {
+        let shard_sizes = vec![(
+            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+            vec![(ShardDimCondition::Any, shard_size)],
+        )];
+        ManifestShardingConfig { shard_sizes }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestPreloadCondition {
