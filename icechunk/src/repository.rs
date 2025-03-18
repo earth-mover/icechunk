@@ -909,8 +909,9 @@ mod tests {
             CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestShardCondition,
             ManifestShardingConfig, RepositoryConfig, ShardDimCondition,
         },
-        format::{ChunkIndices, manifest::ChunkPayload, snapshot::ArrayShape},
+        format::{ByteRange, ChunkIndices, manifest::ChunkPayload, snapshot::ArrayShape},
         new_local_filesystem_storage,
+        session::get_chunk,
         storage::new_in_memory_storage,
     };
 
@@ -1187,6 +1188,23 @@ mod tests {
         total_manifests += dim_size.div_ceil(shard_size) as usize;
         session.commit("full overwrite", None).await?;
         assert_manifest_count(&storage, total_manifests).await;
+
+        for i in 0..dim_size {
+            let val = get_chunk(
+                session
+                    .get_chunk_reader(
+                        &temp_path,
+                        &ChunkIndices(vec![i, 0, 0]),
+                        &ByteRange::ALL,
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+        }
 
         Ok(())
     }
