@@ -207,6 +207,7 @@ impl Default for ManifestShardingConfig {
 }
 
 impl ManifestShardingConfig {
+    // FIXME: test-only?
     pub fn with_size(shard_size: u32) -> Self {
         let shard_sizes = vec![(
             ManifestShardCondition::PathMatches { regex: r".*".to_string() },

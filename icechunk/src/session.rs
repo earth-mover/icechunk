@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::{Itertools as _, repeat_n};
+use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -1504,7 +1505,13 @@ impl ShardDimCondition {
     fn matches(&self, axis: usize, dimname: Option<String>) -> bool {
         match self {
             ShardDimCondition::Axis(ax) => ax == &axis,
-            ShardDimCondition::DimensionName(name) => Some(name) == dimname.as_ref(),
+            ShardDimCondition::DimensionName(regex) => dimname
+                .map(|name| {
+                    Regex::new(regex)
+                        .map(|regex| regex.is_match(name.as_bytes()))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
             ShardDimCondition::Any => true,
         }
     }

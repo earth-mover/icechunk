@@ -1103,7 +1103,6 @@ mod tests {
     }
     #[tokio::test]
     async fn test_manifest_sharding() -> Result<(), Box<dyn Error>> {
-        // initialize_tracing();
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
@@ -1112,17 +1111,13 @@ mod tests {
         let shard_size = 3u32;
 
         let shape =
-            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (1, 1), (1, 1)])
+            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (1, 1)])
                 .unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
-        let shard_sizes = vec![(
-            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-            vec![(ShardDimCondition::Any, shard_size)],
-        )];
         let man_config = ManifestConfig {
-            sharding: Some(ManifestShardingConfig { shard_sizes }),
+            sharding: Some(ManifestShardingConfig::with_size(shard_size)),
             ..ManifestConfig::default()
         };
         let config = RepositoryConfig {
@@ -1205,6 +1200,59 @@ mod tests {
             .unwrap();
             assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_manifest_sharding_complex() -> Result<(), Box<dyn Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let storage = Arc::clone(&backend);
+
+        let dim_size = 25u32;
+        let chunk_size = 1u32;
+        let t_shard_size = 3u32;
+        let y_shard_size = 2u32;
+
+        let shape =
+            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (10, 1)])
+                .unwrap();
+        let dimension_names = Some(vec!["t".into(), "y".into(), "x".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+
+        let shard_sizes = vec![
+            (
+                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+                vec![(ShardDimCondition::DimensionName("t".to_string()), t_shard_size)],
+            ),
+            (
+                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+                vec![(ShardDimCondition::Axis(1), y_shard_size)],
+            ),
+        ];
+        let man_config = ManifestConfig {
+            sharding: Some(ManifestShardingConfig { shard_sizes }),
+            ..ManifestConfig::default()
+        };
+        let config = RepositoryConfig {
+            manifest: Some(man_config),
+            ..RepositoryConfig::default()
+        };
+        let repository =
+            Repository::create(Some(config), storage, HashMap::new()).await?;
+
+        let mut session = repository.writable_session("main").await?;
+
+        let def = Bytes::from_static(br#"{"this":"array"}"#);
+        session.add_group(Path::root(), def.clone()).await?;
+        session
+            .add_array(
+                temp_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
 
         Ok(())
     }
