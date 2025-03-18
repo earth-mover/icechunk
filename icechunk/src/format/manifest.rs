@@ -21,6 +21,12 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(Vec<Range<u32>>);
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestRef {
+    pub object_id: ManifestId,
+    pub extents: ManifestExtents,
+}
+
 impl ManifestExtents {
     pub fn new(from: &[u32], to: &[u32]) -> Self {
         let v = from
@@ -46,12 +52,6 @@ impl ManifestExtents {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestRef {
-    pub object_id: ManifestId,
-    pub extents: ManifestExtents,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

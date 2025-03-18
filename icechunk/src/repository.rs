@@ -1306,7 +1306,7 @@ mod tests {
                 max_total_refs: Some(2),
                 preload_if: None,
             }),
-            sharding: Some(ManifestShardingConfig { shard_sizes: vec![] }),
+            ..ManifestConfig::default()
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
