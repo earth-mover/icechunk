@@ -61,15 +61,10 @@ impl ManifestShards {
     pub fn default(ndim: usize) -> Self {
         Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
     }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
-    //FIXME: Why can't I change the inner Iterator to IntoIterator?
-    pub fn from_edges(
-        iter: impl IntoIterator<Item = impl Iterator<Item = u32> + Clone>,
-    ) -> Self {
+    pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
         let res = iter
             .into_iter()
             .map(|x| x.into_iter().tuple_windows())

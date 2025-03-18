@@ -1542,9 +1542,13 @@ impl ManifestShardingConfig {
                                         (0..=num_chunks[axis])
                                             .step_by(*shard_size as usize)
                                             .chain(
-                                                (num_chunks[axis] % shard_size != 0)
-                                                    .then(|| num_chunks[axis]),
+                                                if num_chunks[axis] % shard_size != 0 {
+                                                    Some(num_chunks[axis])
+                                                } else {
+                                                    None
+                                                },
                                             )
+                                            .collect()
                                     })
                                 }
                             }
@@ -2042,12 +2046,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_which_shard() -> Result<(), Box<dyn Error>> {
-        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20].into_iter()]);
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
 
         assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
         assert_eq!(shards.which(&ChunkIndices(vec![11])).unwrap(), 1);
 
-        let edges = vec![vec![0u32, 10, 20].into_iter(), vec![0u32, 10, 20].into_iter()];
+        let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let shards = ManifestShards::from_edges(edges);
         assert_eq!(shards.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
