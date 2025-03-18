@@ -1528,7 +1528,22 @@ impl ManifestShardingConfig {
             NodeData::Array { shape, dimension_names, .. } => {
                 let ndim = shape.len();
                 let num_chunks = shape.num_chunks();
-                let mut edges = Vec::with_capacity(ndim);
+                let mut edges: Vec<Vec<u32>> =
+                    (0..ndim).map(|axis| vec![0, num_chunks[axis]]).collect();
+
+                // This is ugly but necessary to handle:
+                //   - path: *
+                //     manifest-split-size:
+                //     - t : 10
+                //   - path: *
+                //     manifest-split-size:
+                //     - y : 2
+                // which is now identical to:
+                //   - path: *
+                //     manifest-split-size:
+                //     - t : 10
+                //     - y : 2
+                let mut already_matched: HashSet<usize> = HashSet::new();
 
                 for (condition, dim_specs) in self.shard_sizes.iter() {
                     if condition.matches(&node.path) {
@@ -1536,21 +1551,21 @@ impl ManifestShardingConfig {
                             repeat_n(DimensionName::NotSpecified, ndim).collect(),
                         );
                         for (axis, dimname) in itertools::enumerate(dimension_names) {
+                            if already_matched.contains(&axis) {
+                                continue;
+                            }
                             for (dim_condition, shard_size) in dim_specs.iter() {
                                 if dim_condition.matches(axis, dimname.clone().into()) {
-                                    edges.push({
-                                        (0..=num_chunks[axis])
-                                            .step_by(*shard_size as usize)
-                                            .chain(
-                                                if num_chunks[axis] % shard_size != 0 {
-                                                    Some(num_chunks[axis])
-                                                } else {
-                                                    None
-                                                },
-                                            )
-                                            .collect()
-                                    })
-                                }
+                                    edges[axis] = (0..=num_chunks[axis])
+                                        .step_by(*shard_size as usize)
+                                        .chain(
+                                            (num_chunks[axis] % shard_size != 0)
+                                                .then(|| num_chunks[axis]),
+                                        )
+                                        .collect();
+                                    already_matched.insert(axis);
+                                    break;
+                                };
                             }
                         }
                     }
