@@ -16,7 +16,10 @@ use icechunk::{
         snapshot::{SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
-    ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
+    ops::{
+        gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
+        stats::repo_chunks_storage,
+    },
     repository::{RepositoryErrorKind, VersionInfo},
 };
 use pyo3::{
@@ -864,6 +867,25 @@ impl PyRepository {
                     .await
                     .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
+                })?;
+
+            Ok(result)
+        })
+    }
+
+    pub fn total_chunks_storage(&self, py: Python<'_>) -> PyResult<u64> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let result =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let result = repo_chunks_storage(
+                        self.0.storage().as_ref(),
+                        self.0.storage_settings(),
+                        self.0.asset_manager().clone(),
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                    Ok::<_, PyIcechunkStoreError>(result)
                 })?;
 
             Ok(result)
