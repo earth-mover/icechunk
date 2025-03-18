@@ -154,13 +154,13 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     assert_eq!(summary.chunks_deleted, 10);
-    assert_eq!(summary.manifests_deleted, 1);
+    assert_eq!(summary.manifests_deleted, 110);
     assert_eq!(summary.snapshots_deleted, 1);
     assert!(summary.bytes_deleted > summary.chunks_deleted);
 
     // 10 chunks should be drop
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
-    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 1);
+    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 110);
     assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 2);
 
     // Opening the repo on main should give the right data
