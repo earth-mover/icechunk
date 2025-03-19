@@ -262,6 +262,8 @@ class Session:
         ----------
         message : str
             The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
 
         Returns
         -------
