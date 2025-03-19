@@ -261,7 +261,7 @@ class IcechunkStore(Store, SyncMixin):
         array_path : str
             The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array"
         chunks : list[VirtualChunkSpec],
-            The list of virtula chunks to add
+            The list of virtual chunks to add
         validate_containers: bool
             If set to true, ignore virtual references for locations that don't match any existing virtual chunk container
 
