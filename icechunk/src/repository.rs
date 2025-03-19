@@ -1291,14 +1291,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifest_sharding_complex_writes() -> Result<(), Box<dyn Error>> {
+        let dim_size = 25u32;
         let t_shard_size = 12u32;
         let y_shard_size = 2u32;
 
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape =
+            ArrayShape::new(vec![(dim_size.into(), 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
-        // let expected_shard_sizes = vec![t_shard_size, 9, y_shard_size, 9];
+        let expected_shard_sizes = vec![t_shard_size, 9, y_shard_size, 9];
 
         let shard_sizes = vec![
             (
@@ -1315,7 +1317,7 @@ mod tests {
             ),
         ];
         let shard_config = ManifestShardingConfig { shard_sizes };
-        let repo = create_repo_with_shard_config(
+        let repository = create_repo_with_shard_config(
             &temp_path,
             &shape,
             &dimension_names,
@@ -1323,49 +1325,46 @@ mod tests {
         )
         .await?;
 
-        let session = repo.writable_session("main").await?;
+        // dbg!(&shard_config.get_shard_sizes(&session.get_node(&temp_path).await?)?);
+        let mut total_manifests = 0;
+        let storage = Arc::clone(&repository.storage());
 
-        dbg!(&shard_config.get_shard_sizes(&session.get_node(&temp_path).await?)?);
-        // let mut total_manifests = 0;
-        // let storage = Arc::clone(&backend);
+        for ax in 0..shape.len() {
+            let mut session = repository.writable_session("main").await?;
+            for i in 0..shape[ax].array_length() {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                session
+                    .set_chunk_ref(
+                        temp_path.clone(),
+                        ChunkIndices(index),
+                        Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    )
+                    .await?
+            }
+            total_manifests += dim_size.div_ceil(expected_shard_sizes[ax]) as usize;
+            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
+            assert_manifest_count(&storage, total_manifests).await;
 
-        // for ax in 0..shape.len() {
-        //     let mut session = repository.writable_session("main").await?;
-        //     for i in 0..shape[ax].array_length() {
-        //         let mut index = vec![0u32, 0, 0, 0];
-        //         index[ax] = i as u32;
-        //         session
-        //             .set_chunk_ref(
-        //                 temp_path.clone(),
-        //                 ChunkIndices(index),
-        //                 Some(ChunkPayload::Inline(format!("{0}", i).into())),
-        //             )
-        //             .await?
-        //     }
-        //     total_manifests = 2 * total_manifests
-        //         + dim_size.div_ceil(expected_shard_sizes[ax]) as usize;
-        //     session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
-        //     assert_manifest_count(&storage, total_manifests).await;
-
-        //     for i in 0..shape[ax].array_length() {
-        //         let mut index = vec![0u32, 0, 0, 0];
-        //         index[ax] = i as u32;
-        //         let val = get_chunk(
-        //             session
-        //                 .get_chunk_reader(
-        //                     &temp_path,
-        //                     &ChunkIndices(index),
-        //                     &ByteRange::ALL,
-        //                 )
-        //                 .await
-        //                 .unwrap(),
-        //         )
-        //         .await
-        //         .unwrap()
-        //         .unwrap();
-        //         assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
-        //     }
-        // }
+            for i in 0..shape[ax].array_length() {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                let val = get_chunk(
+                    session
+                        .get_chunk_reader(
+                            &temp_path,
+                            &ChunkIndices(index),
+                            &ByteRange::ALL,
+                        )
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+            }
+        }
 
         Ok(())
     }
