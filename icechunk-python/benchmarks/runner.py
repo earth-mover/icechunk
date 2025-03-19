@@ -18,13 +18,14 @@ from helpers import (
     assert_cwd_is_icechunk_python,
     get_coiled_kwargs,
     get_full_commit,
+    rdms,
     setup_logger,
 )
 
 logger = setup_logger()
 
 PIP_OPTIONS = "--disable-pip-version-check -q"
-PYTEST_OPTIONS = "-v --durations 10 --rootdir=benchmarks --tb=line"
+PYTEST_OPTIONS = "-q --durations 10 --rootdir=benchmarks --tb=line"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
 
@@ -50,11 +51,14 @@ def get_benchmark_deps(filepath: str) -> str:
 class Runner:
     bench_store_dir = None
 
-    def __init__(self, *, ref: str, where: str) -> None:
+    def __init__(self, *, ref: str, where: str, save_prefix: str) -> None:
         self.ref = ref
         self.full_commit = get_full_commit(ref)
         self.commit = self.full_commit[:8]
         self.where = where
+        self.save_prefix = save_prefix
+        # shorten the name so `pytest-benchmark compare` is readable
+        self.clean_ref = self.ref.removeprefix("icechunk-v0.1.0-alph")
 
     @property
     def pip_github_url(self) -> str:
@@ -102,15 +106,12 @@ class Runner:
         """Actually runs the benchmarks."""
         logger.info(f"running benchmarks for {self.ref} / {self.commit}")
 
-        # shorten the name so `pytest-benchmark compare` is readable
-        clean_ref = self.ref.removeprefix("icechunk-v0.1.0-alph")
-
         assert self.bench_store_dir is not None
         # Note: .benchmarks is the default location for pytest-benchmark
         cmd = (
             f"pytest {pytest_extra} "
             f"--benchmark-storage={self.bench_store_dir}/.benchmarks "
-            f"--benchmark-save={clean_ref}_{self.commit}_{self.where} "
+            f"--benchmark-save={self.where}_{self.clean_ref}_{self.commit} "
             f"--where={self.where} "
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             f"{PYTEST_OPTIONS} "
@@ -151,24 +152,6 @@ class LocalRunner(Runner):
 
     def run(self, *, pytest_extra: str = "") -> None:
         super().run(pytest_extra=pytest_extra)
-        if len(refs) > 1:
-            files = sorted(
-                glob.glob("./.benchmarks/**/*.json", recursive=True),
-                key=os.path.getmtime,
-                reverse=True,
-            )[-len(refs) :]
-            # TODO: Use `just` here when we figure that out.
-            subprocess.run(
-                [
-                    "pytest-benchmark",
-                    "compare",
-                    "--group=group,func,param",
-                    "--sort=fullname",
-                    "--columns=median",
-                    "--name=normal",
-                    *files,
-                ]
-            )
 
 
 class CoiledRunner(Runner):
@@ -180,10 +163,8 @@ class CoiledRunner(Runner):
             "coiled",
             "run",
             "--interactive",
-            "--name",
-            f"icebench-{self.commit}",  # cluster name
-            "--keepalive",
-            "10m",
+            f"--name={ckwargs['name']}",
+            f"--keepalive={ckwargs['keepalive']}",
             f"--workspace={ckwargs['workspace']}",  # cloud
             f"--vm-type={ckwargs['vm_type']}",
             f"--software={ckwargs['software']}",
@@ -201,6 +182,8 @@ class CoiledRunner(Runner):
         kwargs["software"] = COILED_SOFTWARE.get(
             self.ref, f"icechunk-bench-{self.commit}"
         )
+        kwargs["name"] = f"icebench-{self.commit}-{self.where}"
+        kwargs["keepalive"] = "10m"
         return kwargs
 
     def initialize(self) -> None:
@@ -221,7 +204,7 @@ class CoiledRunner(Runner):
         )
         super().initialize()
 
-    def execute(self, cmd, **kwargs) -> None:
+    def execute(self, cmd, **kwargs):
         subprocess.run([*self.get_coiled_run_args(), cmd], **kwargs)
 
     def sync_benchmarks_folder(self) -> None:
@@ -230,47 +213,45 @@ class CoiledRunner(Runner):
                 *self.get_coiled_run_args(),
                 "--file",
                 "benchmarks/",
-                "ls -alh ./benchmarks/",
+                "ls -alh ./.benchmarks/",
             ],
             check=True,
         )
 
     def run(self, *, pytest_extra: str = "") -> None:
         super().run(pytest_extra=pytest_extra)
-        # This prints to screen but we could upload to a bucket in here.
-        self.execute("sh benchmarks/most_recent.sh")
+        filename = f"{self.save_prefix}/{self.where}_{self.clean_ref}_{self.commit}.json"
+        # This is crappy; but for some reason coiled.function doesn't see the right files :/
+        # So we need to use 'coiled run'; upload to a bucket; and then download from bucket
+        # pytest-benchmark cannot write directly to a bucket yet, sadly.
+        # TODO: explore a mounting a bucket as a volume.
+        self.execute(f"sh benchmarks/most_recent.sh {filename}")
 
 
-def init_for_ref(runner: Runner):
+def read_latest_benchmark_json() -> str:
+    files = sorted(
+        glob.glob("./.benchmarks/*", recursive=True),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+    with open(files[0]) as f:
+        json = f.read()
+    return json
+
+
+def init_for_ref(runner: Runner) -> None:
     runner.initialize()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
-    parser.add_argument("--pytest", help="passed to pytest", default="")
-    parser.add_argument(
-        "--where", help="where to run? [local|s3|s3_ob|gcs]", default="local"
-    )
-    parser.add_argument(
-        "--skip-setup",
-        help="skip setup step, useful for benchmarks that don't need data",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--force-setup", help="forced recreation of datasets?", type=bool, default=False
-    )
-    args = parser.parse_args()
-
-    refs = args.refs
-
-    if args.where == "local":
+def run_there(where: str, *, args, save_prefix) -> None:
+    if where == "local":
         runner_cls = LocalRunner
     else:
         runner_cls = CoiledRunner
 
-    runners = tuple(runner_cls(ref=ref, where=args.where) for ref in refs)
+    runners = tuple(
+        runner_cls(ref=ref, where=where, save_prefix=save_prefix) for ref in args.refs
+    )
 
     # we can only initialize in parallel since the two refs may have the same spec version.
     tqdm.contrib.concurrent.process_map(partial(init_for_ref), runners)
@@ -283,9 +264,79 @@ if __name__ == "__main__":
         runner.run(pytest_extra=args.pytest)
 
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
+    parser.add_argument("--pytest", help="passed to pytest", default="")
+    parser.add_argument(
+        "--where",
+        help="where to run? [local|s3|s3_ob|gcs], combinations are allowed: [s3|gcs]",
+        default="local",
+    )
+    parser.add_argument(
+        "--skip-setup",
+        help="skip setup step, useful for benchmarks that don't need data",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--force-setup", help="forced recreation of datasets?", type=bool, default=False
+    )
+    args = parser.parse_args()
+
+    if "|" in args.where:
+        where = args.where.split("|")
+    else:
+        where = (args.where,)
+
+    save_prefix = rdms()
+
+    tqdm.contrib.concurrent.process_map(
+        partial(run_there, args=args, save_prefix=save_prefix), where
+    )
+
+    subprocess.run(
+        [
+            "aws",
+            "s3",
+            "cp",
+            f"s3://earthmover-scratch/benchmarks/{save_prefix}/",
+            f"/tmp/benchmarks/{save_prefix}/",
+            "--recursive",
+        ],
+        check=True,
+    )
+    refs = args.refs
+
+    # TODO: clean this up
+    if where == ("local",) and len(refs) > 1:
+        files = sorted(
+            glob.glob("./.benchmarks/**/*.json", recursive=True),
+            key=os.path.getmtime,
+            reverse=True,
+        )[: len(refs)]
+    else:
+        files = sorted(
+            glob.glob(f"/tmp/benchmarks/{save_prefix}/*.json", recursive=True),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        #  TODO: Use `just` here when we figure that out.
+        subprocess.run(
+            [
+                "pytest-benchmark",
+                "compare",
+                "--group=group,func,param",
+                "--sort=fullname",
+                "--columns=median",
+                "--name=normal",
+                *files,
+            ]
+        )
+
+
 # Compare wish-list:
 # 1. skip differences < X%
 # 2. groupby
 # 3. better names in summary table
-# 4. Compare across object stores; same object store & compare across versions
 # 5. Compare icechunk vs plain Zarr
