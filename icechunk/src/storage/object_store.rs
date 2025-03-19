@@ -35,7 +35,10 @@ use std::{
     path::{Path as StdPath, PathBuf},
     sync::Arc,
 };
-use tokio::{io::AsyncRead, sync::OnceCell};
+use tokio::{
+    io::AsyncRead,
+    sync::{Mutex, OnceCell},
+};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
@@ -940,27 +943,38 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
     }
 }
 
-// We don't need to cache the credential ourselves, because object_store handles credential caching and expiration itself:
-// https://github.com/apache/arrow-rs/blob/660a3ac22a8ef8601acf4548d65146bc623f653a/object_store/src/gcp/credential.rs#L301-L302
-// https://github.com/apache/arrow-rs/blob/660a3ac22a8ef8601acf4548d65146bc623f653a/object_store/src/client/mod.rs#L818-L822
 #[derive(Debug)]
 pub struct GcsRefreshableCredentialProvider {
+    last_credential: Arc<Mutex<Option<GcsBearerCredential>>>,
     refresher: Arc<dyn GcsCredentialsFetcher>,
 }
 
 impl GcsRefreshableCredentialProvider {
     pub fn new(refresher: Arc<dyn GcsCredentialsFetcher>) -> Self {
-        Self { refresher }
+        Self { last_credential: Arc::new(Mutex::new(None)), refresher }
     }
 
     pub async fn get_or_update_credentials(
         &self,
     ) -> Result<GcsBearerCredential, StorageError> {
+        let mut last_credential = self.last_credential.lock().await;
+
+        // If we have a credential and it hasn't expired, return it
+        if let Some(creds) = last_credential.as_ref() {
+            if let Some(expires_after) = creds.expires_after {
+                if expires_after > Utc::now() {
+                    return Ok(creds.clone());
+                }
+            }
+        }
+
+        // Otherwise, refresh the credential and cache it
         let creds = self
             .refresher
             .get()
             .await
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+        *last_credential = Some(creds.clone());
         Ok(creds)
     }
 }
