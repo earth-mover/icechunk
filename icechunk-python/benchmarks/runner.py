@@ -230,7 +230,7 @@ class CoiledRunner(Runner):
                 *self.get_coiled_run_args(),
                 "--file",
                 "benchmarks/",
-                "ls -alh ./.benchmarks/",
+                "ls -alh ./benchmarks/",
             ],
             check=True,
         )

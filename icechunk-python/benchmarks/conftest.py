@@ -1,20 +1,53 @@
+from typing import cast
+
 import pytest
 
+from benchmarks import helpers
 from benchmarks.datasets import (
     ERA5,
     ERA5_ARCO,
     ERA5_SINGLE,
     GB_8MB_CHUNKS,
     GB_128MB_CHUNKS,
+    PANCAKE_WRITES,
+    SIMPLE_1D,
     TEST_BUCKETS,
+    BenchmarkReadDataset,
+    BenchmarkWriteDataset,
+    Dataset,
 )
 from icechunk import Repository, local_filesystem_storage
-from zarr.abc.store import Store
+
+
+def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
+    extra_prefix = request.config.getoption("--icechunk-prefix") + moar_prefix
+    where = request.config.getoption("--where")
+    ds = request.param
+    if where == "local" and ds.skip_local:
+        pytest.skip()
+    # for some reason, this gets run multiple times so we apply the prefix repeatedly
+    # if we don't catch that :(
+    ds.storage_config = ds.storage_config.with_overwrite(
+        **TEST_BUCKETS[where]
+    ).with_extra(prefix=extra_prefix, force_idempotent=True)
+    return ds
 
 
 @pytest.fixture(scope="function")
 def repo(tmpdir: str) -> Repository:
     return Repository.create(storage=local_filesystem_storage(tmpdir))
+
+
+@pytest.fixture(params=[pytest.param(PANCAKE_WRITES, id="pancake-writes")])
+def synth_write_dataset(request) -> BenchmarkWriteDataset:
+    ds = request_to_dataset(request, moar_prefix=helpers.rdms())
+    return cast(BenchmarkWriteDataset, ds)
+
+
+@pytest.fixture(params=[pytest.param(SIMPLE_1D, id="simple-1d")])
+def simple_write_dataset(request) -> BenchmarkWriteDataset:
+    ds = request_to_dataset(request, moar_prefix=helpers.rdms())
+    return cast(BenchmarkWriteDataset, ds)
 
 
 @pytest.fixture(
@@ -26,18 +59,9 @@ def repo(tmpdir: str) -> Repository:
         pytest.param(ERA5_ARCO, id="era5-arco"),
     ],
 )
-def synth_dataset(request) -> Store:
+def synth_dataset(request) -> BenchmarkReadDataset:
     """For now, these are synthetic datasets stored in the cloud."""
-    extra_prefix = request.config.getoption("--icechunk-prefix")
-    where = request.config.getoption("--where")
-    ds = request.param
-    if where == "local" and ds.skip_local:
-        pytest.skip()
-    # for some reason, this gets run multiple times so we apply the prefix repeatedly
-    # if we don't catch that :(
-    ds.storage_config = ds.storage_config.with_overwrite(
-        **TEST_BUCKETS[where]
-    ).with_extra(prefix=extra_prefix, force_idempotent=True)
+    ds = request_to_dataset(request)
     if ds.setupfn is None:
         # these datasets aren't automatically set up
         # so skip if the data haven't been written yet.
@@ -45,7 +69,7 @@ def synth_dataset(request) -> Store:
             ds.store()
         except ValueError as e:
             pytest.skip(reason=str(e))
-    return ds
+    return cast(BenchmarkReadDataset, ds)
 
 
 # This hook is used instead of `pyproject.toml` so that we can run the benchmark infra
