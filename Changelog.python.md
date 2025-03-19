@@ -1,5 +1,20 @@
 # Changelog
 
+## Python Icechunk Library 0.2.8
+
+### Features
+
+- New `Repository.total_chunks_storage` method to calculate the space used by all chunks in the repo, across all versions.
+- Rust library is compiled using rustc 1.85.
+
+### Performance
+
+- Up to 3x faster chunk upload for small chunks on GCS.
+
+### Fixes
+
+- CLI issues 0 exit code when using --help
+
 ## Python Icechunk Library 0.2.7
 
 ### Fixes
