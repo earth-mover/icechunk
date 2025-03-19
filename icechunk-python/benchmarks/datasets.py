@@ -23,6 +23,7 @@ ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 CONSTRUCTORS = {
     "s3": ic.s3_storage,
+    "s3_ob": ic.storage.s3_object_store_storage,
     "gcs": ic.gcs_storage,
     "tigris": ic.tigris_storage,
     "local": ic.local_filesystem_storage,
@@ -30,8 +31,8 @@ CONSTRUCTORS = {
 }
 TEST_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
-    # "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
-    "gcs": dict(store="gcs", bucket="arraylake-scratch", region="us-east1"),
+    "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
+    # "gcs": dict(store="gcs", bucket="arraylake-scratch", region="us-east1"),
     # not using region="auto", because for now we pass this directly to coiled.
     "r2": dict(store="r2", bucket="icechunk-test-r2", region="us-east-1"),
     # "tigris": dict(
@@ -40,6 +41,7 @@ TEST_BUCKETS = {
     "tigris": dict(store="tigris", bucket="icechunk-test", region="iad"),
     "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
 }
+TEST_BUCKETS["s3_ob"] = TEST_BUCKETS["s3"]
 BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
     "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),

@@ -249,7 +249,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest", default="")
-    parser.add_argument("--where", help="where to run? [local|s3|gcs]", default="local")
+    parser.add_argument(
+        "--where", help="where to run? [local|s3|s3_ob|gcs]", default="local"
+    )
     parser.add_argument(
         "--skip-setup",
         help="skip setup step, useful for benchmarks that don't need data",
