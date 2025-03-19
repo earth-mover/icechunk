@@ -35,10 +35,7 @@ use std::{
     path::{Path as StdPath, PathBuf},
     sync::Arc,
 };
-use tokio::{
-    io::AsyncRead,
-    sync::{Mutex, OnceCell},
-};
+use tokio::{io::AsyncRead, sync::OnceCell};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
@@ -65,7 +62,7 @@ impl ObjectStorage {
     /// This implementation should not be used in production code.
     pub async fn new_in_memory() -> Result<ObjectStorage, StorageError> {
         let backend = Arc::new(InMemoryObjectStoreBackend);
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
         Ok(storage)
     }
@@ -78,7 +75,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(LocalFileSystemObjectStoreBackend { path: prefix.to_path_buf() });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
         Ok(storage)
     }
@@ -91,7 +88,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(S3ObjectStoreBackend { bucket, prefix, credentials, config });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
 
         Ok(storage)
@@ -111,7 +108,7 @@ impl ObjectStorage {
             credentials,
             config,
         });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
 
         Ok(storage)
@@ -125,7 +122,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(GcsObjectStoreBackend { bucket, prefix, credentials, config });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
 
         Ok(storage)
@@ -140,10 +137,7 @@ impl ObjectStorage {
             .get_or_init(|| async {
                 // TODO: handle error better?
                 #[allow(clippy::expect_used)]
-                self.backend
-                    .mk_object_store()
-                    .await
-                    .expect("failed to create object store")
+                self.backend.mk_object_store().expect("failed to create object store")
             })
             .await
     }
@@ -618,10 +612,9 @@ impl Storage for ObjectStorage {
     }
 }
 
-#[async_trait]
 #[typetag::serde(tag = "object_store_provider_type")]
 pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError>;
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError>;
 
     /// The prefix for the object store.
     fn prefix(&self) -> String;
@@ -644,10 +637,9 @@ impl fmt::Display for InMemoryObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "in_memory_object_store_provider")]
 impl ObjectStoreBackend for InMemoryObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         Ok(Arc::new(InMemory::new()))
     }
 
@@ -682,12 +674,10 @@ impl fmt::Display for LocalFileSystemObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "local_file_system_object_store_provider")]
 impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        _ = create_dir_all(&self.path)
-            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+        create_dir_all(&self.path).map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
         let path = std::fs::canonicalize(&self.path)
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
@@ -742,10 +732,9 @@ impl fmt::Display for S3ObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "s3_object_store_provider")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = AmazonS3Builder::new();
 
         let builder = match self.credentials.as_ref() {
@@ -828,10 +817,9 @@ impl fmt::Display for AzureObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = MicrosoftAzureBuilder::new();
 
         let builder = match self.credentials.as_ref() {
@@ -891,10 +879,9 @@ impl fmt::Display for GcsObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = GoogleCloudStorageBuilder::new();
 
         let builder = match self.credentials.as_ref() {
@@ -953,38 +940,27 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
     }
 }
 
+// We don't need to cache the credential ourselves, because object_store handles credential caching and expiration itself:
+// https://github.com/apache/arrow-rs/blob/660a3ac22a8ef8601acf4548d65146bc623f653a/object_store/src/gcp/credential.rs#L301-L302
+// https://github.com/apache/arrow-rs/blob/660a3ac22a8ef8601acf4548d65146bc623f653a/object_store/src/client/mod.rs#L818-L822
 #[derive(Debug)]
 pub struct GcsRefreshableCredentialProvider {
-    last_credential: Arc<Mutex<Option<GcsBearerCredential>>>,
     refresher: Arc<dyn GcsCredentialsFetcher>,
 }
 
 impl GcsRefreshableCredentialProvider {
     pub fn new(refresher: Arc<dyn GcsCredentialsFetcher>) -> Self {
-        Self { last_credential: Arc::new(Mutex::new(None)), refresher }
+        Self { refresher }
     }
 
     pub async fn get_or_update_credentials(
         &self,
     ) -> Result<GcsBearerCredential, StorageError> {
-        let mut last_credential = self.last_credential.lock().await;
-
-        // If we have a credential and it hasn't expired, return it
-        if let Some(creds) = last_credential.as_ref() {
-            if let Some(expires_after) = creds.expires_after {
-                if expires_after > Utc::now() {
-                    return Ok(creds.clone());
-                }
-            }
-        }
-
-        // Otherwise, refresh the credential and cache it
         let creds = self
             .refresher
             .get()
             .await
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
-        *last_credential = Some(creds.clone());
         Ok(creds)
     }
 }
