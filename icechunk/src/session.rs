@@ -1381,28 +1381,34 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_from_iterator(
         &mut self,
         node_id: &NodeId,
-        chunks: impl Iterator<Item = ChunkInfo>,
+        chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
         shards: ManifestShards,
     ) -> SessionResult<()> {
         let mut from = vec![];
         let mut to = vec![];
 
-        let mut sharded_refs: HashMap<usize, Vec<_>> = HashMap::new();
-        sharded_refs.reserve(shards.len());
         // TODO: what is a good capacity
         let ref_capacity = 8_192;
-        sharded_refs.insert(0, Vec::with_capacity(ref_capacity));
-        for chunk in chunks {
-            let shard_index = shards.which(&chunk.coord)?;
-            sharded_refs
-                .entry(shard_index)
-                .or_insert_with(|| Vec::with_capacity(ref_capacity))
-                .push(chunk);
-        }
 
         // TODO: think about optimizing writes to manifests
         // TODO: add test case for append caqse
         // TODO: add benchmarks
+        let mut sharded_refs = chunks
+            .try_fold(
+                // TODO: have the changeset track this HashMap
+                HashMap::with_capacity(shards.len()),
+                |mut sharded_refs, chunk| async {
+                    let shard_index = shards.which(&chunk.coord).map_err(|e| e.into());
+                    shard_index.map(|index| {
+                        sharded_refs
+                            .entry(index)
+                            .or_insert_with(|| Vec::with_capacity(ref_capacity))
+                            .push(chunk);
+                        sharded_refs
+                    })
+                },
+            )
+            .await?;
 
         for i in 0..shards.len() {
             if let Some(shard_chunks) = sharded_refs.remove(&i) {
@@ -1449,7 +1455,9 @@ impl<'a> FlushProcess<'a> {
         node_path: &Path,
         shards: ManifestShards,
     ) -> SessionResult<()> {
-        let chunks = self.change_set.new_array_chunk_iterator(node_id, node_path);
+        let chunks = stream::iter(
+            self.change_set.new_array_chunk_iterator(node_id, node_path).map(Ok),
+        );
         self.write_manifest_from_iterator(node_id, chunks, shards).await
     }
 
@@ -1461,8 +1469,9 @@ impl<'a> FlushProcess<'a> {
         node: &NodeSnapshot,
         shards: ManifestShards,
     ) -> SessionResult<()> {
+        let asset_manager = Arc::clone(&self.asset_manager);
         let updated_chunks = updated_node_chunks_iterator(
-            self.asset_manager.as_ref(),
+            asset_manager.as_ref(),
             self.change_set,
             self.parent_id,
             node.clone(),
@@ -1470,11 +1479,7 @@ impl<'a> FlushProcess<'a> {
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
 
-        // FIXME
-        let as_iter =
-            updated_chunks.collect::<Vec<_>>().await.into_iter().map(|x| x.unwrap());
-
-        self.write_manifest_from_iterator(&node.id, as_iter, shards).await
+        self.write_manifest_from_iterator(&node.id, updated_chunks, shards).await
     }
 
     /// Record the previous manifests for an array that was not modified in the session
