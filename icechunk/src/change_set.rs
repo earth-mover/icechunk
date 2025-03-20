@@ -31,6 +31,7 @@ pub struct ChangeSet {
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     // It's important we keep these sorted, we use this fact in TransactionLog creation
+    // TODO: could track ManifestExtents
     set_chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,

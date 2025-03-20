@@ -1400,6 +1400,10 @@ impl<'a> FlushProcess<'a> {
                 .push(chunk);
         }
 
+        // TODO: think about optimizing writes to manifests
+        // TODO: add test case for append caqse
+        // TODO: add benchmarks
+
         for i in 0..shards.len() {
             if let Some(shard_chunks) = sharded_refs.remove(&i) {
                 let shard_chunks = stream::iter(
