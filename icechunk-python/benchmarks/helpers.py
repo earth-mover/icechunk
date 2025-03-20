@@ -13,6 +13,8 @@ def setup_logger():
 
 
 def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
+    if store == "s3_ob":
+        store = "s3"
     COILED_VM_TYPES = {
         # TODO: think about these
         "s3": "m5.4xlarge",

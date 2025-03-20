@@ -78,7 +78,7 @@ def execute_write_task(task: Task) -> TaskResult:
     return TaskResult(task.session, time=toc - tic)
 
 
-def get_repo(url: str) -> Repository:
+def get_storage(url: str) -> Storage:
     url = urlparse(url)
     if url.netloc == "" or url.params != "" or url.query != "" or url.fragment != "":
         raise ValueError(f"Invalid {url=!r}")
@@ -93,7 +93,7 @@ def get_repo(url: str) -> Repository:
             os.path.expanduser(f"{url.netloc}/{url.path}")
         )
 
-    return Repository.open_or_create(storage=storage)
+    return storage
 
 
 class Executor(StrEnum):
@@ -155,7 +155,8 @@ def initialize_store(repo: Repository, *, shape, chunks):
 # @app.command()
 def write(
     # data
-    url: str,
+    url: str | None = None,
+    storage: Storage | None = None,
     # num_arrays: Annotated[int, typer.Option(min=1, max=1)] = 1,
     num_arrays: int = 1,
     # scale:   # TODO: [small, medium, large]
@@ -174,7 +175,9 @@ def write(
     executor = get_executor(
         executor=executor, workers=workers, threads_per_worker=threads_per_worker
     )
-    repo = get_repo(url)
+    if storage is None:
+        storage = get_storage(url)
+    repo = Repository.open_or_create(storage)
     initialize_store(repo, shape=shape, chunks=chunks)
 
     session = repo.writable_session("main")
@@ -189,19 +192,20 @@ def write(
     with timer.time(op="total_write_time", **timer_context):
         # tasks =
         # print(f"submitted {len(tasks)} tasks")
-        results = [
-            f.result(timeout=5)
-            for f in tqdm.tqdm(
-                futures.as_completed(
-                    [
-                        executor.submit(
-                            execute_write_task, Task(session=session, region=slicer)
-                        )
-                        for slicer in lib.slices_from_chunks(shape, task_chunk_shape)
-                    ]
+        with session.allow_pickling():
+            results = [
+                f.result(timeout=5)
+                for f in tqdm.tqdm(
+                    futures.as_completed(
+                        [
+                            executor.submit(
+                                execute_write_task, Task(session=session, region=slicer)
+                            )
+                            for slicer in lib.slices_from_chunks(shape, task_chunk_shape)
+                        ]
+                    )
                 )
-            )
-        ]
+            ]
 
     timer.diagnostics.append(
         {"op": "write_task", "runtime": tuple(r.time for r in results)}

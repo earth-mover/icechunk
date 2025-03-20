@@ -23,6 +23,7 @@ ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 CONSTRUCTORS = {
     "s3": ic.s3_storage,
+    "s3_ob": ic.storage.s3_object_store_storage,
     "gcs": ic.gcs_storage,
     "tigris": ic.tigris_storage,
     "local": ic.local_filesystem_storage,
@@ -31,6 +32,7 @@ CONSTRUCTORS = {
 TEST_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
+    # "gcs": dict(store="gcs", bucket="arraylake-scratch", region="us-east1"),
     # not using region="auto", because for now we pass this directly to coiled.
     "r2": dict(store="r2", bucket="icechunk-test-r2", region="us-east-1"),
     # "tigris": dict(
@@ -39,6 +41,7 @@ TEST_BUCKETS = {
     "tigris": dict(store="tigris", bucket="icechunk-test", region="iad"),
     "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
 }
+TEST_BUCKETS["s3_ob"] = TEST_BUCKETS["s3"]
 BUCKETS = {
     "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
     "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
@@ -205,7 +208,16 @@ class Dataset:
 
 
 @dataclass(kw_only=True)
-class BenchmarkDataset(Dataset):
+class BenchmarkWriteDataset(Dataset):
+    num_arrays: int
+    shape: tuple[int, ...]
+    chunks: tuple[int, ...]
+    # whether to skip this one on local runs
+    skip_local: bool = False
+
+
+@dataclass(kw_only=True)
+class BenchmarkReadDataset(Dataset):
     # data variable to load in `time_xarray_read_chunks`
     load_variables: list[str] | None = None
     # Passed to .isel for `time_xarray_read_chunks`
@@ -377,7 +389,7 @@ ERA5_ARCO_INGEST = IngestDataset(
     arrays=[],
 )
 
-ERA5 = BenchmarkDataset(
+ERA5 = BenchmarkReadDataset(
     # weatherbench2 data - 5 years
     skip_local=False,
     storage_config=StorageConfig(prefix="era5-weatherbench"),
@@ -390,7 +402,7 @@ ERA5 = BenchmarkDataset(
     # setupfn=partial(setup_ingest_for_benchmarks, ingest=ERA5_WB),
 )
 
-ERA5_ARCO = BenchmarkDataset(
+ERA5_ARCO = BenchmarkReadDataset(
     skip_local=False,
     storage_config=StorageConfig(prefix="era5-arco"),
     first_byte_variable="latitude",
@@ -398,7 +410,7 @@ ERA5_ARCO = BenchmarkDataset(
     setupfn=partial(setup_ingest_for_benchmarks, ingest=ERA5_ARCO_INGEST),
 )
 
-# ERA5_LARGE = BenchmarkDataset(
+# ERA5_LARGE = BenchmarkReadDataset(
 #     skip_local=True,
 #     storage_config=StorageConfig(
 #         bucket="icechunk-public-data", prefix="era5-weatherbench2"
@@ -411,7 +423,7 @@ ERA5_ARCO = BenchmarkDataset(
 #     # by mistake
 # )
 
-ERA5_SINGLE = BenchmarkDataset(
+ERA5_SINGLE = BenchmarkReadDataset(
     # Single NCAR AWS PDS ERA5 netCDF
     storage_config=StorageConfig(prefix="perf-era5-single"),
     load_variables=["PV"],
@@ -420,7 +432,7 @@ ERA5_SINGLE = BenchmarkDataset(
     setupfn=setup_era5_single,
 )
 
-GB_128MB_CHUNKS = BenchmarkDataset(
+GB_128MB_CHUNKS = BenchmarkReadDataset(
     storage_config=StorageConfig(prefix="gb-128mb-chunks"),
     load_variables=["array"],
     chunk_selector={},
@@ -428,7 +440,7 @@ GB_128MB_CHUNKS = BenchmarkDataset(
     setupfn=partial(setup_synthetic_gb_dataset, chunk_shape=(64, 512, 512)),
 )
 
-GB_8MB_CHUNKS = BenchmarkDataset(
+GB_8MB_CHUNKS = BenchmarkReadDataset(
     storage_config=StorageConfig(prefix="gb-8mb-chunks"),
     load_variables=["array"],
     chunk_selector={},
@@ -437,7 +449,7 @@ GB_8MB_CHUNKS = BenchmarkDataset(
 )
 
 # TODO
-GPM_IMERG_VIRTUAL = BenchmarkDataset(
+GPM_IMERG_VIRTUAL = BenchmarkReadDataset(
     storage_config=StorageConfig(
         store="s3",
         bucket="earthmover-icechunk-us-west-2",
@@ -450,4 +462,18 @@ GPM_IMERG_VIRTUAL = BenchmarkDataset(
     load_variables=["foo"],
     chunk_selector={"time": 1},
     first_byte_variable="lat",
+)
+
+
+PANCAKE_WRITES = BenchmarkWriteDataset(
+    storage_config=StorageConfig(prefix="pancake_writes"),
+    num_arrays=1,
+    shape=(320, 720, 1441),
+    chunks=(1, -1, -1),
+)
+SIMPLE_1D = BenchmarkWriteDataset(
+    storage_config=StorageConfig(prefix="simple_1d_writes"),
+    num_arrays=1,
+    shape=(2000 * 1000,),
+    chunks=(1000,),
 )
