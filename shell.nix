@@ -25,6 +25,7 @@ in pkgs.mkShell.override {
     taplo # toml lsp server
 
     awscli2
+    google-cloud-sdk
     just # script launcher with a make flavor
     alejandra # nix code formatter
     markdownlint-cli2

@@ -865,10 +865,10 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GcsObjectStoreBackend {
-    bucket: String,
-    prefix: Option<String>,
-    credentials: Option<GcsCredentials>,
-    config: Option<HashMap<GoogleConfigKey, String>>,
+    pub bucket: String,
+    pub prefix: Option<String>,
+    pub credentials: Option<GcsCredentials>,
+    pub config: Option<HashMap<GoogleConfigKey, String>>,
 }
 
 impl fmt::Display for GcsObjectStoreBackend {
@@ -916,7 +916,9 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                     GcsRefreshableCredentialProvider::new(Arc::clone(fetcher));
                 builder.with_credentials(Arc::new(credential_provider))
             }
-            None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
+            None | Some(GcsCredentials::FromEnv) | Some(GcsCredentials::Anonymous) => {
+                GoogleCloudStorageBuilder::from_env()
+            }
         };
 
         let builder = builder.with_bucket_name(&self.bucket);
