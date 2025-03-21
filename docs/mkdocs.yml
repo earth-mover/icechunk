@@ -54,9 +54,9 @@ theme:
     - navigation.footer
     - navigation.tabs
     - navigation.tabs.sticky
+    - navigation.top
     #- navigation.expand
     - toc.follow
-    - navigation.top
     - announce.dismiss
     - content.code.copy
     - content.code.annotate
@@ -156,6 +156,8 @@ plugins:
 markdown_extensions:
   - admonition
   - tables
+  - toc:
+      toc_depth: 2
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences:

@@ -287,7 +287,7 @@ def to_icechunk(
         in with ``region``, use the `_XarrayDatasetWriter` directly.
     """
 
-    as_dataset = make_dataset(obj)
+    as_dataset = _make_dataset(obj)
     with session.allow_pickling():
         store = session.store
         writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
@@ -303,10 +303,10 @@ def to_icechunk(
 
 
 @overload
-def make_dataset(obj: DataArray) -> Dataset: ...
+def _make_dataset(obj: DataArray) -> Dataset: ...
 @overload
-def make_dataset(obj: Dataset) -> Dataset: ...
-def make_dataset(obj: DataArray | Dataset) -> Dataset:
+def _make_dataset(obj: Dataset) -> Dataset: ...
+def _make_dataset(obj: DataArray | Dataset) -> Dataset:
     """Copied from DataArray.to_zarr"""
     DATAARRAY_NAME = "__xarray_dataarray_name__"
     DATAARRAY_VARIABLE = "__xarray_dataarray_variable__"
