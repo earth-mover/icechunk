@@ -54,7 +54,7 @@ We can now access the `zarr.Store` from the `Session` and create a new root grou
 ```python exec="on" session="version" source="material-block" result="code"
 import zarr
 
-root = zarr.group(session.store)
+root = zarr.create_group(session.store)
 root.attrs["foo"] = "bar"
 print(session.commit(message="Add foo attribute to root group"))
 ```
@@ -65,7 +65,7 @@ Once we've committed the snapshot, the `Session` will become read-only, and we c
 
 ```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("main")
-root = zarr.group(session.store)
+root = zarr.open_group(session.store)
 root.attrs["foo"] = "baz"
 print(session.commit(message="Update foo attribute on root group"))
 ```
@@ -117,7 +117,7 @@ We can now create a new writable `Session` from the `dev` branch and modify the 
 
 ```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("dev")
-root = zarr.group(session.store)
+root = zarr.open_group(session.store)
 root.attrs["foo"] = "balogna"
 print(session.commit(message="Update foo attribute on root group"))
 ```
@@ -128,7 +128,7 @@ We can also create a new branch from the tip of the `main` branch if we want to 
 repo.create_branch("feature", snapshot_id=main_branch_snapshot_id)
 
 session = repo.writable_session("feature")
-root = zarr.group(session.store)
+root = zarr.open_group(session.store)
 root.attrs["foo"] = "cherry"
 print(session.commit(message="Update foo attribute on root group"))
 ```
@@ -246,7 +246,7 @@ import zarr
 
 repo = icechunk.Repository.create(icechunk.in_memory_storage())
 session = repo.writable_session("main")
-root = zarr.group(session.store)
+root = zarr.create_group(session.store)
 root.attrs["foo"] = "bar"
 root.create_dataset("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
 print(session.commit(message="Add foo attribute and data array"))

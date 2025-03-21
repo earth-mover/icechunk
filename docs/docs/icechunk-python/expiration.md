@@ -35,7 +35,7 @@ There are 10 snapshots
 
 ```python exec="on" session="version" source="material-block"
 ancestry = list(repo.ancestry(branch="main"))
-print(ancestry)
+print("\n\n".join([str((a.id, a.written_at)) for a in ancestry]))
 ```
 
 
@@ -73,7 +73,8 @@ print([a.id for a in ancestry[-5:-1]])
 Note that ancestry is now shorter:
 
 ```python exec="on" session="version" source="material-block"
-print(list(repo.ancestry(branch="main")))
+new_ancestry = list(repo.ancestry(branch="main"))
+print("\n\n".join([str((a.id, a.written_at)) for a in new_ancestry]))
 ```
 
 ## Delete expired data
