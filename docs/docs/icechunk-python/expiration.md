@@ -10,7 +10,10 @@ First create a Repository, configured so that there are no "inline" chunks. This
 ```python exec="on" session="version" source="material-block"
 import icechunk
 
-repo = icechunk.Repository.create(icechunk.in_memory_storage(), config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=0))
+repo = icechunk.Repository.create(
+    icechunk.in_memory_storage(),
+    config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=0),
+)
 ```
 
 ## Generate a few snapshots
@@ -24,7 +27,9 @@ import time
 
 for i in range(10):
     session = repo.writable_session("main")
-    array = zarr.create_array(session.store, name="array", shape=(10,), fill_value=-1, dtype=int, overwrite=True)
+    array = zarr.create_array(
+        session.store, name="array", shape=(10,), fill_value=-1, dtype=int, overwrite=True
+    )
     array[:] = i
     session.commit(f"snap {i}")
     time.sleep(0.1)
