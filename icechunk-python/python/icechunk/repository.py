@@ -540,7 +540,9 @@ class Repository:
         expiration process, point to expired snapshots directly, will be
         deleted.
 
-        Warning: this is an administrative operation, it should be run
+        Danger
+        ------
+        This is an administrative operation, it should be run
         carefully. The repository can still operate concurrently while
         `expire_snapshots` runs, but other readers can get inconsistent
         views of the repository history.
@@ -551,7 +553,9 @@ class Repository:
     def garbage_collect(self, delete_object_older_than: datetime.datetime) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
-        Warning: this is an administrative operation, it should be run
+        Danger
+        ------
+        This is an administrative operation, it should be run
         carefully. The repository can still operate concurrently while
         `garbage_collect` runs, but other reades can get inconsistent
         views if they are trying to access the expired snapshots.
