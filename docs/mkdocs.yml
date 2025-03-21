@@ -137,6 +137,7 @@ plugins:
           options:
             docstring_style: numpy
             docstring_section_style: "table"
+            filters: "public"
             separate_signature: true
             show_symbol_type_heading: true
             show_symbol_type_toc: true

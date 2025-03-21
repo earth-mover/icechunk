@@ -311,8 +311,14 @@ def containers_credentials(
 ) -> dict[str, Credentials.S3]:
     """Build a map of credentials for virtual chunk containers.
 
-    Example usage:
-    ```
+    Parameters
+    ----------
+    m: Mapping[str, AnyS3Credential]
+        A mapping from container name to credentials.
+
+    Examples
+    --------
+    ```python
     import icechunk as ic
 
     config = ic.RepositoryConfig.default()
@@ -338,10 +344,6 @@ def containers_credentials(
     )
     ```
 
-    Parameters
-    ----------
-    m: Mapping[str, AnyS3Credential]
-        A mapping from container name to credentials.
     """
     res = {}
     for name, cred in {**m, **kwargs}.items():

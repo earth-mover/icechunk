@@ -16,6 +16,8 @@ from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
+__all__ = ["to_icechunk"]
+
 Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
@@ -69,7 +71,7 @@ class LazyArrayWriter(ArrayWriter):
 
 
 @dataclass
-class XarrayDatasetWriter:
+class _XarrayDatasetWriter:
     """
     Write Xarray Datasets to a group in an Icechunk store.
 
@@ -282,13 +284,13 @@ def to_icechunk(
         should be written in a separate single call to ``to_icechunk()``.
       - Dimensions cannot be included in both ``region`` and
         ``append_dim`` at the same time. To create empty arrays to fill
-        in with ``region``, use the `XarrayDatasetWriter` directly.
+        in with ``region``, use the `_XarrayDatasetWriter` directly.
     """
 
     as_dataset = make_dataset(obj)
     with session.allow_pickling():
         store = session.store
-        writer = XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
+        writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
         writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
