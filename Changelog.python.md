@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 0.2.9
+
+### Features
+
+- Add support for virtual chunks in Google Cloud Storage. Currently, credentials are needed
+  to access GCS buckets, even if they are public. We'll allow anonymous access in a future version.
+
 ## Python Icechunk Library 0.2.8
 
 ### Features
