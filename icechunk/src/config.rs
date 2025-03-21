@@ -322,6 +322,16 @@ impl ManifestConfig {
             DEFAULT_MANIFEST_SHARDING_CONFIG.get_or_init(ManifestShardingConfig::default)
         })
     }
+    // for testing only, create a config with no preloading and no sharding
+    pub fn empty() -> Self {
+        ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: None,
+                preload_if: None,
+            }),
+            sharding: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]

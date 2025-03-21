@@ -58,6 +58,11 @@ impl ManifestExtents {
 pub struct ManifestShards(Vec<ManifestExtents>);
 
 impl ManifestShards {
+    /// Used at read-time
+    pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
+        Self(extents)
+    }
+
     pub fn default(ndim: usize) -> Self {
         Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
     }
@@ -76,31 +81,6 @@ impl ManifestShards {
                 ManifestExtents::new(from.as_slice(), to.as_slice())
             });
         Self(res.collect())
-    }
-
-    // Returns the index of shard_range that includes ChunkIndices
-    // This can be used at write time to split manifests based on the config
-    // and at read time to choose which manifest to query for chunk payload
-    pub fn which(&self, coord: &ChunkIndices) -> Result<usize, IcechunkFormatError> {
-        // shard_range[i] must bound ChunkIndices
-        // 0 <= return value <= shard_range.len()
-        // it is possible that shard_range does not include a coord. say we have 2x2 shard grid
-        // but only shard (0,0) and shard (1,1) are populated with data.
-        // A coord located in (1, 0) should return Err
-        // Since shard_range need not form a regular grid, we must iterate through and find the first result.
-        // ManifestExtents in shard_range MUST NOT overlap with each other. How do we ensure this?
-        // ndim must be the same
-        // debug_assert_eq!(coord.0.len(), shard_range[0].len());
-        // FIXME: could optimize for unbounded single manifest
-        self.iter()
-            .enumerate()
-            .find(|(_, e)| e.contains(coord.0.as_slice()))
-            .map(|(i, _)| i)
-            .ok_or(IcechunkFormatError::from(
-                IcechunkFormatErrorKind::InvalidIndexForSharding {
-                    coords: coord.clone(),
-                },
-            ))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {

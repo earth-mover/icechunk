@@ -106,6 +106,8 @@ pub enum SessionErrorKind {
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
+    #[error("invalid chunk index for sharding manifests: {coords:?}")]
+    InvalidIndexForManifestShards { coords: ChunkIndices },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
 }
@@ -157,6 +159,34 @@ impl From<VirtualReferenceError> for SessionError {
 }
 
 pub type SessionResult<T> = Result<T, SessionError>;
+
+impl ManifestShards {
+    // Returns the index of shard_range that includes ChunkIndices
+    // This can be used at write time to split manifests based on the config
+    // and at read time to choose which manifest to query for chunk payload
+    pub fn which(&self, coord: &ChunkIndices) -> SessionResult<usize> {
+        // shard_range[i] must bound ChunkIndices
+        // 0 <= return value <= shard_range.len()
+        // it is possible that shard_range does not include a coord. say we have 2x2 shard grid
+        // but only shard (0,0) and shard (1,1) are populated with data.
+        // A coord located in (1, 0) should return Err
+        // Since shard_range need not form a regular grid, we must iterate through and find the first result.
+        // ManifestExtents in shard_range MUST NOT overlap with each other. How do we ensure this?
+        // ndim must be the same
+        // debug_assert_eq!(coord.0.len(), shard_range[0].len());
+        // FIXME: could optimize for unbounded single manifest
+        // Note: I don't think we can distinguish between out of bounds index for the array
+        //       and an index that is part of a shard that hasn't been written yet.
+        self.iter()
+            .enumerate()
+            .find(|(_, e)| e.contains(coord.0.as_slice()))
+            .map(|(i, _)| i)
+            .ok_or(
+                SessionErrorKind::InvalidIndexForManifestShards { coords: coord.clone() }
+                    .into(),
+            )
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -545,6 +575,8 @@ impl Session {
             }
             .into()),
             NodeData::Array { manifests, .. } => {
+                // Note: at this point, coords could be invalid for the array shape
+                //       but we just let that pass.
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
@@ -702,19 +734,28 @@ impl Session {
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
     ) -> SessionResult<Option<ChunkPayload>> {
-        // FIXME: use manifest extents
-        for manifest in manifests {
-            let manifest = self.fetch_manifest(&manifest.object_id).await?;
-            match manifest.get_chunk_payload(&node, coords) {
-                Ok(payload) => {
-                    return Ok(Some(payload.clone()));
-                }
-                Err(IcechunkFormatError {
-                    kind: IcechunkFormatErrorKind::ChunkCoordinatesNotFound { .. },
-                    ..
-                }) => {}
-                Err(err) => return Err(err.into()),
+        let shards = ManifestShards::from_extents(
+            manifests.iter().map(|m| m.extents.clone()).collect(),
+        );
+        let index = match shards.which(coords) {
+            Ok(index) => index,
+            // for an invalid coordinate, we bail.
+            // This happens for two cases:
+            // (1) the "coords" is out-of-range for the array shape
+            // (2) the "coords" belongs to a shard that hasn't been written yet.
+            Err(_) => return Ok(None),
+        };
+
+        let manifest = self.fetch_manifest(&manifests[index].object_id).await?;
+        match manifest.get_chunk_payload(&node, coords) {
+            Ok(payload) => {
+                return Ok(Some(payload.clone()));
             }
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::ChunkCoordinatesNotFound { .. },
+                ..
+            }) => {}
+            Err(err) => return Err(err.into()),
         }
         Ok(None)
     }
