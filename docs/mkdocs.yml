@@ -193,6 +193,7 @@ nav:
     - Parallel Writes: icechunk-python/parallel.md
     - Dask: icechunk-python/dask.md
     - Version Control: icechunk-python/version-control.md
+    - Expiring Data: icechunk-python/expiration.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md
     - Cheatsheets:
