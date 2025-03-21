@@ -123,6 +123,11 @@ mod tests {
                     force_path_style: false,
                 }),
             },
+            VirtualChunkContainer {
+                name: "gcs".to_string(),
+                url_prefix: "gcs://".to_string(),
+                store: ObjectStoreConfig::Gcs(Default::default()),
+            },
         ];
         create_repository(storage, containers, None).await
     }
@@ -551,7 +556,92 @@ mod tests {
 
         let last_year = f32::from_le_bytes(chunk[(288 - 4)..].try_into().unwrap());
         assert!(last_year - 2018.9861 < 0.000001);
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn test_zarr_store_virtual_refs_from_public_gcs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repo_dir = TempDir::new()?;
+        let repo = create_local_repository(repo_dir.path()).await;
+        let ds = repo.writable_session("main").await.unwrap();
+
+        let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
+
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[72],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value": 0.0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[],"dimension_names":["year"]}"#);
+        store.set("year/zarr.json", zarr_meta.clone()).await.unwrap();
+
+        let ref1 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            )?,
+            offset: 22306,
+            length: 288,
+            checksum: None,
+        };
+
+        let ref2 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "gcs://gcp-public-data-arco-era5/ar/1959-2022-1h-240x121_equiangular_with_poles_conservative.zarr/2m_temperature/0.0.0",
+            )?,
+            offset: 223,
+            length: 400,
+            checksum: None,
+        };
+
+        let ref3 = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "gcs://gcp-public-data-arco-era5/ar/1959-2022-1h-240x121_equiangular_with_poles_conservative.zarr/2m_temperature/1.0.0",
+            )?,
+            offset: 0,
+            length: 100,
+            checksum: None,
+        };
+
+        let ref_expired = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            )?,
+            offset: 22306,
+            length: 288,
+            checksum: Some(Checksum::LastModified(SecondsSinceEpoch(3600))),
+        };
+        let ref_bad_tag = VirtualChunkRef {
+            location: VirtualChunkLocation::from_absolute_path(
+                "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            )?,
+            offset: 22306,
+            length: 288,
+            checksum: Some(Checksum::ETag(ETag("bad".to_string()))),
+        };
+
+        store.set_virtual_ref("year/c/0", ref1, false).await?;
+        store.set_virtual_ref("year/c/1", ref2, false).await?;
+        store.set_virtual_ref("year/c/2", ref3, false).await?;
+        store.set_virtual_ref("year/c/3", ref_expired, false).await?;
+        store.set_virtual_ref("year/c/4", ref_bad_tag, false).await?;
+
+        // FIXME: enable this once object_store can access public buckets without credentials
+        // otherwise we get an error in GHA
+        if false {
+            let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
+            assert_eq!(chunk.len(), 288);
+            let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
+            assert_eq!(chunk.len(), 400);
+            let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
+            assert_eq!(chunk.len(), 100);
+
+            assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
+            assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
+        }
         Ok(())
     }
 

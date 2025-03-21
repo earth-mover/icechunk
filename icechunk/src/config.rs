@@ -428,6 +428,7 @@ pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
 pub enum GcsCredentials {
     #[default]
     FromEnv,
+    Anonymous,
     Static(GcsStaticCredentials),
     Refreshable(Arc<dyn GcsCredentialsFetcher>),
 }
