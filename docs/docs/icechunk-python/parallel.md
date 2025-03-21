@@ -123,7 +123,7 @@ def write_timestamp(*, itime: int, session: Session) -> Session:
     return session
 ```
 
-Now we issue write tasks within the [`session.allow_pickling()`](./reference/md#icechunk.Session.allow_pickling) context, gather the Sessions from individual tasks,
+Now we issue write tasks within the [`session.allow_pickling()`](reference.md#icechunk.Session.allow_pickling) context, gather the Sessions from individual tasks,
 merge them, and make a successful commit.
 
 ```python

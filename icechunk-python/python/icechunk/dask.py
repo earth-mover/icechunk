@@ -54,8 +54,8 @@ def store_dask(
 
     Parameters
     ----------
-    store: IcechunkStore
-        Icechunk store to write to.
+    session: Sessions
+        Icechunk writable session
     sources: list of `dask.array.Array`
         List of dask arrays to write.
     targets : list of `zarr.Array`
@@ -92,7 +92,7 @@ def store_dask(
 
 
 # tree-reduce all changesets, regardless of array
-def partial_reduce(
+def _partial_reduce(
     aggregate: Callable[..., Any],
     keys: Iterable[tuple[Any, ...]],
     *,
@@ -180,7 +180,7 @@ def stateful_store_reduce(
         while len(keys) > split_every:
             latest_layer = f"{aggprefix}-{depth}-{token}"
 
-            layers[latest_layer] = partial_reduce(
+            layers[latest_layer] = _partial_reduce(
                 aggregate, keys, layer_name=latest_layer, split_every=split_every
             )
             previous_layer, *_ = next(iter(keys))
@@ -191,7 +191,7 @@ def stateful_store_reduce(
 
         # last one
         latest_layer = f"{aggprefix}-final-{token}"
-        layers[latest_layer] = partial_reduce(
+        layers[latest_layer] = _partial_reduce(
             aggregate, keys, layer_name=latest_layer, split_every=split_every
         )
         previous_layer, *_ = next(iter(keys))
