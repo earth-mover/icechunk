@@ -68,7 +68,7 @@ def store_dask(
         Arbitrary keyword arguments passed to `dask.array.store`. Notably `compute`,
         `return_stored`, `load_stored`, and `lock` are unsupported.
     """
-    stored_arrays = dask.array.store(  # type: ignore[attr-defined]
+    stored_arrays = dask.array.store(
         sources=sources,
         targets=targets,  # type: ignore[arg-type]
         regions=regions,

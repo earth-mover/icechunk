@@ -4,6 +4,7 @@
 - [configuration](configuration.md)
 - [storage](storage.md)
 - [version control](version-control.md)
+- [expiration](expiration.md)
 - [xarray](xarray.md)
 - [concurrency](concurrency.md)
 - [dask](dask.md)
