@@ -4,7 +4,7 @@ use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::Itertools;
+use itertools::{Itertools, multiunzip, repeat_n};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -37,8 +37,58 @@ impl ManifestExtents {
         Self(v)
     }
 
+    pub fn contains(&self, coord: &[u32]) -> bool {
+        self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Range<u32>> {
         self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestShards(Vec<ManifestExtents>);
+
+impl ManifestShards {
+    /// Used at read-time
+    pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
+        Self(extents)
+    }
+
+    pub fn default(ndim: usize) -> Self {
+        Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
+        let res = iter
+            .into_iter()
+            .map(|x| x.into_iter().tuple_windows())
+            .multi_cartesian_product()
+            .map(multiunzip)
+            .map(|(from, to): (Vec<u32>, Vec<u32>)| {
+                ManifestExtents::new(from.as_slice(), to.as_slice())
+            });
+        Self(res.collect())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -206,7 +256,7 @@ impl Manifest {
         }
 
         if array_manifests.is_empty() {
-            // empty manifet
+            // empty manifest
             return Ok(None);
         }
 
