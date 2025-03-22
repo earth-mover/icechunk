@@ -536,7 +536,7 @@ class Repository:
         available for garbage collection, they could still be pointed by
         ether refs.
 
-        If delete_expired_* is set to True, branches or tags that, after the
+        If `delete_expired_*` is set to True, branches or tags that, after the
         expiration process, point to expired snapshots directly, will be
         deleted.
 
@@ -546,6 +546,19 @@ class Repository:
         carefully. The repository can still operate concurrently while
         `expire_snapshots` runs, but other readers can get inconsistent
         views of the repository history.
+
+        Parameters
+        ----------
+        older_than: datetime.datetime
+            Expire snapshots older than this time.
+        delete_expired_branches: bool, optional
+            Whether to delete any branches that now have only expired snapshots.
+        delete_expired_tags: bool, optional
+            Whether to delete any tags associated with expired snapshots
+
+        Returns
+        -------
+        set of expires snapshot IDs
         """
 
         return self._repository.expire_snapshots(older_than)
@@ -559,6 +572,16 @@ class Repository:
         carefully. The repository can still operate concurrently while
         `garbage_collect` runs, but other reades can get inconsistent
         views if they are trying to access the expired snapshots.
+
+        Parameters
+        ----------
+        delete_object_older_than: datetime.datetime
+            Delete objects older than this time.
+
+        Returns
+        -------
+        GCSummary
+            Summary of objects deleted.
         """
 
         return self._repository.garbage_collect(delete_object_older_than)
