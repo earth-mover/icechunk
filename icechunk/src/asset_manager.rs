@@ -323,6 +323,16 @@ impl AssetManager {
             .get_snapshot_last_modified(&self.storage_settings, snapshot_id)
             .await?)
     }
+
+    #[instrument(skip(self))]
+    pub async fn fetch_snapshot_info(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<SnapshotInfo> {
+        let snapshot = self.fetch_snapshot(snapshot_id).await?;
+        let info = snapshot.as_ref().try_into()?;
+        Ok(info)
+    }
 }
 
 fn binary_file_header(

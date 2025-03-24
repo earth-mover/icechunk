@@ -16,6 +16,7 @@ use futures::{
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tokio::task::JoinError;
 use tracing::{Instrument, debug, error, instrument, trace};
 
@@ -27,7 +28,9 @@ use crate::{
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
-        snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
+        snapshot::{
+            ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
+        },
         transaction_log::{Diff, DiffBuilder},
     },
     refs::{
@@ -136,6 +139,8 @@ pub struct Repository {
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+    #[serde(skip)]
+    default_commit_metadata: Arc<RwLock<Option<SnapshotProperties>>>,
 }
 
 impl Repository {
@@ -307,6 +312,7 @@ impl Repository {
             virtual_resolver,
             asset_manager,
             virtual_chunk_credentials,
+            default_commit_metadata: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -373,6 +379,20 @@ impl Repository {
             &self.config_version,
         )
         .await
+    }
+
+    #[instrument(skip_all)]
+    pub async fn set_default_commit_metadata(
+        &self,
+        metadata: Option<SnapshotProperties>,
+    ) {
+        let mut guard = self.default_commit_metadata.write().await;
+        *guard = metadata;
+    }
+
+    #[instrument(skip_all)]
+    pub async fn default_commit_metadata(&self) -> Option<SnapshotProperties> {
+        self.default_commit_metadata.read().await.clone()
     }
 
     #[instrument(skip(storage, config))]
@@ -754,6 +774,7 @@ impl Repository {
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot.clone(),
+            self.default_commit_metadata.read().await.clone(),
         );
 
         self.preload_manifests(ref_data.snapshot);

@@ -293,3 +293,17 @@ async def test_session_with_as_of() -> None:
         expected_children = {f"child {j}" for j in range(i)}
         actual_children = {g[0] for g in group.members()}
         assert expected_children == actual_children
+
+
+async def test_default_commit_metadata() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    repo.set_default_commit_metadata({"user": "test"})
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("child")
+    sid = session.commit("root")
+    snap = next(repo.ancestry(snapshot_id=sid))
+    assert snap.metadata == {"user": "test"}

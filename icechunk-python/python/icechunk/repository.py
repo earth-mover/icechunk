@@ -1,6 +1,6 @@
 import datetime
 from collections.abc import AsyncIterator, Iterator
-from typing import Self, cast
+from typing import Any, Self, cast
 
 from icechunk._icechunk_python import (
     Diff,
@@ -215,6 +215,36 @@ class Repository:
             The repository storage instance.
         """
         return self._repository.storage()
+
+    def set_default_commit_metadata(self, metadata: dict[str, Any] | None = None) -> None:
+        """
+        Set the default commit metadata for the repository. This is useful for providing
+        addition static system conexted metadata to all commits.
+
+        When a commit is made, the metadata will be merged with the metadata provided, with any
+        duplicate keys being overwritten by the metadata provided in the commit.
+
+        !!! warning
+            This metadata is only applied to sessions that are created after this call. Any open
+            writable sessions will not be affected and will not use the new default metadata.
+
+        Parameters
+        ----------
+        metadata : dict[str, Any], optional
+            The default commit metadata.
+        """
+        return self._repository.set_default_commit_metadata(metadata)
+
+    def default_commit_metadata(self) -> dict[str, Any] | None:
+        """
+        Get the current configured default commit metadata for the repository.
+
+        Returns
+        -------
+        dict[str, Any] | None
+            The default commit metadata.
+        """
+        return self._repository.default_commit_metadata()
 
     def ancestry(
         self,

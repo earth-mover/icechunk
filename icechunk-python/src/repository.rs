@@ -550,6 +550,25 @@ impl PyRepository {
         PyStorage(Arc::clone(self.0.storage()))
     }
 
+    #[pyo3(signature = (metadata))]
+    pub fn set_default_commit_metadata(
+        &self,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<()> {
+        let metadata = metadata.map(|m| m.into());
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            self.0.set_default_commit_metadata(metadata).await;
+            Ok(())
+        })
+    }
+
+    pub fn default_commit_metadata(&self) -> PyResult<Option<PySnapshotProperties>> {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let metadata = self.0.default_commit_metadata().await;
+            Ok(metadata.map(|m| m.into()))
+        })
+    }
+
     /// Returns an object that is both a sync and an async iterator
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
     pub fn async_ancestry(
