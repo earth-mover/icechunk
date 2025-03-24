@@ -224,6 +224,10 @@ class Repository:
         When a commit is made, the metadata will be merged with the metadata provided, with any
         duplicate keys being overwritten by the metadata provided in the commit.
 
+        !!! warning
+            This metadata is only applied to sessions that are created after this call. Any open
+            writable sessions will not be affected and will not use the new default metadata.
+
         Parameters
         ----------
         metadata : dict[str, Any], optional
