@@ -166,6 +166,7 @@ pub struct Session {
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
+    default_commit_metadata: Option<SnapshotProperties>,
 }
 
 impl Session {
@@ -186,6 +187,7 @@ impl Session {
             branch_name: None,
             snapshot_id,
             change_set: ChangeSet::default(),
+            default_commit_metadata: None,
         }
     }
 
@@ -197,6 +199,7 @@ impl Session {
         virtual_resolver: Arc<VirtualChunkResolver>,
         branch_name: String,
         snapshot_id: SnapshotId,
+        default_commit_metadata: Option<SnapshotProperties>,
     ) -> Self {
         Self {
             config,
@@ -207,6 +210,7 @@ impl Session {
             branch_name: Some(branch_name),
             snapshot_id,
             change_set: ChangeSet::default(),
+            default_commit_metadata,
         }
     }
 
@@ -804,6 +808,17 @@ impl Session {
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
+        };
+
+        let properties = match (properties, self.default_commit_metadata.as_ref()) {
+            (Some(p), None) => Some(p),
+            (None, Some(d)) => Some(d.clone()),
+            (Some(p), Some(d)) => {
+                let mut merged = d.clone();
+                merged.extend(p.into_iter());
+                Some(merged)
+            }
+            (None, None) => None,
         };
 
         let current = fetch_branch_tip(
@@ -1948,6 +1963,49 @@ mod tests {
 
         prop_assert_eq!(from, expected_from);
         prop_assert_eq!(to, expected_to);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
+    {
+        let mut repo = create_memory_store_repository().await;
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group(Path::root(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", None).await?;
+
+        // Verify that the first commit has no metadata
+        let snapshot_info = repo.snapshot_info(&snapshot).await?;
+        assert!(snapshot_info.metadata.is_empty());
+
+        // Set some default metadata
+        let mut default_metadata = SnapshotProperties::default();
+        default_metadata.insert("author".to_string(), "John Doe".to_string().into());
+        default_metadata.insert("project".to_string(), "My Project".to_string().into());
+        repo.set_default_commit_metadata(Some(default_metadata.clone()));
+
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", None).await?;
+
+        let snapshot_info = repo.snapshot_info(&snapshot).await?;
+        assert_eq!(snapshot_info.metadata, default_metadata);
+
+        // Check that metadata is merged with users provided metadata taking precedence
+        let mut metadata = SnapshotProperties::default();
+        metadata.insert("author".to_string(), "Jane Doe".to_string().into());
+        metadata.insert("id".to_string(), "ideded".to_string().into());
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
+
+        let snapshot_info = repo.snapshot_info(&snapshot).await?;
+        let mut expected_result = SnapshotProperties::default();
+        expected_result.insert("author".to_string(), "Jane Doe".to_string().into());
+        expected_result.insert("project".to_string(), "My Project".to_string().into());
+        expected_result.insert("id".to_string(), "ideded".to_string().into());
+        assert_eq!(snapshot_info.metadata, expected_result);
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]

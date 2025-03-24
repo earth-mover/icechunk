@@ -27,7 +27,9 @@ use crate::{
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
-        snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
+        snapshot::{
+            ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
+        },
         transaction_log::{Diff, DiffBuilder},
     },
     refs::{
@@ -136,6 +138,7 @@ pub struct Repository {
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+    default_commit_metadata: Option<SnapshotProperties>,
 }
 
 impl Repository {
@@ -307,6 +310,7 @@ impl Repository {
             virtual_resolver,
             asset_manager,
             virtual_chunk_credentials,
+            default_commit_metadata: None,
         })
     }
 
@@ -375,6 +379,16 @@ impl Repository {
         .await
     }
 
+    #[instrument(skip_all)]
+    pub fn set_default_commit_metadata(&mut self, metadata: Option<SnapshotProperties>) {
+        self.default_commit_metadata = metadata;
+    }
+
+    #[instrument(skip_all)]
+    pub fn default_commit_metadata(&self) -> Option<&SnapshotProperties> {
+        self.default_commit_metadata.as_ref()
+    }
+
     #[instrument(skip(storage, config))]
     pub(crate) async fn store_config(
         storage: &(dyn Storage + Send + Sync),
@@ -414,6 +428,16 @@ impl Repository {
 
     pub fn asset_manager(&self) -> &Arc<AssetManager> {
         &self.asset_manager
+    }
+
+    /// Returns the info for the specified snapshot
+    #[instrument(skip(self))]
+    pub async fn snapshot_info(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<SnapshotInfo> {
+        let info = self.asset_manager.fetch_snapshot_info(snapshot_id).await?;
+        Ok(info)
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
@@ -754,6 +778,7 @@ impl Repository {
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot.clone(),
+            self.default_commit_metadata.clone(),
         );
 
         self.preload_manifests(ref_data.snapshot);
