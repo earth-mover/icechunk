@@ -191,6 +191,7 @@ impl Session {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -1968,7 +1969,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
     {
-        let mut repo = create_memory_store_repository().await;
+        let repo = create_memory_store_repository().await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", None).await?;
@@ -1981,7 +1982,7 @@ mod tests {
         let mut default_metadata = SnapshotProperties::default();
         default_metadata.insert("author".to_string(), "John Doe".to_string().into());
         default_metadata.insert("project".to_string(), "My Project".to_string().into());
-        repo.set_default_commit_metadata(Some(default_metadata.clone()));
+        repo.set_default_commit_metadata(Some(default_metadata.clone())).await;
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
