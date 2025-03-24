@@ -436,16 +436,6 @@ impl Repository {
         &self.asset_manager
     }
 
-    /// Returns the info for the specified snapshot
-    #[instrument(skip(self))]
-    pub async fn snapshot_info(
-        &self,
-        snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<SnapshotInfo> {
-        let info = self.asset_manager.fetch_snapshot_info(snapshot_id).await?;
-        Ok(info)
-    }
-
     /// Returns the sequence of parents of the current session, in order of latest first.
     #[instrument(skip(self))]
     pub async fn snapshot_ancestry(

@@ -1975,8 +1975,9 @@ mod tests {
         let snapshot = ds.commit("commit", None).await?;
 
         // Verify that the first commit has no metadata
-        let snapshot_info = repo.snapshot_info(&snapshot).await?;
-        assert!(snapshot_info.metadata.is_empty());
+        let ancestry = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = ancestry.try_collect::<Vec<_>>().await?;
+        assert!(snapshot_infos[0].metadata.is_empty());
 
         // Set some default metadata
         let mut default_metadata = SnapshotProperties::default();
@@ -1988,8 +1989,9 @@ mod tests {
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", None).await?;
 
-        let snapshot_info = repo.snapshot_info(&snapshot).await?;
-        assert_eq!(snapshot_info.metadata, default_metadata);
+        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
+        assert_eq!(snapshot_infos[0].metadata, default_metadata);
 
         // Check that metadata is merged with users provided metadata taking precedence
         let mut metadata = SnapshotProperties::default();
@@ -1999,12 +2001,13 @@ mod tests {
         ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
 
-        let snapshot_info = repo.snapshot_info(&snapshot).await?;
+        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
         let mut expected_result = SnapshotProperties::default();
         expected_result.insert("author".to_string(), "Jane Doe".to_string().into());
         expected_result.insert("project".to_string(), "My Project".to_string().into());
         expected_result.insert("id".to_string(), "ideded".to_string().into());
-        assert_eq!(snapshot_info.metadata, expected_result);
+        assert_eq!(snapshot_infos[0].metadata, expected_result);
 
         Ok(())
     }
