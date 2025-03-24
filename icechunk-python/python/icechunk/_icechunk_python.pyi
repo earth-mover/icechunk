@@ -2,7 +2,7 @@ import abc
 import datetime
 from collections.abc import AsyncGenerator, AsyncIterator
 from enum import Enum
-from typing import Any
+from typing import Any, Self, TypeAlias
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -482,13 +482,102 @@ class ManifestPreloadConfig:
         """
         ...
 
+class ManifestShardCondition:
+    """Configuration for conditions under which manifests will preload on session creation"""
+
+    @staticmethod
+    def or_conditions(
+        conditions: list[ManifestShardCondition],
+    ) -> ManifestShardCondition:
+        """Create a sharding condition that matches if any of `conditions` matches"""
+        ...
+    @staticmethod
+    def and_conditions(
+        conditions: list[ManifestShardCondition],
+    ) -> ManifestShardCondition:
+        """Create a sharding condition that matches only if all passed `conditions` match"""
+        ...
+    @staticmethod
+    def path_matches(regex: str) -> ManifestShardCondition:
+        """Create a sharding condition that matches if the full path to the array matches the passed regex.
+
+        Array paths are absolute, as in `/path/to/my/array`
+        """
+        ...
+    @staticmethod
+    def name_matches(regex: str) -> ManifestShardCondition:
+        """Create a sharding condition that matches if the array's name matches the passed regex.
+
+        Example, for an array  `/model/outputs/temperature`, the following will match:
+        ```
+        name_matches(".*temp.*")
+        ```
+        """
+        ...
+
+class ShardDimCondition:
+    """Conditions for specifying dimensions along which to shard manifests."""
+    class Axis:
+        """Shard along specified integer axis."""
+        def __init__(self, axis: int) -> Self: ...
+
+    class DimensionName:
+        """Shard along specified named dimension."""
+        def __init__(self, regex: str) -> Self: ...
+
+    class Any:
+        """Shard along any other unspecified dimension."""
+        def __init__(self) -> Self: ...
+
+ShardSizes: TypeAlias = list[ManifestShardCondition, [ShardDimCondition, int]]
+
+class ManifestShardingConfig:
+    """Configuration for manifest sharding."""
+
+    def __init__(self, shard_sizes: ShardSizes) -> Self:
+        """Configuration for how Icechunk manifests will be sharded.
+
+        Parameters
+        ----------
+        shard_sizes: list[ManifestShardCondition, [ShardDimCondition, int]] | None
+            The configuration for how Icechunk manifests will be preloaded.
+        """
+        pass
+
+    # TODO: add a from_dict here?
+
+    @property
+    def shard_sizes(self) -> ShardSizes:
+        """
+        Configuration for how Icechunk manifests will be sharded.
+
+        Returns
+        -------
+        list[ManifestShardCondition, [ShardDimCondition, int]] | None
+            The configuration for how Icechunk manifests will be preloaded.
+        """
+        ...
+
+    @shard_sizes.setter
+    def shard_sizes(self, value: ShardSizes) -> None:
+        """
+        Set the sizes for how Icechunk manifests will be sharded.
+
+        Parameters
+        ----------
+        shard_sizes: list[ManifestShardCondition, [ShardDimCondition, int]] | None
+            The configuration for how Icechunk manifests will be preloaded.
+        """
+        ...
+
 class ManifestConfig:
     """Configuration for how Icechunk manifests"""
 
     def __init__(
         self,
         preload: ManifestPreloadConfig | None = None,
-    ) -> None:
+        sharding: ManifestShardingConfig | None = None,
+    ) -> Self:
         """
         Create a new `ManifestConfig` object
 
@@ -496,6 +585,8 @@ class ManifestConfig:
         ----------
         preload: ManifestPreloadConfig | None
             The configuration for how Icechunk manifests will be preloaded.
+        sharding: ManifestShardingConfig | None
+            The configuration for how Icechunk manifests will be sharded.
         """
         ...
     @property
@@ -518,6 +609,30 @@ class ManifestConfig:
         ----------
         value: ManifestPreloadConfig | None
             The configuration for how Icechunk manifests will be preloaded.
+        """
+        ...
+
+    @property
+    def sharding(self) -> ManifestShardingConfig | None:
+        """
+        The configuration for how Icechunk manifests will be sharded.
+
+        Returns
+        -------
+        ManifestShardingConfig | None
+            The configuration for how Icechunk manifests will be sharded.
+        """
+        ...
+
+    @sharding.setter
+    def sharding(self, value: ManifestShardingConfig | None) -> None:
+        """
+        Set the configuration for how Icechunk manifests will be sharded.
+
+        Parameters
+        ----------
+        value: ManifestShardingConfig | None
+            The configuration for how Icechunk manifests will be sharded.
         """
         ...
 

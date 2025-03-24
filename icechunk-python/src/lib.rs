@@ -17,6 +17,7 @@ use config::{
     PyStorageConcurrencySettings, PyStorageSettings, PyVirtualChunkContainer,
     PythonCredentialsFetcher,
 };
+use config::{PyManifestShardCondition, PyManifestShardingConfig, PyShardDimCondition};
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
     PyConflictType, PyVersionSelection,
@@ -117,6 +118,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyManifestPreloadConfig>()?;
     m.add_class::<PyManifestPreloadCondition>()?;
     m.add_class::<PyManifestConfig>()?;
+    m.add_class::<PyShardDimCondition>()?;
+    m.add_class::<PyManifestShardCondition>()?;
+    m.add_class::<PyManifestShardingConfig>()?;
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;

@@ -1326,7 +1326,7 @@ mod tests {
                 vec![(ShardDimCondition::Any, 9)],
             ),
         ];
-        let shard_config = ManifestShardingConfig { shard_sizes };
+        let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
         let repo = create_repo_with_shard_config(
             &temp_path,
             &shape,
@@ -1355,7 +1355,7 @@ mod tests {
                 (ShardDimCondition::Any, 9),
             ],
         )];
-        let shard_config = ManifestShardingConfig { shard_sizes };
+        let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
         let repo = create_repo_with_shard_config(
             &temp_path,
             &shape,
@@ -1400,7 +1400,7 @@ mod tests {
                 vec![(ShardDimCondition::Any, 9)],
             ),
         ];
-        let shard_config = ManifestShardingConfig { shard_sizes };
+        let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();

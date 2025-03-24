@@ -15,8 +15,9 @@ use icechunk::{
         AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
         CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
         GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
-        ManifestPreloadCondition, ManifestPreloadConfig, S3Credentials,
-        S3CredentialsFetcher, S3Options, S3StaticCredentials,
+        ManifestPreloadCondition, ManifestPreloadConfig, ManifestShardCondition,
+        ManifestShardingConfig, S3Credentials, S3CredentialsFetcher, S3Options,
+        S3StaticCredentials, ShardDimCondition,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -937,27 +938,171 @@ impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
         })
     }
 }
+#[pyclass(name = "ManifestShardCondition", eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PyManifestShardCondition {
+    Or(Vec<PyManifestShardCondition>),
+    And(Vec<PyManifestShardCondition>),
+    PathMatches { regex: String },
+    NameMatches { regex: String },
+}
+
+#[pymethods]
+impl PyManifestShardCondition {
+    #[staticmethod]
+    pub fn or_conditions(conditions: Vec<PyManifestShardCondition>) -> Self {
+        Self::Or(conditions)
+    }
+    #[staticmethod]
+    pub fn and_conditions(conditions: Vec<PyManifestShardCondition>) -> Self {
+        Self::And(conditions)
+    }
+    #[staticmethod]
+    pub fn path_matches(regex: String) -> Self {
+        Self::PathMatches { regex }
+    }
+    #[staticmethod]
+    pub fn name_matches(regex: String) -> Self {
+        Self::NameMatches { regex }
+    }
+}
+
+impl From<&PyManifestShardCondition> for ManifestShardCondition {
+    fn from(value: &PyManifestShardCondition) -> Self {
+        use PyManifestShardCondition::*;
+        match value {
+            Or(vec) => Self::Or(vec.iter().map(|c| c.into()).collect()),
+            And(vec) => Self::And(vec.iter().map(|c| c.into()).collect()),
+            PathMatches { regex } => Self::PathMatches { regex: regex.clone() },
+            NameMatches { regex } => Self::NameMatches { regex: regex.clone() },
+        }
+    }
+}
+
+impl From<ManifestShardCondition> for PyManifestShardCondition {
+    fn from(value: ManifestShardCondition) -> Self {
+        use ManifestShardCondition::*;
+        match value {
+            Or(vec) => Self::Or(vec.into_iter().map(|c| c.into()).collect()),
+            And(vec) => Self::And(vec.into_iter().map(|c| c.into()).collect()),
+            PathMatches { regex } => Self::PathMatches { regex },
+            NameMatches { regex } => Self::NameMatches { regex },
+        }
+    }
+}
+
+#[pyclass(name = "ShardDimCondition")]
+#[derive(Clone, Debug)]
+pub enum PyShardDimCondition {
+    Axis(usize),
+    DimensionName(String),
+    Any(),
+}
+
+impl From<&PyShardDimCondition> for ShardDimCondition {
+    fn from(value: &PyShardDimCondition) -> Self {
+        use PyShardDimCondition::*;
+        match value {
+            Axis(a) => ShardDimCondition::Axis(a.clone()),
+            DimensionName(name) => ShardDimCondition::DimensionName(name.clone()),
+            Any() => ShardDimCondition::Any,
+        }
+    }
+}
+impl From<ShardDimCondition> for PyShardDimCondition {
+    fn from(value: ShardDimCondition) -> Self {
+        use ShardDimCondition::*;
+        match value {
+            Axis(a) => PyShardDimCondition::Axis(a),
+            DimensionName(name) => PyShardDimCondition::DimensionName(name),
+            Any => PyShardDimCondition::Any(),
+        }
+    }
+}
+
+#[pyclass(name = "ManifestShardingConfig", eq)]
+#[derive(Debug)]
+pub struct PyManifestShardingConfig {
+    #[pyo3(get, set)]
+    pub shard_sizes:
+        Option<Vec<(PyManifestShardCondition, Vec<(PyShardDimCondition, u32)>)>>,
+}
+
+#[pymethods]
+impl PyManifestShardingConfig {
+    #[new]
+    #[pyo3(signature = (shard_sizes=None))]
+    fn new(
+        shard_sizes: Option<
+            Vec<(PyManifestShardCondition, Vec<(PyShardDimCondition, u32)>)>,
+        >,
+    ) -> Self {
+        Self { shard_sizes }
+    }
+}
+
+impl PartialEq for PyManifestShardingConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let x: ManifestShardingConfig = self.into();
+        let y: ManifestShardingConfig = other.into();
+        x == y
+    }
+}
+
+impl From<ManifestShardingConfig> for PyManifestShardingConfig {
+    fn from(value: ManifestShardingConfig) -> Self {
+        Self {
+            shard_sizes: value.shard_sizes.map(|c| {
+                c.into_iter()
+                    .map(|(x, v)| {
+                        (x.into(), v.into_iter().map(|(s, u)| (s.into(), u)).collect())
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl From<&PyManifestShardingConfig> for ManifestShardingConfig {
+    fn from(value: &PyManifestShardingConfig) -> Self {
+        Self {
+            shard_sizes: value.shard_sizes.as_ref().map(|c| {
+                c.iter()
+                    .map(|(x, v)| {
+                        (x.into(), v.iter().map(|(s, u)| (s.into(), u.clone())).collect())
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
 
 #[pyclass(name = "ManifestConfig", eq)]
 #[derive(Debug, Default)]
 pub struct PyManifestConfig {
     #[pyo3(get, set)]
     pub preload: Option<Py<PyManifestPreloadConfig>>,
+    #[pyo3(get, set)]
+    pub sharding: Option<Py<PyManifestShardingConfig>>,
 }
 
 #[pymethods]
 impl PyManifestConfig {
     #[new]
-    #[pyo3(signature = (preload=None))]
-    fn new(preload: Option<Py<PyManifestPreloadConfig>>) -> Self {
-        Self { preload }
+    #[pyo3(signature = (preload=None, sharding=None))]
+    fn new(
+        preload: Option<Py<PyManifestPreloadConfig>>,
+        sharding: Option<Py<PyManifestShardingConfig>>,
+    ) -> Self {
+        Self { preload, sharding }
     }
 
     pub fn __repr__(&self) -> String {
         // TODO: improve repr
         format!(
-            r#"ManifestConfig(preload={pre})"#,
+            r#"ManifestConfig(preload={pre}, sharding={sha})"#,
             pre = format_option_to_string(self.preload.as_ref().map(|l| l.to_string())),
+            sha = format_option_to_string(self.sharding.as_ref().map(|l| l.to_string())),
         )
     }
 }
@@ -974,6 +1119,7 @@ impl From<&PyManifestConfig> for ManifestConfig {
     fn from(value: &PyManifestConfig) -> Self {
         Python::with_gil(|py| Self {
             preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
+            sharding: value.sharding.as_ref().map(|c| (&*c.borrow(py)).into()),
         })
     }
 }
@@ -985,6 +1131,10 @@ impl From<ManifestConfig> for PyManifestConfig {
             preload: value.preload.map(|c| {
                 Py::new(py, Into::<PyManifestPreloadConfig>::into(c))
                     .expect("Cannot create instance of ManifestPreloadConfig")
+            }),
+            sharding: value.sharding.map(|c| {
+                Py::new(py, Into::<PyManifestShardingConfig>::into(c))
+                    .expect("Cannot create instance of ManifestShardingConfig")
             }),
         })
     }

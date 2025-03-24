@@ -61,10 +61,10 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
 
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
     let manifest_shard_size = 10;
-    let shard_sizes = vec![(
+    let shard_sizes = Some(vec![(
         ManifestShardCondition::PathMatches { regex: r".*".to_string() },
         vec![(ShardDimCondition::Any, manifest_shard_size)],
-    )];
+    )]);
     let man_config = ManifestConfig {
         sharding: Some(ManifestShardingConfig { shard_sizes }),
         ..ManifestConfig::default()

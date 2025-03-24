@@ -1595,7 +1595,13 @@ impl ManifestShardingConfig {
                 //     - y : 2
                 let mut already_matched: HashSet<usize> = HashSet::new();
 
-                for (condition, dim_specs) in self.shard_sizes.iter() {
+                let shard_sizes = self
+                    .shard_sizes
+                    .clone()
+                    .or_else(|| Self::default().shard_sizes)
+                    .unwrap();
+
+                for (condition, dim_specs) in shard_sizes.iter() {
                     if condition.matches(&node.path) {
                         let dimension_names = dimension_names.clone().unwrap_or(
                             repeat_n(DimensionName::NotSpecified, ndim).collect(),

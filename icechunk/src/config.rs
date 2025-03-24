@@ -160,15 +160,16 @@ pub enum ManifestShardCondition {
 impl ManifestShardCondition {
     // from_yaml?
     pub fn matches(&self, path: &Path) -> bool {
+        use ManifestShardCondition::*;
         match self {
-            ManifestShardCondition::Or(vec) => vec.iter().any(|c| c.matches(path)),
-            ManifestShardCondition::And(vec) => vec.iter().all(|c| c.matches(path)),
+            Or(vec) => vec.iter().any(|c| c.matches(path)),
+            And(vec) => vec.iter().all(|c| c.matches(path)),
             // TODO: precompile the regex
-            ManifestShardCondition::PathMatches { regex } => Regex::new(regex)
+            PathMatches { regex } => Regex::new(regex)
                 .map(|regex| regex.is_match(path.to_string().as_bytes()))
                 .unwrap_or(false),
             // TODO: precompile the regex
-            ManifestShardCondition::NameMatches { regex } => Regex::new(regex)
+            NameMatches { regex } => Regex::new(regex)
                 .map(|regex| {
                     path.name()
                         .map(|name| regex.is_match(name.as_bytes()))
@@ -191,8 +192,8 @@ pub enum ShardDimCondition {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ManifestShardingConfig {
-    // TODO: need to preserve insertion order of conditions, so hashmap doesn't work
-    pub shard_sizes: Vec<(ManifestShardCondition, Vec<(ShardDimCondition, u32)>)>,
+    // need to preserve insertion order of conditions, so hashmap doesn't work
+    pub shard_sizes: Option<Vec<(ManifestShardCondition, Vec<(ShardDimCondition, u32)>)>>,
 }
 
 impl Default for ManifestShardingConfig {
@@ -202,18 +203,17 @@ impl Default for ManifestShardingConfig {
             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
             inner,
         )];
-        Self { shard_sizes: new }
+        Self { shard_sizes: Some(new) }
     }
 }
 
 impl ManifestShardingConfig {
-    // FIXME: test-only?
     pub fn with_size(shard_size: u32) -> Self {
         let shard_sizes = vec![(
             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
             vec![(ShardDimCondition::Any, shard_size)],
         )];
-        ManifestShardingConfig { shard_sizes }
+        ManifestShardingConfig { shard_sizes: Some(shard_sizes) }
     }
 }
 
