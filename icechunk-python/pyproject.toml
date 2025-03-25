@@ -70,6 +70,7 @@ upstream = [
   "dask @ git+https://github.com/dask/dask.git",
   "distributed @ git+https://github.com/dask/distributed.git",
   "xarray @ git+https://github.com/pydata/xarray.git",
+  "zarr @ git+https://github.com/zarr-developers/zarr.git",
 ]
 
 [tool.maturin]

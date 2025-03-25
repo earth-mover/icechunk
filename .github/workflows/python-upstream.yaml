@@ -67,7 +67,8 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install icechunk['upstream'] --find-links dist --force-reinstall
+          pip install --group upstream
+          pip install icechunk --find-links dist --force-reinstall
           mypy python
 
       - name: Restore cached hypothesis directory
