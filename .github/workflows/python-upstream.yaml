@@ -79,6 +79,8 @@ jobs:
         working-directory: icechunk-python
         run: |
           set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
           mypy python
 
       - name: Restore cached hypothesis directory
@@ -197,6 +199,8 @@ jobs:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
           set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
 
