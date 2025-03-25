@@ -553,18 +553,27 @@ impl PyRepository {
     #[pyo3(signature = (metadata))]
     pub fn set_default_commit_metadata(
         &self,
+        py: Python<'_>,
         metadata: Option<PySnapshotProperties>,
     ) -> PyResult<()> {
         let metadata = metadata.map(|m| m.into());
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            self.0.set_default_commit_metadata(metadata).await;
+        py.allow_threads(move || {
+            self.0
+                .set_default_commit_metadata(metadata)
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(())
         })
     }
 
-    pub fn default_commit_metadata(&self) -> PyResult<Option<PySnapshotProperties>> {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let metadata = self.0.default_commit_metadata().await;
+    pub fn default_commit_metadata(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Option<PySnapshotProperties>> {
+        py.allow_threads(move || {
+            let metadata = self
+                .0
+                .default_commit_metadata()
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(metadata.map(|m| m.into()))
         })
     }
