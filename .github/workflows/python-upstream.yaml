@@ -51,6 +51,9 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -60,15 +63,22 @@ jobs:
           sccache: 'true'
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
-      - name: mypy
+      - name: setup
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install --group upstream
-          pip install icechunk --find-links dist --force-reinstall
+          uv pip install --group upstream
+          uv pip install icechunk --no-deps --find-links dist --force-reinstall
+          uv pip list
+
+      - name: mypy
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
           mypy python
 
       - name: Restore cached hypothesis directory
@@ -158,12 +168,26 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk/icechunk-python
           args: --release --out dist --find-interpreter
           sccache: 'true'
+
+      - name: setup
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          uv pip install icechunk['upstream'] --find-links dist --force-reinstall
+          uv pip install pytest-mypy-plugins
+          uv pip list
 
       - name: pytest
         id: status
@@ -173,10 +197,6 @@ jobs:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
           set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['upstream'] --find-links dist --force-reinstall
-          pip install pytest-mypy-plugins
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
 
