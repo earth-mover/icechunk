@@ -187,7 +187,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          uv pip install icechunk['upstream'] --find-links dist --force-reinstall
+          uv pip install icechunk --group upstream --find-links dist
           uv pip install pytest-mypy-plugins
           uv pip list
 
