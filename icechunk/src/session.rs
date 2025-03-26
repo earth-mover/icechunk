@@ -1439,7 +1439,7 @@ impl<'a> FlushProcess<'a> {
                 // TODO: have the changeset track this HashMap
                 HashMap::with_capacity(shards.len()),
                 |mut sharded_refs, chunk| async {
-                    let shard_index = shards.which(&chunk.coord).map_err(|e| e.into());
+                    let shard_index = shards.which(&chunk.coord);
                     shard_index.map(|index| {
                         sharded_refs
                             .entry(index)
@@ -1595,11 +1595,12 @@ impl ManifestShardingConfig {
                 //     - y : 2
                 let mut already_matched: HashSet<usize> = HashSet::new();
 
+                #[allow(clippy::expect_used)]
                 let shard_sizes = self
                     .shard_sizes
                     .clone()
                     .or_else(|| Self::default().shard_sizes)
-                    .unwrap();
+                    .expect("logic bug");
 
                 for (condition, dim_specs) in shard_sizes.iter() {
                     if condition.matches(&node.path) {

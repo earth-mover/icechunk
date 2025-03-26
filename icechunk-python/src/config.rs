@@ -1024,7 +1024,7 @@ impl PyShardDimCondition {
         match self {
             Axis(axis) => format!("Axis({})", axis),
             DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
-            Any() => format!("Any"),
+            Any() => "Any".to_string(),
         }
     }
 
@@ -1039,7 +1039,7 @@ impl From<&PyShardDimCondition> for ShardDimCondition {
     fn from(value: &PyShardDimCondition) -> Self {
         use PyShardDimCondition::*;
         match value {
-            Axis(a) => ShardDimCondition::Axis(a.clone()),
+            Axis(axis) => ShardDimCondition::Axis(*axis),
             DimensionName(name) => ShardDimCondition::DimensionName(name.clone()),
             Any() => ShardDimCondition::Any,
         }
@@ -1125,7 +1125,7 @@ impl From<&PyManifestShardingConfig> for ManifestShardingConfig {
             shard_sizes: value.shard_sizes.as_ref().map(|c| {
                 c.iter()
                     .map(|(x, v)| {
-                        (x.into(), v.iter().map(|(s, u)| (s.into(), u.clone())).collect())
+                        (x.into(), v.iter().map(|(s, u)| (s.into(), *u)).collect())
                     })
                     .collect()
             }),

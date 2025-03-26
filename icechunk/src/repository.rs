@@ -1116,7 +1116,7 @@ mod tests {
         storage: Option<Arc<dyn Storage + Send + Sync>>,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
-            storage.or(Some(new_in_memory_storage().await?)).unwrap();
+            storage.or(Some(new_in_memory_storage().await?)).expect("foo");
         let storage = Arc::clone(&backend);
 
         let man_config = ManifestConfig {
@@ -1384,7 +1384,7 @@ mod tests {
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
-        let expected_shard_sizes = vec![t_shard_size, 9, y_shard_size, 9];
+        let expected_shard_sizes = [t_shard_size, 9, y_shard_size, 9];
 
         let shard_sizes = vec![
             (
