@@ -18,13 +18,20 @@ DIMS = ("time", "latitude", "longitude")
 
 
 def test_manifest_sharding():
-    sconfig = ic.ManifestShardingConfig(
-        [
-            (
-                ManifestShardCondition.name_matches("temperature"),
-                [(ShardDimCondition.DimensionName("longitude"), 3)],
-            )
-        ]
+    # sconfig = ic.ManifestShardingConfig(
+    #     [
+    #         (
+    #             ManifestShardCondition.name_matches("temperature"),
+    #             [(ShardDimCondition.DimensionName("longitude"), 3)],
+    #         )
+    #     ]
+    # )
+    sconfig = ic.ManifestShardingConfig.from_dict(
+        {
+            ManifestShardCondition.name_matches("temperature"): {
+                ShardDimCondition.DimensionName("longitude"): 3
+            }
+        }
     )
     config = ic.RepositoryConfig(
         inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(sharding=sconfig)

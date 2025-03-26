@@ -1,5 +1,7 @@
 # module
 
+from typing import TypeAlias
+
 from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
@@ -167,5 +169,17 @@ def print_debug_info() -> None:
         except ModuleNotFoundError:
             continue
 
+
+# monkey path
+
+ShardSizesDict: TypeAlias = dict[ManifestShardCondition, dict[ShardDimCondition, int]]
+
+
+def from_dict(shard_sizes: ShardSizesDict) -> ManifestShardingConfig:
+    unwrapped = tuple((k, tuple(v.items())) for k, v in shard_sizes.items())
+    return ManifestShardingConfig(unwrapped)
+
+
+ManifestShardingConfig.from_dict = from_dict
 
 initialize_logs()

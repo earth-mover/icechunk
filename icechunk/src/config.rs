@@ -190,10 +190,12 @@ pub enum ShardDimCondition {
     Any,
 }
 
+type DimConditions = Vec<(ShardDimCondition, u32)>;
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ManifestShardingConfig {
     // need to preserve insertion order of conditions, so hashmap doesn't work
-    pub shard_sizes: Option<Vec<(ManifestShardCondition, Vec<(ShardDimCondition, u32)>)>>,
+    pub shard_sizes: Option<Vec<(ManifestShardCondition, DimConditions)>>,
 }
 
 impl Default for ManifestShardingConfig {

@@ -544,8 +544,6 @@ class ManifestShardingConfig:
         """
         pass
 
-    # TODO: add a from_dict here?
-
     @property
     def shard_sizes(self) -> ShardSizes:
         """

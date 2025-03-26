@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 use std::{
     collections::HashMap,
     fmt::Display,
+    hash::DefaultHasher,
     num::{NonZeroU16, NonZeroU64},
     path::PathBuf,
     sync::Arc,
@@ -939,7 +941,7 @@ impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
     }
 }
 #[pyclass(name = "ManifestShardCondition", eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum PyManifestShardCondition {
     Or(Vec<PyManifestShardCondition>),
     And(Vec<PyManifestShardCondition>),
@@ -975,6 +977,12 @@ impl PyManifestShardCondition {
             NameMatches { regex } => format!("NameMatches('{}')", regex),
         }
     }
+
+    fn __hash__(&self) -> usize {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish() as usize
+    }
 }
 
 impl From<&PyManifestShardCondition> for ManifestShardCondition {
@@ -1002,7 +1010,7 @@ impl From<ManifestShardCondition> for PyManifestShardCondition {
 }
 
 #[pyclass(name = "ShardDimCondition")]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub enum PyShardDimCondition {
     Axis(usize),
     DimensionName(String),
@@ -1018,6 +1026,12 @@ impl PyShardDimCondition {
             DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
             Any() => format!("Any"),
         }
+    }
+
+    fn __hash__(&self) -> usize {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish() as usize
     }
 }
 
@@ -1042,23 +1056,20 @@ impl From<ShardDimCondition> for PyShardDimCondition {
     }
 }
 
+type DimConditions = Vec<(PyShardDimCondition, u32)>;
+
 #[pyclass(name = "ManifestShardingConfig", eq)]
 #[derive(Debug)]
 pub struct PyManifestShardingConfig {
     #[pyo3(get, set)]
-    pub shard_sizes:
-        Option<Vec<(PyManifestShardCondition, Vec<(PyShardDimCondition, u32)>)>>,
+    pub shard_sizes: Option<Vec<(PyManifestShardCondition, DimConditions)>>,
 }
 
 #[pymethods]
 impl PyManifestShardingConfig {
     #[new]
     #[pyo3(signature = (shard_sizes=None))]
-    fn new(
-        shard_sizes: Option<
-            Vec<(PyManifestShardCondition, Vec<(PyShardDimCondition, u32)>)>,
-        >,
-    ) -> Self {
+    fn new(shard_sizes: Option<Vec<(PyManifestShardCondition, DimConditions)>>) -> Self {
         Self { shard_sizes }
     }
 
