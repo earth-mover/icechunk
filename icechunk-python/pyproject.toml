@@ -52,6 +52,29 @@ benchmark = [
   "platformdirs",
 ]
 
+[dependency-groups]
+upstream = [
+  "boto3",
+  "coverage",
+  "mypy",
+  "pytest",
+  "pytest-cov",
+  "pytest-asyncio",
+  "pytest-xdist",
+  "pytest-reportlog",
+  "ruff",
+  "hypothesis",
+  "pandas-stubs",
+  "boto3-stubs[s3]",
+  "termcolor",
+  # "object-store-python @ git+https://github.com/roeap/object-store-python.git", # doesn't work with uv
+  "object-store-python",
+  "dask @ git+https://github.com/dask/dask.git",
+  "distributed @ git+https://github.com/dask/distributed.git",
+  "xarray @ git+https://github.com/pydata/xarray.git",
+  "zarr @ git+https://github.com/zarr-developers/zarr.git",
+]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
