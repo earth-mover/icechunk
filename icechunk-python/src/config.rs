@@ -965,6 +965,16 @@ impl PyManifestShardCondition {
     pub fn name_matches(regex: String) -> Self {
         Self::NameMatches { regex }
     }
+
+    pub fn __repr__(&self) -> String {
+        use PyManifestShardCondition::*;
+        match self {
+            Or(conditions) => format!("Or({:?})", conditions),
+            And(conditions) => format!("And({:?})", conditions),
+            PathMatches { regex } => format!("PathMatches('{}')", regex),
+            NameMatches { regex } => format!("NameMatches('{}')", regex),
+        }
+    }
 }
 
 impl From<&PyManifestShardCondition> for ManifestShardCondition {
@@ -997,6 +1007,18 @@ pub enum PyShardDimCondition {
     Axis(usize),
     DimensionName(String),
     Any(),
+}
+
+#[pymethods]
+impl PyShardDimCondition {
+    pub fn __repr__(&self) -> String {
+        use PyShardDimCondition::*;
+        match self {
+            Axis(axis) => format!("Axis({})", axis),
+            DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
+            Any() => format!("Any"),
+        }
+    }
 }
 
 impl From<&PyShardDimCondition> for ShardDimCondition {
@@ -1038,6 +1060,29 @@ impl PyManifestShardingConfig {
         >,
     ) -> Self {
         Self { shard_sizes }
+    }
+
+    pub fn __repr__(&self) -> String {
+        match &self.shard_sizes {
+            Some(shard_sizes) => {
+                let reprs: Vec<String> = shard_sizes
+                    .iter()
+                    .map(|(condition, dims)| {
+                        let condition_repr = format!("{:?}", condition); // Using Debug for PyManifestShardCondition
+                        let dims_repr: Vec<String> = dims
+                            .iter()
+                            .map(|(dim_condition, num)| {
+                                format!("({:?}, {})", dim_condition, num)
+                            })
+                            .collect();
+                        format!("({}, [{}])", condition_repr, dims_repr.join(", "))
+                    })
+                    .collect();
+
+                format!("ManifestShardingConfig({})", reprs.join(", "))
+            }
+            None => "ManifestShardingConfig(None)".to_string(),
+        }
     }
 }
 
