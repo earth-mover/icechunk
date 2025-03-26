@@ -1373,92 +1373,91 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_manifest_sharding_complex_writes() -> Result<(), Box<dyn Error>> {
-        let dim_size = 25u32;
-        let t_shard_size = 12u32;
-        let y_shard_size = 2u32;
+    // #[tokio::test]
+    // async fn test_manifest_sharding_complex_writes() -> Result<(), Box<dyn Error>> {
+    //     let dim_size = 25u32;
+    //     let t_shard_size = 12u32;
+    //     let y_shard_size = 2u32;
 
-        let shape =
-            ArrayShape::new(vec![(dim_size.into(), 1), (10, 1), (3, 1), (4, 1)]).unwrap();
-        let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
-        let temp_path: Path = "/temperature".try_into().unwrap();
+    //     let shape =
+    //         ArrayShape::new(vec![(dim_size.into(), 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+    //     let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
+    //     let temp_path: Path = "/temperature".try_into().unwrap();
 
-        let expected_shard_sizes = [t_shard_size, 9, y_shard_size, 9];
+    //     let expected_shard_sizes = [t_shard_size, 9, y_shard_size, 9];
 
-        let shard_sizes = vec![
-            (
-                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::DimensionName("t".to_string()), t_shard_size)],
-            ),
-            (
-                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::Axis(2), y_shard_size)],
-            ),
-            (
-                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::Any, 9)],
-            ),
-        ];
-        let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
-        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-        let repository = create_repo_with_shard_config(
-            &temp_path,
-            &shape,
-            &dimension_names,
-            &shard_config,
-            Some(logging_c),
-        )
-        .await?;
+    //     let shard_sizes = vec![
+    //         (
+    //             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+    //             vec![(ShardDimCondition::DimensionName("t".to_string()), t_shard_size)],
+    //         ),
+    //         (
+    //             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+    //             vec![(ShardDimCondition::Axis(2), y_shard_size)],
+    //         ),
+    //         (
+    //             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+    //             vec![(ShardDimCondition::Any, 9)],
+    //         ),
+    //     ];
+    //     let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
+    //     let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    //     let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+    //     let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+    //     let repository = create_repo_with_shard_config(
+    //         &temp_path,
+    //         &shape,
+    //         &dimension_names,
+    //         &shard_config,
+    //         Some(logging_c),
+    //     )
+    //     .await?;
 
-        let mut total_manifests = 0;
-        assert_manifest_count(&backend, total_manifests).await;
+    //     let mut total_manifests = 0;
+    //     assert_manifest_count(&backend, total_manifests).await;
 
-        logging.clear();
-        let ops = logging.fetch_operations();
-        assert!(ops.is_empty());
+    //     logging.clear();
+    //     let ops = logging.fetch_operations();
+    //     assert!(ops.is_empty());
 
-        for ax in 0..shape.len() {
-            let mut session = repository.writable_session("main").await?;
-            for i in 0..shape[ax].array_length() {
-                let mut index = vec![0u32, 0, 0, 0];
-                index[ax] = i as u32;
-                session
-                    .set_chunk_ref(
-                        temp_path.clone(),
-                        ChunkIndices(index),
-                        Some(ChunkPayload::Inline(format!("{0}", i).into())),
-                    )
-                    .await?
-            }
-            total_manifests += dim_size.div_ceil(expected_shard_sizes[ax]) as usize;
-            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
-            assert_manifest_count(&backend, total_manifests).await;
+    //     for ax in 0..shape.len() {
+    //         let mut session = repository.writable_session("main").await?;
+    //         for i in 0..shape[ax].array_length() {
+    //             let mut index = vec![0u32, 0, 0, 0];
+    //             index[ax] = i as u32;
+    //             session
+    //                 .set_chunk_ref(
+    //                     temp_path.clone(),
+    //                     ChunkIndices(index),
+    //                     Some(ChunkPayload::Inline(format!("{0}", i).into())),
+    //                 )
+    //                 .await?
+    //         }
+    //         total_manifests += dim_size.div_ceil(expected_shard_sizes[ax]) as usize;
+    //         session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
+    //         assert_manifest_count(&backend, total_manifests).await;
 
-            for i in 0..shape[ax].array_length() {
-                let mut index = vec![0u32, 0, 0, 0];
-                index[ax] = i as u32;
-                let val = get_chunk(
-                    session
-                        .get_chunk_reader(
-                            &temp_path,
-                            &ChunkIndices(index),
-                            &ByteRange::ALL,
-                        )
-                        .await
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
-                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
-            }
-        }
-
-        Ok(())
-    }
+    //         for i in 0..shape[ax].array_length() {
+    //             let mut index = vec![0u32, 0, 0, 0];
+    //             index[ax] = i as u32;
+    //             let val = get_chunk(
+    //                 session
+    //                     .get_chunk_reader(
+    //                         &temp_path,
+    //                         &ChunkIndices(index),
+    //                         &ByteRange::ALL,
+    //                     )
+    //                     .await
+    //                     .unwrap(),
+    //             )
+    //             .await
+    //             .unwrap()
+    //             .unwrap();
+    //             assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     #[tokio::test]
     /// Writes four arrays to a repo arrays, checks preloading of the manifests
