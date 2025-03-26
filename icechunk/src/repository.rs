@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::ready,
     ops::RangeBounds,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_recursion::async_recursion;
@@ -139,7 +139,7 @@ pub struct Repository {
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
-    default_commit_metadata: Arc<Mutex<Option<SnapshotProperties>>>,
+    default_commit_metadata: SnapshotProperties,
 }
 
 impl Repository {
@@ -311,7 +311,7 @@ impl Repository {
             virtual_resolver,
             asset_manager,
             virtual_chunk_credentials,
-            default_commit_metadata: Arc::new(Mutex::new(None)),
+            default_commit_metadata: SnapshotProperties::default(),
         })
     }
 
@@ -382,26 +382,16 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub fn set_default_commit_metadata(
-        &self,
-        metadata: Option<SnapshotProperties>,
+        &mut self,
+        metadata: SnapshotProperties,
     ) -> RepositoryResult<()> {
-        let mut guard = self
-            .default_commit_metadata
-            .lock()
-            .map_err(|_| RepositoryErrorKind::SyncError)?;
-        *guard = metadata;
+        self.default_commit_metadata = metadata;
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub fn default_commit_metadata(
-        &self,
-    ) -> RepositoryResult<Option<SnapshotProperties>> {
-        let guard = self
-            .default_commit_metadata
-            .lock()
-            .map_err(|_| RepositoryErrorKind::SyncError)?;
-        Ok(guard.clone())
+    pub fn default_commit_metadata(&self) -> RepositoryResult<SnapshotProperties> {
+        Ok(self.default_commit_metadata.clone())
     }
 
     #[instrument(skip(storage, config))]
@@ -783,10 +773,7 @@ impl Repository {
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot.clone(),
-            self.default_commit_metadata
-                .lock()
-                .map_err(|_| RepositoryErrorKind::SyncError)?
-                .clone(),
+            self.default_commit_metadata.clone(),
         );
 
         self.preload_manifests(ref_data.snapshot);
