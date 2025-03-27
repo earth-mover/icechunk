@@ -24,6 +24,7 @@ from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
     Settings,
+    consumes,
     initialize,
     invariant,
     precondition,
@@ -31,7 +32,7 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import Repository, in_memory_storage
+from icechunk import IcechunkError, Repository, in_memory_storage
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -358,21 +359,28 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.session = self.repo.writable_session(branch)
             self.model.checkout_branch(branch)
 
-    #     @rule(branch=consumes(branches))
-    #     def delete_branch(self, branch):
-    #         note(f"Deleting branch {branch!r}")
-    #         if branch in self.model.branches:
-    #             if branch == "main":
-    #                 note("Expecting error.")
-    #                 with pytest.raises(IcechunkError):
-    #                     self.repo.delete_branch(branch)
-    #             else:
-    #                 self.repo.delete_branch(branch)
-    #                 self.model.delete_branch(branch)
-    #         else:
-    #             note("Expecting error.")
-    #             with pytest.raises(IcechunkError):
-    #                 self.repo.delete_branch(branch)
+    @rule(branch=consumes(branches))
+    def delete_branch(self, branch):
+        note(f"Deleting branch {branch!r}")
+        if branch in self.model.branches:
+            if branch == "main":
+                note("Expecting error.")
+                with pytest.raises(IcechunkError, match="main branch cannot be deleted"):
+                    self.repo.delete_branch(branch)
+            else:
+                self.repo.delete_branch(branch)
+                self.model.delete_branch(branch)
+
+                # TODO: if we delete the current branch, we hold on to an invalid session
+                #       this is confusing UX. any attempts to commit will create a conflict
+                if self.model.branch == branch:
+                    self.session = self.repo.writable_session("main")
+                    self.model.checkout_branch("main")
+
+        else:
+            note("Expecting error.")
+            with pytest.raises(IcechunkError):
+                self.repo.delete_branch(branch)
 
     @invariant()
     def check_list_prefix_from_root(self):
