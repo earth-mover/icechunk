@@ -594,12 +594,20 @@ impl PyRepository {
         tag: Option<String>,
         snapshot_id: Option<String>,
     ) -> PyResult<PyAsyncGenerator> {
-        let repo = Arc::clone(&self.0);
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let version = args_to_version_info(branch, tag, snapshot_id, None)?;
             let ancestry = pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(async move { repo.read_owned().await.ancestry(&version).await })
+                .block_on(async move {
+                    let (snapshot_id, asset_manager) = {
+                        let lock = self.0.read().await;
+                        (
+                            lock.resolve_version(&version).await?,
+                            Arc::clone(lock.asset_manager()),
+                        )
+                    };
+                    asset_manager.snapshot_ancestry(&snapshot_id).await
+                })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError);
 

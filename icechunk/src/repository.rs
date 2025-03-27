@@ -628,7 +628,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn resolve_version(
+    pub async fn resolve_version(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
