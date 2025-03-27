@@ -293,14 +293,12 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::RefIsExpired => {
-            panic!()
-        }
         ExpireRefResult::NothingToDo => {
             panic!()
         }
-        ExpireRefResult::Done { released_snapshots, .. } => {
+        ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
             assert_eq!(released_snapshots.len(), 4);
+            assert!(!ref_is_expired);
         }
     }
 
@@ -332,9 +330,9 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::RefIsExpired => panic!(),
         ExpireRefResult::NothingToDo => panic!(),
-        ExpireRefResult::Done { released_snapshots, .. } => {
+        ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
+            assert!(!ref_is_expired);
             assert_eq!(released_snapshots.len(), 4);
         }
     }
@@ -367,9 +365,9 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::RefIsExpired => panic!(),
         ExpireRefResult::NothingToDo => panic!(),
-        ExpireRefResult::Done { released_snapshots, .. } => {
+        ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
+            assert!(!ref_is_expired);
             assert_eq!(released_snapshots.len(), 5);
         }
     }
@@ -402,9 +400,9 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::RefIsExpired => panic!(),
         ExpireRefResult::NothingToDo => panic!(),
-        ExpireRefResult::Done { released_snapshots, .. } => {
+        ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
+            assert!(!ref_is_expired);
             assert_eq!(released_snapshots.len(), 5);
         }
     }
@@ -432,8 +430,8 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-pub async fn test_expire_ref_with_odd_timestamp() -> Result<(), Box<dyn std::error::Error>>
-{
+pub async fn test_expire_ref_with_odd_timestamps()
+-> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings();
     let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
@@ -489,7 +487,16 @@ pub async fn test_expire_ref_with_odd_timestamp() -> Result<(), Box<dyn std::err
     )
     .await?
     {
-        ExpireRefResult::RefIsExpired => {}
+        ExpireRefResult::Done { ref_is_expired, .. } => {
+            assert!(ref_is_expired);
+            // create another repo to avoid caching issues
+            let repo =
+                Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+            assert_eq!(
+                branch_commit_messages(&repo, "main").await,
+                Vec::from(["third", "Repository initialized"])
+            );
+        }
         _ => panic!(),
     }
 
@@ -497,7 +504,7 @@ pub async fn test_expire_ref_with_odd_timestamp() -> Result<(), Box<dyn std::err
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
-        Vec::from(["third", "second", "first", "Repository initialized"])
+        Vec::from(["third", "Repository initialized"])
     );
     Ok(())
 }
@@ -552,11 +559,11 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
     );
     assert_eq!(
         tag_commit_messages(&repo, "tag1").await,
-        Vec::from(["3", "2", "1", "Repository initialized"])
+        Vec::from(["3", "Repository initialized"])
     );
     assert_eq!(
         tag_commit_messages(&repo, "tag2").await,
-        Vec::from(["5", "4", "2", "1", "Repository initialized"])
+        Vec::from(["5", "Repository initialized"])
     );
 
     let now = Utc::now();
@@ -575,10 +582,10 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
     )
     .await?;
     // other expired snapshots are pointed by tags
-    assert_eq!(summary.snapshots_deleted, 2);
+    assert_eq!(summary.snapshots_deleted, 5);
 
-    // the non expired snapshots + the expired but pointed by tags snapshots
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 13);
+    // the non expired snapshots + the 2 expired but pointed by tags snapshots
+    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 10);
 
     repo.delete_tag("tag1").await?;
 
@@ -592,8 +599,8 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
-    // the non expired snapshots + the expired but pointed by tags snapshots
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 12);
+    // the non expired snapshots + the 1 pointed by tag2 snapshots
+    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 9);
 
     repo.delete_tag("tag2").await?;
 
@@ -605,10 +612,61 @@ pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error:
     )
     .await?;
     // tag2 snapshosts are released now
-    assert_eq!(summary.snapshots_deleted, 4);
+    assert_eq!(summary.snapshots_deleted, 1);
 
     // only the non expired snapshots left
     assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 8);
 
+    Ok(())
+}
+
+#[tokio::test]
+/// In this test, we set up a repo as in the design document for expiration.
+///
+/// We then, expire old snapshots and garbage collect. We verify we end up
+/// with what is expected according to the design document.
+pub async fn test_expire_and_garbage_collect_deliting_expired_refs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage_settings = storage.default_settings();
+    let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+
+    let expire_older_than = make_design_doc_repo(&mut repo).await?;
+
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
+
+    let result = expire(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        expire_older_than,
+        // This is different compared to the previous test
+        ExpiredRefAction::Delete,
+        ExpiredRefAction::Delete,
+    )
+    .await?;
+
+    assert_eq!(result.released_snapshots.len(), 7);
+    assert_eq!(result.deleted_refs.len(), 2);
+
+    let now = Utc::now();
+    let gc_config = GCConfig::clean_all(now, now, None);
+    let summary = garbage_collect(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &gc_config,
+    )
+    .await?;
+
+    assert_eq!(summary.snapshots_deleted, 7);
+    assert_eq!(summary.transaction_logs_deleted, 7);
+
+    // only the non expired snapshots left
+    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 8);
     Ok(())
 }
