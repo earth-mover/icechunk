@@ -415,14 +415,27 @@ pub async fn expire_ref(
     released.remove(&root);
 
     let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
-    let parent_id = editable_snap.parent_id();
-    if editable_snap.id() == root || Some(&root) == parent_id.as_ref() {
+
+    let old_parent_id = editable_snap.parent_id();
+    if editable_snap.id() == root    // only root can be expired
+        || Some(&root) == old_parent_id.as_ref()
+        // we never found an expirable snap
+        || root == snap_id
+    {
         // Either the reference is the root, or it is pointing to the root as first parent
         // Nothing to do
         return Ok(ExpireRefResult::NothingToDo);
     }
 
     let root = asset_manager.fetch_snapshot(&root).await?;
+    // we don't want to create loops, so:
+    // we never edit the root of a tree
+    assert!(editable_snap.parent_id().is_some());
+    // and, we only set a root as parent
+    assert!(root.parent_id().is_none());
+
+    assert!(editable_snap.flushed_at()? >= older_than);
+
     // TODO: add properties to the snapshot that tell us it was history edited
     let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
     asset_manager.write_snapshot(new_snapshot).await?;

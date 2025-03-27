@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
@@ -428,6 +428,77 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
         Vec::from(["8", "Repository initialized"])
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+pub async fn test_expire_ref_with_odd_timestamp() -> Result<(), Box<dyn std::error::Error>>
+{
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage_settings = storage.default_settings();
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+
+    let mut session = repo.writable_session("main").await?;
+
+    let user_data = Bytes::new();
+    session.add_group(Path::root(), user_data.clone()).await?;
+    session.commit("first", None).await?;
+    let mut session = repo.writable_session("main").await?;
+    session.add_group("/a".try_into().unwrap(), user_data.clone()).await?;
+    session.commit("second", None).await?;
+    let mut session = repo.writable_session("main").await?;
+    session.add_group("/b".try_into().unwrap(), user_data.clone()).await?;
+    session.commit("third", None).await?;
+
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
+    match expire_ref(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &Ref::Branch("main".to_string()),
+        Utc::now() - TimeDelta::days(10),
+    )
+    .await?
+    {
+        ExpireRefResult::NothingToDo => {}
+        _ => panic!(),
+    }
+
+    // create another repo to avoid caching issues
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    assert_eq!(
+        branch_commit_messages(&repo, "main").await,
+        Vec::from(["third", "second", "first", "Repository initialized"])
+    );
+
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings.clone(),
+        1,
+    ));
+    match expire_ref(
+        storage.as_ref(),
+        &storage_settings,
+        asset_manager.clone(),
+        &Ref::Branch("main".to_string()),
+        Utc::now() + TimeDelta::days(10),
+    )
+    .await?
+    {
+        ExpireRefResult::RefIsExpired => {}
+        _ => panic!(),
+    }
+
+    // create another repo to avoid caching issues
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    assert_eq!(
+        branch_commit_messages(&repo, "main").await,
+        Vec::from(["third", "second", "first", "Repository initialized"])
+    );
     Ok(())
 }
 
