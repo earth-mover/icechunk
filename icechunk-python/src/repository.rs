@@ -670,6 +670,31 @@ impl PyRepository {
         })
     }
 
+    pub fn lookup_snapshot(
+        &self,
+        py: Python<'_>,
+        snapshot_id: &str,
+    ) -> PyResult<PySnapshotInfo> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+                PyIcechunkStoreError::RepositoryError(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+                )
+            })?;
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let res = self
+                    .0
+                    .read()
+                    .await
+                    .lookup_snapshot(&snapshot_id)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(res.into())
+            })
+        })
+    }
+
     pub fn reset_branch(
         &self,
         py: Python<'_>,

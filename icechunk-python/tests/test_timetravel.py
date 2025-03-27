@@ -203,6 +203,9 @@ Arrays deleted:
     tag_snapshot_id = repo.lookup_tag("v1.0")
     assert tag_snapshot_id == feature_snapshot_id
 
+    actual = next(iter(repo.ancestry(tag="v1.0")))
+    assert actual == repo.lookup_snapshot(actual.id)
+
 
 async def test_branch_reset() -> None:
     config = ic.RepositoryConfig.default()
