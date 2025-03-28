@@ -1,6 +1,6 @@
 # Changelog
 
-## Python Icechunk Library 0.2.10
+## Python Icechunk Library 0.2.11
 
 ### Features
 
