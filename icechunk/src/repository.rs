@@ -59,8 +59,6 @@ pub enum RepositoryErrorKind {
     FormatError(IcechunkFormatErrorKind),
     #[error(transparent)]
     Ref(RefErrorKind),
-    #[error("failed to obtain mutex lock")]
-    SyncError,
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -381,17 +379,13 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
-    pub fn set_default_commit_metadata(
-        &mut self,
-        metadata: SnapshotProperties,
-    ) -> RepositoryResult<()> {
+    pub fn set_default_commit_metadata(&mut self, metadata: SnapshotProperties) {
         self.default_commit_metadata = metadata;
-        Ok(())
     }
 
     #[instrument(skip_all)]
-    pub fn default_commit_metadata(&self) -> RepositoryResult<SnapshotProperties> {
-        Ok(self.default_commit_metadata.clone())
+    pub fn default_commit_metadata(&self) -> SnapshotProperties {
+        self.default_commit_metadata.clone()
     }
 
     #[instrument(skip(storage, config))]

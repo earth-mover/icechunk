@@ -560,28 +560,17 @@ impl PyRepository {
         &self,
         py: Python<'_>,
         metadata: PySnapshotProperties,
-    ) -> PyResult<()> {
-        let metadata = metadata.into();
+    ) {
         py.allow_threads(move || {
-            self.0
-                .blocking_write()
-                .set_default_commit_metadata(metadata)
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(())
+            let metadata = metadata.into();
+            self.0.blocking_write().set_default_commit_metadata(metadata);
         })
     }
 
-    pub fn default_commit_metadata(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<PySnapshotProperties> {
+    pub fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
         py.allow_threads(move || {
-            let metadata = self
-                .0
-                .blocking_read()
-                .default_commit_metadata()
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(metadata.into())
+            let metadata = self.0.blocking_read().default_commit_metadata();
+            metadata.into()
         })
     }
 
@@ -880,11 +869,19 @@ impl PyRepository {
         py.allow_threads(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let lock = self.0.read().await;
+                    let (storage, storage_settings, asset_manager) = {
+                        let lock = self.0.read().await;
+                        (
+                            Arc::clone(lock.storage()),
+                            lock.storage_settings().clone(),
+                            Arc::clone(lock.asset_manager()),
+                        )
+                    };
+
                     let result = expire(
-                        lock.storage().as_ref(),
-                        lock.storage_settings(),
-                        lock.asset_manager().clone(),
+                        storage.as_ref(),
+                        &storage_settings,
+                        asset_manager,
                         older_than,
                         if delete_expired_branches {
                             ExpiredRefAction::Delete
@@ -926,11 +923,18 @@ impl PyRepository {
                         delete_object_older_than,
                         Default::default(),
                     );
-                    let lock = self.0.read().await;
+                    let (storage, storage_settings, asset_manager) = {
+                        let lock = self.0.read().await;
+                        (
+                            Arc::clone(lock.storage()),
+                            lock.storage_settings().clone(),
+                            Arc::clone(lock.asset_manager()),
+                        )
+                    };
                     let result = garbage_collect(
-                        lock.storage().as_ref(),
-                        lock.storage_settings(),
-                        lock.asset_manager().clone(),
+                        storage.as_ref(),
+                        &storage_settings,
+                        asset_manager,
                         &gc_config,
                     )
                     .await
@@ -947,11 +951,18 @@ impl PyRepository {
         py.allow_threads(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let lock = self.0.read().await;
+                    let (storage, storage_settings, asset_manager) = {
+                        let lock = self.0.read().await;
+                        (
+                            Arc::clone(lock.storage()),
+                            lock.storage_settings().clone(),
+                            Arc::clone(lock.asset_manager()),
+                        )
+                    };
                     let result = repo_chunks_storage(
-                        lock.storage().as_ref(),
-                        lock.storage_settings(),
-                        lock.asset_manager().clone(),
+                        storage.as_ref(),
+                        &storage_settings,
+                        asset_manager,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
