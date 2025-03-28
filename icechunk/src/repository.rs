@@ -16,7 +16,6 @@ use futures::{
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
 use tokio::task::JoinError;
 use tracing::{Instrument, debug, error, instrument, trace};
 
@@ -60,7 +59,6 @@ pub enum RepositoryErrorKind {
     FormatError(IcechunkFormatErrorKind),
     #[error(transparent)]
     Ref(RefErrorKind),
-
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -139,8 +137,7 @@ pub struct Repository {
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
-    #[serde(skip)]
-    default_commit_metadata: Arc<RwLock<Option<SnapshotProperties>>>,
+    default_commit_metadata: SnapshotProperties,
 }
 
 impl Repository {
@@ -312,7 +309,7 @@ impl Repository {
             virtual_resolver,
             asset_manager,
             virtual_chunk_credentials,
-            default_commit_metadata: Arc::new(RwLock::new(None)),
+            default_commit_metadata: SnapshotProperties::default(),
         })
     }
 
@@ -382,17 +379,13 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
-    pub async fn set_default_commit_metadata(
-        &self,
-        metadata: Option<SnapshotProperties>,
-    ) {
-        let mut guard = self.default_commit_metadata.write().await;
-        *guard = metadata;
+    pub fn set_default_commit_metadata(&mut self, metadata: SnapshotProperties) {
+        self.default_commit_metadata = metadata;
     }
 
     #[instrument(skip_all)]
-    pub async fn default_commit_metadata(&self) -> Option<SnapshotProperties> {
-        self.default_commit_metadata.read().await.clone()
+    pub fn default_commit_metadata(&self) -> &SnapshotProperties {
+        &self.default_commit_metadata
     }
 
     #[instrument(skip(storage, config))]
@@ -629,7 +622,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn resolve_version(
+    pub async fn resolve_version(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
@@ -774,7 +767,7 @@ impl Repository {
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot.clone(),
-            self.default_commit_metadata.read().await.clone(),
+            self.default_commit_metadata.clone(),
         );
 
         self.preload_manifests(ref_data.snapshot);

@@ -166,7 +166,7 @@ pub struct Session {
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
-    default_commit_metadata: Option<SnapshotProperties>,
+    default_commit_metadata: SnapshotProperties,
 }
 
 impl Session {
@@ -187,7 +187,7 @@ impl Session {
             branch_name: None,
             snapshot_id,
             change_set: ChangeSet::default(),
-            default_commit_metadata: None,
+            default_commit_metadata: SnapshotProperties::default(),
         }
     }
 
@@ -200,7 +200,7 @@ impl Session {
         virtual_resolver: Arc<VirtualChunkResolver>,
         branch_name: String,
         snapshot_id: SnapshotId,
-        default_commit_metadata: Option<SnapshotProperties>,
+        default_commit_metadata: SnapshotProperties,
     ) -> Self {
         Self {
             config,
@@ -811,16 +811,14 @@ impl Session {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
 
-        let properties = match (properties, self.default_commit_metadata.as_ref()) {
-            (Some(p), None) => Some(p),
-            (None, Some(d)) => Some(d.clone()),
-            (Some(p), Some(d)) => {
-                let mut merged = d.clone();
+        let default_metadata = self.default_commit_metadata.clone();
+        let properties = properties
+            .map(|p| {
+                let mut merged = default_metadata.clone();
                 merged.extend(p.into_iter());
-                Some(merged)
-            }
-            (None, None) => None,
-        };
+                merged
+            })
+            .unwrap_or(default_metadata);
 
         let current = fetch_branch_tip(
             self.storage.as_ref(),
@@ -839,7 +837,7 @@ impl Session {
                     &self.snapshot_id,
                     &self.change_set,
                     message,
-                    properties,
+                    Some(properties),
                 )
                 .await
             }
@@ -861,7 +859,7 @@ impl Session {
                         &self.snapshot_id,
                         &self.change_set,
                         message,
-                        properties,
+                        Some(properties),
                     )
                     .await
                 }
@@ -1970,7 +1968,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
     {
-        let repo = create_memory_store_repository().await;
+        let mut repo = create_memory_store_repository().await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", None).await?;
@@ -1984,7 +1982,7 @@ mod tests {
         let mut default_metadata = SnapshotProperties::default();
         default_metadata.insert("author".to_string(), "John Doe".to_string().into());
         default_metadata.insert("project".to_string(), "My Project".to_string().into());
-        repo.set_default_commit_metadata(Some(default_metadata.clone())).await;
+        repo.set_default_commit_metadata(default_metadata.clone());
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
