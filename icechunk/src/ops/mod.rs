@@ -1,6 +1,7 @@
 use std::{collections::HashSet, future::ready, sync::Arc};
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
+use tracing::instrument;
 
 use crate::{
     Storage,
@@ -31,6 +32,7 @@ pub async fn all_roots<'a>(
     Ok(roots)
 }
 
+#[instrument(skip(storage, storage_settings, asset_manager))]
 pub async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,

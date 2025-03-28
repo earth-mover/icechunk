@@ -3,6 +3,7 @@ use std::{collections::HashSet, future::ready, sync::Arc};
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt, stream};
 use tokio::pin;
+use tracing::instrument;
 
 use crate::{
     Storage, StorageError,
@@ -152,6 +153,7 @@ pub enum GCError {
 
 pub type GCResult<A> = Result<A, GCError>;
 
+#[instrument(skip(asset_manager))]
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -160,9 +162,11 @@ pub async fn garbage_collect(
 ) -> GCResult<GCSummary> {
     // TODO: this function could have much more parallelism
     if !config.action_needed() {
+        tracing::info!("No action requested");
         return Ok(GCSummary::default());
     }
 
+    tracing::info!("Finding GC roots");
     let all_snaps = pointed_snapshots(
         storage,
         storage_settings,
@@ -176,15 +180,21 @@ pub async fn garbage_collect(
     let mut keep_manifests = HashSet::new();
     let mut keep_snapshots = HashSet::new();
 
+    tracing::info!("Calculating retained objects");
     pin!(all_snaps);
     while let Some(snap_id) = all_snaps.try_next().await? {
         let snap = asset_manager.fetch_snapshot(&snap_id).await?;
-        if config.deletes_snapshots() {
-            keep_snapshots.insert(snap_id);
+        if config.deletes_snapshots() && keep_snapshots.insert(snap_id.clone()) {
+            tracing::trace!("Adding snapshot to keep list: {}", &snap_id);
         }
 
         if config.deletes_manifests() {
-            keep_manifests.extend(snap.manifest_files().map(|mf| mf.id));
+            let manifests = snap.manifest_files().map(|mf| mf.id);
+            for mf in manifests {
+                if keep_manifests.insert(mf.clone()) {
+                    tracing::trace!("Adding manifest to keep list: {}", &mf);
+                }
+            }
         }
 
         if config.deletes_chunks() {
@@ -212,7 +222,11 @@ pub async fn garbage_collect(
                             None
                         }
                     });
-                keep_chunks.extend(chunk_ids);
+                for chunk in chunk_ids {
+                    if keep_chunks.insert(chunk.clone()) {
+                        tracing::trace!("Adding chunk to keep list: {}", &chunk);
+                    }
+                }
             }
         }
     }
@@ -246,6 +260,7 @@ pub async fn garbage_collect(
     Ok(summary)
 }
 
+#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_chunks(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -269,6 +284,7 @@ async fn gc_chunks(
     Ok(storage.delete_chunks(storage_settings, to_delete).await?)
 }
 
+#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_manifests(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -294,6 +310,7 @@ async fn gc_manifests(
     Ok(storage.delete_manifests(storage_settings, to_delete).await?)
 }
 
+#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_snapshots(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -319,6 +336,7 @@ async fn gc_snapshots(
     Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
 }
 
+#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_transaction_logs(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -373,6 +391,7 @@ pub enum ExpireRefResult {
 /// ether refs.
 ///
 /// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+#[instrument(skip(asset_manager))]
 pub async fn expire_ref(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -384,6 +403,8 @@ pub async fn expire_ref(
         .fetch(storage, storage_settings)
         .await
         .map(|ref_data| ref_data.snapshot)?;
+
+    tracing::info!("Starting expiration at ref {}", snap_id);
 
     // the algorithm works by finding the oldest non expired snap and the root of the repo
     // we do that in a single pass through the ancestry
@@ -402,15 +423,18 @@ pub async fn expire_ref(
     let mut ref_is_expired = false;
     if let Some(Ok(info)) = ancestry.as_mut().peek().await {
         if info.flushed_at < older_than {
+            tracing::debug!(flushed_at = %info.flushed_at, "Ref flagged as expired");
             ref_is_expired = true;
         }
     }
 
     while let Some(parent) = ancestry.try_next().await? {
         if parent.flushed_at >= older_than {
+            tracing::debug!(snap = %parent.id, flushed_at = %parent.flushed_at, "Processing non expired snapshot");
             // we are navigating non-expired snaps, last will be kept in editable_snap
             editable_snap = parent.id;
         } else {
+            tracing::debug!(snap = %parent.id, flushed_at = %parent.flushed_at, "Processing expired snapshot");
             released.insert(parent.id.clone());
             root = parent.id;
         }
@@ -429,6 +453,7 @@ pub async fn expire_ref(
     {
         // Either the reference is the root, or it is pointing to the root as first parent
         // Nothing to do
+        tracing::info!("Nothing to expire for this ref");
         return Ok(ExpireRefResult::NothingToDo { ref_is_expired });
     }
 
@@ -439,9 +464,12 @@ pub async fn expire_ref(
     // and, we only set a root as parent
     assert!(root.parent_id().is_none());
 
+    tracing::info!(root = %root.id(), editable_snap=%editable_snap.id(), "Expiration needed for this ref");
+
     // TODO: add properties to the snapshot that tell us it was history edited
     let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
     asset_manager.write_snapshot(new_snapshot).await?;
+    tracing::info!("Snapshot overwritten");
 
     Ok(ExpireRefResult::Done {
         released_snapshots: released,
@@ -481,6 +509,7 @@ pub struct ExpireResult {
 /// ether refs.
 ///
 /// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+#[instrument(skip(asset_manager))]
 pub async fn expire(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -519,6 +548,7 @@ pub async fn expire(
                 match &r {
                     Ref::Tag(name) => {
                         if expired_tags == ExpiredRefAction::Delete {
+                            tracing::info!(name, "Deleting expired tag");
                             delete_tag(storage, storage_settings, name.as_str())
                                 .await
                                 .map_err(GCError::Ref)?;
@@ -529,6 +559,7 @@ pub async fn expire(
                         if expired_branches == ExpiredRefAction::Delete
                             && name != Ref::DEFAULT_BRANCH
                         {
+                            tracing::info!(name, "Deleting expired branch");
                             delete_branch(storage, storage_settings, name.as_str())
                                 .await
                                 .map_err(GCError::Ref)?;
