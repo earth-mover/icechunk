@@ -384,8 +384,8 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
-    pub fn default_commit_metadata(&self) -> SnapshotProperties {
-        self.default_commit_metadata.clone()
+    pub fn default_commit_metadata(&self) -> &SnapshotProperties {
+        &self.default_commit_metadata
     }
 
     #[instrument(skip(storage, config))]

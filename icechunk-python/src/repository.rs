@@ -569,7 +569,7 @@ impl PyRepository {
 
     pub fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
         py.allow_threads(move || {
-            let metadata = self.0.blocking_read().default_commit_metadata();
+            let metadata = self.0.blocking_read().default_commit_metadata().clone();
             metadata.into()
         })
     }
