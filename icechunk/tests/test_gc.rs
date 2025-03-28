@@ -293,7 +293,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::NothingToDo => {
+        ExpireRefResult::NothingToDo { .. } => {
             panic!()
         }
         ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
@@ -330,7 +330,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::NothingToDo => panic!(),
+        ExpireRefResult::NothingToDo { .. } => panic!(),
         ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
             assert!(!ref_is_expired);
             assert_eq!(released_snapshots.len(), 4);
@@ -365,7 +365,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::NothingToDo => panic!(),
+        ExpireRefResult::NothingToDo { .. } => panic!(),
         ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
             assert!(!ref_is_expired);
             assert_eq!(released_snapshots.len(), 5);
@@ -400,7 +400,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     {
-        ExpireRefResult::NothingToDo => panic!(),
+        ExpireRefResult::NothingToDo { .. } => panic!(),
         ExpireRefResult::Done { released_snapshots, ref_is_expired, .. } => {
             assert!(!ref_is_expired);
             assert_eq!(released_snapshots.len(), 5);
@@ -462,7 +462,9 @@ pub async fn test_expire_ref_with_odd_timestamps()
     )
     .await?
     {
-        ExpireRefResult::NothingToDo => {}
+        ExpireRefResult::NothingToDo { ref_is_expired } => {
+            assert!(!ref_is_expired);
+        }
         _ => panic!(),
     }
 
