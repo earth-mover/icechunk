@@ -138,6 +138,22 @@ impl AssetManager {
         )
     }
 
+    pub fn remove_cached_snapshot(&self, snapshot_id: &SnapshotId) {
+        self.snapshot_cache.remove(snapshot_id);
+    }
+
+    pub fn remove_cached_manifest(&self, manifest_id: &ManifestId) {
+        self.manifest_cache.remove(manifest_id);
+    }
+
+    pub fn remove_cached_tx_log(&self, snapshot_id: &SnapshotId) {
+        self.transactions_cache.remove(snapshot_id);
+    }
+
+    pub fn clear_chunk_cache(&self) {
+        self.chunk_cache.clear();
+    }
+
     #[instrument(skip(self, manifest))]
     pub async fn write_manifest(&self, manifest: Arc<Manifest>) -> RepositoryResult<u64> {
         let manifest_c = Arc::clone(&manifest);
