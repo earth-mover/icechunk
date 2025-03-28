@@ -1,7 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
-    Repository, Storage,
+    Repository, RepositoryConfig, Storage,
+    config::{ManifestConfig, ManifestShardingConfig},
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     session::{Session, get_chunk},
     storage::new_in_memory_storage,
@@ -31,11 +32,19 @@ const N: usize = 20;
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
 async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
+    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+
+    let config = RepositoryConfig {
+        manifest: Some(ManifestConfig {
+            sharding: Some(ManifestShardingConfig::with_size(2)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, storage, HashMap::new()).await?;
+    let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
     let mut ds = repo.writable_session("main").await?;
 
-    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
     let dimension_names = Some(vec!["x".into(), "y".into()]);
     let user_data = Bytes::new();
     let new_array_path: Path = "/array".try_into().unwrap();

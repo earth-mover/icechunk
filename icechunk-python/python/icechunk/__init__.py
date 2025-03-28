@@ -1,5 +1,7 @@
 # module
 
+from typing import TypeAlias
+
 from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
@@ -22,12 +24,15 @@ from icechunk._icechunk_python import (
     ManifestConfig,
     ManifestPreloadCondition,
     ManifestPreloadConfig,
+    ManifestShardCondition,
+    ManifestShardingConfig,
     ObjectStoreConfig,
     RebaseFailedData,
     RepositoryConfig,
     S3Credentials,
     S3Options,
     S3StaticCredentials,
+    ShardDimCondition,
     SnapshotInfo,
     Storage,
     StorageConcurrencySettings,
@@ -106,6 +111,8 @@ __all__ = [
     "ManifestConfig",
     "ManifestPreloadCondition",
     "ManifestPreloadConfig",
+    "ManifestShardCondition",
+    "ManifestShardingConfig",
     "ObjectStoreConfig",
     "RebaseFailedData",
     "RebaseFailedError",
@@ -115,6 +122,7 @@ __all__ = [
     "S3Options",
     "S3StaticCredentials",
     "Session",
+    "ShardDimCondition",
     "SnapshotInfo",
     "Storage",
     "StorageConcurrencySettings",
@@ -163,5 +171,17 @@ def print_debug_info() -> None:
         except ModuleNotFoundError:
             continue
 
+
+# monkey path
+
+ShardSizesDict: TypeAlias = dict[ManifestShardCondition, dict[ShardDimCondition, int]]
+
+
+def from_dict(shard_sizes: ShardSizesDict) -> ManifestShardingConfig:
+    unwrapped = tuple((k, tuple(v.items())) for k, v in shard_sizes.items())
+    return ManifestShardingConfig(unwrapped)
+
+
+ManifestShardingConfig.from_dict = from_dict
 
 initialize_logs()

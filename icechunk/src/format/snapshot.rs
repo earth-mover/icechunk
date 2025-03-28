@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
+use std::{
+    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Index, sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -37,6 +39,17 @@ impl DimensionShape {
 pub struct ArrayShape(Vec<DimensionShape>);
 
 impl ArrayShape {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn num_chunks(&self) -> Vec<u32> {
+        self.max_chunk_indices_permitted().map(|x| x + 1).collect()
+    }
+
     pub fn new<I>(it: I) -> Option<Self>
     where
         I: IntoIterator<Item = (u64, u64)>,
@@ -87,6 +100,15 @@ impl ArrayShape {
     }
 }
 
+// Implement indexing for immutable access
+impl Index<usize> for ArrayShape {
+    type Output = DimensionShape;
+
+    fn index(&self, index: usize) -> &DimensionShape {
+        &self.0[index]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DimensionName {
     NotSpecified,
@@ -98,6 +120,15 @@ impl From<Option<&str>> for DimensionName {
         match value {
             Some(s) => s.into(),
             None => DimensionName::NotSpecified,
+        }
+    }
+}
+
+impl From<DimensionName> for Option<String> {
+    fn from(value: DimensionName) -> Option<String> {
+        match value {
+            DimensionName::NotSpecified => None,
+            DimensionName::Name(name) => Some(name),
         }
     }
 }

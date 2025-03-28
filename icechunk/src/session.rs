@@ -13,7 +13,8 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
-use itertools::Itertools as _;
+use itertools::{Itertools as _, repeat_n};
+use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -23,6 +24,7 @@ use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
+    config::{ManifestShardingConfig, ShardDimCondition},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
@@ -30,7 +32,7 @@ use crate::{
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+            ManifestShards, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
         snapshot::{
@@ -104,6 +106,8 @@ pub enum SessionErrorKind {
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
+    #[error("invalid chunk index for sharding manifests: {coords:?}")]
+    InvalidIndexForManifestShards { coords: ChunkIndices },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
 }
@@ -155,6 +159,34 @@ impl From<VirtualReferenceError> for SessionError {
 }
 
 pub type SessionResult<T> = Result<T, SessionError>;
+
+impl ManifestShards {
+    // Returns the index of shard_range that includes ChunkIndices
+    // This can be used at write time to split manifests based on the config
+    // and at read time to choose which manifest to query for chunk payload
+    pub fn which(&self, coord: &ChunkIndices) -> SessionResult<usize> {
+        // shard_range[i] must bound ChunkIndices
+        // 0 <= return value <= shard_range.len()
+        // it is possible that shard_range does not include a coord. say we have 2x2 shard grid
+        // but only shard (0,0) and shard (1,1) are populated with data.
+        // A coord located in (1, 0) should return Err
+        // Since shard_range need not form a regular grid, we must iterate through and find the first result.
+        // ManifestExtents in shard_range MUST NOT overlap with each other. How do we ensure this?
+        // ndim must be the same
+        // debug_assert_eq!(coord.0.len(), shard_range[0].len());
+        // FIXME: could optimize for unbounded single manifest
+        // Note: I don't think we can distinguish between out of bounds index for the array
+        //       and an index that is part of a shard that hasn't been written yet.
+        self.iter()
+            .enumerate()
+            .find(|(_, e)| e.contains(coord.0.as_slice()))
+            .map(|(i, _)| i)
+            .ok_or(
+                SessionErrorKind::InvalidIndexForManifestShards { coords: coord.clone() }
+                    .into(),
+            )
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -548,6 +580,8 @@ impl Session {
             }
             .into()),
             NodeData::Array { manifests, .. } => {
+                // Note: at this point, coords could be invalid for the array shape
+                //       but we just let that pass.
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
@@ -705,19 +739,28 @@ impl Session {
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
     ) -> SessionResult<Option<ChunkPayload>> {
-        // FIXME: use manifest extents
-        for manifest in manifests {
-            let manifest = self.fetch_manifest(&manifest.object_id).await?;
-            match manifest.get_chunk_payload(&node, coords) {
-                Ok(payload) => {
-                    return Ok(Some(payload.clone()));
-                }
-                Err(IcechunkFormatError {
-                    kind: IcechunkFormatErrorKind::ChunkCoordinatesNotFound { .. },
-                    ..
-                }) => {}
-                Err(err) => return Err(err.into()),
+        let shards = ManifestShards::from_extents(
+            manifests.iter().map(|m| m.extents.clone()).collect(),
+        );
+        let index = match shards.which(coords) {
+            Ok(index) => index,
+            // for an invalid coordinate, we bail.
+            // This happens for two cases:
+            // (1) the "coords" is out-of-range for the array shape
+            // (2) the "coords" belongs to a shard that hasn't been written yet.
+            Err(_) => return Ok(None),
+        };
+
+        let manifest = self.fetch_manifest(&manifests[index].object_id).await?;
+        match manifest.get_chunk_payload(&node, coords) {
+            Ok(payload) => {
+                return Ok(Some(payload.clone()));
             }
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::ChunkCoordinatesNotFound { .. },
+                ..
+            }) => {}
+            Err(err) => return Err(err.into()),
         }
         Ok(None)
     }
@@ -836,6 +879,7 @@ impl Session {
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
+                    &self.config,
                     message,
                     Some(properties),
                 )
@@ -858,6 +902,7 @@ impl Session {
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
+                        &self.config,
                         message,
                         Some(properties),
                     )
@@ -1366,6 +1411,7 @@ struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
+    config: &'a RepositoryConfig,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1375,14 +1421,85 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
+        config: &'a RepositoryConfig,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
+            config,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
+    }
+
+    async fn write_manifest_from_iterator(
+        &mut self,
+        node_id: &NodeId,
+        chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
+        shards: ManifestShards,
+    ) -> SessionResult<()> {
+        let mut from = vec![];
+        let mut to = vec![];
+
+        // TODO: what is a good capacity
+        let ref_capacity = 8_192;
+
+        // TODO: think about optimizing writes to manifests
+        // TODO: add test case for append caqse
+        // TODO: add benchmarks
+        let mut sharded_refs = chunks
+            .try_fold(
+                // TODO: have the changeset track this HashMap
+                HashMap::with_capacity(shards.len()),
+                |mut sharded_refs, chunk| async {
+                    let shard_index = shards.which(&chunk.coord);
+                    shard_index.map(|index| {
+                        sharded_refs
+                            .entry(index)
+                            .or_insert_with(|| Vec::with_capacity(ref_capacity))
+                            .push(chunk);
+                        sharded_refs
+                    })
+                },
+            )
+            .await?;
+
+        for i in 0..shards.len() {
+            if let Some(shard_chunks) = sharded_refs.remove(&i) {
+                let shard_chunks = stream::iter(
+                    shard_chunks.into_iter().map(Ok::<ChunkInfo, Infallible>),
+                );
+                let shard_chunks =
+                    aggregate_extents(&mut from, &mut to, shard_chunks, |ci| &ci.coord);
+
+                if let Some(new_manifest) =
+                    Manifest::from_stream(shard_chunks).await.unwrap()
+                {
+                    let new_manifest = Arc::new(new_manifest);
+                    let new_manifest_size = self
+                        .asset_manager
+                        .write_manifest(Arc::clone(&new_manifest))
+                        .await?;
+
+                    let file_info =
+                        ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+                    self.manifest_files.insert(file_info);
+
+                    let new_ref = ManifestRef {
+                        object_id: new_manifest.id().clone(),
+                        extents: ManifestExtents::new(&from, &to),
+                    };
+
+                    self.manifest_refs
+                        .entry(node_id.clone())
+                        .and_modify(|v| v.push(new_ref.clone()))
+                        .or_insert_with(|| vec![new_ref]);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Write a manifest for a node that was created in this session
@@ -1391,36 +1508,12 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node_id: &NodeId,
         node_path: &Path,
+        shards: ManifestShards,
     ) -> SessionResult<()> {
-        let mut from = vec![];
-        let mut to = vec![];
         let chunks = stream::iter(
-            self.change_set
-                .new_array_chunk_iterator(node_id, node_path)
-                .map(Ok::<ChunkInfo, Infallible>),
+            self.change_set.new_array_chunk_iterator(node_id, node_path).map(Ok),
         );
-        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
-
-        if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
-
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
-
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-
-            self.manifest_refs
-                .entry(node_id.clone())
-                .and_modify(|v| v.push(new_ref.clone()))
-                .or_insert_with(|| vec![new_ref]);
-        }
-        Ok(())
+        self.write_manifest_from_iterator(node_id, chunks, shards).await
     }
 
     /// Write a manifest for a node that was modified in this session
@@ -1429,39 +1522,19 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
+        shards: ManifestShards,
     ) -> SessionResult<()> {
+        let asset_manager = Arc::clone(&self.asset_manager);
         let updated_chunks = updated_node_chunks_iterator(
-            self.asset_manager.as_ref(),
+            asset_manager.as_ref(),
             self.change_set,
             self.parent_id,
             node.clone(),
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
-        let mut from = vec![];
-        let mut to = vec![];
-        let updated_chunks =
-            aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(updated_chunks).await? {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
-
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
-
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-            self.manifest_refs
-                .entry(node.id.clone())
-                .and_modify(|v| v.push(new_ref.clone()))
-                .or_insert_with(|| vec![new_ref]);
-        }
-        Ok(())
+        self.write_manifest_from_iterator(&node.id, updated_chunks, shards).await
     }
 
     /// Record the previous manifests for an array that was not modified in the session
@@ -1492,6 +1565,88 @@ impl<'a> FlushProcess<'a> {
     }
 }
 
+impl ShardDimCondition {
+    fn matches(&self, axis: usize, dimname: Option<String>) -> bool {
+        match self {
+            ShardDimCondition::Axis(ax) => ax == &axis,
+            ShardDimCondition::DimensionName(regex) => dimname
+                .map(|name| {
+                    Regex::new(regex)
+                        .map(|regex| regex.is_match(name.as_bytes()))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+            ShardDimCondition::Any => true,
+        }
+    }
+}
+
+impl ManifestShardingConfig {
+    pub fn get_shard_sizes(&self, node: &NodeSnapshot) -> SessionResult<ManifestShards> {
+        match &node.node_data {
+            NodeData::Group => Err(SessionErrorKind::NotAnArray {
+                node: node.clone(),
+                message: "attempting to shard manifest for group".to_string(),
+            }
+            .into()),
+            NodeData::Array { shape, dimension_names, .. } => {
+                let ndim = shape.len();
+                let num_chunks = shape.num_chunks();
+                let mut edges: Vec<Vec<u32>> =
+                    (0..ndim).map(|axis| vec![0, num_chunks[axis]]).collect();
+
+                // This is ugly but necessary to handle:
+                //   - path: *
+                //     manifest-split-size:
+                //     - t : 10
+                //   - path: *
+                //     manifest-split-size:
+                //     - y : 2
+                // which is now identical to:
+                //   - path: *
+                //     manifest-split-size:
+                //     - t : 10
+                //     - y : 2
+                let mut already_matched: HashSet<usize> = HashSet::new();
+
+                #[allow(clippy::expect_used)]
+                let shard_sizes = self
+                    .shard_sizes
+                    .clone()
+                    .or_else(|| Self::default().shard_sizes)
+                    .expect("logic bug");
+
+                for (condition, dim_specs) in shard_sizes.iter() {
+                    if condition.matches(&node.path) {
+                        let dimension_names = dimension_names.clone().unwrap_or(
+                            repeat_n(DimensionName::NotSpecified, ndim).collect(),
+                        );
+                        for (axis, dimname) in itertools::enumerate(dimension_names) {
+                            if already_matched.contains(&axis) {
+                                continue;
+                            }
+                            for (dim_condition, shard_size) in dim_specs.iter() {
+                                if dim_condition.matches(axis, dimname.clone().into()) {
+                                    edges[axis] = (0..=num_chunks[axis])
+                                        .step_by(*shard_size as usize)
+                                        .chain(
+                                            (num_chunks[axis] % shard_size != 0)
+                                                .then(|| num_chunks[axis]),
+                                        )
+                                        .collect();
+                                    already_matched.insert(axis);
+                                    break;
+                                };
+                            }
+                        }
+                    }
+                }
+                Ok(ManifestShards::from_edges(edges))
+            }
+        }
+    }
+}
+
 async fn flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
@@ -1503,6 +1658,7 @@ async fn flush(
 
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
+    let sharding_config = flush_data.config.manifest().sharding();
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
@@ -1520,7 +1676,8 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            flush_data.write_manifest_for_existing_node(&node).await?;
+            let shards = sharding_config.get_shard_sizes(&node)?;
+            flush_data.write_manifest_for_existing_node(&node, shards).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
@@ -1534,7 +1691,15 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
+        let node = get_node(
+            &flush_data.asset_manager,
+            flush_data.change_set,
+            flush_data.parent_id,
+            node_path,
+        )
+        .await?;
+        let shards = sharding_config.get_shard_sizes(&node)?;
+        flush_data.write_manifest_for_new_node(node_id, node_path, shards).await?;
     }
 
     trace!("Building new snapshot");
@@ -1647,13 +1812,14 @@ async fn do_commit(
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
+    config: &RepositoryConfig,
     message: &str,
     properties: Option<SnapshotProperties>,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, config);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
@@ -1762,7 +1928,7 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::ManifestExtents,
+        format::manifest::{ManifestExtents, ManifestShards},
         refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
@@ -1963,6 +2129,24 @@ mod tests {
 
         prop_assert_eq!(from, expected_from);
         prop_assert_eq!(to, expected_to);
+    }
+
+    #[tokio::test]
+    async fn test_which_shard() -> Result<(), Box<dyn Error>> {
+        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
+
+        assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![11])).unwrap(), 1);
+
+        let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
+
+        let shards = ManifestShards::from_edges(edges);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
+        assert_eq!(shards.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
+        assert!(shards.which(&ChunkIndices(vec![21, 21])).is_err());
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
