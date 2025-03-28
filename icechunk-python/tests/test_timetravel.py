@@ -368,10 +368,8 @@ def test_branch_expiration() -> None:
     for snap in (a, b):
         repo.lookup_snapshot(snap)
 
-    summary = repo.garbage_collect(
-        repo.lookup_snapshot(b).written_at + timedelta(seconds=1)
-    )
-    print(summary)
+    # FIXME: this fails to delete snapshot `b` with microseconds=1
+    repo.garbage_collect(repo.lookup_snapshot(b).written_at + timedelta(seconds=1))
     # make sure snapshot cannot be opened anymore
     for snap in (a, b):
         with pytest.raises(ValueError):
