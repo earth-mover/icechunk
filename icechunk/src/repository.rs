@@ -518,6 +518,14 @@ impl Repository {
         Ok(branch_version.snapshot)
     }
 
+    #[instrument(skip(self))]
+    pub async fn lookup_snapshot(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<SnapshotInfo> {
+        self.asset_manager.fetch_snapshot_info(snapshot_id).await
+    }
+
     /// Make a branch point to the specified snapshot.
     /// After execution, history of the branch will be altered, and the current
     /// store will point to a different base snapshot_id
