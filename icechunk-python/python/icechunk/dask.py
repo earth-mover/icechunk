@@ -79,6 +79,7 @@ def store_dask(
             aggregate=merge_sessions,
             split_every=split_every,
             concatenate=False,
+            keepdims=False,
             dtype=object,
             **store_kwargs,
         )
