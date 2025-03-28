@@ -180,7 +180,7 @@ class _XarrayDatasetWriter:
 
         # Now we tree-reduce all changesets
         merged_sessions = [
-            da.reduction(
+            da.reduction(  # type: ignore[no-untyped-call]
                 arr,
                 name="ice-changeset",
                 chunk=extract_session,
@@ -191,7 +191,8 @@ class _XarrayDatasetWriter:
             )
             for arr in stored_arrays
         ]
-        merged_session = merge_sessions(*da.compute(*merged_sessions))
+        computed = da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
+        merged_session = merge_sessions(*computed)
         self.store.session.merge(merged_session)
 
 

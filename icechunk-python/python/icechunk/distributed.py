@@ -2,8 +2,23 @@
 from typing import Any, cast
 
 import zarr
-from dask.core import flatten
 from icechunk import IcechunkStore, Session
+
+__all__ = [
+    "extract_session",
+    "merge_sessions",
+]
+
+
+def _flatten(seq, container=list):
+    if isinstance(seq, str):
+        yield seq
+    else:
+        for item in seq:
+            if isinstance(item, container):
+                yield from _flatten(item, container=container)
+            else:
+                yield item
 
 
 def extract_session(
@@ -18,7 +33,7 @@ def merge_sessions(
     axis: Any = None,
     keepdims: Any = None,
 ) -> Session:
-    session, *rest = list(flatten(sessions))
+    session, *rest = list(_flatten(sessions))  # type: ignore[no-untyped-call]
     for other in rest:
         session.merge(other)
-    return session
+    return cast(Session, session)
