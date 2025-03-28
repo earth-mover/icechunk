@@ -360,6 +360,21 @@ class Repository:
         """
         return self._repository.lookup_branch(branch)
 
+    def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo:
+        """
+        Get the SnapshotInfo given a snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to look up
+
+        Returns
+        -------
+        SnapshotInfo
+        """
+        return self._repository.lookup_snapshot(snapshot_id)
+
     def reset_branch(self, branch: str, snapshot_id: str) -> None:
         """
         Reset a branch to a specific snapshot.
