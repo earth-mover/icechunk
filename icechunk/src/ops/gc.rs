@@ -234,24 +234,43 @@ pub async fn garbage_collect(
     let mut summary = GCSummary::default();
 
     if config.deletes_snapshots() {
-        let res =
-            gc_snapshots(storage, storage_settings, config, &keep_snapshots).await?;
+        let res = gc_snapshots(
+            asset_manager.as_ref(),
+            storage,
+            storage_settings,
+            config,
+            &keep_snapshots,
+        )
+        .await?;
         summary.snapshots_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_transaction_logs() {
-        let res = gc_transaction_logs(storage, storage_settings, config, &keep_snapshots)
-            .await?;
+        let res = gc_transaction_logs(
+            asset_manager.as_ref(),
+            storage,
+            storage_settings,
+            config,
+            &keep_snapshots,
+        )
+        .await?;
         summary.transaction_logs_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_manifests() {
-        let res =
-            gc_manifests(storage, storage_settings, config, &keep_manifests).await?;
+        let res = gc_manifests(
+            asset_manager.as_ref(),
+            storage,
+            storage_settings,
+            config,
+            &keep_manifests,
+        )
+        .await?;
         summary.manifests_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_chunks() {
+        asset_manager.clear_chunk_cache();
         let res = gc_chunks(storage, storage_settings, config, &keep_chunks).await?;
         summary.chunks_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
@@ -286,6 +305,7 @@ async fn gc_chunks(
 
 #[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_manifests(
+    asset_manager: &AssetManager,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
@@ -300,6 +320,7 @@ async fn gc_manifests(
                 if config.must_delete_manifest(&manifest)
                     && !keep_ids.contains(&manifest.id)
                 {
+                    asset_manager.remove_cached_manifest(&manifest.id);
                     Some((manifest.id.clone(), manifest.size_bytes))
                 } else {
                     None
@@ -312,6 +333,7 @@ async fn gc_manifests(
 
 #[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_snapshots(
+    asset_manager: &AssetManager,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
@@ -326,6 +348,7 @@ async fn gc_snapshots(
                 if config.must_delete_snapshot(&snapshot)
                     && !keep_ids.contains(&snapshot.id)
                 {
+                    asset_manager.remove_cached_snapshot(&snapshot.id);
                     Some((snapshot.id.clone(), snapshot.size_bytes))
                 } else {
                     None
@@ -338,6 +361,7 @@ async fn gc_snapshots(
 
 #[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_transaction_logs(
+    asset_manager: &AssetManager,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     config: &GCConfig,
@@ -350,6 +374,7 @@ async fn gc_transaction_logs(
         .filter_map(move |tx| {
             ready(tx.ok().and_then(|tx| {
                 if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
+                    asset_manager.remove_cached_tx_log(&tx.id);
                     Some((tx.id.clone(), tx.size_bytes))
                 } else {
                     None

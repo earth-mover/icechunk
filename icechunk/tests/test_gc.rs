@@ -50,12 +50,6 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
         new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
             .expect("Creating minio storage failed");
     let storage_settings = storage.default_settings();
-    let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
-        storage_settings.clone(),
-        1,
-    ));
-
     let repo = Repository::create(
         Some(RepositoryConfig {
             inline_chunk_threshold_bytes: Some(0),
@@ -104,7 +98,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let summary = garbage_collect(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &gc_config,
     )
     .await?;
@@ -136,7 +130,7 @@ pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
     let summary = garbage_collect(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &gc_config,
     )
     .await?;
@@ -278,16 +272,10 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
-    let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
-        storage_settings.clone(),
-        1,
-    ));
-
     match expire_ref(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &Ref::Branch("main".to_string()),
         expire_older_than,
     )
@@ -301,8 +289,6 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
             assert!(!ref_is_expired);
         }
     }
-
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
@@ -324,7 +310,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     match expire_ref(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &Ref::Branch("develop".to_string()),
         expire_older_than,
     )
@@ -336,8 +322,6 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(released_snapshots.len(), 4);
         }
     }
-
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
@@ -359,7 +343,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     match expire_ref(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &Ref::Branch("test".to_string()),
         expire_older_than,
     )
@@ -371,8 +355,6 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(released_snapshots.len(), 5);
         }
     }
-
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
@@ -394,7 +376,7 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
     match expire_ref(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &Ref::Branch("qa".to_string()),
         expire_older_than,
     )
@@ -406,8 +388,6 @@ pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(released_snapshots.len(), 5);
         }
     }
-
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
@@ -448,15 +428,10 @@ pub async fn test_expire_ref_with_odd_timestamps()
     session.add_group("/b".try_into().unwrap(), user_data.clone()).await?;
     session.commit("third", None).await?;
 
-    let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
-        storage_settings.clone(),
-        1,
-    ));
     match expire_ref(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &Ref::Branch("main".to_string()),
         Utc::now() - TimeDelta::days(10),
     )
@@ -468,22 +443,15 @@ pub async fn test_expire_ref_with_odd_timestamps()
         _ => panic!(),
     }
 
-    // create another repo to avoid caching issues
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
         Vec::from(["third", "second", "first", "Repository initialized"])
     );
 
-    let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
-        storage_settings.clone(),
-        1,
-    ));
     match expire_ref(
         storage.as_ref(),
         &storage_settings,
-        asset_manager.clone(),
+        repo.asset_manager().clone(),
         &Ref::Branch("main".to_string()),
         Utc::now() + TimeDelta::days(10),
     )
@@ -491,9 +459,6 @@ pub async fn test_expire_ref_with_odd_timestamps()
     {
         ExpireRefResult::Done { ref_is_expired, .. } => {
             assert!(ref_is_expired);
-            // create another repo to avoid caching issues
-            let repo =
-                Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
             assert_eq!(
                 branch_commit_messages(&repo, "main").await,
                 Vec::from(["third", "Repository initialized"])
@@ -502,8 +467,6 @@ pub async fn test_expire_ref_with_odd_timestamps()
         _ => panic!(),
     }
 
-    // create another repo to avoid caching issues
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
     assert_eq!(
         branch_commit_messages(&repo, "main").await,
         Vec::from(["third", "Repository initialized"])
