@@ -110,7 +110,7 @@ async def test_distributed_writers(use_object_store: bool) -> None:
             warnings.simplefilter("ignore", category=UserWarning)
             assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]
 
-    with Client(n_workers=8):  # type: ignore[no-untyped-call]
+    with Client(dashboard_address=":0"):  # type: ignore[no-untyped-call]
         do_writes("with-processes")
         await verify("with-processes")
 

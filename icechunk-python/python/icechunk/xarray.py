@@ -6,10 +6,10 @@ from typing import Any, Literal, overload
 import numpy as np
 from packaging.version import Version
 
+import dask.array as da
 import xarray as xr
 import zarr
 from icechunk import IcechunkStore, Session
-from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset
@@ -179,15 +179,20 @@ class _XarrayDatasetWriter:
         )  # type: ignore[no-untyped-call]
 
         # Now we tree-reduce all changesets
-        merged_session = stateful_store_reduce(
-            stored_arrays,
-            prefix="ice-changeset",
-            chunk=extract_session,
-            aggregate=merge_sessions,
-            split_every=split_every,
-            compute=True,
-            **chunkmanager_store_kwargs,
-        )
+        merged_sessions = [
+            da.reduction(  # type: ignore[no-untyped-call]
+                arr,
+                name="ice-changeset",
+                chunk=extract_session,
+                aggregate=merge_sessions,
+                split_every=split_every,
+                concatenate=False,
+                dtype=object,
+            )
+            for arr in stored_arrays
+        ]
+        computed = da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
+        merged_session = merge_sessions(*computed)
         self.store.session.merge(merged_session)
 
 
