@@ -605,8 +605,11 @@ class Repository:
         -------
         set of expires snapshot IDs
         """
-
-        return self._repository.expire_snapshots(older_than)
+        return self._repository.expire_snapshots(
+            older_than,
+            delete_expired_branches=delete_expired_branches,
+            delete_expired_tags=delete_expired_tags,
+        )
 
     def garbage_collect(self, delete_object_older_than: datetime.datetime) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
