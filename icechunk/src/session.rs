@@ -1576,6 +1576,7 @@ async fn flush(
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
+        None,
         all_nodes.into_iter().map(Ok::<_, Infallible>),
     )?;
 
@@ -2080,6 +2081,7 @@ mod tests {
             "message".to_string(),
             None,
             manifests,
+            None,
             nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
         )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;

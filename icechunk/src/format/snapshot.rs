@@ -313,6 +313,7 @@ impl Snapshot {
         message: String,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
+        flushed_at: Option<DateTime<Utc>>,
         sorted_iter: I,
     ) -> IcechunkResult<Self>
     where
@@ -349,7 +350,7 @@ impl Snapshot {
 
         let message = builder.create_string(&message);
         let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
-        let flushed_at = Utc::now().timestamp_micros() as u64;
+        let flushed_at = flushed_at.unwrap_or_else(Utc::now).timestamp_micros() as u64;
         let id = generated::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
 
         let nodes: Vec<_> = sorted_iter
@@ -387,6 +388,7 @@ impl Snapshot {
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
+            None,
             nodes,
         )
     }
@@ -459,6 +461,7 @@ impl Snapshot {
             new_child.message().clone(),
             Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
+            Some(new_child.flushed_at()?),
             new_child.iter(),
         )
     }
@@ -736,6 +739,7 @@ mod tests {
             String::default(),
             Default::default(),
             manifests,
+            None,
             nodes.into_iter().map(Ok::<NodeSnapshot, Infallible>),
         )
         .unwrap();
