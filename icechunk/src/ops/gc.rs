@@ -344,7 +344,9 @@ async fn gc_transaction_logs(
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ExpireRefResult {
-    NothingToDo,
+    NothingToDo {
+        ref_is_expired: bool,
+    },
     Done {
         released_snapshots: HashSet<SnapshotId>,
         edited_snapshot: SnapshotId,
@@ -427,7 +429,7 @@ pub async fn expire_ref(
     {
         // Either the reference is the root, or it is pointing to the root as first parent
         // Nothing to do
-        return Ok(ExpireRefResult::NothingToDo);
+        return Ok(ExpireRefResult::NothingToDo { ref_is_expired });
     }
 
     let root = asset_manager.fetch_snapshot(&root).await?;
@@ -501,7 +503,7 @@ pub async fn expire(
             }
         })
         .try_fold(ExpireResult::default(), |mut result, (r, ref_result)| async move {
-            match ref_result {
+            let ref_is_expired = match ref_result {
                 ExpireRefResult::Done {
                     released_snapshots,
                     edited_snapshot,
@@ -509,36 +511,33 @@ pub async fn expire(
                 } => {
                     result.released_snapshots.extend(released_snapshots.into_iter());
                     result.edited_snapshots.insert(edited_snapshot);
-                    if ref_is_expired {
-                        match &r {
-                            Ref::Tag(name) => {
-                                if expired_tags == ExpiredRefAction::Delete {
-                                    delete_tag(storage, storage_settings, name.as_str())
-                                        .await
-                                        .map_err(GCError::Ref)?;
-                                    result.deleted_refs.insert(r);
-                                }
-                            }
-                            Ref::Branch(name) => {
-                                if expired_branches == ExpiredRefAction::Delete
-                                    && name != Ref::DEFAULT_BRANCH
-                                {
-                                    delete_branch(
-                                        storage,
-                                        storage_settings,
-                                        name.as_str(),
-                                    )
-                                    .await
-                                    .map_err(GCError::Ref)?;
-                                    result.deleted_refs.insert(r);
-                                }
-                            }
+                    ref_is_expired
+                }
+                ExpireRefResult::NothingToDo { ref_is_expired } => ref_is_expired,
+            };
+            if ref_is_expired {
+                match &r {
+                    Ref::Tag(name) => {
+                        if expired_tags == ExpiredRefAction::Delete {
+                            delete_tag(storage, storage_settings, name.as_str())
+                                .await
+                                .map_err(GCError::Ref)?;
+                            result.deleted_refs.insert(r);
                         }
                     }
-                    Ok(result)
+                    Ref::Branch(name) => {
+                        if expired_branches == ExpiredRefAction::Delete
+                            && name != Ref::DEFAULT_BRANCH
+                        {
+                            delete_branch(storage, storage_settings, name.as_str())
+                                .await
+                                .map_err(GCError::Ref)?;
+                            result.deleted_refs.insert(r);
+                        }
+                    }
                 }
-                ExpireRefResult::NothingToDo => Ok(result),
             }
+            Ok(result)
         })
         .await
 }
