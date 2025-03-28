@@ -20,7 +20,8 @@ from xarray.tests.test_backends import (
     TestZarrRegionAuto as ZarrRegionAutoTests,
 )
 from xarray.tests.test_backends import (
-    ZarrBase,  # noqa: F401; needed otherwise not discovered
+    ZarrBase,
+    default_zarr_format,  # noqa: F401; needed otherwise not discovered
 )
 
 
