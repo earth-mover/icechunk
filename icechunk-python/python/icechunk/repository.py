@@ -216,7 +216,7 @@ class Repository:
         """
         return self._repository.storage()
 
-    def set_default_commit_metadata(self, metadata: dict[str, Any] | None = None) -> None:
+    def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None:
         """
         Set the default commit metadata for the repository. This is useful for providing
         addition static system conexted metadata to all commits.
@@ -230,18 +230,18 @@ class Repository:
 
         Parameters
         ----------
-        metadata : dict[str, Any], optional
-            The default commit metadata.
+        metadata : dict[str, Any]
+            The default commit metadata. Pass an empty dict to clear the default metadata.
         """
         return self._repository.set_default_commit_metadata(metadata)
 
-    def default_commit_metadata(self) -> dict[str, Any] | None:
+    def default_commit_metadata(self) -> dict[str, Any]:
         """
         Get the current configured default commit metadata for the repository.
 
         Returns
         -------
-        dict[str, Any] | None
+        dict[str, Any]
             The default commit metadata.
         """
         return self._repository.default_commit_metadata()

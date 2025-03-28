@@ -15,7 +15,9 @@ from icechunk import (
 
 
 def create_local_repo(path: str) -> Repository:
-    return Repository.create(storage=local_filesystem_storage(path))
+    repo = Repository.create(storage=local_filesystem_storage(path))
+    repo.set_default_commit_metadata({"author": "test"})
+    return repo
 
 
 @pytest.fixture(scope="function")
@@ -29,6 +31,8 @@ def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
     pickled = pickle.dumps(tmp_repo)
     roundtripped = pickle.loads(pickled)
     assert tmp_repo.list_branches() == roundtripped.list_branches()
+    assert tmp_repo.default_commit_metadata() == roundtripped.default_commit_metadata()
+    assert tmp_repo.default_commit_metadata() == {"author": "test"}
 
     storage = tmp_repo.storage
     assert (
