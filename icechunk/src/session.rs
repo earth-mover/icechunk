@@ -1981,7 +1981,7 @@ mod tests {
         let mut default_metadata = SnapshotProperties::default();
         default_metadata.insert("author".to_string(), "John Doe".to_string().into());
         default_metadata.insert("project".to_string(), "My Project".to_string().into());
-        repo.set_default_commit_metadata(default_metadata.clone())?;
+        repo.set_default_commit_metadata(default_metadata.clone());
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
