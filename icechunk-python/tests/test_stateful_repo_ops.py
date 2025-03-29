@@ -363,6 +363,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.session = self.repo.readonly_session(snapshot_id=ref)
             assert self.session.read_only
             self.model.checkout_commit(ref)
+            self.check_commit(ref)
 
     @rule(ref=tags)
     def checkout_tag(self, ref: str) -> None:
@@ -564,7 +565,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.session = self.repo.writable_session(DEFAULT_BRANCH)
                 self.model.checkout_branch(DEFAULT_BRANCH)
 
-    @rule(commit=commits)
     def check_commit(self, commit) -> None:
         assume(commit in self.model.commits)
         note(f"Checking {commit=!r}")
