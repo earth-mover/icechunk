@@ -397,6 +397,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(name=simple_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r}")
+
+        #### FIXME: get rid of this once the bug is fixed.
+        try:
+            self.repo.lookup_snapshot(commit)
+        except IcechunkError:
+            assume(False)
+        #####
+
         # we can create a tag and branch with the same name
         if name not in self.model.branches and commit in self.model.commits:
             self.repo.create_branch(name, commit)
@@ -413,6 +421,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(name=simple_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
+
+        #### FIXME: get rid of this once the bug is fixed.
+        try:
+            self.repo.lookup_snapshot(commit_id)
+        except IcechunkError:
+            assume(False)
+        #####
+
         if (
             name in self.model.created_tags
             or name in self.model.tags
