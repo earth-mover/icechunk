@@ -71,11 +71,32 @@ impl ManifestShards {
         self.0.is_empty()
     }
 
+    // Build up ManifestShards from a iterable of shard edges or boundaries
+    // along each dimension.
+    /// # Examples
+    /// ```
+    /// use icechunk::format::manifest::{ManifestShards, ManifestExtents};
+    /// let actual = ManifestShards::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
+    /// let expected = ManifestShards::from_extents(vec![
+    ///     ManifestExtents::new(&[0, 3], &[1, 4]),
+    ///     ManifestExtents::new(&[0, 4], &[1, 5]),
+    ///     ManifestExtents::new(&[1, 3], &[2, 4]),
+    ///     ManifestExtents::new(&[1, 4], &[2, 5]),
+    ///     ]
+    /// );
+    /// assert_eq!(actual, expected);
+    /// ```
     pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
+        // let iter = vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
         let res = iter
             .into_iter()
+            // vec![(0, 1), (1, 2)], vec![(3, 4), (4, 5)]
             .map(|x| x.into_iter().tuple_windows())
+            // vec![((0, 1), (3, 4)), ((0, 1), (4, 5)),
+            //      ((1, 2), (3, 4)), ((1, 2), (4, 5))]
             .multi_cartesian_product()
+            // vec![((0, 3), (1, 4)), ((0, 4), (1, 5)),
+            //      ((1, 3), (2, 4)), ((1, 4), (2, 5))]
             .map(multiunzip)
             .map(|(from, to): (Vec<u32>, Vec<u32>)| {
                 ManifestExtents::new(from.as_slice(), to.as_slice())
