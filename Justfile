@@ -5,6 +5,9 @@ alias pre := pre-commit
 test *args='':
   cargo test --all {{args}}
 
+doctest *args='':
+  cargo test --doc {{args}}
+
 # compile but don't run all tests
 compile-tests *args='':
   cargo test --no-run {{args}}
@@ -42,6 +45,7 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just build
   just format "--check"
   just lint "-p icechunk -p icechunk-python"
+  just doctest
   just test
   just run-all-examples
   just check-deps
