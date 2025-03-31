@@ -93,6 +93,69 @@ def test_manifest_sharding_appends():
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
+def test_manifest_update_sharding_config_on_read():
+    sconfig = ic.ManifestShardingConfig.from_dict(
+        {
+            ManifestShardCondition.name_matches("temperature"): {
+                ShardDimCondition.DimensionName("longitude"): 3
+            }
+        }
+    )
+
+    new_sconfig = ic.ManifestShardingConfig.from_dict(
+        {
+            ManifestShardCondition.name_matches("temperature"): {
+                ShardDimCondition.DimensionName("longitude"): 10
+            }
+        }
+    )
+
+    config = ic.RepositoryConfig(
+        inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(sharding=sconfig)
+    )
+    new_config = ic.RepositoryConfig(
+        inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(sharding=new_sconfig)
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ### simple create repo with manifest sharding
+        storage = ic.local_filesystem_storage(tmpdir)
+        repo = ic.Repository.create(storage, config=config)
+        assert repo.config.manifest.sharding is not None
+
+        ds = xr.Dataset(
+            {"temperature": (DIMS, np.arange(math.prod(SHAPE)).reshape(SHAPE))}
+        )
+        session = repo.writable_session("main")
+        with zarr.config.set({"array.write_empty_chunks": True}):
+            to_icechunk(
+                ds, session, encoding={"temperature": {"chunks": CHUNKS}}, mode="w"
+            )
+        session.commit("initialize")
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        xr.testing.assert_identical(roundtripped, ds)
+
+        nchunks = math.prod(SHAPE)
+        nmanifests = 6
+        assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
+        assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
+
+        #### check that config is persisted and used when writing after re-open
+        ### append along time - no sharding specified along this dimension
+        repo = ic.Repository.open(storage, config=new_config)
+        assert repo.config.manifest.sharding is not None
+        session = repo.writable_session("main")
+        with zarr.config.set({"array.write_empty_chunks": True}):
+            to_icechunk(ds, session, mode="a", append_dim="time")
+        session.commit("appended")
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        xr.testing.assert_identical(roundtripped, xr.concat([ds, ds], dim="time"))
+        nchunks = 2 * math.prod(SHAPE)
+        nmanifests += 2
+
+        assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
+        assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
+
+
 def test_manifest_sharding_sparse_regions():
     sconfig = ic.ManifestShardingConfig.from_dict(
         {
