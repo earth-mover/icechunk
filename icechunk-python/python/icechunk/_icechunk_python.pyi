@@ -2,7 +2,7 @@ import abc
 import datetime
 from collections.abc import AsyncGenerator, AsyncIterator
 from enum import Enum
-from typing import Any, Self, TypeAlias
+from typing import Any, TypeAlias
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -519,22 +519,24 @@ class ShardDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
     class Axis:
         """Shard along specified integer axis."""
-        def __init__(self, axis: int) -> Self: ...
+        def __init__(self, axis: int) -> None: ...
 
     class DimensionName:
         """Shard along specified named dimension."""
-        def __init__(self, regex: str) -> Self: ...
+        def __init__(self, regex: str) -> None: ...
 
     class Any:
         """Shard along any other unspecified dimension."""
-        def __init__(self) -> Self: ...
+        def __init__(self) -> None: ...
 
-ShardSizes: TypeAlias = list[ManifestShardCondition, [ShardDimCondition, int]]
+ShardSizes: TypeAlias = tuple[
+    tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...
+]
 
 class ManifestShardingConfig:
     """Configuration for manifest sharding."""
 
-    def __init__(self, shard_sizes: ShardSizes) -> Self:
+    def __init__(self, shard_sizes: ShardSizes) -> None:
         """Configuration for how Icechunk manifests will be sharded.
 
         Parameters
@@ -575,7 +577,7 @@ class ManifestConfig:
         self,
         preload: ManifestPreloadConfig | None = None,
         sharding: ManifestShardingConfig | None = None,
-    ) -> Self:
+    ) -> None:
         """
         Create a new `ManifestConfig` object
 

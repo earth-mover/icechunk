@@ -172,7 +172,7 @@ def print_debug_info() -> None:
             continue
 
 
-# monkey path
+# monkey patch
 
 ShardSizesDict: TypeAlias = dict[ManifestShardCondition, dict[ShardDimCondition, int]]
 
@@ -182,6 +182,6 @@ def from_dict(shard_sizes: ShardSizesDict) -> ManifestShardingConfig:
     return ManifestShardingConfig(unwrapped)
 
 
-ManifestShardingConfig.from_dict = from_dict
+ManifestShardingConfig.from_dict = from_dict  # type: ignore[attr-defined]
 
 initialize_logs()
