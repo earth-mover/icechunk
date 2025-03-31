@@ -1676,7 +1676,15 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            let shards = sharding_config.get_shard_sizes(&node)?;
+            // get the new node to handle changes in size, e.g. appends.
+            let new_node = get_existing_node(
+                flush_data.asset_manager.as_ref(),
+                flush_data.change_set,
+                flush_data.parent_id,
+                &node.path,
+            )
+            .await?;
+            let shards = sharding_config.get_shard_sizes(&new_node)?;
             flush_data.write_manifest_for_existing_node(&node, shards).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
