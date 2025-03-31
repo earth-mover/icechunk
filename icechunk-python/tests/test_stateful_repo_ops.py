@@ -84,13 +84,13 @@ class ExpireInfo:
 class CommitModel:
     id: str
     written_at: datetime.datetime
-    state: dict[str, Any]
+    store: dict[str, Any]
     parent_id: str
 
     @classmethod
     def from_snapshot_and_store(cls, snap: SnapshotInfo, store: dict[str, Any]) -> Self:
         return cls(
-            id=snap.id, written_at=snap.written_at, parent_id=snap.parent_id, state=store
+            id=snap.id, written_at=snap.written_at, parent_id=snap.parent_id, store=store
         )
 
 
@@ -160,7 +160,7 @@ class Model:
         assert str(ref) in self.commits
         # deepcopy so that we allow changes, but the committed store remains unchanged
         # TODO: consider Frozen stores in self.commit?
-        self.store = copy.deepcopy(self.commits[ref].state)
+        self.store = copy.deepcopy(self.commits[ref].store)
         self.changes_made = False
         self.HEAD = ref
         self.branch = None
