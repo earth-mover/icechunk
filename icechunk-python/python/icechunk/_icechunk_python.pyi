@@ -541,7 +541,7 @@ class ManifestShardingConfig:
 
         Parameters
         ----------
-        shard_sizes: list[ManifestShardCondition, [ShardDimCondition, int]] | None
+        shard_sizes: tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
         """
         pass
@@ -553,7 +553,7 @@ class ManifestShardingConfig:
 
         Returns
         -------
-        list[ManifestShardCondition, [ShardDimCondition, int]] | None
+        tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
         """
         ...
@@ -565,7 +565,7 @@ class ManifestShardingConfig:
 
         Parameters
         ----------
-        shard_sizes: list[ManifestShardCondition, [ShardDimCondition, int]] | None
+        value: tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
         """
         ...
