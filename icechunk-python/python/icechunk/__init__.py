@@ -172,7 +172,10 @@ def print_debug_info() -> None:
             continue
 
 
-# monkey patch
+# This monkey patch is a bit annoying. Python dicts preserve insertion order
+# But this gets mapped to a Rust HashMap which does *not* preserve order
+# So on the python side, we can accept a dict as a nicer API, and immediately
+# convert it to tuples that preserve order, and pass those to Rust
 
 ShardSizesDict: TypeAlias = dict[ManifestShardCondition, dict[ShardDimCondition, int]]
 
