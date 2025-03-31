@@ -27,7 +27,9 @@ use crate::{
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
-        snapshot::{ManifestFileInfo, NodeData, Snapshot, SnapshotInfo},
+        snapshot::{
+            ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
+        },
         transaction_log::{Diff, DiffBuilder},
     },
     refs::{
@@ -57,7 +59,6 @@ pub enum RepositoryErrorKind {
     FormatError(IcechunkFormatErrorKind),
     #[error(transparent)]
     Ref(RefErrorKind),
-
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -136,6 +137,7 @@ pub struct Repository {
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
     virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+    default_commit_metadata: SnapshotProperties,
 }
 
 impl Repository {
@@ -309,6 +311,7 @@ impl Repository {
             virtual_resolver,
             asset_manager,
             virtual_chunk_credentials,
+            default_commit_metadata: SnapshotProperties::default(),
         })
     }
 
@@ -375,6 +378,16 @@ impl Repository {
             &self.config_version,
         )
         .await
+    }
+
+    #[instrument(skip_all)]
+    pub fn set_default_commit_metadata(&mut self, metadata: SnapshotProperties) {
+        self.default_commit_metadata = metadata;
+    }
+
+    #[instrument(skip_all)]
+    pub fn default_commit_metadata(&self) -> &SnapshotProperties {
+        &self.default_commit_metadata
     }
 
     #[instrument(skip(storage, config))]
@@ -507,6 +520,14 @@ impl Repository {
         Ok(branch_version.snapshot)
     }
 
+    #[instrument(skip(self))]
+    pub async fn lookup_snapshot(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<SnapshotInfo> {
+        self.asset_manager.fetch_snapshot_info(snapshot_id).await
+    }
+
     /// Make a branch point to the specified snapshot.
     /// After execution, history of the branch will be altered, and the current
     /// store will point to a different base snapshot_id
@@ -611,7 +632,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn resolve_version(
+    pub async fn resolve_version(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
@@ -756,6 +777,7 @@ impl Repository {
             self.virtual_resolver.clone(),
             branch.to_string(),
             ref_data.snapshot.clone(),
+            self.default_commit_metadata.clone(),
         );
 
         self.preload_manifests(ref_data.snapshot);

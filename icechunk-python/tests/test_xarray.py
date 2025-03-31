@@ -34,7 +34,7 @@ def create_test_data(
     obj["dim2"] = ("dim2", 0.5 * np.arange(_dims["dim2"]))
     if _dims["dim3"] > 26:
         raise RuntimeError(
-            f'Not enough letters for filling this dimension size ({_dims["dim3"]})'
+            f"Not enough letters for filling this dimension size ({_dims['dim3']})"
         )
     obj["dim3"] = ("dim3", list(string.ascii_lowercase[0 : _dims["dim3"]]))
     obj["time"] = ("time", pd.date_range("2000-01-01", periods=20))

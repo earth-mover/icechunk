@@ -65,7 +65,7 @@ impl ObjectStorage {
     /// This implementation should not be used in production code.
     pub async fn new_in_memory() -> Result<ObjectStorage, StorageError> {
         let backend = Arc::new(InMemoryObjectStoreBackend);
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
         Ok(storage)
     }
@@ -78,7 +78,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(LocalFileSystemObjectStoreBackend { path: prefix.to_path_buf() });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
         Ok(storage)
     }
@@ -91,7 +91,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(S3ObjectStoreBackend { bucket, prefix, credentials, config });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
 
         Ok(storage)
@@ -111,7 +111,7 @@ impl ObjectStorage {
             credentials,
             config,
         });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
 
         Ok(storage)
@@ -125,7 +125,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(GcsObjectStoreBackend { bucket, prefix, credentials, config });
-        let client = backend.mk_object_store().await?;
+        let client = backend.mk_object_store()?;
         let storage = ObjectStorage { backend, client: OnceCell::new_with(Some(client)) };
 
         Ok(storage)
@@ -140,10 +140,7 @@ impl ObjectStorage {
             .get_or_init(|| async {
                 // TODO: handle error better?
                 #[allow(clippy::expect_used)]
-                self.backend
-                    .mk_object_store()
-                    .await
-                    .expect("failed to create object store")
+                self.backend.mk_object_store().expect("failed to create object store")
             })
             .await
     }
@@ -459,11 +456,7 @@ impl Storage for ObjectStorage {
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let path = self.get_chunk_path(&id);
-        let upload = self.get_client().await.put_multipart(&path).await?;
-        // TODO: new_with_chunk_size?
-        let mut write = object_store::WriteMultipart::new(upload);
-        write.write(&bytes);
-        write.finish().await?;
+        self.get_client().await.put(&path, bytes.into()).await?;
         Ok(())
     }
 
@@ -622,10 +615,9 @@ impl Storage for ObjectStorage {
     }
 }
 
-#[async_trait]
 #[typetag::serde(tag = "object_store_provider_type")]
 pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError>;
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError>;
 
     /// The prefix for the object store.
     fn prefix(&self) -> String;
@@ -648,10 +640,9 @@ impl fmt::Display for InMemoryObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "in_memory_object_store_provider")]
 impl ObjectStoreBackend for InMemoryObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         Ok(Arc::new(InMemory::new()))
     }
 
@@ -686,12 +677,10 @@ impl fmt::Display for LocalFileSystemObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "local_file_system_object_store_provider")]
 impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        _ = create_dir_all(&self.path)
-            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+        create_dir_all(&self.path).map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
         let path = std::fs::canonicalize(&self.path)
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
@@ -746,10 +735,9 @@ impl fmt::Display for S3ObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "s3_object_store_provider")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = AmazonS3Builder::new();
 
         let builder = match self.credentials.as_ref() {
@@ -832,10 +820,9 @@ impl fmt::Display for AzureObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = MicrosoftAzureBuilder::new();
 
         let builder = match self.credentials.as_ref() {
@@ -878,10 +865,10 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GcsObjectStoreBackend {
-    bucket: String,
-    prefix: Option<String>,
-    credentials: Option<GcsCredentials>,
-    config: Option<HashMap<GoogleConfigKey, String>>,
+    pub bucket: String,
+    pub prefix: Option<String>,
+    pub credentials: Option<GcsCredentials>,
+    pub config: Option<HashMap<GoogleConfigKey, String>>,
 }
 
 impl fmt::Display for GcsObjectStoreBackend {
@@ -895,10 +882,9 @@ impl fmt::Display for GcsObjectStoreBackend {
     }
 }
 
-#[async_trait]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
-    async fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = GoogleCloudStorageBuilder::new();
 
         let builder = match self.credentials.as_ref() {
@@ -930,7 +916,9 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                     GcsRefreshableCredentialProvider::new(Arc::clone(fetcher));
                 builder.with_credentials(Arc::new(credential_provider))
             }
-            None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
+            None | Some(GcsCredentials::FromEnv) | Some(GcsCredentials::Anonymous) => {
+                GoogleCloudStorageBuilder::from_env()
+            }
         };
 
         let builder = builder.with_bucket_name(&self.bucket);

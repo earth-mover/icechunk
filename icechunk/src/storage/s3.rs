@@ -133,7 +133,7 @@ pub async fn mk_client(
 
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
-    let mut aws_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
+    let mut aws_config = aws_config::defaults(BehaviorVersion::v2025_01_17())
         .region(region)
         .app_name(app_name);
 
@@ -348,6 +348,17 @@ impl Storage for S3Storage {
             },
             Err(sdk_err) => match sdk_err.as_service_error() {
                 Some(e) if e.is_no_such_key() => Ok(FetchConfigResult::NotFound),
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if config doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Ok(FetchConfigResult::NotFound)
+                }
                 _ => Err(sdk_err.into()),
             },
         }

@@ -1,5 +1,44 @@
 # Changelog
 
+## Python Icechunk Library 0.2.11
+
+### Features
+
+- Extra commit metadata can now optionally be set on the repository itself.
+  Useful for properties such as commit author.
+- New `Repository.lookup_snapshot` helper method.
+- Garbage collection and expiration produce logs now.
+- More aggressive commit squashing during snapshot expiration.
+- Garbage collection cleans the assets cache, so the same repository can be reused after GC.
+
+### Fixes
+
+- Bug in snapshot expiration that created a commit loop for out-of-range input timestamps.
+
+## Python Icechunk Library 0.2.9
+
+This version is only partially released, not all Python wheels are released to PyPI. We recommend upgrading to 0.2.10.
+
+### Features
+
+- Add support for virtual chunks in Google Cloud Storage. Currently, credentials are needed
+  to access GCS buckets, even if they are public. We'll allow anonymous access in a future version.
+
+## Python Icechunk Library 0.2.8
+
+### Features
+
+- New `Repository.total_chunks_storage` method to calculate the space used by all chunks in the repo, across all versions.
+- Rust library is compiled using rustc 1.85.
+
+### Performance
+
+- Up to 3x faster chunk upload for small chunks on GCS.
+
+### Fixes
+
+- CLI issues 0 exit code when using --help
+
 ## Python Icechunk Library 0.2.7
 
 ### Fixes

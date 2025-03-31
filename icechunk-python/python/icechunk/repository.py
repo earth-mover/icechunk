@@ -1,6 +1,6 @@
 import datetime
 from collections.abc import AsyncIterator, Iterator
-from typing import Self, cast
+from typing import Any, Self, cast
 
 from icechunk._icechunk_python import (
     Diff,
@@ -216,6 +216,36 @@ class Repository:
         """
         return self._repository.storage()
 
+    def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None:
+        """
+        Set the default commit metadata for the repository. This is useful for providing
+        addition static system conexted metadata to all commits.
+
+        When a commit is made, the metadata will be merged with the metadata provided, with any
+        duplicate keys being overwritten by the metadata provided in the commit.
+
+        !!! warning
+            This metadata is only applied to sessions that are created after this call. Any open
+            writable sessions will not be affected and will not use the new default metadata.
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The default commit metadata. Pass an empty dict to clear the default metadata.
+        """
+        return self._repository.set_default_commit_metadata(metadata)
+
+    def default_commit_metadata(self) -> dict[str, Any]:
+        """
+        Get the current configured default commit metadata for the repository.
+
+        Returns
+        -------
+        dict[str, Any]
+            The default commit metadata.
+        """
+        return self._repository.default_commit_metadata()
+
     def ancestry(
         self,
         *,
@@ -329,6 +359,21 @@ class Repository:
             The snapshot ID of the tip of the branch.
         """
         return self._repository.lookup_branch(branch)
+
+    def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo:
+        """
+        Get the SnapshotInfo given a snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to look up
+
+        Returns
+        -------
+        SnapshotInfo
+        """
+        return self._repository.lookup_snapshot(snapshot_id)
 
     def reset_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -536,25 +581,69 @@ class Repository:
         available for garbage collection, they could still be pointed by
         ether refs.
 
-        If delete_expired_* is set to True, branches or tags that, after the
+        If `delete_expired_*` is set to True, branches or tags that, after the
         expiration process, point to expired snapshots directly, will be
         deleted.
 
-        Warning: this is an administrative operation, it should be run
+        Danger
+        ------
+        This is an administrative operation, it should be run
         carefully. The repository can still operate concurrently while
         `expire_snapshots` runs, but other readers can get inconsistent
         views of the repository history.
-        """
 
-        return self._repository.expire_snapshots(older_than)
+        Parameters
+        ----------
+        older_than: datetime.datetime
+            Expire snapshots older than this time.
+        delete_expired_branches: bool, optional
+            Whether to delete any branches that now have only expired snapshots.
+        delete_expired_tags: bool, optional
+            Whether to delete any tags associated with expired snapshots
+
+        Returns
+        -------
+        set of expires snapshot IDs
+        """
+        return self._repository.expire_snapshots(
+            older_than,
+            delete_expired_branches=delete_expired_branches,
+            delete_expired_tags=delete_expired_tags,
+        )
 
     def garbage_collect(self, delete_object_older_than: datetime.datetime) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
-        Warning: this is an administrative operation, it should be run
+        Danger
+        ------
+        This is an administrative operation, it should be run
         carefully. The repository can still operate concurrently while
         `garbage_collect` runs, but other reades can get inconsistent
         views if they are trying to access the expired snapshots.
+
+        Parameters
+        ----------
+        delete_object_older_than: datetime.datetime
+            Delete objects older than this time.
+
+        Returns
+        -------
+        GCSummary
+            Summary of objects deleted.
         """
 
         return self._repository.garbage_collect(delete_object_older_than)
+
+    def total_chunks_storage(self) -> int:
+        """Calculate the total storage used for chunks, in bytes .
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result includes only native chunks, not adding virtual or inline chunks.
+        """
+
+        return self._repository.total_chunks_storage()

@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "0.2.7"
+version = "0.2.10"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -13,7 +13,7 @@ edition = "2024"
 publish = true
 
 [dependencies]
-async-trait = "0.1.87"
+async-trait = "0.1.88"
 bytes = { version = "1.10.1", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.31"
@@ -24,10 +24,10 @@ thiserror = "2.0.12"
 serde_json = "1.0.140"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_with = { version = "3.12.0", features = ["hex"] }
-tokio = { version = "1.44.0", features = ["rt-multi-thread", "macros"] }
-test-strategy = "0.4.0"
+tokio = { version = "1.44.1", features = ["rt-multi-thread", "macros"] }
+test-strategy = "0.4.1"
 proptest = "1.6.0"
-quick_cache = "0.6.11"
+quick_cache = "0.6.12"
 base32 = "0.5.1"
 chrono = { version = "0.4.40", features = ["serde"] }
 async-recursion = "1.1.1"
@@ -37,7 +37,7 @@ async-stream = "0.3.6"
 rmpv = { version = "1.3.0", features = ["serde", "with-serde"] }
 aws-sdk-s3 = "1.65.0"
 aws-config = "1.5.10"
-aws-credential-types = "1.2.1"
+aws-credential-types = "1.2.2"
 typed-path = "0.10.0"
 aws-smithy-types-convert = { version = "0.60.9", features = [
   "convert-chrono",
@@ -45,7 +45,7 @@ aws-smithy-types-convert = { version = "0.60.9", features = [
 ] }
 typetag = "0.2.20"
 zstd = "0.13.3"
-tokio-util = { version = "0.7.13", features = ["compat", "io-util"] }
+tokio-util = { version = "0.7.14", features = ["compat", "io-util"] }
 serde_bytes = "0.11.17"
 regex = "1.11.1"
 tracing-error = "0.2.1"
@@ -65,7 +65,7 @@ flatbuffers = "25.2.10"
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 proptest-state-machine = "0.3.1"
-tempfile = "3.18.0"
+tempfile = "3.19.1"
 
 [lints]
 workspace = true

@@ -198,6 +198,7 @@ pub struct Session {
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
+    default_commit_metadata: SnapshotProperties,
 }
 
 impl Session {
@@ -218,9 +219,11 @@ impl Session {
             branch_name: None,
             snapshot_id,
             change_set: ChangeSet::default(),
+            default_commit_metadata: SnapshotProperties::default(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -229,6 +232,7 @@ impl Session {
         virtual_resolver: Arc<VirtualChunkResolver>,
         branch_name: String,
         snapshot_id: SnapshotId,
+        default_commit_metadata: SnapshotProperties,
     ) -> Self {
         Self {
             config,
@@ -239,6 +243,7 @@ impl Session {
             branch_name: Some(branch_name),
             snapshot_id,
             change_set: ChangeSet::default(),
+            default_commit_metadata,
         }
     }
 
@@ -849,6 +854,15 @@ impl Session {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
 
+        let default_metadata = self.default_commit_metadata.clone();
+        let properties = properties
+            .map(|p| {
+                let mut merged = default_metadata.clone();
+                merged.extend(p.into_iter());
+                merged
+            })
+            .unwrap_or(default_metadata);
+
         let current = fetch_branch_tip(
             self.storage.as_ref(),
             self.storage_settings.as_ref(),
@@ -867,7 +881,7 @@ impl Session {
                     &self.change_set,
                     &self.config,
                     message,
-                    properties,
+                    Some(properties),
                 )
                 .await
             }
@@ -890,7 +904,7 @@ impl Session {
                         &self.change_set,
                         &self.config,
                         message,
-                        properties,
+                        Some(properties),
                     )
                     .await
                 }
@@ -1727,6 +1741,7 @@ async fn flush(
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
+        None,
         all_nodes.into_iter().map(Ok::<_, Infallible>),
     )?;
 
@@ -2135,6 +2150,52 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
+    {
+        let mut repo = create_memory_store_repository().await;
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group(Path::root(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", None).await?;
+
+        // Verify that the first commit has no metadata
+        let ancestry = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = ancestry.try_collect::<Vec<_>>().await?;
+        assert!(snapshot_infos[0].metadata.is_empty());
+
+        // Set some default metadata
+        let mut default_metadata = SnapshotProperties::default();
+        default_metadata.insert("author".to_string(), "John Doe".to_string().into());
+        default_metadata.insert("project".to_string(), "My Project".to_string().into());
+        repo.set_default_commit_metadata(default_metadata.clone());
+
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", None).await?;
+
+        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
+        assert_eq!(snapshot_infos[0].metadata, default_metadata);
+
+        // Check that metadata is merged with users provided metadata taking precedence
+        let mut metadata = SnapshotProperties::default();
+        metadata.insert("author".to_string(), "Jane Doe".to_string().into());
+        metadata.insert("id".to_string(), "ideded".to_string().into());
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
+
+        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
+        let mut expected_result = SnapshotProperties::default();
+        expected_result.insert("author".to_string(), "Jane Doe".to_string().into());
+        expected_result.insert("project".to_string(), "My Project".to_string().into());
+        expected_result.insert("id".to_string(), "ideded".to_string().into());
+        assert_eq!(snapshot_infos[0].metadata, expected_result);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
@@ -2204,6 +2265,7 @@ mod tests {
             "message".to_string(),
             None,
             manifests,
+            None,
             nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
         )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;

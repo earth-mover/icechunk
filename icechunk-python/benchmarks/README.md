@@ -90,7 +90,10 @@ test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
 ### Notes
 ### Where to run the benchmarks?
 
-Pass the `--where [local|s3|gcs|tigris]` flag to control where benchmarks are run.
+- Pass the `--where [local|s3|s3_ob|gcs|tigris]` flag to control where benchmarks are run.
+- `s3_ob` uses the `s3_object_store_storage` constructor.
+- Pass multiple stores with `--where 's3|gcs'`
+
 ```sh
 python benchmarks/runner.py --where gcs v0.1.2
 ```
@@ -193,6 +196,22 @@ pytest-benchmark compare 0019 0020 0021 --group=func,param --sort=name --columns
 Passing `--histogram=compare` will save a boatload of `compare-*.svg` files.
 
 To easily run benchmarks for some named refs use `benchmarks/run_refs.py`
+
+### Comparing across multiple stores
+
+```sh
+python benchmarks/runner.py --skip-setup --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
+```
+
+``` sh
+-------- benchmark 'test_write_simple_1d simple-1d': 3 tests --------
+Name (time in s)                                     Median
+---------------------------------------------------------------------
+test_write_simple_1d[simple-1d] (g/gcs_main_95e)     5.2314 (3.15)
+test_write_simple_1d[simple-1d] (g/s3_main_95ef)     1.6622 (1.0)
+test_write_simple_1d[simple-1d] (g/s3_ob_main_9)     1.6909 (1.02)
+---------------------------------------------------------------------
+```
 
 ## Design decisions / future choices
 
