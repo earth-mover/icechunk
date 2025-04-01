@@ -483,7 +483,7 @@ class ManifestPreloadConfig:
         ...
 
 class ManifestShardCondition:
-    """Configuration for conditions under which manifests will preload on session creation"""
+    """Configuration for conditions under which manifests will be split into shards"""
 
     @staticmethod
     def or_conditions(
