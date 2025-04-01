@@ -940,6 +940,7 @@ impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
         })
     }
 }
+
 #[pyclass(name = "ManifestShardCondition", eq)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum PyManifestShardCondition {
@@ -971,8 +972,24 @@ impl PyManifestShardCondition {
     pub fn __repr__(&self) -> String {
         use PyManifestShardCondition::*;
         match self {
-            Or(conditions) => format!("Or({:?})", conditions),
-            And(conditions) => format!("And({:?})", conditions),
+            Or(conditions) => {
+                let mut res =
+                    conditions.iter().fold("Or(".to_string(), |mut state, condition| {
+                        state.push_str(&condition.__repr__());
+                        state
+                    });
+                res.push(')');
+                res
+            }
+            And(conditions) => {
+                let mut res =
+                    conditions.iter().fold("And(".to_string(), |mut state, condition| {
+                        state.push_str(&condition.__repr__());
+                        state
+                    });
+                res.push(')');
+                res
+            }
             PathMatches { regex } => format!("PathMatches('{}')", regex),
             NameMatches { regex } => format!("NameMatches('{}')", regex),
         }
