@@ -72,7 +72,7 @@ def store_dask(
     # reduce the individual arrays since concatenation isn't always trivial due
     # to different shapes
     merged_sessions = [
-        da.reduction(
+        da.reduction(  # type: ignore[no-untyped-call]
             arr,
             name="ice-changeset",
             chunk=extract_session,
@@ -85,5 +85,7 @@ def store_dask(
         )
         for arr in stored_arrays
     ]
-    merged_session = merge_sessions(*da.compute(*merged_sessions))
+    merged_session = merge_sessions(
+        *da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
+    )
     session.merge(merged_session)

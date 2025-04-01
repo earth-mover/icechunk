@@ -1,7 +1,8 @@
 # distributed utility functions
-from typing import Any, cast
+from typing import Any, Generator, Iterable, cast
 
 import zarr
+
 from icechunk import IcechunkStore, Session
 
 __all__ = [
@@ -10,12 +11,13 @@ __all__ = [
 ]
 
 
-def _flatten(seq, container=list):
+def _flatten(seq: Iterable[Any], container: type = list) -> Generator[Any, None, None]:
     if isinstance(seq, str):
         yield seq
     else:
         for item in seq:
             if isinstance(item, container):
+                assert isinstance(item, Iterable)
                 yield from _flatten(item, container=container)
             else:
                 yield item
@@ -33,7 +35,7 @@ def merge_sessions(
     axis: Any = None,
     keepdims: Any = None,
 ) -> Session:
-    session, *rest = list(_flatten(sessions))  # type: ignore[no-untyped-call]
+    session, *rest = list(_flatten(sessions))
     for other in rest:
         session.merge(other)
     return cast(Session, session)
