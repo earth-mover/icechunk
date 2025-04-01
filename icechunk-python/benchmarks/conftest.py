@@ -10,6 +10,7 @@ from benchmarks.datasets import (
     ERA5_SINGLE,
     GB_8MB_CHUNKS,
     GB_128MB_CHUNKS,
+    LARGE_1D,
     PANCAKE_WRITES,
     SIMPLE_1D,
     TEST_BUCKETS,
@@ -48,6 +49,15 @@ def synth_write_dataset(request) -> BenchmarkWriteDataset:
 @pytest.fixture(params=[pytest.param(SIMPLE_1D, id="simple-1d")])
 def simple_write_dataset(request) -> BenchmarkWriteDataset:
     ds = request_to_dataset(request, moar_prefix=helpers.rdms())
+    return cast(BenchmarkWriteDataset, ds)
+
+
+@pytest.fixture(params=[pytest.param(LARGE_1D, id="large-1d")])
+def large_write_dataset(request) -> BenchmarkWriteDataset:
+    moar_prefix = helpers.rdms()
+    print(f"calling fixture with {moar_prefix=!r}")
+    ds = request_to_dataset(request, moar_prefix=moar_prefix)
+    print(f"return  {ds}")
     return cast(BenchmarkWriteDataset, ds)
 
 

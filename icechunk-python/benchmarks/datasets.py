@@ -479,3 +479,9 @@ SIMPLE_1D = BenchmarkWriteDataset(
     shape=(2000 * 1000,),
     chunks=(1000,),
 )
+LARGE_1D = BenchmarkWriteDataset(
+    storage_config=StorageConfig(prefix="large_1d_writes"),
+    num_arrays=1,
+    shape=(500_000 * 1000,),
+    chunks=(1000,),
+)

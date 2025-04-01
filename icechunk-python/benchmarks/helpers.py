@@ -2,6 +2,8 @@ import logging
 import os
 import subprocess
 
+import icechunk as ic
+
 
 def setup_logger():
     logger = logging.getLogger("icechunk-bench")
@@ -68,3 +70,31 @@ def rdms() -> str:
     import string
 
     return "".join(random.sample(string.ascii_lowercase, k=8))
+
+
+def repo_config_with(
+    *, inline_chunk_threshold_bytes: int | None = None, sharding=None
+) -> ic.RepositoryConfig:
+    config = ic.RepositoryConfig.default()
+    if inline_chunk_threshold_bytes is not None:
+        config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
+    if sharding is not None:
+        config.manifest = ic.ManifestConfig(sharding=sharding)
+    return config
+
+
+def get_sharding_config(*, shard_size: int):
+    # helper to allow benchmarking versions before manifest sharding was introduced
+    from icechunk import (
+        ManifestShardCondition,
+        ManifestShardingConfig,
+        ShardDimCondition,
+    )
+
+    return ManifestShardingConfig.from_dict(
+        {
+            ManifestShardCondition.path_matches(".*"): {
+                ShardDimCondition.Rest(): shard_size
+            }
+        }
+    )

@@ -5,14 +5,37 @@ import pytest
 
 import zarr
 from benchmarks import lib
+from benchmarks.helpers import get_sharding_config, repo_config_with
 from benchmarks.tasks import Executor, write
-from icechunk import Repository, RepositoryConfig, local_filesystem_storage
+from icechunk import (
+    Repository,
+    RepositoryConfig,
+    Session,
+    VirtualChunkSpec,
+    local_filesystem_storage,
+)
 
 NUM_CHUNK_REFS = 10_000
 NUM_VIRTUAL_CHUNK_REFS = 100_000
 
 
 pytestmark = pytest.mark.write_benchmark
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(None, id="no-sharding"),
+        pytest.param(10000, id="shard-size-10_000"),
+    ]
+)
+def sharding(request):
+    if request.param is None:
+        return None
+    else:
+        try:
+            return get_sharding_config(shard_size=request.param)
+        except ImportError:
+            pytest.skip("sharding not supported on this version")
 
 
 # FIXME: figure out a reasonable default
@@ -81,14 +104,6 @@ def test_write_simple_1d(benchmark, simple_write_dataset):
     benchmark(write_task)
 
 
-def repo_config_with(
-    *, inline_chunk_threshold_bytes: int | None = None
-) -> RepositoryConfig:
-    config = RepositoryConfig.default()
-    if inline_chunk_threshold_bytes is not None:
-        config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
-
-
 @pytest.mark.benchmark(group="refs-write")
 @pytest.mark.parametrize("commit", [True, False])
 @pytest.mark.parametrize(
@@ -114,6 +129,7 @@ def test_write_many_chunk_refs(
         if commit:
             session.commit("written!")
 
+    assert repo_config is not None
     repo = Repository.create(storage=local_filesystem_storage(tmpdir), config=repo_config)
     session = repo.writable_session("main")
     group = zarr.group(session.store)
@@ -162,3 +178,44 @@ def test_set_many_virtual_chunk_refs(benchmark, repo) -> None:
             store.set_virtual_ref(
                 f"array/c/{i}", location=f"s3://foo/bar/{i}.nc", offset=0, length=1
             )
+
+
+@pytest.mark.benchmark(group="refs-write")
+def test_write_sharded_refs(benchmark, sharding, large_write_dataset) -> None:
+    dataset = large_write_dataset
+    config = repo_config_with(sharding=sharding)
+    assert config is not None
+    if hasattr(config.manifest, "sharding"):
+        assert config.manifest.sharding == sharding
+    repo = dataset.create(config=config)
+    session = repo.writable_session(branch="main")
+    store = session.store
+    group = zarr.open_group(store, zarr_format=3)
+    group.create_array(
+        "array",
+        shape=dataset.shape,
+        chunks=dataset.chunks,
+        dtype="int8",
+        fill_value=0,
+        compressors=None,
+    )
+    session.commit("initialize")
+
+    def write_refs() -> Session:
+        session = repo.writable_session(branch="main")
+        num_chunks = dataset.shape[0] // dataset.chunks[0]
+        chunks = [
+            VirtualChunkSpec(
+                index=[i], location=f"s3://foo/bar/{i}.nc", offset=0, length=1
+            )
+            for i in range(num_chunks)
+        ]
+
+        session.store.set_virtual_refs("array", chunks)
+        # (args, kwargs)
+        return ((session,), {})
+
+    def commit(session_from_setup):
+        session_from_setup.commit("wrote refs")
+
+    benchmark.pedantic(commit, setup=write_refs, iterations=1, rounds=10)
