@@ -308,7 +308,6 @@ impl ManifestConfig {
     pub fn merge(&self, other: Self) -> Self {
         Self {
             preload: other.preload.or(self.preload.clone()),
-            // FIXME: why prioritize one over the other?
             sharding: other.sharding.or(self.sharding.clone()),
         }
     }

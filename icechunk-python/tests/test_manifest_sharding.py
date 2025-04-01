@@ -93,7 +93,7 @@ def test_manifest_sharding_appends():
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_update_sharding_config_on_read():
+def test_manifest_overwrite_sharding_config_on_read():
     sconfig = ic.ManifestShardingConfig.from_dict(
         {
             ManifestShardCondition.name_matches("temperature"): {
@@ -139,7 +139,7 @@ def test_manifest_update_sharding_config_on_read():
         assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
-        #### check that config is persisted and used when writing after re-open
+        #### check that config is overwritten on read
         ### append along time - no sharding specified along this dimension
         repo = ic.Repository.open(storage, config=new_config)
         assert repo.config.manifest.sharding is not None
