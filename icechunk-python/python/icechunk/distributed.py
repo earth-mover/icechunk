@@ -1,8 +1,8 @@
 # distributed utility functions
-from typing import Any, Generator, Iterable, cast
+from collections.abc import Generator, Iterable
+from typing import Any, cast
 
 import zarr
-
 from icechunk import IcechunkStore, Session
 
 __all__ = [
