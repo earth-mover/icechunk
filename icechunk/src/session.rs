@@ -1407,6 +1407,41 @@ pub fn construct_valid_byte_range(
     }
 }
 
+#[derive(Default)]
+struct ManifestShard {
+    from: Vec<u32>,
+    to: Vec<u32>,
+    chunks: Vec<ChunkInfo>,
+}
+
+impl ManifestShard {
+    fn update(&mut self, chunk: ChunkInfo) {
+        if self.from.is_empty() {
+            debug_assert!(self.to.is_empty());
+            debug_assert!(self.chunks.is_empty());
+            // important to remember that `to` is not inclusive, so we need +1
+            let mut coord = chunk.coord.0.clone();
+            self.to.extend(coord.iter().cloned().map(|n| n + 1));
+            self.from.append(&mut coord);
+        } else {
+            for (existing, coord) in self.from.iter_mut().zip(chunk.coord.0.iter()) {
+                if coord < existing {
+                    *existing = *coord
+                }
+            }
+            for (existing, coord) in self.to.iter_mut().zip(chunk.coord.0.iter()) {
+                // important to remember that `to` is not inclusive, so we need +1
+                let range_value = coord + 1;
+                if range_value > *existing {
+                    *existing = range_value
+                }
+            }
+        }
+
+        self.chunks.push(chunk)
+    }
+}
+
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
@@ -1439,63 +1474,45 @@ impl<'a> FlushProcess<'a> {
         chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
         shards: ManifestShards,
     ) -> SessionResult<()> {
-        let mut from = vec![];
-        let mut to = vec![];
-
-        // TODO: what is a good capacity
-        let ref_capacity = 8_192;
-
         // TODO: think about optimizing writes to manifests
-        // TODO: add test case for append caqse
         // TODO: add benchmarks
-        let mut sharded_refs = chunks
+        let sharded_refs = chunks
             .try_fold(
                 // TODO: have the changeset track this HashMap
-                HashMap::with_capacity(shards.len()),
+                HashMap::<usize, ManifestShard>::with_capacity(shards.len()),
                 |mut sharded_refs, chunk| async {
                     let shard_index = shards.which(&chunk.coord);
                     shard_index.map(|index| {
-                        sharded_refs
-                            .entry(index)
-                            .or_insert_with(|| Vec::with_capacity(ref_capacity))
-                            .push(chunk);
+                        sharded_refs.entry(index).or_default().update(chunk);
                         sharded_refs
                     })
                 },
             )
             .await?;
 
-        for i in 0..shards.len() {
-            if let Some(shard_chunks) = sharded_refs.remove(&i) {
-                let shard_chunks = stream::iter(
-                    shard_chunks.into_iter().map(Ok::<ChunkInfo, Infallible>),
-                );
-                let shard_chunks =
-                    aggregate_extents(&mut from, &mut to, shard_chunks, |ci| &ci.coord);
+        for (_, shard) in sharded_refs.into_iter() {
+            let shard_chunks =
+                stream::iter(shard.chunks.into_iter().map(Ok::<ChunkInfo, Infallible>));
 
-                if let Some(new_manifest) =
-                    Manifest::from_stream(shard_chunks).await.unwrap()
-                {
-                    let new_manifest = Arc::new(new_manifest);
-                    let new_manifest_size = self
-                        .asset_manager
-                        .write_manifest(Arc::clone(&new_manifest))
-                        .await?;
+            if let Some(new_manifest) = Manifest::from_stream(shard_chunks).await.unwrap()
+            {
+                let new_manifest = Arc::new(new_manifest);
+                let new_manifest_size =
+                    self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
-                    let file_info =
-                        ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-                    self.manifest_files.insert(file_info);
+                let file_info =
+                    ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+                self.manifest_files.insert(file_info);
 
-                    let new_ref = ManifestRef {
-                        object_id: new_manifest.id().clone(),
-                        extents: ManifestExtents::new(&from, &to),
-                    };
+                let new_ref = ManifestRef {
+                    object_id: new_manifest.id().clone(),
+                    extents: ManifestExtents::new(&shard.from, &shard.to),
+                };
 
-                    self.manifest_refs
-                        .entry(node_id.clone())
-                        .and_modify(|v| v.push(new_ref.clone()))
-                        .or_insert_with(|| vec![new_ref]);
-                }
+                self.manifest_refs
+                    .entry(node_id.clone())
+                    .and_modify(|v| v.push(new_ref.clone()))
+                    .or_insert_with(|| vec![new_ref]);
             }
         }
 
@@ -1882,6 +1899,7 @@ async fn fetch_manifest(
 /// available in `from` and `to` arguments.
 ///
 /// Yes, this is horrible.
+#[allow(dead_code)]
 fn aggregate_extents<'a, T: std::fmt::Debug, E>(
     from: &'a mut Vec<u32>,
     to: &'a mut Vec<u32>,
