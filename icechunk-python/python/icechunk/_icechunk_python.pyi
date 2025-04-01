@@ -529,8 +529,9 @@ class ShardDimCondition:
         """Shard along any other unspecified dimension."""
         def __init__(self) -> None: ...
 
+DimShardSize: TypeAlias = int
 ShardSizes: TypeAlias = tuple[
-    tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...
+    tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, DimShardSize], ...]], ...
 ]
 
 class ManifestShardingConfig:
@@ -543,6 +544,18 @@ class ManifestShardingConfig:
         ----------
         shard_sizes: tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
+
+        Examples
+        --------
+
+        Shard manifests for the `temperature` array, with 3 chunks per shard along the `longitude` dimension.
+        >>> ManifestShardingConfig.from_dict(
+        ...     {
+        ...         ManifestShardCondition.name_matches("temperature"): {
+        ...             ShardDimCondition.DimensionName("longitude"): 3
+        ...         }
+        ...     }
+        ... )
         """
         pass
 
