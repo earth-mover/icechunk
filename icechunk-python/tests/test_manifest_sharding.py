@@ -5,6 +5,7 @@ import os
 import tempfile
 
 import numpy as np
+import pytest
 
 import icechunk as ic
 import xarray as xr
@@ -201,4 +202,66 @@ def test_manifest_sharding_sparse_regions():
         )
         nmanifests = 2 + len(ds.coords)
         assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
+        assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
+
+
+@pytest.mark.parametrize(
+    "config, expected_shard_sizes",
+    [
+        (
+            {
+                ShardDimCondition.DimensionName("longitude"): 3,
+                ShardDimCondition.Axis(1): 2,
+                ShardDimCondition.Rest(): 1,
+            },
+            (1, 2, 3),
+        ),
+        (
+            {
+                ShardDimCondition.DimensionName("longitude"): 3,
+                ShardDimCondition.Rest(): 1,
+                # this next one gets overwritten by Rest
+                ShardDimCondition.Axis(1): 2,
+            },
+            (1, 1, 3),
+        ),
+        (
+            {
+                ShardDimCondition.DimensionName("longitude"): 3,
+                ShardDimCondition.DimensionName("latitude"): 3,
+                # this next one gets overwritten by DimensionName above.
+                ShardDimCondition.Axis(1): 13,
+                ShardDimCondition.Rest(): 1,
+            },
+            (1, 3, 3),
+        ),
+    ],
+)
+def test_manifest_sharding_complex_config(config, expected_shard_sizes):
+    sconfig = ic.ManifestShardingConfig.from_dict(
+        {ManifestShardCondition.name_matches("temperature"): config}
+    )
+    config = ic.RepositoryConfig(
+        inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(sharding=sconfig)
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ### simple create repo with manifest sharding
+        storage = ic.local_filesystem_storage(tmpdir)
+        repo = ic.Repository.create(storage, config=config)
+        assert repo.config.manifest.sharding is not None
+
+        ds = xr.Dataset(
+            {"temperature": (DIMS, np.arange(math.prod(SHAPE)).reshape(SHAPE))},
+        )
+        session = repo.writable_session("main")
+        with zarr.config.set({"array.write_empty_chunks": True}):
+            to_icechunk(
+                ds, session, mode="w", encoding={"temperature": {"chunks": CHUNKS}}
+            )
+        session.commit("write")
+
+        nmanifests = math.prod(
+            math.ceil(nchunks / shardsize)
+            for nchunks, shardsize in zip(SHAPE, expected_shard_sizes, strict=False)
+        )
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
