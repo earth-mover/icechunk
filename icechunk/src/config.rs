@@ -187,7 +187,7 @@ pub enum ShardDimCondition {
     DimensionName(String),
     // TODO: Since dimension name can be null,
     // i don't think we can have DimensionName(r"*") catch the "Any" case
-    Any,
+    Rest,
 }
 
 type DimConditions = Vec<(ShardDimCondition, u32)>;
@@ -200,7 +200,7 @@ pub struct ManifestShardingConfig {
 
 impl Default for ManifestShardingConfig {
     fn default() -> Self {
-        let inner = vec![(ShardDimCondition::Any, u32::MAX)];
+        let inner = vec![(ShardDimCondition::Rest, u32::MAX)];
         let new = vec![(
             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
             inner,
@@ -213,7 +213,7 @@ impl ManifestShardingConfig {
     pub fn with_size(shard_size: u32) -> Self {
         let shard_sizes = vec![(
             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-            vec![(ShardDimCondition::Any, shard_size)],
+            vec![(ShardDimCondition::Rest, shard_size)],
         )];
         ManifestShardingConfig { shard_sizes: Some(shard_sizes) }
     }

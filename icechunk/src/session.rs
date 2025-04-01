@@ -1576,7 +1576,7 @@ impl ShardDimCondition {
                         .unwrap_or(false)
                 })
                 .unwrap_or(false),
-            ShardDimCondition::Any => true,
+            ShardDimCondition::Rest => true,
         }
     }
 }

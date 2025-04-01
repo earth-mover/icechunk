@@ -1014,7 +1014,7 @@ impl From<ManifestShardCondition> for PyManifestShardCondition {
 pub enum PyShardDimCondition {
     Axis(usize),
     DimensionName(String),
-    Any(),
+    Rest(),
 }
 
 #[pymethods]
@@ -1024,7 +1024,7 @@ impl PyShardDimCondition {
         match self {
             Axis(axis) => format!("Axis({})", axis),
             DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
-            Any() => "Any".to_string(),
+            Rest() => "Rest".to_string(),
         }
     }
 
@@ -1041,7 +1041,7 @@ impl From<&PyShardDimCondition> for ShardDimCondition {
         match value {
             Axis(axis) => ShardDimCondition::Axis(*axis),
             DimensionName(name) => ShardDimCondition::DimensionName(name.clone()),
-            Any() => ShardDimCondition::Any,
+            Rest() => ShardDimCondition::Rest,
         }
     }
 }
@@ -1051,7 +1051,7 @@ impl From<ShardDimCondition> for PyShardDimCondition {
         match value {
             Axis(a) => PyShardDimCondition::Axis(a),
             DimensionName(name) => PyShardDimCondition::DimensionName(name),
-            Any => PyShardDimCondition::Any(),
+            Rest => PyShardDimCondition::Rest(),
         }
     }
 }

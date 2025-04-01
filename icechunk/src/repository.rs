@@ -1345,7 +1345,7 @@ mod tests {
             ),
             (
                 ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::Any, 9)],
+                vec![(ShardDimCondition::Rest, 9)],
             ),
         ];
         let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
@@ -1374,7 +1374,7 @@ mod tests {
             vec![
                 (ShardDimCondition::DimensionName("t".to_string()), 12),
                 (ShardDimCondition::Axis(2), 2),
-                (ShardDimCondition::Any, 9),
+                (ShardDimCondition::Rest, 9),
             ],
         )];
         let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
