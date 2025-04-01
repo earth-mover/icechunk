@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 from typing import cast
 
 import pytest
@@ -203,6 +204,9 @@ Arrays deleted:
     tag_snapshot_id = repo.lookup_tag("v1.0")
     assert tag_snapshot_id == feature_snapshot_id
 
+    actual = next(iter(repo.ancestry(tag="v1.0")))
+    assert actual == repo.lookup_snapshot(actual.id)
+
 
 async def test_branch_reset() -> None:
     config = ic.RepositoryConfig.default()
@@ -307,3 +311,69 @@ async def test_default_commit_metadata() -> None:
     sid = session.commit("root")
     snap = next(repo.ancestry(snapshot_id=sid))
     assert snap.metadata == {"user": "test"}
+
+
+def test_tag_expiration() -> None:
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    a = session.commit("a")
+
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("child1")
+    b = session.commit("b")
+
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("child2")
+    session.commit("c")
+
+    repo.create_tag("0", a)
+    repo.create_tag("1", b)
+    assert repo.list_tags() == {"0", "1"}
+
+    expired = repo.expire_snapshots(
+        repo.lookup_snapshot(b).written_at + timedelta(microseconds=1),
+        delete_expired_tags=True,
+    )
+    assert expired == {a, b}
+    assert repo.list_tags() == set()
+
+
+def test_branch_expiration() -> None:
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    a = session.commit("a")
+
+    repo.create_branch("branch", a)
+    session = repo.writable_session("branch")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("child1")
+    b = session.commit("b")
+
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("child2")
+    c = session.commit("c")
+
+    expired = repo.expire_snapshots(
+        repo.lookup_snapshot(b).written_at + timedelta(microseconds=1),
+        delete_expired_branches=True,
+    )
+    assert expired == {a, b}
+    assert "branch" not in repo.list_branches()
+
+    for snap in (a, b):
+        repo.lookup_snapshot(snap)
+
+    # FIXME: this fails to delete snapshot `b` with microseconds=1
+    repo.garbage_collect(repo.lookup_snapshot(b).written_at + timedelta(seconds=1))
+    # make sure snapshot cannot be opened anymore
+    for snap in (a, b):
+        with pytest.raises(ValueError):
+            repo.readonly_session(snapshot_id=snap)
+
+    # should succeed
+    repo.lookup_snapshot(c)

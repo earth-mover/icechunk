@@ -216,7 +216,7 @@ class Repository:
         """
         return self._repository.storage()
 
-    def set_default_commit_metadata(self, metadata: dict[str, Any] | None = None) -> None:
+    def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None:
         """
         Set the default commit metadata for the repository. This is useful for providing
         addition static system conexted metadata to all commits.
@@ -230,18 +230,18 @@ class Repository:
 
         Parameters
         ----------
-        metadata : dict[str, Any], optional
-            The default commit metadata.
+        metadata : dict[str, Any]
+            The default commit metadata. Pass an empty dict to clear the default metadata.
         """
         return self._repository.set_default_commit_metadata(metadata)
 
-    def default_commit_metadata(self) -> dict[str, Any] | None:
+    def default_commit_metadata(self) -> dict[str, Any]:
         """
         Get the current configured default commit metadata for the repository.
 
         Returns
         -------
-        dict[str, Any] | None
+        dict[str, Any]
             The default commit metadata.
         """
         return self._repository.default_commit_metadata()
@@ -359,6 +359,21 @@ class Repository:
             The snapshot ID of the tip of the branch.
         """
         return self._repository.lookup_branch(branch)
+
+    def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo:
+        """
+        Get the SnapshotInfo given a snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to look up
+
+        Returns
+        -------
+        SnapshotInfo
+        """
+        return self._repository.lookup_snapshot(snapshot_id)
 
     def reset_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -590,8 +605,11 @@ class Repository:
         -------
         set of expires snapshot IDs
         """
-
-        return self._repository.expire_snapshots(older_than)
+        return self._repository.expire_snapshots(
+            older_than,
+            delete_expired_branches=delete_expired_branches,
+            delete_expired_tags=delete_expired_tags,
+        )
 
     def garbage_collect(self, delete_object_older_than: datetime.datetime) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.

@@ -1,6 +1,23 @@
 # Changelog
 
+## Python Icechunk Library 0.2.11
+
+### Features
+
+- Extra commit metadata can now optionally be set on the repository itself.
+  Useful for properties such as commit author.
+- New `Repository.lookup_snapshot` helper method.
+- Garbage collection and expiration produce logs now.
+- More aggressive commit squashing during snapshot expiration.
+- Garbage collection cleans the assets cache, so the same repository can be reused after GC.
+
+### Fixes
+
+- Bug in snapshot expiration that created a commit loop for out-of-range input timestamps.
+
 ## Python Icechunk Library 0.2.9
+
+This version is only partially released, not all Python wheels are released to PyPI. We recommend upgrading to 0.2.10.
 
 ### Features
 
