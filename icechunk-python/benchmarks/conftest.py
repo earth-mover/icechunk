@@ -1,3 +1,4 @@
+import copy
 from typing import cast
 
 import pytest
@@ -22,11 +23,11 @@ from icechunk import Repository, local_filesystem_storage
 def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
     extra_prefix = request.config.getoption("--icechunk-prefix") + moar_prefix
     where = request.config.getoption("--where")
-    ds = request.param
+    ds = copy.deepcopy(request.param)
     if where == "local" and ds.skip_local:
         pytest.skip()
-    # for some reason, this gets run multiple times so we apply the prefix repeatedly
-    # if we don't catch that :(
+    # this gets run multiple times because the fixture scope is 'function'
+    # so we need this `force_idempotent` ugliness
     ds.storage_config = ds.storage_config.with_overwrite(
         **TEST_BUCKETS[where]
     ).with_extra(prefix=extra_prefix, force_idempotent=True)

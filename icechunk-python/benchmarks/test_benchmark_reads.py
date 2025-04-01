@@ -48,7 +48,7 @@ def test_time_getsize_key(synth_dataset: Dataset, benchmark) -> None:
     @benchmark
     def fn():
         for array in synth_dataset.load_variables:
-            if group := synth_dataset.group is not None:
+            if (group := synth_dataset.group) is not None:
                 prefix = f"{group}/"
             else:
                 prefix = ""

@@ -12,8 +12,10 @@ NUM_CHUNK_REFS = 10_000
 NUM_VIRTUAL_CHUNK_REFS = 100_000
 
 
+pytestmark = pytest.mark.write_benchmark
+
+
 # FIXME: figure out a reasonable default
-@pytest.mark.write_benchmark
 @pytest.mark.parametrize(
     "executor",
     [
@@ -53,8 +55,8 @@ def test_write_chunks_with_tasks(synth_write_dataset, benchmark, executor):
     benchmark.extra_info["data"] = diags
 
 
-@pytest.mark.write_benchmark
 def test_write_simple_1d(benchmark, simple_write_dataset):
+    """Simple write benchmarks. Shows 2-3X slower on GCS compared to S3"""
     dataset = simple_write_dataset
     repo = dataset.create()
     session = repo.writable_session(branch="main")
@@ -87,7 +89,6 @@ def repo_config_with(
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
 
 
-@pytest.mark.write_benchmark
 @pytest.mark.benchmark(group="refs-write")
 @pytest.mark.parametrize("commit", [True, False])
 @pytest.mark.parametrize(
@@ -132,9 +133,8 @@ def test_write_many_chunk_refs(
     benchmark(write_chunk_refs, repo)
 
 
-@pytest.mark.write_benchmark
 @pytest.mark.benchmark(group="refs-write")
-def test_write_many_virtual_chunk_refs(benchmark, repo) -> None:
+def test_set_many_virtual_chunk_refs(benchmark, repo) -> None:
     """Benchmark the setting of many virtual chunk refs."""
     session = repo.writable_session("main")
     store = session.store

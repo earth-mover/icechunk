@@ -180,7 +180,9 @@ class Dataset:
             self._storage = self.storage_config.create()
         return self._storage
 
-    def create(self, clear: bool = False) -> ic.Repository:
+    def create(
+        self, clear: bool = False, config: ic.RepositoryConfig | None = None
+    ) -> ic.Repository:
         if clear:
             clear_uri = self.storage_config.clear_uri()
             if clear_uri is None:
@@ -199,7 +201,7 @@ class Dataset:
                 except FileNotFoundError:
                     pass
         logger.info(repr(self.storage))
-        return ic.Repository.create(self.storage)
+        return ic.Repository.create(self.storage, config=config)
 
     @property
     def store(self) -> ic.IcechunkStore:
@@ -243,15 +245,15 @@ class BenchmarkReadDataset(Dataset):
             raise NotImplementedError("setupfn has not been provided.")
 
         if force:
-            print("forced re-creating")
+            logger.info("forced re-creating")
             self.setupfn(self)
             return
 
         try:
             _ = self.store
         except ic.IcechunkError as e:
-            print("Read of existing store failed. Re-creating")
-            print(e)
+            logger.info("Read of existing store failed. Re-creating")
+            logger.info(e)
             self.setupfn(self)
 
 

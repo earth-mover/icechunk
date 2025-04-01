@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 import tomllib
+from collections.abc import Callable
 from functools import partial
 
 import tqdm
@@ -31,6 +32,14 @@ CURRENTDIR = os.getcwd()
 
 
 assert_cwd_is_icechunk_python()
+
+
+def process_map(*, serial: bool, func: Callable, iterable):
+    if serial:
+        for i in iterable:
+            func(i)
+    else:
+        tqdm.contrib.concurrent.process_map(func, iterable)
 
 
 def get_benchmark_deps(filepath: str) -> str:
@@ -93,7 +102,7 @@ class Runner:
         """Creates datasets for read benchmarks."""
         logger.info(f"setup_benchmarks for {self.ref} / {self.commit}")
         cmd = (
-            f"pytest {PYTEST_OPTIONS} -nauto "
+            f"pytest {PYTEST_OPTIONS} -s -nauto --benchmark-disable "
             f"-m setup_benchmarks --force-setup={force} "
             f"--where={self.where} "
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
@@ -126,8 +135,8 @@ class LocalRunner(Runner):
     activate: str = "source .venv/bin/activate"
     bench_store_dir = CURRENTDIR
 
-    def __init__(self, *, ref: str, where: str):
-        super().__init__(ref=ref, where=where)
+    def __init__(self, *, ref: str, where: str, save_prefix: str):
+        super().__init__(ref=ref, where=where, save_prefix="")
         suffix = self.ref_commit
         self.base = f"{TMP}/icechunk-bench-{suffix}"
         self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
@@ -254,12 +263,13 @@ def run_there(where: str, *, args, save_prefix) -> None:
     )
 
     # we can only initialize in parallel since the two refs may have the same spec version.
-    tqdm.contrib.concurrent.process_map(partial(init_for_ref), runners)
+    process_map(serial=args.serial, func=partial(init_for_ref), iterable=runners)
 
     if not args.skip_setup:
         for runner in runners:
             runner.setup(force=args.force_setup)
 
+    # TODO: this could be parallelized for coiled runners
     for runner in tqdm.tqdm(runners):
         runner.run(pytest_extra=args.pytest)
 
@@ -268,6 +278,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("refs", help="refs to run benchmarks for", nargs="+")
     parser.add_argument("--pytest", help="passed to pytest", default="")
+    parser.add_argument("--serial", action="store_true", default=False)
     parser.add_argument(
         "--where",
         help="where to run? [local|s3|s3_ob|gcs], combinations are allowed: [s3|gcs]",
@@ -291,21 +302,24 @@ if __name__ == "__main__":
 
     save_prefix = rdms()
 
-    tqdm.contrib.concurrent.process_map(
-        partial(run_there, args=args, save_prefix=save_prefix), where
+    process_map(
+        serial=args.serial,
+        func=partial(run_there, args=args, save_prefix=save_prefix),
+        iterable=where,
     )
 
-    subprocess.run(
-        [
-            "aws",
-            "s3",
-            "cp",
-            f"s3://earthmover-scratch/benchmarks/{save_prefix}/",
-            f"/tmp/benchmarks/{save_prefix}/",
-            "--recursive",
-        ],
-        check=True,
-    )
+    if any(w != "local" for w in where):
+        subprocess.run(
+            [
+                "aws",
+                "s3",
+                "cp",
+                f"s3://earthmover-scratch/benchmarks/{save_prefix}/",
+                f"/tmp/benchmarks/{save_prefix}/",
+                "--recursive",
+            ],
+            check=True,
+        )
     refs = args.refs
 
     # TODO: clean this up
@@ -321,18 +335,18 @@ if __name__ == "__main__":
             key=os.path.getmtime,
             reverse=True,
         )
-        #  TODO: Use `just` here when we figure that out.
-        subprocess.run(
-            [
-                "pytest-benchmark",
-                "compare",
-                "--group=group,func,param",
-                "--sort=fullname",
-                "--columns=median",
-                "--name=normal",
-                *files,
-            ]
-        )
+    #  TODO: Use `just` here when we figure that out.
+    subprocess.run(
+        [
+            "pytest-benchmark",
+            "compare",
+            "--group=group,func",
+            "--sort=fullname",
+            "--columns=median",
+            "--name=normal",
+            *files,
+        ]
+    )
 
 
 # Compare wish-list:
