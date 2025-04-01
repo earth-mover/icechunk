@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use chrono::Utc;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
@@ -15,10 +16,51 @@ use icechunk::{
     ops::stats::repo_chunks_storage,
 };
 
+mod common;
+
 #[tokio::test]
-pub async fn test_repo_chunks_storage() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        new_in_memory_storage().await.expect("Creating storage failed");
+pub async fn test_repo_chunks_storage_in_memory() -> Result<(), Box<dyn std::error::Error>>
+{
+    let storage = new_in_memory_storage().await?;
+    do_test_repo_chunks_storage(storage).await
+}
+
+#[tokio::test]
+pub async fn test_repo_chunks_storage_in_minio() -> Result<(), Box<dyn std::error::Error>>
+{
+    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+    let storage = common::make_minio_integration_storage(prefix)?;
+    do_test_repo_chunks_storage(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_repo_chunks_storage_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+    let storage = common::make_aws_integration_storage(prefix)?;
+    do_test_repo_chunks_storage(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_repo_chunks_storage_in_tigris() -> Result<(), Box<dyn std::error::Error>>
+{
+    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+    let storage = common::make_tigris_integration_storage(prefix)?;
+    do_test_repo_chunks_storage(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_repo_chunks_storage_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+    let storage = common::make_r2_integration_storage(prefix)?;
+    do_test_repo_chunks_storage(storage).await
+}
+
+pub async fn do_test_repo_chunks_storage(
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings();
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
