@@ -671,6 +671,12 @@ pub fn new_s3_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
+    if let Some(endpoint) = &config.endpoint_url {
+        if endpoint.contains("fly.storage.tigris.dev") {
+            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        }
+    }
+
     let st = S3Storage::new(
         config,
         bucket,
@@ -791,6 +797,11 @@ pub async fn new_s3_object_store_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
+    if let Some(endpoint) = &config.endpoint_url {
+        if endpoint.contains("fly.storage.tigris.dev") {
+            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        }
+    }
     let storage =
         ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
     Ok(Arc::new(storage))
