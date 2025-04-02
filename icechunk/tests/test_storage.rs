@@ -130,14 +130,14 @@ where
         f("AWS", s6).await?;
     }
     if env::var("R2_BUCKET").is_ok() {
-        let s6 = common::make_r2_integration_storage(prefix.clone())?;
+        let s7 = common::make_r2_integration_storage(prefix.clone())?;
         println!("Using R2 storage");
-        f("R2", s6).await?;
+        f("R2", s7).await?;
     }
     if env::var("TIGRIS_BUCKET").is_ok() {
-        let s7 = common::make_tigris_integration_storage(prefix.clone())?;
+        let s8 = common::make_tigris_integration_storage(prefix.clone())?;
         println!("Using Tigris storage");
-        f("Tigris", s7).await?;
+        f("Tigris", s8).await?;
     }
 
     Ok(())
