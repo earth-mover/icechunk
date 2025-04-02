@@ -617,10 +617,16 @@ fn translate_list_infos<'a, Id>(
     s: impl Stream<Item = StorageResult<ListInfo<String>>> + Send + 'a,
 ) -> BoxStream<'a, StorageResult<ListInfo<Id>>>
 where
-    Id: for<'b> TryFrom<&'b str> + Send + 'a,
+    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
 {
-    // FIXME: flag error, don't skip
-    s.try_filter_map(|info| async move { Ok(convert_list_item(info)) }).boxed()
+    s.try_filter_map(|info| async move {
+        let info = convert_list_item(info);
+        if info.is_none() {
+            tracing::error!(list_info=?info, "Error processing list item metadata");
+        }
+        Ok(info)
+    })
+    .boxed()
 }
 
 /// Split an object request into multiple byte range requests
