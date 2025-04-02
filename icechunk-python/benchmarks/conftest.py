@@ -5,12 +5,9 @@ import pytest
 
 from benchmarks import helpers
 from benchmarks.datasets import (
-    ERA5,
-    ERA5_ARCO,
-    ERA5_SINGLE,
-    GB_8MB_CHUNKS,
-    GB_128MB_CHUNKS,
     LARGE_1D,
+    LARGE_MANIFEST_SHARDED,
+    LARGE_MANIFEST_UNSHARDED,
     PANCAKE_WRITES,
     SIMPLE_1D,
     TEST_BUCKETS,
@@ -19,6 +16,13 @@ from benchmarks.datasets import (
     Dataset,
 )
 from icechunk import Repository, local_filesystem_storage
+
+try:
+    from icechunk import ManifestShardingConfig  # noqa: F401
+
+    no_sharding = False
+except ImportError:
+    no_sharding = True
 
 
 def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
@@ -55,19 +59,23 @@ def simple_write_dataset(request) -> BenchmarkWriteDataset:
 @pytest.fixture(params=[pytest.param(LARGE_1D, id="large-1d")])
 def large_write_dataset(request) -> BenchmarkWriteDataset:
     moar_prefix = helpers.rdms()
-    print(f"calling fixture with {moar_prefix=!r}")
     ds = request_to_dataset(request, moar_prefix=moar_prefix)
-    print(f"return  {ds}")
     return cast(BenchmarkWriteDataset, ds)
 
 
 @pytest.fixture(
     params=[
-        pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
-        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
-        pytest.param(ERA5_SINGLE, id="era5-single"),
-        pytest.param(ERA5, id="era5-weatherbench"),
-        pytest.param(ERA5_ARCO, id="era5-arco"),
+        # pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
+        # pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
+        # pytest.param(ERA5_SINGLE, id="era5-single"),
+        # pytest.param(ERA5, id="era5-weatherbench"),
+        # pytest.param(ERA5_ARCO, id="era5-arco"),
+        pytest.param(LARGE_MANIFEST_UNSHARDED, id="large-manifest-unsharded"),
+        pytest.param(
+            LARGE_MANIFEST_SHARDED,
+            id="large-manifest-sharded",
+            marks=pytest.mark.skipif(no_sharding, reason="no sharding"),
+        ),
     ],
 )
 def synth_dataset(request) -> BenchmarkReadDataset:

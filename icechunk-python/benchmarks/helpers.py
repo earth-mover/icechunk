@@ -73,13 +73,13 @@ def rdms() -> str:
 
 
 def repo_config_with(
-    *, inline_chunk_threshold_bytes: int | None = None, sharding=None
+    *, inline_chunk_threshold_bytes: int | None = None, preload=None, sharding=None
 ) -> ic.RepositoryConfig:
     config = ic.RepositoryConfig.default()
     if inline_chunk_threshold_bytes is not None:
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
     if sharding is not None:
-        config.manifest = ic.ManifestConfig(sharding=sharding)
+        config.manifest = ic.ManifestConfig(preload=preload, sharding=sharding)
     return config
 
 

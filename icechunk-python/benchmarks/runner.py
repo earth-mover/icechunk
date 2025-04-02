@@ -108,7 +108,7 @@ class Runner:
             f"--icechunk-prefix=benchmarks/{self.prefix}/ "
             "benchmarks/"
         )
-        logger.info(cmd)
+        logger.info(">>> " + cmd)
         self.execute(cmd, check=True)
 
     def run(self, *, pytest_extra: str = "") -> None:
@@ -137,7 +137,7 @@ class LocalRunner(Runner):
 
     def __init__(self, *, ref: str, where: str, save_prefix: str):
         super().__init__(ref=ref, where=where, save_prefix="")
-        suffix = self.ref_commit
+        suffix = self.commit
         self.base = f"{TMP}/icechunk-bench-{suffix}"
         self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
         self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"

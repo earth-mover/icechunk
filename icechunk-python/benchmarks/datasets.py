@@ -1,4 +1,5 @@
 import datetime
+import random
 import time
 import warnings
 from collections.abc import Callable
@@ -9,11 +10,19 @@ from typing import Any, Literal, Self, TypeAlias
 import fsspec
 import numpy as np
 import platformdirs
+import pytest
 
 import icechunk as ic
+import icechunk.xarray
 import xarray as xr
 import zarr
-from benchmarks.helpers import get_coiled_kwargs, rdms, setup_logger
+from benchmarks.helpers import (
+    get_coiled_kwargs,
+    get_sharding_config,
+    rdms,
+    repo_config_with,
+    setup_logger,
+)
 
 rng = np.random.default_rng(seed=123)
 
@@ -222,8 +231,10 @@ class BenchmarkWriteDataset(Dataset):
 class BenchmarkReadDataset(Dataset):
     # data variable to load in `time_xarray_read_chunks`
     load_variables: list[str] | None = None
-    # Passed to .isel for `time_xarray_read_chunks`
+    # Passed to .isel for `time_xarray_read_chunks`, reads a single chunk
     chunk_selector: dict[str, Any] | None = None
+    # Passed to .isel for `time_xarray_read_chunks`, reads a large fraction of the data
+    full_load_selector: dict[str, Any] | None = None
     # name of (coordinate) variable used for testing "time to first byte"
     first_byte_variable: str | None
     # function used to construct the dataset prior to read benchmarks
@@ -231,10 +242,10 @@ class BenchmarkReadDataset(Dataset):
     # whether to skip this one on local runs
     skip_local: bool = False
 
-    def create(self, clear: bool = True):
+    def create(self, clear: bool = True, config: ic.RepositoryConfig | None = None):
         if clear is not True:
             raise ValueError("clear *must* be true for benchmark datasets.")
-        return super().create(clear=True)
+        return super().create(clear=True, config=config)
 
     def setup(self, force: bool = False) -> None:
         """
@@ -380,6 +391,31 @@ def setup_era5(*args, **kwargs):
     return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
 
 
+def setup_sharded_refs(dataset: Dataset, *, shard_size: int | None):
+    shape = (500_000 * 1000,)
+    chunks = (1000,)
+
+    if shard_size is not None:
+        try:
+            sharding = get_sharding_config(shard_size=shard_size)
+        except ImportError:
+            logger.info("sharding not supported")
+            pytest.skip("sharding not supported on this version")
+    else:
+        sharding = None
+    config = repo_config_with(sharding=sharding)
+    assert config is not None
+    if hasattr(config.manifest, "sharding"):
+        assert config.manifest.sharding == sharding
+    repo = dataset.create(config=config)
+    logger.info(repo.config)
+    session = repo.writable_session(branch="main")
+    ds = xr.Dataset({"array": ("x", np.ones(shape=shape))})
+    with zarr.config.set({"async.concurrency": 64}):
+        ic.xarray.to_icechunk(ds, session, encoding={"array": {"chunks": chunks}})
+    session.commit("wrote data")
+
+
 ERA5_ARCO_INGEST = IngestDataset(
     name="ERA5-ARCO",
     prefix="era5_arco",
@@ -448,6 +484,26 @@ GB_8MB_CHUNKS = BenchmarkReadDataset(
     chunk_selector={},
     first_byte_variable=None,
     setupfn=partial(setup_synthetic_gb_dataset, chunk_shape=(4, 512, 512)),
+)
+
+random_selector = sorted(random.choices(range(500_000 * 1000), k=50_000))
+
+# large manifest sharded, unsharded
+LARGE_MANIFEST_UNSHARDED = BenchmarkReadDataset(
+    storage_config=StorageConfig(prefix="large_manifest_unsharded"),
+    chunk_selector={"x": 1},
+    full_load_selector={"x": random_selector},
+    load_variables=["array"],
+    first_byte_variable=None,
+    setupfn=partial(setup_sharded_refs, shard_size=None),
+)
+LARGE_MANIFEST_SHARDED = BenchmarkReadDataset(
+    storage_config=StorageConfig(prefix="large_manifest_sharded"),
+    chunk_selector={"x": 1},
+    full_load_selector={"x": random_selector},
+    load_variables=["array"],
+    first_byte_variable=None,
+    setupfn=partial(setup_sharded_refs, shard_size=100_000),
 )
 
 # TODO
