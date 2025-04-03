@@ -211,12 +211,11 @@ impl PySnapshotInfo {
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, manifests=[{manifests}], message="{message}")"#,
+            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
             parent = format_option_to_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
-            manifests = self.manifests.iter().map(|m| m.__repr__()).join(", ")
         )
     }
 }
