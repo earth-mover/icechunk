@@ -1000,21 +1000,21 @@ class Diff:
         """
         ...
     @property
-    def updated_user_attributes(self) -> set[str]:
+    def updated_groups(self) -> set[str]:
         """
-        The nodes that had user attributes updated in the target ref.
-        """
-        ...
-    @property
-    def updated_zarr_metadata(self) -> set[str]:
-        """
-        The nodes that had zarr metadata updated in the target ref.
+        The groups that were updated via zarr metadata in the target ref.
         """
         ...
     @property
-    def updated_chunks(self) -> dict[str, int]:
+    def updated_arrays(self) -> set[str]:
         """
-        The chunks that had data updated in the target ref.
+        The arrays that were updated via zarr metadata in the target ref.
+        """
+        ...
+    @property
+    def updated_chunks(self) -> dict[str, list[list[int]]]:
+        """
+        The chunks indices that had data updated in the target ref, keyed by the path to the array.
         """
         ...
 

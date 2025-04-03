@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    env,
     future::Future,
     sync::Arc,
 };
@@ -23,6 +24,8 @@ use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use tempfile::tempdir;
 use tokio::io::AsyncReadExt;
+
+mod common;
 
 #[allow(clippy::expect_used)]
 async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
@@ -120,6 +123,23 @@ where
     f("s3_object_store", s3).await?;
     println!("Using azure_blob storage");
     f("azure_blob", s4).await?;
+
+    if env::var("AWS_BUCKET").is_ok() {
+        let s6 = common::make_aws_integration_storage(prefix.clone())?;
+        println!("Using AWS storage");
+        f("AWS", s6).await?;
+    }
+    if env::var("R2_BUCKET").is_ok() {
+        let s7 = common::make_r2_integration_storage(prefix.clone())?;
+        println!("Using R2 storage");
+        f("R2", s7).await?;
+    }
+    if env::var("TIGRIS_BUCKET").is_ok() {
+        let s8 = common::make_tigris_integration_storage(prefix.clone())?;
+        println!("Using Tigris storage");
+        f("Tigris", s8).await?;
+    }
+
     Ok(())
 }
 

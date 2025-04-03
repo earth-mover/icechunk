@@ -9,10 +9,9 @@ use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
     config::{
-        ManifestConfig, ManifestShardCondition, ManifestShardingConfig, S3Credentials,
-        S3Options, S3StaticCredentials, ShardDimCondition,
+        ManifestConfig, ManifestShardCondition, ManifestShardingConfig, ShardDimCondition,
     },
-    format::{ByteRange, ChunkId, ChunkIndices, Path, snapshot::ArrayShape},
+    format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
     ops::gc::{
         ExpireRefResult, ExpiredRefAction, GCConfig, GCSummary, expire, expire_ref,
@@ -21,37 +20,48 @@ use icechunk::{
     refs::{Ref, update_branch},
     repository::VersionInfo,
     session::get_chunk,
-    storage::new_s3_storage,
 };
 use pretty_assertions::assert_eq;
 
-fn minio_s3_config() -> (S3Options, S3Credentials) {
-    let config = S3Options {
-        region: Some("us-east-1".to_string()),
-        endpoint_url: Some("http://localhost:9000".to_string()),
-        allow_http: true,
-        anonymous: false,
-        force_path_style: true,
-    };
-    let credentials = S3Credentials::Static(S3StaticCredentials {
-        access_key_id: "minio123".into(),
-        secret_access_key: "minio123".into(),
-        session_token: None,
-        expires_after: None,
-    });
-    (config, credentials)
+mod common;
+
+#[tokio::test]
+pub async fn test_gc_in_minio() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
+    let storage = common::make_minio_integration_storage(prefix)?;
+    do_test_gc(storage).await
 }
 
 #[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
+    let storage = common::make_aws_integration_storage(prefix)?;
+    do_test_gc(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
+    let storage = common::make_r2_integration_storage(prefix)?;
+    do_test_gc(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
+    let storage = common::make_tigris_integration_storage(prefix)?;
+    do_test_gc(storage).await
+}
+
 /// Create a repo with two commits, reset the branch to "forget" the last commit, run gc
 ///
 /// It runs [`garbage_collect`] to verify it's doing its job.
-pub async fn test_gc() -> Result<(), Box<dyn std::error::Error>> {
-    let prefix = format!("{:?}", ChunkId::random());
-    let (config, credentials) = minio_s3_config();
-    let storage: Arc<dyn Storage + Send + Sync> =
-        new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
-            .expect("Creating minio storage failed");
+pub async fn do_test_gc(
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings();
 
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
@@ -275,12 +285,45 @@ async fn make_design_doc_repo(
 }
 
 #[tokio::test]
+pub async fn test_expire_ref_in_memory() -> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    do_test_expire_ref(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_expire_ref_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_expire_ref_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_aws_integration_storage(prefix)?;
+    do_test_expire_ref(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_expire_ref_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_expire_ref_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_r2_integration_storage(prefix)?;
+    do_test_expire_ref(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_expire_ref_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_expire_ref_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_tigris_integration_storage(prefix)?;
+    do_test_expire_ref(storage).await
+}
+
 /// In this test, we set up a repo as in the design document for expiration.
 ///
 /// We then, expire the branches and tags in the same order as the document
 /// and we verify we get the same results.
-pub async fn test_expire_ref() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+pub async fn do_test_expire_ref(
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings();
     let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
@@ -489,12 +532,62 @@ pub async fn test_expire_ref_with_odd_timestamps()
 }
 
 #[tokio::test]
+pub async fn test_expire_and_garbage_collect_in_memory()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    do_test_expire_and_garbage_collect(storage).await
+}
+
+#[tokio::test]
+pub async fn test_expire_and_garbage_collect_in_minio()
+-> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_minio_integration_storage(prefix)?;
+    do_test_expire_and_garbage_collect(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_expire_and_garbage_collect_in_aws()
+-> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_aws_integration_storage(prefix)?;
+    do_test_expire_and_garbage_collect(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_expire_and_garbage_collect_in_r2()
+-> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_r2_integration_storage(prefix)?;
+    do_test_expire_and_garbage_collect(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+pub async fn test_expire_and_garbage_collect_in_tigris()
+-> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_tigris_integration_storage(prefix)?;
+    do_test_expire_and_garbage_collect(storage).await
+}
+
 /// In this test, we set up a repo as in the design document for expiration.
 ///
 /// We then, expire old snapshots and garbage collect. We verify we end up
 /// with what is expected according to the design document.
-pub async fn test_expire_and_garbage_collect() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+pub async fn do_test_expire_and_garbage_collect(
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings();
     let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 

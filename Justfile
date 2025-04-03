@@ -3,7 +3,7 @@ alias pre := pre-commit
 
 # run all tests
 test *args='':
-  cargo test --all {{args}}
+  cargo test --all --all-targets {{args}}
 
 doctest *args='':
   cargo test --doc {{args}}

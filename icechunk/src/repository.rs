@@ -485,7 +485,12 @@ impl Repository {
             )
             .into());
         }
-        // TODO: The parent snapshot should exist?
+        raise_if_invalid_snapshot_id(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            snapshot_id,
+        )
+        .await?;
         update_branch(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -607,6 +612,13 @@ impl Repository {
             )
             .into());
         }
+        raise_if_invalid_snapshot_id(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            snapshot_id,
+        )
+        .await?;
+
         create_tag(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -1056,6 +1068,14 @@ mod tests {
 
         let initial_tags = repo.list_tags().await?;
         assert_eq!(initial_tags, BTreeSet::new());
+
+        // cannot create invalid tag
+        assert!(repo.create_tag("foo", &SnapshotId::random()).await.is_err());
+        assert_eq!(repo.list_tags().await?, BTreeSet::new());
+
+        // cannot create invalid branch
+        assert!(repo.create_branch("bar", &SnapshotId::random()).await.is_err());
+        assert_eq!(repo.list_branches().await?, BTreeSet::from(["main".into()]));
 
         // Create some branches
         let initial_snapshot = repo.lookup_branch("main").await?;

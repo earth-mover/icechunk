@@ -605,6 +605,8 @@ impl Storage for S3Storage {
                 let name = self.get_ref_name(obj.key());
                 if let Some(name) = name {
                     res.push(name.to_string());
+                } else {
+                    tracing::error!(object = ?obj, "Bad ref name")
                 }
             }
         }
@@ -680,8 +682,13 @@ impl Storage for S3Storage {
                 ready(Ok(contents))
             })
             .try_flatten()
-            // TODO: we should signal error instead of filtering
-            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))));
+            .try_filter_map(|object| async move {
+                let info = object_to_list_info(&object);
+                if info.is_none() {
+                    tracing::error!(object=?object, "Found bad object while listing");
+                }
+                Ok(info)
+            });
         Ok(stream.boxed())
     }
 
@@ -716,12 +723,21 @@ impl Storage for S3Storage {
             .send()
             .await?;
 
+        if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
+            tracing::error!(
+                error = ?err,
+                "Errors deleting objects",
+            );
+        }
+
         let mut result = DeleteObjectsResult::default();
         for deleted in res.deleted() {
             if let Some(key) = deleted.key() {
                 let size = sizes.get(key).unwrap_or(&0);
                 result.deleted_bytes += *size;
                 result.deleted_objects += 1;
+            } else {
+                tracing::error!("Deleted object without key");
             }
         }
         Ok(result)

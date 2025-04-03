@@ -153,7 +153,7 @@ pub enum GCError {
 
 pub type GCResult<A> = Result<A, GCError>;
 
-#[instrument(skip(asset_manager))]
+#[instrument(skip(asset_manager, storage))]
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -416,7 +416,7 @@ pub enum ExpireRefResult {
 /// ether refs.
 ///
 /// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
-#[instrument(skip(asset_manager))]
+#[instrument(skip(asset_manager, storage))]
 pub async fn expire_ref(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -534,7 +534,7 @@ pub struct ExpireResult {
 /// ether refs.
 ///
 /// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
-#[instrument(skip(asset_manager))]
+#[instrument(skip(asset_manager, storage))]
 pub async fn expire(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
