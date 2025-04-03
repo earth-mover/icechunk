@@ -155,9 +155,18 @@ pub struct ChunkInfo {
     pub payload: ChunkPayload,
 }
 
-#[derive(Debug)]
+#[derive(PartialEq)]
 pub struct Manifest {
     buffer: Vec<u8>,
+}
+
+impl std::fmt::Debug for Manifest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Manifest")
+            .field("id", &self.id())
+            .field("chunks", &self.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Manifest {
