@@ -1,0 +1,18 @@
+inline_chunk_threshold_bytes: 12
+get_partial_values_concurrency: null
+compression: null
+caching: null
+storage: null
+virtual_chunk_containers: null
+manifest:
+  preload: null
+  sharding:
+    shard_sizes:
+    - - !name_matches
+        regex: sharded_*
+      - - - !Axis 0
+          - 1
+        - - !DimensionName longitude
+          - 1
+        - - Rest
+          - 3
