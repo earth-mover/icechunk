@@ -13,7 +13,7 @@ use icechunk::{
     config::Credentials,
     format::{
         SnapshotId,
-        snapshot::{SnapshotInfo, SnapshotProperties},
+        snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
     ops::{
@@ -61,6 +61,16 @@ pub struct PySnapshotInfo {
     message: String,
     #[pyo3(get)]
     metadata: PySnapshotProperties,
+    #[pyo3(get)]
+    manifests: Vec<PyManifestFileInfo>,
+}
+
+#[pyclass(name = "ManifestFileInfo", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyManifestFileInfo {
+    pub id: String,
+    pub size_bytes: u64,
+    pub num_chunk_refs: u32,
 }
 
 impl<'py> FromPyObject<'py> for PySnapshotProperties {
@@ -161,15 +171,38 @@ impl From<PySnapshotProperties> for SnapshotProperties {
     }
 }
 
+impl From<ManifestFileInfo> for PyManifestFileInfo {
+    fn from(val: ManifestFileInfo) -> Self {
+        Self {
+            id: val.id.to_string(),
+            size_bytes: val.size_bytes,
+            num_chunk_refs: val.num_chunk_refs,
+        }
+    }
+}
+
 impl From<SnapshotInfo> for PySnapshotInfo {
     fn from(val: SnapshotInfo) -> Self {
-        PySnapshotInfo {
+        Self {
             id: val.id.to_string(),
             parent_id: val.parent_id.map(|id| id.to_string()),
             written_at: val.flushed_at,
             message: val.message,
             metadata: val.metadata.into(),
+            manifests: val.manifests.into_iter().map(|v| v.into()).collect(),
         }
+    }
+}
+
+#[pymethods]
+impl PyManifestFileInfo {
+    pub fn __repr__(&self) -> String {
+        format!(
+            r#"ManifestFileInfo(id="{id}", size_bytes={size}, num_chunk_refs={chunks})"#,
+            id = self.id,
+            size = self.size_bytes,
+            chunks = self.num_chunk_refs,
+        )
     }
 }
 
@@ -178,11 +211,12 @@ impl PySnapshotInfo {
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
+            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, manifests=[{manifests}], message="{message}")"#,
             id = self.id,
             parent = format_option_to_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
             message = self.message.chars().take(10).collect::<String>() + "...",
+            manifests = self.manifests.iter().map(|m| m.__repr__()).join(", ")
         )
     }
 }
