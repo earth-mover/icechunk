@@ -8,6 +8,9 @@ on:
   push:
     branches:
       - main
+  schedule:
+    # three times a day to run the integration tests that take a long time
+    - cron:  '33 3,10,15 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -88,5 +91,42 @@ jobs:
 
       - name: Check
         if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
         run: |
           just pre-commit
+
+      - name: Run integration tests against object stores
+        if: github.event_name == 'cron'
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+        run: |
+          cargo test --all --all-targets -- --ignored

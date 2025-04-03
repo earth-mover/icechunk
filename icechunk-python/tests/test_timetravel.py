@@ -124,6 +124,7 @@ def test_timetravel() -> None:
         "commit 1",
         "Repository initialized",
     ]
+    assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
     assert list(repo.ancestry(tag="v1.0")) == parents

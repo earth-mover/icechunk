@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
+use chrono::Utc;
 use icechunk::{
     Repository, Storage,
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
@@ -21,17 +22,52 @@ use tokio::{
 
 use futures::TryStreamExt;
 
+mod common;
+
 const N: usize = 20;
 
 #[tokio::test]
+async fn test_concurrency_in_memory() -> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_concurrency_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_r2_integration_storage(prefix)?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_concurrency_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_aws_integration_storage(prefix)?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_tigris_integration_storage(prefix)?;
+    do_test_concurrency(storage).await
+}
+
 /// This test starts concurrent tasks to read, write and list a repository.
 ///
 /// It writes an `NxN` array,  with individual tasks for each 1x1 chunk. Concurrently with that it
 /// starts NxN tasks to read each chunk, these tasks only finish when the chunk was successfully
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
-async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+async fn do_test_concurrency(
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::create(None, storage, HashMap::new()).await?;
     let mut ds = repo.writable_session("main").await?;
 

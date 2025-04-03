@@ -28,7 +28,7 @@ use errors::{
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
-use repository::{PyDiff, PyGCSummary, PyRepository, PySnapshotInfo};
+use repository::{PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo};
 use session::PySession;
 use store::{PyStore, VirtualChunkSpec};
 
@@ -93,6 +93,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySession>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PySnapshotInfo>()?;
+    m.add_class::<PyManifestFileInfo>()?;
     m.add_class::<PyConflictSolver>()?;
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_class::<PyConflictDetector>()?;

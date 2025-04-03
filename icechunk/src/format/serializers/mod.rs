@@ -35,9 +35,9 @@
 //!     - Then this new type `XDeserializer` is deserialized using serde and converted with `into`.
 //!
 //! - `serializers.current.rs` holds all the serializers and deserializers for the current version
-//!    of the spec
+//!   of the spec
 //! - `serializers.version_foo.rs` holds all the serializers and deserializers for version foo of
-//!    the spec
+//!   the spec
 //! - The `serializers` module root has functions `serialize_X` and `deserialize_X` that take a
 //!   spec version number and use the right (de)-serializer to do the job.
 use std::io::{Read, Write};

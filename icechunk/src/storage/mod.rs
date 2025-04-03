@@ -617,10 +617,16 @@ fn translate_list_infos<'a, Id>(
     s: impl Stream<Item = StorageResult<ListInfo<String>>> + Send + 'a,
 ) -> BoxStream<'a, StorageResult<ListInfo<Id>>>
 where
-    Id: for<'b> TryFrom<&'b str> + Send + 'a,
+    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
 {
-    // FIXME: flag error, don't skip
-    s.try_filter_map(|info| async move { Ok(convert_list_item(info)) }).boxed()
+    s.try_filter_map(|info| async move {
+        let info = convert_list_item(info);
+        if info.is_none() {
+            tracing::error!(list_info=?info, "Error processing list item metadata");
+        }
+        Ok(info)
+    })
+    .boxed()
 }
 
 /// Split an object request into multiple byte range requests
@@ -665,6 +671,12 @@ pub fn new_s3_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
+    if let Some(endpoint) = &config.endpoint_url {
+        if endpoint.contains("fly.storage.tigris.dev") {
+            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        }
+    }
+
     let st = S3Storage::new(
         config,
         bucket,
@@ -785,6 +797,11 @@ pub async fn new_s3_object_store_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
+    if let Some(endpoint) = &config.endpoint_url {
+        if endpoint.contains("fly.storage.tigris.dev") {
+            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        }
+    }
     let storage =
         ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
     Ok(Arc::new(storage))
