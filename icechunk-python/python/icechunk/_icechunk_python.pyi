@@ -872,21 +872,21 @@ class Diff:
         """
         ...
     @property
-    def updated_user_attributes(self) -> set[str]:
+    def updated_groups(self) -> set[str]:
         """
-        The nodes that had user attributes updated in the target ref.
-        """
-        ...
-    @property
-    def updated_zarr_metadata(self) -> set[str]:
-        """
-        The nodes that had zarr metadata updated in the target ref.
+        The groups that were updated via zarr metadata in the target ref.
         """
         ...
     @property
-    def updated_chunks(self) -> dict[str, int]:
+    def updated_arrays(self) -> set[str]:
         """
-        The chunks that had data updated in the target ref.
+        The arrays that were updated via zarr metadata in the target ref.
+        """
+        ...
+    @property
+    def updated_chunks(self) -> dict[str, list[list[int]]]:
+        """
+        The chunks indices that had data updated in the target ref, keyed by the path to the array.
         """
         ...
 
@@ -1097,6 +1097,22 @@ class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
+class ManifestFileInfo:
+    """Manifest file metadata"""
+
+    @property
+    def id(self) -> str:
+        """The manifest id"""
+        ...
+    @property
+    def size_bytes(self) -> int:
+        """The size in bytes of the"""
+        ...
+    @property
+    def num_chunk_refs(self) -> int:
+        """The number of chunk references contained in this manifest"""
+        ...
+
 class SnapshotInfo:
     """Metadata for a snapshot"""
     @property
@@ -1123,6 +1139,12 @@ class SnapshotInfo:
     def metadata(self) -> dict[str, Any]:
         """
         The metadata of the snapshot
+        """
+        ...
+    @property
+    def manifests(self) -> list[ManifestFileInfo]:
+        """
+        The manifests linked to this snapshot
         """
         ...
 

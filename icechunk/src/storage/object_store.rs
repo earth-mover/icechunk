@@ -483,13 +483,19 @@ impl Storage for ObjectStorage {
 
     #[instrument(skip(self, _settings))]
     async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
-        let prefix = self.ref_key("");
+        let prefix = &self.ref_key("");
 
         Ok(self
             .get_client()
             .await
             .list(Some(prefix.clone()).as_ref())
-            .try_filter_map(|meta| ready(Ok(self.get_ref_name(&prefix, &meta))))
+            .try_filter_map(|meta| async move {
+                let name = self.get_ref_name(prefix, &meta);
+                if name.is_none() {
+                    tracing::error!(object = ?meta, "Bad ref name")
+                }
+                Ok(name)
+            })
             .try_collect()
             .await?)
     }
@@ -533,7 +539,13 @@ impl Storage for ObjectStorage {
             .await
             .list(Some(&prefix))
             // TODO: we should signal error instead of filtering
-            .try_filter_map(|object| ready(Ok(object_to_list_info(&object))))
+            .try_filter_map(|object| async move {
+                let info = object_to_list_info(&object);
+                if info.is_none() {
+                    tracing::error!(object=?object, "Found bad object while listing");
+                }
+                Ok(info)
+            })
             .err_into();
         Ok(stream.boxed())
     }
@@ -551,7 +563,6 @@ impl Storage for ObjectStorage {
             sizes.insert(path, size);
         }
         let results = self.get_client().await.delete_stream(stream::iter(ids).boxed());
-        // FIXME: flag errors instead of skipping them
         let res = results
             .fold(DeleteObjectsResult::default(), |mut res, delete_result| {
                 if let Ok(deleted_path) = delete_result {
@@ -559,12 +570,16 @@ impl Storage for ObjectStorage {
                         res.deleted_objects += 1;
                         res.deleted_bytes += *size;
                     }
+                } else {
+                    tracing::error!(
+                        error = ?delete_result,
+                        "Error deleting object",
+                    );
                 }
                 ready(res)
             })
             .await;
         Ok(res)
-        //Ok(results.filter(|res| ready(res.is_ok())).count().await)
     }
 
     #[instrument(skip(self, _settings))]

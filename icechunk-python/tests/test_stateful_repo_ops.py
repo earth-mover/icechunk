@@ -328,8 +328,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(path=metadata_paths, value=v3_array_metadata)
     def set_doc(self, path: str, value: Buffer) -> None:
         note(f"setting path {path!r} with {value.to_bytes()!r}")
-        # FIXME: remove when we support complex values with infinity fill_value
-        assume("complex" not in json.loads(value.to_bytes())["data_type"])
         if self.model.branch is not None:
             self.sync_store.set(path, value)
             self.model[path] = value
@@ -399,13 +397,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r}")
 
-        #### FIXME: get rid of this once the bug is fixed.
-        try:
-            self.repo.lookup_snapshot(commit)
-        except IcechunkError:
-            assume(False)
-        #####
-
         # we can create a tag and branch with the same name
         if name not in self.model.branches and commit in self.model.commits:
             self.repo.create_branch(name, commit)
@@ -422,13 +413,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(name=simple_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
-
-        #### FIXME: get rid of this once the bug is fixed.
-        try:
-            self.repo.lookup_snapshot(commit_id)
-        except IcechunkError:
-            assume(False)
-        #####
 
         if (
             name in self.model.created_tags

@@ -32,4 +32,5 @@ virtual_chunk_containers:
       endpoint_url: http://localhost:9000
       anonymous: false
       allow_http: true
+      force_path_style: true
 manifest: null

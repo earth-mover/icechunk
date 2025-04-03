@@ -11,7 +11,6 @@ use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
-use itertools::Itertools;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
 use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
@@ -108,7 +107,7 @@ impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
 
 impl<const SIZE: usize, T: FileTypeTag> fmt::Debug for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02x}", self.0.iter().format(""))
+        write!(f, "{}", String::from(self))
     }
 }
 
