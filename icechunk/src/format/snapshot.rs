@@ -282,9 +282,25 @@ impl ManifestFileInfo {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct Snapshot {
     buffer: Vec<u8>,
+}
+
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let nodes =
+            self.iter().map(|n| n.map(|n| n.path.to_string())).collect::<Vec<_>>();
+        f.debug_struct("Snapshot")
+            .field("id", &self.id())
+            .field("parent_id", &self.parent_id())
+            .field("flushed_at", &self.flushed_at())
+            .field("nodes", &nodes)
+            .field("manifests", &self.manifest_files().collect::<Vec<_>>())
+            .field("message", &self.message())
+            .field("metadata", &self.metadata())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,6 +310,7 @@ pub struct SnapshotInfo {
     pub flushed_at: DateTime<chrono::Utc>,
     pub message: String,
     pub metadata: SnapshotProperties,
+    pub manifests: Vec<ManifestFileInfo>,
 }
 
 impl TryFrom<&Snapshot> for SnapshotInfo {
@@ -306,6 +323,7 @@ impl TryFrom<&Snapshot> for SnapshotInfo {
             flushed_at: value.flushed_at()?,
             message: value.message().to_string(),
             metadata: value.metadata()?.clone(),
+            manifests: value.manifest_files().collect(),
         })
     }
 }
@@ -462,10 +480,6 @@ impl Snapshot {
     pub fn message(&self) -> String {
         self.root().message().to_string()
     }
-
-    // pub fn nodes(&self) -> &BTreeMap<Path, NodeSnapshot> {
-    //     &self.nodes
-    // }
 
     pub fn get_manifest_file(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
         self.root().manifest_files().iter().find(|mf| mf.id().0 == id.0.as_slice()).map(

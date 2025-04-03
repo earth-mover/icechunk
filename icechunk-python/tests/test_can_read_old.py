@@ -21,22 +21,23 @@ import icechunk as ic
 import zarr
 
 
-def mk_repo(create: bool) -> ic.Repository:
+def mk_repo(*, create: bool, config: ic.RepositoryConfig | None = None) -> ic.Repository:
     """Create a store that can access virtual chunks in localhost MinIO"""
     store_path = "./tests/data/test-repo"
 
-    config = ic.RepositoryConfig.default()
-    config.inline_chunk_threshold_bytes = 12
+    if create and config is None:
+        config = ic.RepositoryConfig.default()
+        config.inline_chunk_threshold_bytes = 12
 
-    virtual_store_config = ic.s3_store(
-        region="us-east-1",
-        endpoint_url="http://localhost:9000",
-        allow_http=True,
-        s3_compatible=True,
-        force_path_style=True,
-    )
-    container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
-    config.set_virtual_chunk_container(container)
+        virtual_store_config = ic.s3_store(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            s3_compatible=True,
+            force_path_style=True,
+        )
+        container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
+        config.set_virtual_chunk_container(container)
     credentials = ic.containers_credentials(
         s3=ic.s3_credentials(access_key_id="minio123", secret_access_key="minio123")
     )
@@ -62,7 +63,7 @@ async def write_a_test_repo() -> None:
     """
 
     print("Writing repository to ./tests/data/test-repo")
-    repo = mk_repo(True)
+    repo = mk_repo(create=True)
     session = repo.writable_session("main")
     store = session.store
 
@@ -168,7 +169,7 @@ async def test_icechunk_can_read_old_repo() -> None:
     # we import here so it works when the script is ran by pytest
     from tests.conftest import write_chunks_to_minio
 
-    repo = mk_repo(False)
+    repo = mk_repo(create=False)
     main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [

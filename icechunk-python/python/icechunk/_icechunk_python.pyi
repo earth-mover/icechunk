@@ -1225,6 +1225,22 @@ class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
+class ManifestFileInfo:
+    """Manifest file metadata"""
+
+    @property
+    def id(self) -> str:
+        """The manifest id"""
+        ...
+    @property
+    def size_bytes(self) -> int:
+        """The size in bytes of the"""
+        ...
+    @property
+    def num_chunk_refs(self) -> int:
+        """The number of chunk references contained in this manifest"""
+        ...
+
 class SnapshotInfo:
     """Metadata for a snapshot"""
     @property
@@ -1251,6 +1267,12 @@ class SnapshotInfo:
     def metadata(self) -> dict[str, Any]:
         """
         The metadata of the snapshot
+        """
+        ...
+    @property
+    def manifests(self) -> list[ManifestFileInfo]:
+        """
+        The manifests linked to this snapshot
         """
         ...
 
