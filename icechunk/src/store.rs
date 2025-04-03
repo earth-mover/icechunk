@@ -592,7 +592,7 @@ impl Store {
                     ListDirItem::Prefix("c".to_string()),
                 ]
             }
-            Ok(NodeSnapshot { node_data: NodeData::Group { .. }, .. }) => {
+            Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => {
                 // if the prefix is the path to a group we need to discover any nodes with the prefix as node path
                 // listing chunks is unnecessary
                 self.list_metadata_prefix(prefix, true)
