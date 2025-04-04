@@ -1,5 +1,18 @@
 # Changelog
 
+## Python Icechunk Library 0.2.12
+
+### Features
+
+- Distributed writes now can use Dask's native reduction.
+- Disallow creating tags/branches pointing to non-existing snapshots.
+- `SnapshotInfo` now contains information about the snapshot manifests.
+- More logging for garbage collection and expiration.
+
+### Fixes
+
+- Fix type annotations for the `Diff` type.
+
 ## Python Icechunk Library 0.2.11
 
 ### Features
