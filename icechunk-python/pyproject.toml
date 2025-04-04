@@ -50,6 +50,7 @@ benchmark = [
   "tqdm",
   "humanize",
   "platformdirs",
+  "ipdb",
 ]
 
 [dependency-groups]
