@@ -210,10 +210,10 @@ impl Default for ManifestSplittingConfig {
 }
 
 impl ManifestSplittingConfig {
-    pub fn with_size(shard_size: u32) -> Self {
+    pub fn with_size(split_size: u32) -> Self {
         let split_sizes = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-            vec![(ManifestSplitDimCondition::Rest, shard_size)],
+            vec![(ManifestSplitDimCondition::Rest, split_size)],
         )];
         ManifestSplittingConfig { split_sizes: Some(split_sizes) }
     }

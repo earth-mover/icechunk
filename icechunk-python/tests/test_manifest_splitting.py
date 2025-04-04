@@ -206,7 +206,7 @@ def test_manifest_splitting_sparse_regions():
 
 
 @pytest.mark.parametrize(
-    "config, expected_shard_sizes",
+    "config, expected_split_sizes",
     [
         (
             {
@@ -237,7 +237,7 @@ def test_manifest_splitting_sparse_regions():
         ),
     ],
 )
-def test_manifest_splitting_complex_config(config, expected_shard_sizes):
+def test_manifest_splitting_complex_config(config, expected_split_sizes):
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.name_matches("temperature"): config}
     )
@@ -261,7 +261,7 @@ def test_manifest_splitting_complex_config(config, expected_shard_sizes):
         session.commit("write")
 
         nmanifests = math.prod(
-            math.ceil(nchunks / shardsize)
-            for nchunks, shardsize in zip(SHAPE, expected_shard_sizes, strict=False)
+            math.ceil(nchunks / splitsize)
+            for nchunks, splitsize in zip(SHAPE, expected_split_sizes, strict=False)
         )
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests

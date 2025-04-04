@@ -391,13 +391,13 @@ def setup_era5(*args, **kwargs):
     return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
 
 
-def setup_sharded_refs(dataset: Dataset, *, shard_size: int | None):
+def setup_split_manifest_refs(dataset: Dataset, *, split_size: int | None):
     shape = (500_000 * 1000,)
     chunks = (1000,)
 
-    if shard_size is not None:
+    if split_size is not None:
         try:
-            splitting = get_splitting_config(shard_size=shard_size)
+            splitting = get_splitting_config(split_size=split_size)
         except ImportError:
             logger.info("splitting not supported")
             pytest.skip("splitting not supported on this version")
@@ -490,20 +490,20 @@ random_selector = sorted(random.choices(range(500_000 * 1000), k=50_000))
 
 # large manifest sharded, unsharded
 LARGE_MANIFEST_UNSHARDED = BenchmarkReadDataset(
-    storage_config=StorageConfig(prefix="large_manifest_unsharded"),
+    storage_config=StorageConfig(prefix="large_manifest_no_split"),
     chunk_selector={"x": 1},
     full_load_selector={"x": random_selector},
     load_variables=["array"],
     first_byte_variable=None,
-    setupfn=partial(setup_sharded_refs, shard_size=None),
+    setupfn=partial(setup_split_manifest_refs, split_size=None),
 )
 LARGE_MANIFEST_SHARDED = BenchmarkReadDataset(
-    storage_config=StorageConfig(prefix="large_manifest_sharded"),
+    storage_config=StorageConfig(prefix="large_manifest_split"),
     chunk_selector={"x": 1},
     full_load_selector={"x": random_selector},
     load_variables=["array"],
     first_byte_variable=None,
-    setupfn=partial(setup_sharded_refs, shard_size=100_000),
+    setupfn=partial(setup_split_manifest_refs, split_size=100_000),
 )
 
 # TODO

@@ -66,10 +66,10 @@ pub async fn do_test_gc(
     let storage_settings = storage.default_settings();
 
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
-    let manifest_shard_size = 10;
+    let manifest_split_size = 10;
     let split_sizes = Some(vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-        vec![(ManifestSplitDimCondition::Rest, manifest_shard_size)],
+        vec![(ManifestSplitDimCondition::Rest, manifest_split_size)],
     )]);
     let man_config = ManifestConfig {
         splitting: Some(ManifestSplittingConfig { split_sizes }),

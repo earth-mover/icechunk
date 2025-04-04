@@ -22,7 +22,7 @@ import zarr
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
-        ic.ManifestSplitCondition.name_matches("sharded_*"): {
+        ic.ManifestSplitCondition.name_matches("split_*"): {
             ic.ManifestSplitDimCondition.Axis(0): 1,
             ic.ManifestSplitDimCondition.DimensionName("longitude"): 1,
             ic.ManifestSplitDimCondition.Rest(): 3,
@@ -62,16 +62,16 @@ def mk_repo(
     return repo
 
 
-async def write_a_sharded_repo() -> None:
+async def write_a_split_repo() -> None:
     """Write the test repository with manifest splitting."""
 
-    store_path = "./tests/data/sharded-repo"
+    store_path = "./tests/data/split-repo"
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 12
     config.manifest = ic.ManifestConfig(
         splitting=ic.ManifestSplittingConfig.from_dict(
             {
-                ic.ManifestSplitCondition.name_matches("sharded_*"): {
+                ic.ManifestSplitCondition.name_matches("split_*"): {
                     ic.ManifestSplitDimCondition.Axis(0): 1,
                     ic.ManifestSplitDimCondition.DimensionName("latitude"): 1,
                     ic.ManifestSplitDimCondition.Rest(): 3,
@@ -92,7 +92,7 @@ async def write_a_sharded_repo() -> None:
 
     # these chunks will be materialized
     big_chunks = group1.create_array(
-        "sharded",
+        "split",
         shape=(10, 10),
         chunks=(3, 3),
         dimension_names=(None, "longitude"),
@@ -113,14 +113,14 @@ async def write_a_sharded_repo() -> None:
     session.commit("empty structure")
 
     session = repo.writable_session("main")
-    big_chunks = zarr.open_array(session.store, path="/group1/sharded", mode="a")
+    big_chunks = zarr.open_array(session.store, path="/group1/split", mode="a")
     small_chunks = zarr.open_array(session.store, path="/group1/small_chunks", mode="a")
     big_chunks[:] = 120
     small_chunks[:] = 0
     session.commit("write data")
 
     session = repo.writable_session("main")
-    big_chunks = zarr.open_array(session.store, path="group1/sharded", mode="a")
+    big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
     small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
     big_chunks[:] = 12
     small_chunks[:] = 1
@@ -133,15 +133,15 @@ async def write_a_sharded_repo() -> None:
     repo = mk_repo(create=False, store_path=store_path, config=config)
     repo.save_config()
     session = repo.writable_session("main")
-    big_chunks = zarr.open_array(session.store, path="group1/sharded", mode="a")
+    big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
     small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
     big_chunks[:] = 14
     small_chunks[:] = 3
-    session.commit("write data again with more shards")
+    session.commit("write data again with more splits")
 
 
 async def test_icechunk_can_read_old_repo_with_manifest_splitting():
-    repo = mk_repo(create=False, store_path="./tests/data/sharded-repo")
+    repo = mk_repo(create=False, store_path="./tests/data/split-repo")
     ancestry = list(repo.ancestry(branch="main"))[::-1]
 
     init_snapshot = ancestry[1]
@@ -157,7 +157,7 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting():
     assert len(snapshot.manifests) == 9
 
     snapshot = ancestry[4]
-    assert snapshot.message == "write data again with more shards"
+    assert snapshot.message == "write data again with more splits"
     assert len(snapshot.manifests) == 17
 
     assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG
@@ -394,4 +394,4 @@ if __name__ == "__main__":
     # we import here so it works when the script is ran by pytest
 
     # asyncio.run(write_a_test_repo())
-    asyncio.run(write_a_sharded_repo())
+    asyncio.run(write_a_split_repo())

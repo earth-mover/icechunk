@@ -1150,11 +1150,11 @@ mod tests {
         ));
     }
 
-    async fn create_repo_with_shard_config(
+    async fn create_repo_with_split_manifest_config(
         path: &Path,
         shape: &ArrayShape,
         dimension_names: &Option<Vec<DimensionName>>,
-        shard_config: &ManifestSplittingConfig,
+        split_config: &ManifestSplittingConfig,
         storage: Option<Arc<dyn Storage + Send + Sync>>,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
@@ -1166,7 +1166,7 @@ mod tests {
                 max_total_refs: None,
                 preload_if: None,
             }),
-            splitting: Some(shard_config.clone()),
+            splitting: Some(split_config.clone()),
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -1188,26 +1188,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
+    async fn tests_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
         let chunk_size = 1u32;
-        let shard_size = 3u32;
+        let split_size = 3u32;
 
         let shape =
             ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (1, 1)])
                 .unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
-        let shard_config = ManifestSplittingConfig::with_size(shard_size);
+        let split_config = ManifestSplittingConfig::with_size(split_size);
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
-        let repository = create_repo_with_shard_config(
+        let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
             &dimension_names,
-            &shard_config,
+            &split_config,
             Some(Arc::clone(&storage)),
         )
         .await?;
@@ -1220,7 +1220,7 @@ mod tests {
         assert!(ops.is_empty());
         let mut session = repository.writable_session("main").await?;
 
-        // only add refs that will be packed in the first shard.
+        // only add refs that will be packed in the first split.
         for i in 0..2 {
             session
                 .set_chunk_ref(
@@ -1230,11 +1230,11 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("first shard", None).await?;
+        session.commit("first split", None).await?;
         total_manifests += 1;
         assert_manifest_count(&storage, total_manifests).await;
 
-        // now only last shard
+        // now only last split
         let last_chunk = dim_size - 1;
         let mut session = repository.writable_session("main").await?;
         session
@@ -1244,11 +1244,11 @@ mod tests {
                 Some(ChunkPayload::Inline(format!("{0}", last_chunk).into())),
             )
             .await?;
-        session.commit("last shard", None).await?;
+        session.commit("last split", None).await?;
         total_manifests += 2; // FIXME: this should be +1 once writes are optimized
         assert_manifest_count(&storage, total_manifests).await;
 
-        // check that reads are optimized; we should only fetch the last shard for this query
+        // check that reads are optimized; we should only fetch the last split for this query
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
         let config = RepositoryConfig {
@@ -1284,7 +1284,7 @@ mod tests {
             session
                 .get_chunk_reader(
                     &temp_path,
-                    &ChunkIndices(vec![shard_size + 1, 0, 0]),
+                    &ChunkIndices(vec![split_size + 1, 0, 0]),
                     &ByteRange::ALL,
                 )
                 .await
@@ -1298,9 +1298,9 @@ mod tests {
             0
         );
 
-        // write one ref per shard
+        // write one ref per split
         let mut session = repository.writable_session("main").await?;
-        for i in (0..dim_size).step_by(shard_size as usize) {
+        for i in (0..dim_size).step_by(split_size as usize) {
             total_manifests += 1;
             session
                 .set_chunk_ref(
@@ -1310,7 +1310,7 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("wrote all shards", None).await?;
+        session.commit("wrote all splits", None).await?;
         assert_manifest_count(&storage, total_manifests).await;
 
         let mut session = repository.writable_session("main").await?;
@@ -1323,7 +1323,7 @@ mod tests {
                 )
                 .await?
         }
-        total_manifests += dim_size.div_ceil(shard_size) as usize;
+        total_manifests += dim_size.div_ceil(split_size) as usize;
         session.commit("full overwrite", None).await?;
         assert_manifest_count(&storage, total_manifests).await;
 
@@ -1368,19 +1368,19 @@ mod tests {
                 vec![(ManifestSplitDimCondition::Rest, 9)],
             ),
         ];
-        let shard_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
-        let repo = create_repo_with_shard_config(
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let repo = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
             &dimension_names,
-            &shard_config,
+            &split_config,
             None,
         )
         .await?;
 
         let session = repo.writable_session("main").await?;
         let actual =
-            shard_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
+            split_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
         let expected = ManifestSplits::from_edges(vec![
             vec![0, 12, 24, 25],
             vec![0, 9, 10],
@@ -1397,19 +1397,19 @@ mod tests {
                 (ManifestSplitDimCondition::Rest, 9),
             ],
         )];
-        let shard_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
-        let repo = create_repo_with_shard_config(
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let repo = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
             &dimension_names,
-            &shard_config,
+            &split_config,
             None,
         )
         .await?;
 
         let session = repo.writable_session("main").await?;
         let actual =
-            shard_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
+            split_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
         assert_eq!(actual, expected);
 
         Ok(())
@@ -1418,39 +1418,39 @@ mod tests {
     // #[tokio::test]
     // async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
     //     let dim_size = 25u32;
-    //     let t_shard_size = 12u32;
-    //     let y_shard_size = 2u32;
+    //     let t_split_size = 12u32;
+    //     let y_split_size = 2u32;
 
     //     let shape =
     //         ArrayShape::new(vec![(dim_size.into(), 1), (10, 1), (3, 1), (4, 1)]).unwrap();
     //     let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
     //     let temp_path: Path = "/temperature".try_into().unwrap();
 
-    //     let expected_split_sizes = [t_shard_size, 9, y_shard_size, 9];
+    //     let expected_split_sizes = [t_split_size, 9, y_split_size, 9];
 
     //     let split_sizes = vec![
     //         (
     //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ManifestSplitDimCondition::DimensionName("t".to_string()), t_shard_size)],
+    //             vec![(ManifestSplitDimCondition::DimensionName("t".to_string()), t_split_size)],
     //         ),
     //         (
     //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ManifestSplitDimCondition::Axis(2), y_shard_size)],
+    //             vec![(ManifestSplitDimCondition::Axis(2), y_split_size)],
     //         ),
     //         (
     //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
     //             vec![(ManifestSplitDimCondition::Any, 9)],
     //         ),
     //     ];
-    //     let shard_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+    //     let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
     //     let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     //     let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
     //     let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-    //     let repository = create_repo_with_shard_config(
+    //     let repository = create_repo_with_split_config(
     //         &temp_path,
     //         &shape,
     //         &dimension_names,
-    //         &shard_config,
+    //         &split_config,
     //         Some(logging_c),
     //     )
     //     .await?;

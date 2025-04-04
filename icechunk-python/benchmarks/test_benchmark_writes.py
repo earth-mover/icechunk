@@ -25,7 +25,7 @@ pytestmark = pytest.mark.write_benchmark
 @pytest.fixture(
     params=[
         pytest.param(None, id="no-splitting"),
-        pytest.param(10000, id="shard-size-10_000"),
+        pytest.param(10000, id="split-size-10_000"),
     ]
 )
 def splitting(request):
@@ -33,7 +33,7 @@ def splitting(request):
         return None
     else:
         try:
-            return get_splitting_config(shard_size=request.param)
+            return get_splitting_config(split_size=request.param)
         except ImportError:
             pytest.skip("splitting not supported on this version")
 
@@ -181,7 +181,7 @@ def test_set_many_virtual_chunk_refs(benchmark, repo) -> None:
 
 
 @pytest.mark.benchmark(group="refs-write")
-def test_write_sharded_refs(benchmark, splitting, large_write_dataset) -> None:
+def test_write_split_manifest_refs(benchmark, splitting, large_write_dataset) -> None:
     dataset = large_write_dataset
     config = repo_config_with(splitting=splitting)
     assert config is not None

@@ -483,7 +483,7 @@ class ManifestPreloadConfig:
         ...
 
 class ManifestSplitCondition:
-    """Configuration for conditions under which manifests will be split into shards"""
+    """Configuration for conditions under which manifests will be split into splits"""
 
     @staticmethod
     def or_conditions(
@@ -518,21 +518,21 @@ class ManifestSplitCondition:
 class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
     class Axis:
-        """Shard along specified integer axis."""
+        """Split along specified integer axis."""
         def __init__(self, axis: int) -> None: ...
 
     class DimensionName:
-        """Shard along specified named dimension."""
+        """Split along specified named dimension."""
         def __init__(self, regex: str) -> None: ...
 
     class Any:
-        """Shard along any other unspecified dimension."""
+        """Split along any other unspecified dimension."""
         def __init__(self) -> None: ...
 
-DimShardSize: TypeAlias = int
-ShardSizes: TypeAlias = tuple[
+DimSplitSize: TypeAlias = int
+SplitSizes: TypeAlias = tuple[
     tuple[
-        ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, DimShardSize], ...]
+        ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, DimSplitSize], ...]
     ],
     ...,
 ]
@@ -540,8 +540,8 @@ ShardSizes: TypeAlias = tuple[
 class ManifestSplittingConfig:
     """Configuration for manifest splitting."""
 
-    def __init__(self, split_sizes: ShardSizes) -> None:
-        """Configuration for how Icechunk manifests will be sharded.
+    def __init__(self, split_sizes: SplitSizes) -> None:
+        """Configuration for how Icechunk manifests will be split.
 
         Parameters
         ----------
@@ -551,7 +551,7 @@ class ManifestSplittingConfig:
         Examples
         --------
 
-        Shard manifests for the `temperature` array, with 3 chunks per shard along the `longitude` dimension.
+        Split manifests for the `temperature` array, with 3 chunks per shard along the `longitude` dimension.
         >>> ManifestSplittingConfig.from_dict(
         ...     {
         ...         ManifestSplitCondition.name_matches("temperature"): {
@@ -563,9 +563,9 @@ class ManifestSplittingConfig:
         pass
 
     @property
-    def split_sizes(self) -> ShardSizes:
+    def split_sizes(self) -> SplitSizes:
         """
-        Configuration for how Icechunk manifests will be sharded.
+        Configuration for how Icechunk manifests will be split.
 
         Returns
         -------
@@ -575,9 +575,9 @@ class ManifestSplittingConfig:
         ...
 
     @split_sizes.setter
-    def split_sizes(self, value: ShardSizes) -> None:
+    def split_sizes(self, value: SplitSizes) -> None:
         """
-        Set the sizes for how Icechunk manifests will be sharded.
+        Set the sizes for how Icechunk manifests will be split.
 
         Parameters
         ----------
@@ -602,7 +602,7 @@ class ManifestConfig:
         preload: ManifestPreloadConfig | None
             The configuration for how Icechunk manifests will be preloaded.
         splitting: ManifestSplittingConfig | None
-            The configuration for how Icechunk manifests will be sharded.
+            The configuration for how Icechunk manifests will be split.
         """
         ...
     @property
@@ -631,24 +631,24 @@ class ManifestConfig:
     @property
     def splitting(self) -> ManifestSplittingConfig | None:
         """
-        The configuration for how Icechunk manifests will be sharded.
+        The configuration for how Icechunk manifests will be split.
 
         Returns
         -------
         ManifestSplittingConfig | None
-            The configuration for how Icechunk manifests will be sharded.
+            The configuration for how Icechunk manifests will be split.
         """
         ...
 
     @splitting.setter
     def splitting(self, value: ManifestSplittingConfig | None) -> None:
         """
-        Set the configuration for how Icechunk manifests will be sharded.
+        Set the configuration for how Icechunk manifests will be split.
 
         Parameters
         ----------
         value: ManifestSplittingConfig | None
-            The configuration for how Icechunk manifests will be sharded.
+            The configuration for how Icechunk manifests will be split.
         """
         ...
 

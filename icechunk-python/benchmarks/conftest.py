@@ -70,10 +70,10 @@ def large_write_dataset(request) -> BenchmarkWriteDataset:
         # pytest.param(ERA5_SINGLE, id="era5-single"),
         # pytest.param(ERA5, id="era5-weatherbench"),
         # pytest.param(ERA5_ARCO, id="era5-arco"),
-        pytest.param(LARGE_MANIFEST_UNSHARDED, id="large-manifest-unsharded"),
+        pytest.param(LARGE_MANIFEST_UNSHARDED, id="large-manifest-no-split"),
         pytest.param(
             LARGE_MANIFEST_SHARDED,
-            id="large-manifest-sharded",
+            id="large-manifest-split",
             marks=pytest.mark.skipif(no_splitting, reason="no splitting"),
         ),
     ],

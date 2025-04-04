@@ -83,7 +83,7 @@ def repo_config_with(
     return config
 
 
-def get_splitting_config(*, shard_size: int):
+def get_splitting_config(*, split_size: int):
     # helper to allow benchmarking versions before manifest splitting was introduced
     from icechunk import (
         ManifestSplitCondition,
@@ -94,7 +94,7 @@ def get_splitting_config(*, shard_size: int):
     return ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.path_matches(".*"): {
-                ManifestSplitDimCondition.Rest(): shard_size
+                ManifestSplitDimCondition.Rest(): split_size
             }
         }
     )

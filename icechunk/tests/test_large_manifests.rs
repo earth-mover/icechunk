@@ -17,7 +17,7 @@ use tokio::{
 };
 
 const TOTAL_NUM_REFS: usize = 100_000_000;
-const SHARD_SIZE: u32 = 1_000_000;
+const MANIFEST_SPLIT_SIZE: u32 = 1_000_000;
 const CHUNK_SIZE: u32 = 1;
 const TASK_CHUNK_SIZE: usize = 1_000; // each task writes this many refs in serial
 const NUM_TASKS: usize = TOTAL_NUM_REFS / TASK_CHUNK_SIZE;
@@ -29,7 +29,7 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
     let config = RepositoryConfig {
         inline_chunk_threshold_bytes: Some(128),
         manifest: Some(ManifestConfig {
-            splitting: Some(ManifestSplittingConfig::with_size(SHARD_SIZE)),
+            splitting: Some(ManifestSplittingConfig::with_size(MANIFEST_SPLIT_SIZE)),
             ..Default::default()
         }),
         ..Default::default()
