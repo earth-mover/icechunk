@@ -55,9 +55,9 @@ impl ManifestExtents {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestShards(Vec<ManifestExtents>);
+pub struct ManifestSplits(Vec<ManifestExtents>);
 
-impl ManifestShards {
+impl ManifestSplits {
     /// Used at read-time
     pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
         Self(extents)
@@ -71,13 +71,13 @@ impl ManifestShards {
         self.0.is_empty()
     }
 
-    // Build up ManifestShards from a iterable of shard edges or boundaries
+    // Build up ManifestSplits from a iterable of shard edges or boundaries
     // along each dimension.
     /// # Examples
     /// ```
-    /// use icechunk::format::manifest::{ManifestShards, ManifestExtents};
-    /// let actual = ManifestShards::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
-    /// let expected = ManifestShards::from_extents(vec![
+    /// use icechunk::format::manifest::{ManifestSplits, ManifestExtents};
+    /// let actual = ManifestSplits::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
+    /// let expected = ManifestSplits::from_extents(vec![
     ///     ManifestExtents::new(&[0, 3], &[1, 4]),
     ///     ManifestExtents::new(&[0, 4], &[1, 5]),
     ///     ManifestExtents::new(&[1, 3], &[2, 4]),

@@ -18,7 +18,7 @@ import xarray as xr
 import zarr
 from benchmarks.helpers import (
     get_coiled_kwargs,
-    get_sharding_config,
+    get_splitting_config,
     rdms,
     repo_config_with,
     setup_logger,
@@ -397,16 +397,16 @@ def setup_sharded_refs(dataset: Dataset, *, shard_size: int | None):
 
     if shard_size is not None:
         try:
-            sharding = get_sharding_config(shard_size=shard_size)
+            splitting = get_splitting_config(shard_size=shard_size)
         except ImportError:
-            logger.info("sharding not supported")
-            pytest.skip("sharding not supported on this version")
+            logger.info("splitting not supported")
+            pytest.skip("splitting not supported on this version")
     else:
-        sharding = None
-    config = repo_config_with(sharding=sharding)
+        splitting = None
+    config = repo_config_with(splitting=splitting)
     assert config is not None
-    if hasattr(config.manifest, "sharding"):
-        assert config.manifest.sharding == sharding
+    if hasattr(config.manifest, "splitting"):
+        assert config.manifest.splitting == splitting
     repo = dataset.create(config=config)
     logger.info(repo.config)
     session = repo.writable_session(branch="main")

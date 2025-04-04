@@ -73,28 +73,28 @@ def rdms() -> str:
 
 
 def repo_config_with(
-    *, inline_chunk_threshold_bytes: int | None = None, preload=None, sharding=None
+    *, inline_chunk_threshold_bytes: int | None = None, preload=None, splitting=None
 ) -> ic.RepositoryConfig:
     config = ic.RepositoryConfig.default()
     if inline_chunk_threshold_bytes is not None:
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
-    if sharding is not None:
-        config.manifest = ic.ManifestConfig(preload=preload, sharding=sharding)
+    if splitting is not None:
+        config.manifest = ic.ManifestConfig(preload=preload, splitting=splitting)
     return config
 
 
-def get_sharding_config(*, shard_size: int):
-    # helper to allow benchmarking versions before manifest sharding was introduced
+def get_splitting_config(*, shard_size: int):
+    # helper to allow benchmarking versions before manifest splitting was introduced
     from icechunk import (
-        ManifestShardCondition,
-        ManifestShardingConfig,
-        ShardDimCondition,
+        ManifestSplitCondition,
+        ManifestSplitDimCondition,
+        ManifestSplittingConfig,
     )
 
-    return ManifestShardingConfig.from_dict(
+    return ManifestSplittingConfig.from_dict(
         {
-            ManifestShardCondition.path_matches(".*"): {
-                ShardDimCondition.Rest(): shard_size
+            ManifestSplitCondition.path_matches(".*"): {
+                ManifestSplitDimCondition.Rest(): shard_size
             }
         }
     )

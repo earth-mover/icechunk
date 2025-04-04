@@ -942,12 +942,12 @@ mod tests {
     use crate::{
         Repository, Storage,
         config::{
-            CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestShardCondition,
-            ManifestShardingConfig, RepositoryConfig, ShardDimCondition,
+            CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplitCondition,
+            ManifestSplitDimCondition, ManifestSplittingConfig, RepositoryConfig,
         },
         format::{
             ByteRange, ChunkIndices,
-            manifest::{ChunkPayload, ManifestShards},
+            manifest::{ChunkPayload, ManifestSplits},
             snapshot::{ArrayShape, DimensionName},
         },
         new_local_filesystem_storage,
@@ -1154,7 +1154,7 @@ mod tests {
         path: &Path,
         shape: &ArrayShape,
         dimension_names: &Option<Vec<DimensionName>>,
-        shard_config: &ManifestShardingConfig,
+        shard_config: &ManifestSplittingConfig,
         storage: Option<Arc<dyn Storage + Send + Sync>>,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
@@ -1166,7 +1166,7 @@ mod tests {
                 max_total_refs: None,
                 preload_if: None,
             }),
-            sharding: Some(shard_config.clone()),
+            splitting: Some(shard_config.clone()),
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -1188,7 +1188,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manifest_sharding_simple() -> Result<(), Box<dyn Error>> {
+    async fn test_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
         let chunk_size = 1u32;
         let shard_size = 3u32;
@@ -1198,7 +1198,7 @@ mod tests {
                 .unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
-        let shard_config = ManifestShardingConfig::with_size(shard_size);
+        let shard_config = ManifestSplittingConfig::with_size(shard_size);
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
@@ -1349,26 +1349,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manifest_sharding_complex_config() -> Result<(), Box<dyn Error>> {
+    async fn test_manifest_splitting_complex_config() -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
-        let shard_sizes = vec![
+        let split_sizes = vec![
             (
-                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::DimensionName("t".to_string()), 12)],
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![(ManifestSplitDimCondition::DimensionName("t".to_string()), 12)],
             ),
             (
-                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::Axis(2), 2)],
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![(ManifestSplitDimCondition::Axis(2), 2)],
             ),
             (
-                ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ShardDimCondition::Rest, 9)],
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![(ManifestSplitDimCondition::Rest, 9)],
             ),
         ];
-        let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
+        let shard_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
         let repo = create_repo_with_shard_config(
             &temp_path,
             &shape,
@@ -1380,8 +1380,8 @@ mod tests {
 
         let session = repo.writable_session("main").await?;
         let actual =
-            shard_config.get_shard_sizes(&session.get_node(&temp_path).await?)?;
-        let expected = ManifestShards::from_edges(vec![
+            shard_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
+        let expected = ManifestSplits::from_edges(vec![
             vec![0, 12, 24, 25],
             vec![0, 9, 10],
             vec![0, 2, 3],
@@ -1389,15 +1389,15 @@ mod tests {
         ]);
         assert_eq!(actual, expected);
 
-        let shard_sizes = vec![(
-            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
             vec![
-                (ShardDimCondition::DimensionName("t".to_string()), 12),
-                (ShardDimCondition::Axis(2), 2),
-                (ShardDimCondition::Rest, 9),
+                (ManifestSplitDimCondition::DimensionName("t".to_string()), 12),
+                (ManifestSplitDimCondition::Axis(2), 2),
+                (ManifestSplitDimCondition::Rest, 9),
             ],
         )];
-        let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
+        let shard_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
         let repo = create_repo_with_shard_config(
             &temp_path,
             &shape,
@@ -1409,14 +1409,14 @@ mod tests {
 
         let session = repo.writable_session("main").await?;
         let actual =
-            shard_config.get_shard_sizes(&session.get_node(&temp_path).await?)?;
+            shard_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
         assert_eq!(actual, expected);
 
         Ok(())
     }
 
     // #[tokio::test]
-    // async fn test_manifest_sharding_complex_writes() -> Result<(), Box<dyn Error>> {
+    // async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
     //     let dim_size = 25u32;
     //     let t_shard_size = 12u32;
     //     let y_shard_size = 2u32;
@@ -1426,23 +1426,23 @@ mod tests {
     //     let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
     //     let temp_path: Path = "/temperature".try_into().unwrap();
 
-    //     let expected_shard_sizes = [t_shard_size, 9, y_shard_size, 9];
+    //     let expected_split_sizes = [t_shard_size, 9, y_shard_size, 9];
 
-    //     let shard_sizes = vec![
+    //     let split_sizes = vec![
     //         (
-    //             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ShardDimCondition::DimensionName("t".to_string()), t_shard_size)],
+    //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+    //             vec![(ManifestSplitDimCondition::DimensionName("t".to_string()), t_shard_size)],
     //         ),
     //         (
-    //             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ShardDimCondition::Axis(2), y_shard_size)],
+    //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+    //             vec![(ManifestSplitDimCondition::Axis(2), y_shard_size)],
     //         ),
     //         (
-    //             ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ShardDimCondition::Any, 9)],
+    //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+    //             vec![(ManifestSplitDimCondition::Any, 9)],
     //         ),
     //     ];
-    //     let shard_config = ManifestShardingConfig { shard_sizes: Some(shard_sizes) };
+    //     let shard_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
     //     let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     //     let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
     //     let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -1475,7 +1475,7 @@ mod tests {
     //                 )
     //                 .await?
     //         }
-    //         total_manifests += dim_size.div_ceil(expected_shard_sizes[ax]) as usize;
+    //         total_manifests += dim_size.div_ceil(expected_split_sizes[ax]) as usize;
     //         session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
     //         assert_manifest_count(&backend, total_manifests).await;
 

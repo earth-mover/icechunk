@@ -18,11 +18,11 @@ from benchmarks.datasets import (
 from icechunk import Repository, local_filesystem_storage
 
 try:
-    from icechunk import ManifestShardingConfig  # noqa: F401
+    from icechunk import ManifestSplittingConfig  # noqa: F401
 
-    no_sharding = False
+    no_splitting = False
 except ImportError:
-    no_sharding = True
+    no_splitting = True
 
 
 def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
@@ -74,7 +74,7 @@ def large_write_dataset(request) -> BenchmarkWriteDataset:
         pytest.param(
             LARGE_MANIFEST_SHARDED,
             id="large-manifest-sharded",
-            marks=pytest.mark.skipif(no_sharding, reason="no sharding"),
+            marks=pytest.mark.skipif(no_splitting, reason="no splitting"),
         ),
     ],
 )

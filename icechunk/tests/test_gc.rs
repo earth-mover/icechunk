@@ -9,7 +9,8 @@ use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
     config::{
-        ManifestConfig, ManifestShardCondition, ManifestShardingConfig, ShardDimCondition,
+        ManifestConfig, ManifestSplitCondition, ManifestSplitDimCondition,
+        ManifestSplittingConfig,
     },
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
@@ -66,12 +67,12 @@ pub async fn do_test_gc(
 
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
     let manifest_shard_size = 10;
-    let shard_sizes = Some(vec![(
-        ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-        vec![(ShardDimCondition::Rest, manifest_shard_size)],
+    let split_sizes = Some(vec![(
+        ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+        vec![(ManifestSplitDimCondition::Rest, manifest_shard_size)],
     )]);
     let man_config = ManifestConfig {
-        sharding: Some(ManifestShardingConfig { shard_sizes }),
+        splitting: Some(ManifestSplittingConfig { split_sizes }),
         ..ManifestConfig::default()
     };
 

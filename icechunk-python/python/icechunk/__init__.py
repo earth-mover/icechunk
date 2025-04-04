@@ -25,15 +25,15 @@ from icechunk._icechunk_python import (
     ManifestFileInfo,
     ManifestPreloadCondition,
     ManifestPreloadConfig,
-    ManifestShardCondition,
-    ManifestShardingConfig,
+    ManifestSplitCondition,
+    ManifestSplitDimCondition,
+    ManifestSplittingConfig,
     ObjectStoreConfig,
     RebaseFailedData,
     RepositoryConfig,
     S3Credentials,
     S3Options,
     S3StaticCredentials,
-    ShardDimCondition,
     SnapshotInfo,
     Storage,
     StorageConcurrencySettings,
@@ -113,8 +113,9 @@ __all__ = [
     "ManifestFileInfo",
     "ManifestPreloadCondition",
     "ManifestPreloadConfig",
-    "ManifestShardCondition",
-    "ManifestShardingConfig",
+    "ManifestSplitCondition",
+    "ManifestSplitDimCondition",
+    "ManifestSplittingConfig",
     "ObjectStoreConfig",
     "RebaseFailedData",
     "RebaseFailedError",
@@ -124,7 +125,6 @@ __all__ = [
     "S3Options",
     "S3StaticCredentials",
     "Session",
-    "ShardDimCondition",
     "SnapshotInfo",
     "Storage",
     "StorageConcurrencySettings",
@@ -179,14 +179,16 @@ def print_debug_info() -> None:
 # So on the python side, we can accept a dict as a nicer API, and immediately
 # convert it to tuples that preserve order, and pass those to Rust
 
-ShardSizesDict: TypeAlias = dict[ManifestShardCondition, dict[ShardDimCondition, int]]
+SplitSizesDict: TypeAlias = dict[
+    ManifestSplitCondition, dict[ManifestSplitDimCondition, int]
+]
 
 
-def from_dict(shard_sizes: ShardSizesDict) -> ManifestShardingConfig:
-    unwrapped = tuple((k, tuple(v.items())) for k, v in shard_sizes.items())
-    return ManifestShardingConfig(unwrapped)
+def from_dict(split_sizes: SplitSizesDict) -> ManifestSplittingConfig:
+    unwrapped = tuple((k, tuple(v.items())) for k, v in split_sizes.items())
+    return ManifestSplittingConfig(unwrapped)
 
 
-ManifestShardingConfig.from_dict = from_dict  # type: ignore[attr-defined]
+ManifestSplittingConfig.from_dict = from_dict  # type: ignore[attr-defined]
 
 initialize_logs()

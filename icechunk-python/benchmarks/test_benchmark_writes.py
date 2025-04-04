@@ -5,7 +5,7 @@ import pytest
 
 import zarr
 from benchmarks import lib
-from benchmarks.helpers import get_sharding_config, repo_config_with
+from benchmarks.helpers import get_splitting_config, repo_config_with
 from benchmarks.tasks import Executor, write
 from icechunk import (
     Repository,
@@ -24,18 +24,18 @@ pytestmark = pytest.mark.write_benchmark
 
 @pytest.fixture(
     params=[
-        pytest.param(None, id="no-sharding"),
+        pytest.param(None, id="no-splitting"),
         pytest.param(10000, id="shard-size-10_000"),
     ]
 )
-def sharding(request):
+def splitting(request):
     if request.param is None:
         return None
     else:
         try:
-            return get_sharding_config(shard_size=request.param)
+            return get_splitting_config(shard_size=request.param)
         except ImportError:
-            pytest.skip("sharding not supported on this version")
+            pytest.skip("splitting not supported on this version")
 
 
 # FIXME: figure out a reasonable default
@@ -181,12 +181,12 @@ def test_set_many_virtual_chunk_refs(benchmark, repo) -> None:
 
 
 @pytest.mark.benchmark(group="refs-write")
-def test_write_sharded_refs(benchmark, sharding, large_write_dataset) -> None:
+def test_write_sharded_refs(benchmark, splitting, large_write_dataset) -> None:
     dataset = large_write_dataset
-    config = repo_config_with(sharding=sharding)
+    config = repo_config_with(splitting=splitting)
     assert config is not None
-    if hasattr(config.manifest, "sharding"):
-        assert config.manifest.sharding == sharding
+    if hasattr(config.manifest, "splitting"):
+        assert config.manifest.splitting == splitting
     repo = dataset.create(config=config)
     session = repo.writable_session(branch="main")
     store = session.store

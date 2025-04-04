@@ -132,9 +132,9 @@ impl CachingConfig {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Hash, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
-pub enum ManifestShardCondition {
-    Or(Vec<ManifestShardCondition>),
-    And(Vec<ManifestShardCondition>),
+pub enum ManifestSplitCondition {
+    Or(Vec<ManifestSplitCondition>),
+    And(Vec<ManifestSplitCondition>),
     PathMatches { regex: String },
     NameMatches { regex: String },
 }
@@ -157,10 +157,10 @@ pub enum ManifestShardCondition {
 //    manifest-split-sizes: null  # no splitting, just a single manifest per array
 //```
 
-impl ManifestShardCondition {
+impl ManifestSplitCondition {
     // from_yaml?
     pub fn matches(&self, path: &Path) -> bool {
-        use ManifestShardCondition::*;
+        use ManifestSplitCondition::*;
         match self {
             Or(vec) => vec.iter().any(|c| c.matches(path)),
             And(vec) => vec.iter().all(|c| c.matches(path)),
@@ -182,7 +182,7 @@ impl ManifestShardCondition {
 
 // FIXME: isn't this really another condition?
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub enum ShardDimCondition {
+pub enum ManifestSplitDimCondition {
     Axis(usize),
     DimensionName(String),
     // TODO: Since dimension name can be null,
@@ -190,32 +190,32 @@ pub enum ShardDimCondition {
     Rest,
 }
 
-type DimConditions = Vec<(ShardDimCondition, u32)>;
+type DimConditions = Vec<(ManifestSplitDimCondition, u32)>;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub struct ManifestShardingConfig {
+pub struct ManifestSplittingConfig {
     // need to preserve insertion order of conditions, so hashmap doesn't work
-    pub shard_sizes: Option<Vec<(ManifestShardCondition, DimConditions)>>,
+    pub split_sizes: Option<Vec<(ManifestSplitCondition, DimConditions)>>,
 }
 
-impl Default for ManifestShardingConfig {
+impl Default for ManifestSplittingConfig {
     fn default() -> Self {
-        let inner = vec![(ShardDimCondition::Rest, u32::MAX)];
+        let inner = vec![(ManifestSplitDimCondition::Rest, u32::MAX)];
         let new = vec![(
-            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
             inner,
         )];
-        Self { shard_sizes: Some(new) }
+        Self { split_sizes: Some(new) }
     }
 }
 
-impl ManifestShardingConfig {
+impl ManifestSplittingConfig {
     pub fn with_size(shard_size: u32) -> Self {
-        let shard_sizes = vec![(
-            ManifestShardCondition::PathMatches { regex: r".*".to_string() },
-            vec![(ShardDimCondition::Rest, shard_size)],
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![(ManifestSplitDimCondition::Rest, shard_size)],
         )];
-        ManifestShardingConfig { shard_sizes: Some(shard_sizes) }
+        ManifestSplittingConfig { split_sizes: Some(split_sizes) }
     }
 }
 
@@ -297,18 +297,18 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     pub preload: Option<ManifestPreloadConfig>,
-    pub sharding: Option<ManifestShardingConfig>,
+    pub splitting: Option<ManifestSplittingConfig>,
 }
 
 static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
-static DEFAULT_MANIFEST_SHARDING_CONFIG: OnceLock<ManifestShardingConfig> =
+static DEFAULT_MANIFEST_SPLITTING_CONFIG: OnceLock<ManifestSplittingConfig> =
     OnceLock::new();
 
 impl ManifestConfig {
     pub fn merge(&self, other: Self) -> Self {
         Self {
             preload: other.preload.or(self.preload.clone()),
-            sharding: other.sharding.or(self.sharding.clone()),
+            splitting: other.splitting.or(self.splitting.clone()),
         }
     }
 
@@ -318,19 +318,20 @@ impl ManifestConfig {
         })
     }
 
-    pub fn sharding(&self) -> &ManifestShardingConfig {
-        self.sharding.as_ref().unwrap_or_else(|| {
-            DEFAULT_MANIFEST_SHARDING_CONFIG.get_or_init(ManifestShardingConfig::default)
+    pub fn splitting(&self) -> &ManifestSplittingConfig {
+        self.splitting.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_SPLITTING_CONFIG
+                .get_or_init(ManifestSplittingConfig::default)
         })
     }
-    // for testing only, create a config with no preloading and no sharding
+    // for testing only, create a config with no preloading and no splitting
     pub fn empty() -> Self {
         ManifestConfig {
             preload: Some(ManifestPreloadConfig {
                 max_total_refs: None,
                 preload_if: None,
             }),
-            sharding: None,
+            splitting: None,
         }
     }
 }

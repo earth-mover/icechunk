@@ -938,7 +938,7 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
                 Err(SessionError {
                     // this chunk belongs to a shard that has not been written
                     // or is invalid
-                    kind: SessionErrorKind::InvalidIndexForManifestShards { .. },
+                    kind: SessionErrorKind::InvalidIndexForSplitManifests { .. },
                     ..
                 }) => Ok(false),
                 Err(SessionError {

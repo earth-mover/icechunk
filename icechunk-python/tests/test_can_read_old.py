@@ -20,12 +20,12 @@ from numpy.testing import assert_array_equal
 import icechunk as ic
 import zarr
 
-UPDATED_SHARDING_CONFIG = ic.ManifestShardingConfig.from_dict(
+UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
-        ic.ManifestShardCondition.name_matches("sharded_*"): {
-            ic.ShardDimCondition.Axis(0): 1,
-            ic.ShardDimCondition.DimensionName("longitude"): 1,
-            ic.ShardDimCondition.Rest(): 3,
+        ic.ManifestSplitCondition.name_matches("sharded_*"): {
+            ic.ManifestSplitDimCondition.Axis(0): 1,
+            ic.ManifestSplitDimCondition.DimensionName("longitude"): 1,
+            ic.ManifestSplitDimCondition.Rest(): 3,
         }
     }
 )
@@ -63,18 +63,18 @@ def mk_repo(
 
 
 async def write_a_sharded_repo() -> None:
-    """Write the test repository with manifest sharding."""
+    """Write the test repository with manifest splitting."""
 
     store_path = "./tests/data/sharded-repo"
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 12
     config.manifest = ic.ManifestConfig(
-        sharding=ic.ManifestShardingConfig.from_dict(
+        splitting=ic.ManifestSplittingConfig.from_dict(
             {
-                ic.ManifestShardCondition.name_matches("sharded_*"): {
-                    ic.ShardDimCondition.Axis(0): 1,
-                    ic.ShardDimCondition.DimensionName("latitude"): 1,
-                    ic.ShardDimCondition.Rest(): 3,
+                ic.ManifestSplitCondition.name_matches("sharded_*"): {
+                    ic.ManifestSplitDimCondition.Axis(0): 1,
+                    ic.ManifestSplitDimCondition.DimensionName("latitude"): 1,
+                    ic.ManifestSplitDimCondition.Rest(): 3,
                 }
             }
         )
@@ -129,7 +129,7 @@ async def write_a_sharded_repo() -> None:
     ### new config
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 12
-    config.manifest = ic.ManifestConfig(sharding=UPDATED_SHARDING_CONFIG)
+    config.manifest = ic.ManifestConfig(splitting=UPDATED_SPLITTING_CONFIG)
     repo = mk_repo(create=False, store_path=store_path, config=config)
     repo.save_config()
     session = repo.writable_session("main")
@@ -140,7 +140,7 @@ async def write_a_sharded_repo() -> None:
     session.commit("write data again with more shards")
 
 
-async def test_icechunk_can_read_old_repo_with_manifest_sharding():
+async def test_icechunk_can_read_old_repo_with_manifest_splitting():
     repo = mk_repo(create=False, store_path="./tests/data/sharded-repo")
     ancestry = list(repo.ancestry(branch="main"))[::-1]
 
@@ -160,7 +160,7 @@ async def test_icechunk_can_read_old_repo_with_manifest_sharding():
     assert snapshot.message == "write data again with more shards"
     assert len(snapshot.manifests) == 17
 
-    assert repo.config.manifest.sharding == UPDATED_SHARDING_CONFIG
+    assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG
 
 
 async def write_a_test_repo() -> None:

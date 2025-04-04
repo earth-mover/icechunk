@@ -2,7 +2,7 @@
 use bytes::Bytes;
 use icechunk::{
     Repository, RepositoryConfig, Store,
-    config::{ManifestConfig, ManifestShardingConfig},
+    config::{ManifestConfig, ManifestSplittingConfig},
     format::{
         ChunkIndices,
         manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
@@ -29,7 +29,7 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
     let config = RepositoryConfig {
         inline_chunk_threshold_bytes: Some(128),
         manifest: Some(ManifestConfig {
-            sharding: Some(ManifestShardingConfig::with_size(SHARD_SIZE)),
+            splitting: Some(ManifestSplittingConfig::with_size(SHARD_SIZE)),
             ..Default::default()
         }),
         ..Default::default()

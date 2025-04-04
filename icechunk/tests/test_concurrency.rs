@@ -3,7 +3,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
-    config::{ManifestConfig, ManifestShardingConfig},
+    config::{ManifestConfig, ManifestSplittingConfig},
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     session::{Session, get_chunk},
     storage::new_in_memory_storage,
@@ -73,7 +73,7 @@ async fn do_test_concurrency(
 
     let config = RepositoryConfig {
         manifest: Some(ManifestConfig {
-            sharding: Some(ManifestShardingConfig::with_size(2)),
+            splitting: Some(ManifestSplittingConfig::with_size(2)),
             ..Default::default()
         }),
         ..Default::default()

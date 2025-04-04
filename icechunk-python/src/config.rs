@@ -17,9 +17,9 @@ use icechunk::{
         AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
         CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
         GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
-        ManifestPreloadCondition, ManifestPreloadConfig, ManifestShardCondition,
-        ManifestShardingConfig, S3Credentials, S3CredentialsFetcher, S3Options,
-        S3StaticCredentials, ShardDimCondition,
+        ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
+        ManifestSplitDimCondition, ManifestSplittingConfig, S3Credentials,
+        S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -941,23 +941,23 @@ impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
     }
 }
 
-#[pyclass(name = "ManifestShardCondition", eq)]
+#[pyclass(name = "ManifestSplitCondition", eq)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum PyManifestShardCondition {
-    Or(Vec<PyManifestShardCondition>),
-    And(Vec<PyManifestShardCondition>),
+pub enum PyManifestSplitCondition {
+    Or(Vec<PyManifestSplitCondition>),
+    And(Vec<PyManifestSplitCondition>),
     PathMatches { regex: String },
     NameMatches { regex: String },
 }
 
 #[pymethods]
-impl PyManifestShardCondition {
+impl PyManifestSplitCondition {
     #[staticmethod]
-    pub fn or_conditions(conditions: Vec<PyManifestShardCondition>) -> Self {
+    pub fn or_conditions(conditions: Vec<PyManifestSplitCondition>) -> Self {
         Self::Or(conditions)
     }
     #[staticmethod]
-    pub fn and_conditions(conditions: Vec<PyManifestShardCondition>) -> Self {
+    pub fn and_conditions(conditions: Vec<PyManifestSplitCondition>) -> Self {
         Self::And(conditions)
     }
     #[staticmethod]
@@ -970,7 +970,7 @@ impl PyManifestShardCondition {
     }
 
     pub fn __repr__(&self) -> String {
-        use PyManifestShardCondition::*;
+        use PyManifestSplitCondition::*;
         match self {
             Or(conditions) => {
                 let mut res =
@@ -1002,9 +1002,9 @@ impl PyManifestShardCondition {
     }
 }
 
-impl From<&PyManifestShardCondition> for ManifestShardCondition {
-    fn from(value: &PyManifestShardCondition) -> Self {
-        use PyManifestShardCondition::*;
+impl From<&PyManifestSplitCondition> for ManifestSplitCondition {
+    fn from(value: &PyManifestSplitCondition) -> Self {
+        use PyManifestSplitCondition::*;
         match value {
             Or(vec) => Self::Or(vec.iter().map(|c| c.into()).collect()),
             And(vec) => Self::And(vec.iter().map(|c| c.into()).collect()),
@@ -1014,9 +1014,9 @@ impl From<&PyManifestShardCondition> for ManifestShardCondition {
     }
 }
 
-impl From<ManifestShardCondition> for PyManifestShardCondition {
-    fn from(value: ManifestShardCondition) -> Self {
-        use ManifestShardCondition::*;
+impl From<ManifestSplitCondition> for PyManifestSplitCondition {
+    fn from(value: ManifestSplitCondition) -> Self {
+        use ManifestSplitCondition::*;
         match value {
             Or(vec) => Self::Or(vec.into_iter().map(|c| c.into()).collect()),
             And(vec) => Self::And(vec.into_iter().map(|c| c.into()).collect()),
@@ -1026,18 +1026,18 @@ impl From<ManifestShardCondition> for PyManifestShardCondition {
     }
 }
 
-#[pyclass(name = "ShardDimCondition")]
+#[pyclass(name = "ManifestSplitDimCondition")]
 #[derive(Clone, Debug, Hash)]
-pub enum PyShardDimCondition {
+pub enum PyManifestSplitDimCondition {
     Axis(usize),
     DimensionName(String),
     Rest(),
 }
 
 #[pymethods]
-impl PyShardDimCondition {
+impl PyManifestSplitDimCondition {
     pub fn __repr__(&self) -> String {
-        use PyShardDimCondition::*;
+        use PyManifestSplitDimCondition::*;
         match self {
             Axis(axis) => format!("Axis({})", axis),
             DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
@@ -1052,51 +1052,51 @@ impl PyShardDimCondition {
     }
 }
 
-impl From<&PyShardDimCondition> for ShardDimCondition {
-    fn from(value: &PyShardDimCondition) -> Self {
-        use PyShardDimCondition::*;
+impl From<&PyManifestSplitDimCondition> for ManifestSplitDimCondition {
+    fn from(value: &PyManifestSplitDimCondition) -> Self {
+        use PyManifestSplitDimCondition::*;
         match value {
-            Axis(axis) => ShardDimCondition::Axis(*axis),
-            DimensionName(name) => ShardDimCondition::DimensionName(name.clone()),
-            Rest() => ShardDimCondition::Rest,
+            Axis(axis) => ManifestSplitDimCondition::Axis(*axis),
+            DimensionName(name) => ManifestSplitDimCondition::DimensionName(name.clone()),
+            Rest() => ManifestSplitDimCondition::Rest,
         }
     }
 }
-impl From<ShardDimCondition> for PyShardDimCondition {
-    fn from(value: ShardDimCondition) -> Self {
-        use ShardDimCondition::*;
+impl From<ManifestSplitDimCondition> for PyManifestSplitDimCondition {
+    fn from(value: ManifestSplitDimCondition) -> Self {
+        use ManifestSplitDimCondition::*;
         match value {
-            Axis(a) => PyShardDimCondition::Axis(a),
-            DimensionName(name) => PyShardDimCondition::DimensionName(name),
-            Rest => PyShardDimCondition::Rest(),
+            Axis(a) => PyManifestSplitDimCondition::Axis(a),
+            DimensionName(name) => PyManifestSplitDimCondition::DimensionName(name),
+            Rest => PyManifestSplitDimCondition::Rest(),
         }
     }
 }
 
-type DimConditions = Vec<(PyShardDimCondition, u32)>;
+type DimConditions = Vec<(PyManifestSplitDimCondition, u32)>;
 
-#[pyclass(name = "ManifestShardingConfig", eq)]
+#[pyclass(name = "ManifestSplittingConfig", eq)]
 #[derive(Debug)]
-pub struct PyManifestShardingConfig {
+pub struct PyManifestSplittingConfig {
     #[pyo3(get, set)]
-    pub shard_sizes: Option<Vec<(PyManifestShardCondition, DimConditions)>>,
+    pub split_sizes: Option<Vec<(PyManifestSplitCondition, DimConditions)>>,
 }
 
 #[pymethods]
-impl PyManifestShardingConfig {
+impl PyManifestSplittingConfig {
     #[new]
-    #[pyo3(signature = (shard_sizes=None))]
-    fn new(shard_sizes: Option<Vec<(PyManifestShardCondition, DimConditions)>>) -> Self {
-        Self { shard_sizes }
+    #[pyo3(signature = (split_sizes=None))]
+    fn new(split_sizes: Option<Vec<(PyManifestSplitCondition, DimConditions)>>) -> Self {
+        Self { split_sizes }
     }
 
     pub fn __repr__(&self) -> String {
-        match &self.shard_sizes {
-            Some(shard_sizes) => {
-                let reprs: Vec<String> = shard_sizes
+        match &self.split_sizes {
+            Some(split_sizes) => {
+                let reprs: Vec<String> = split_sizes
                     .iter()
                     .map(|(condition, dims)| {
-                        let condition_repr = format!("{:?}", condition); // Using Debug for PyManifestShardCondition
+                        let condition_repr = format!("{:?}", condition); // Using Debug for PyManifestSplitCondition
                         let dims_repr: Vec<String> = dims
                             .iter()
                             .map(|(dim_condition, num)| {
@@ -1107,25 +1107,25 @@ impl PyManifestShardingConfig {
                     })
                     .collect();
 
-                format!("ManifestShardingConfig({})", reprs.join(", "))
+                format!("ManifestSplittingConfig({})", reprs.join(", "))
             }
-            None => "ManifestShardingConfig(None)".to_string(),
+            None => "ManifestSplittingConfig(None)".to_string(),
         }
     }
 }
 
-impl PartialEq for PyManifestShardingConfig {
+impl PartialEq for PyManifestSplittingConfig {
     fn eq(&self, other: &Self) -> bool {
-        let x: ManifestShardingConfig = self.into();
-        let y: ManifestShardingConfig = other.into();
+        let x: ManifestSplittingConfig = self.into();
+        let y: ManifestSplittingConfig = other.into();
         x == y
     }
 }
 
-impl From<ManifestShardingConfig> for PyManifestShardingConfig {
-    fn from(value: ManifestShardingConfig) -> Self {
+impl From<ManifestSplittingConfig> for PyManifestSplittingConfig {
+    fn from(value: ManifestSplittingConfig) -> Self {
         Self {
-            shard_sizes: value.shard_sizes.map(|c| {
+            split_sizes: value.split_sizes.map(|c| {
                 c.into_iter()
                     .map(|(x, v)| {
                         (x.into(), v.into_iter().map(|(s, u)| (s.into(), u)).collect())
@@ -1136,10 +1136,10 @@ impl From<ManifestShardingConfig> for PyManifestShardingConfig {
     }
 }
 
-impl From<&PyManifestShardingConfig> for ManifestShardingConfig {
-    fn from(value: &PyManifestShardingConfig) -> Self {
+impl From<&PyManifestSplittingConfig> for ManifestSplittingConfig {
+    fn from(value: &PyManifestSplittingConfig) -> Self {
         Self {
-            shard_sizes: value.shard_sizes.as_ref().map(|c| {
+            split_sizes: value.split_sizes.as_ref().map(|c| {
                 c.iter()
                     .map(|(x, v)| {
                         (x.into(), v.iter().map(|(s, u)| (s.into(), *u)).collect())
@@ -1156,26 +1156,26 @@ pub struct PyManifestConfig {
     #[pyo3(get, set)]
     pub preload: Option<Py<PyManifestPreloadConfig>>,
     #[pyo3(get, set)]
-    pub sharding: Option<Py<PyManifestShardingConfig>>,
+    pub splitting: Option<Py<PyManifestSplittingConfig>>,
 }
 
 #[pymethods]
 impl PyManifestConfig {
     #[new]
-    #[pyo3(signature = (preload=None, sharding=None))]
+    #[pyo3(signature = (preload=None, splitting=None))]
     fn new(
         preload: Option<Py<PyManifestPreloadConfig>>,
-        sharding: Option<Py<PyManifestShardingConfig>>,
+        splitting: Option<Py<PyManifestSplittingConfig>>,
     ) -> Self {
-        Self { preload, sharding }
+        Self { preload, splitting }
     }
 
     pub fn __repr__(&self) -> String {
         // TODO: improve repr
         format!(
-            r#"ManifestConfig(preload={pre}, sharding={sha})"#,
+            r#"ManifestConfig(preload={pre}, splitting={sha})"#,
             pre = format_option_to_string(self.preload.as_ref().map(|l| l.to_string())),
-            sha = format_option_to_string(self.sharding.as_ref().map(|l| l.to_string())),
+            sha = format_option_to_string(self.splitting.as_ref().map(|l| l.to_string())),
         )
     }
 }
@@ -1192,7 +1192,7 @@ impl From<&PyManifestConfig> for ManifestConfig {
     fn from(value: &PyManifestConfig) -> Self {
         Python::with_gil(|py| Self {
             preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
-            sharding: value.sharding.as_ref().map(|c| (&*c.borrow(py)).into()),
+            splitting: value.splitting.as_ref().map(|c| (&*c.borrow(py)).into()),
         })
     }
 }
@@ -1205,9 +1205,9 @@ impl From<ManifestConfig> for PyManifestConfig {
                 Py::new(py, Into::<PyManifestPreloadConfig>::into(c))
                     .expect("Cannot create instance of ManifestPreloadConfig")
             }),
-            sharding: value.sharding.map(|c| {
-                Py::new(py, Into::<PyManifestShardingConfig>::into(c))
-                    .expect("Cannot create instance of ManifestShardingConfig")
+            splitting: value.splitting.map(|c| {
+                Py::new(py, Into::<PyManifestSplittingConfig>::into(c))
+                    .expect("Cannot create instance of ManifestSplittingConfig")
             }),
         })
     }

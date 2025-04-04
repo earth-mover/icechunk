@@ -482,31 +482,31 @@ class ManifestPreloadConfig:
         """
         ...
 
-class ManifestShardCondition:
+class ManifestSplitCondition:
     """Configuration for conditions under which manifests will be split into shards"""
 
     @staticmethod
     def or_conditions(
-        conditions: list[ManifestShardCondition],
-    ) -> ManifestShardCondition:
-        """Create a sharding condition that matches if any of `conditions` matches"""
+        conditions: list[ManifestSplitCondition],
+    ) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if any of `conditions` matches"""
         ...
     @staticmethod
     def and_conditions(
-        conditions: list[ManifestShardCondition],
-    ) -> ManifestShardCondition:
-        """Create a sharding condition that matches only if all passed `conditions` match"""
+        conditions: list[ManifestSplitCondition],
+    ) -> ManifestSplitCondition:
+        """Create a splitting condition that matches only if all passed `conditions` match"""
         ...
     @staticmethod
-    def path_matches(regex: str) -> ManifestShardCondition:
-        """Create a sharding condition that matches if the full path to the array matches the passed regex.
+    def path_matches(regex: str) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if the full path to the array matches the passed regex.
 
         Array paths are absolute, as in `/path/to/my/array`
         """
         ...
     @staticmethod
-    def name_matches(regex: str) -> ManifestShardCondition:
-        """Create a sharding condition that matches if the array's name matches the passed regex.
+    def name_matches(regex: str) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if the array's name matches the passed regex.
 
         Example, for an array  `/model/outputs/temperature`, the following will match:
         ```
@@ -515,7 +515,7 @@ class ManifestShardCondition:
         """
         ...
 
-class ShardDimCondition:
+class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
     class Axis:
         """Shard along specified integer axis."""
@@ -531,28 +531,31 @@ class ShardDimCondition:
 
 DimShardSize: TypeAlias = int
 ShardSizes: TypeAlias = tuple[
-    tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, DimShardSize], ...]], ...
+    tuple[
+        ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, DimShardSize], ...]
+    ],
+    ...,
 ]
 
-class ManifestShardingConfig:
-    """Configuration for manifest sharding."""
+class ManifestSplittingConfig:
+    """Configuration for manifest splitting."""
 
-    def __init__(self, shard_sizes: ShardSizes) -> None:
+    def __init__(self, split_sizes: ShardSizes) -> None:
         """Configuration for how Icechunk manifests will be sharded.
 
         Parameters
         ----------
-        shard_sizes: tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
+        split_sizes: tuple[tuple[ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
 
         Examples
         --------
 
         Shard manifests for the `temperature` array, with 3 chunks per shard along the `longitude` dimension.
-        >>> ManifestShardingConfig.from_dict(
+        >>> ManifestSplittingConfig.from_dict(
         ...     {
-        ...         ManifestShardCondition.name_matches("temperature"): {
-        ...             ShardDimCondition.DimensionName("longitude"): 3
+        ...         ManifestSplitCondition.name_matches("temperature"): {
+        ...             ManifestSplitDimCondition.DimensionName("longitude"): 3
         ...         }
         ...     }
         ... )
@@ -560,25 +563,25 @@ class ManifestShardingConfig:
         pass
 
     @property
-    def shard_sizes(self) -> ShardSizes:
+    def split_sizes(self) -> ShardSizes:
         """
         Configuration for how Icechunk manifests will be sharded.
 
         Returns
         -------
-        tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
+        tuple[tuple[ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
         """
         ...
 
-    @shard_sizes.setter
-    def shard_sizes(self, value: ShardSizes) -> None:
+    @split_sizes.setter
+    def split_sizes(self, value: ShardSizes) -> None:
         """
         Set the sizes for how Icechunk manifests will be sharded.
 
         Parameters
         ----------
-        value: tuple[tuple[ManifestShardCondition, tuple[tuple[ShardDimCondition, int], ...]], ...]
+        value: tuple[tuple[ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
         """
         ...
@@ -589,7 +592,7 @@ class ManifestConfig:
     def __init__(
         self,
         preload: ManifestPreloadConfig | None = None,
-        sharding: ManifestShardingConfig | None = None,
+        splitting: ManifestSplittingConfig | None = None,
     ) -> None:
         """
         Create a new `ManifestConfig` object
@@ -598,7 +601,7 @@ class ManifestConfig:
         ----------
         preload: ManifestPreloadConfig | None
             The configuration for how Icechunk manifests will be preloaded.
-        sharding: ManifestShardingConfig | None
+        splitting: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be sharded.
         """
         ...
@@ -626,25 +629,25 @@ class ManifestConfig:
         ...
 
     @property
-    def sharding(self) -> ManifestShardingConfig | None:
+    def splitting(self) -> ManifestSplittingConfig | None:
         """
         The configuration for how Icechunk manifests will be sharded.
 
         Returns
         -------
-        ManifestShardingConfig | None
+        ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be sharded.
         """
         ...
 
-    @sharding.setter
-    def sharding(self, value: ManifestShardingConfig | None) -> None:
+    @splitting.setter
+    def splitting(self, value: ManifestSplittingConfig | None) -> None:
         """
         Set the configuration for how Icechunk manifests will be sharded.
 
         Parameters
         ----------
-        value: ManifestShardingConfig | None
+        value: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be sharded.
         """
         ...

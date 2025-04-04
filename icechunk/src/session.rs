@@ -24,7 +24,7 @@ use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
-    config::{ManifestShardingConfig, ShardDimCondition},
+    config::{ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
@@ -32,7 +32,7 @@ use crate::{
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            ManifestShards, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+            ManifestSplits, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
         snapshot::{
@@ -106,8 +106,8 @@ pub enum SessionErrorKind {
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
-    #[error("invalid chunk index for sharding manifests: {coords:?}")]
-    InvalidIndexForManifestShards { coords: ChunkIndices },
+    #[error("invalid chunk index for splitting manifests: {coords:?}")]
+    InvalidIndexForSplitManifests { coords: ChunkIndices },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
 }
@@ -160,7 +160,7 @@ impl From<VirtualReferenceError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
-impl ManifestShards {
+impl ManifestSplits {
     // Returns the index of shard_range that includes ChunkIndices
     // This can be used at write time to split manifests based on the config
     // and at read time to choose which manifest to query for chunk payload
@@ -182,7 +182,7 @@ impl ManifestShards {
             .find(|(_, e)| e.contains(coord.0.as_slice()))
             .map(|(i, _)| i)
             .ok_or(
-                SessionErrorKind::InvalidIndexForManifestShards { coords: coord.clone() }
+                SessionErrorKind::InvalidIndexForSplitManifests { coords: coord.clone() }
                     .into(),
             )
     }
@@ -739,7 +739,7 @@ impl Session {
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
     ) -> SessionResult<Option<ChunkPayload>> {
-        let shards = ManifestShards::from_extents(
+        let shards = ManifestSplits::from_extents(
             manifests.iter().map(|m| m.extents.clone()).collect(),
         );
         let index = match shards.which(coords) {
@@ -1472,7 +1472,7 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node_id: &NodeId,
         chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
-        shards: ManifestShards,
+        shards: ManifestSplits,
     ) -> SessionResult<()> {
         // TODO: think about optimizing writes to manifests
         // TODO: add benchmarks
@@ -1525,7 +1525,7 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node_id: &NodeId,
         node_path: &Path,
-        shards: ManifestShards,
+        shards: ManifestSplits,
     ) -> SessionResult<()> {
         let chunks = stream::iter(
             self.change_set.new_array_chunk_iterator(node_id, node_path).map(Ok),
@@ -1539,7 +1539,7 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
-        shards: ManifestShards,
+        shards: ManifestSplits,
     ) -> SessionResult<()> {
         let asset_manager = Arc::clone(&self.asset_manager);
         let updated_chunks = updated_node_chunks_iterator(
@@ -1582,24 +1582,24 @@ impl<'a> FlushProcess<'a> {
     }
 }
 
-impl ShardDimCondition {
+impl ManifestSplitDimCondition {
     fn matches(&self, axis: usize, dimname: Option<String>) -> bool {
         match self {
-            ShardDimCondition::Axis(ax) => ax == &axis,
-            ShardDimCondition::DimensionName(regex) => dimname
+            ManifestSplitDimCondition::Axis(ax) => ax == &axis,
+            ManifestSplitDimCondition::DimensionName(regex) => dimname
                 .map(|name| {
                     Regex::new(regex)
                         .map(|regex| regex.is_match(name.as_bytes()))
                         .unwrap_or(false)
                 })
                 .unwrap_or(false),
-            ShardDimCondition::Rest => true,
+            ManifestSplitDimCondition::Rest => true,
         }
     }
 }
 
-impl ManifestShardingConfig {
-    pub fn get_shard_sizes(&self, node: &NodeSnapshot) -> SessionResult<ManifestShards> {
+impl ManifestSplittingConfig {
+    pub fn get_split_sizes(&self, node: &NodeSnapshot) -> SessionResult<ManifestSplits> {
         match &node.node_data {
             NodeData::Group => Err(SessionErrorKind::NotAnArray {
                 node: node.clone(),
@@ -1627,13 +1627,13 @@ impl ManifestShardingConfig {
                 let mut already_matched: HashSet<usize> = HashSet::new();
 
                 #[allow(clippy::expect_used)]
-                let shard_sizes = self
-                    .shard_sizes
+                let split_sizes = self
+                    .split_sizes
                     .clone()
-                    .or_else(|| Self::default().shard_sizes)
+                    .or_else(|| Self::default().split_sizes)
                     .expect("logic bug");
 
-                for (condition, dim_specs) in shard_sizes.iter() {
+                for (condition, dim_specs) in split_sizes.iter() {
                     if condition.matches(&node.path) {
                         let dimension_names = dimension_names.clone().unwrap_or(
                             repeat_n(DimensionName::NotSpecified, ndim).collect(),
@@ -1658,7 +1658,7 @@ impl ManifestShardingConfig {
                         }
                     }
                 }
-                Ok(ManifestShards::from_edges(edges))
+                Ok(ManifestSplits::from_edges(edges))
             }
         }
     }
@@ -1675,7 +1675,7 @@ async fn flush(
 
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
-    let sharding_config = flush_data.config.manifest().sharding();
+    let splitting_config = flush_data.config.manifest().splitting();
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
@@ -1701,7 +1701,7 @@ async fn flush(
                 &node.path,
             )
             .await?;
-            let shards = sharding_config.get_shard_sizes(&new_node)?;
+            let shards = splitting_config.get_split_sizes(&new_node)?;
             flush_data.write_manifest_for_existing_node(&node, shards).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
@@ -1723,7 +1723,7 @@ async fn flush(
             node_path,
         )
         .await?;
-        let shards = sharding_config.get_shard_sizes(&node)?;
+        let shards = splitting_config.get_split_sizes(&node)?;
         flush_data.write_manifest_for_new_node(node_id, node_path, shards).await?;
     }
 
@@ -1954,7 +1954,7 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::{ManifestExtents, ManifestShards},
+        format::manifest::{ManifestExtents, ManifestSplits},
         refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
@@ -2159,14 +2159,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_which_shard() -> Result<(), Box<dyn Error>> {
-        let shards = ManifestShards::from_edges(vec![vec![0, 10, 20]]);
+        let shards = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
         assert_eq!(shards.which(&ChunkIndices(vec![1])).unwrap(), 0);
         assert_eq!(shards.which(&ChunkIndices(vec![11])).unwrap(), 1);
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
-        let shards = ManifestShards::from_edges(edges);
+        let shards = ManifestSplits::from_edges(edges);
         assert_eq!(shards.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
         assert_eq!(shards.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
         assert_eq!(shards.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
