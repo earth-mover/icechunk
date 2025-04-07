@@ -39,7 +39,7 @@ config.compression = icechunk.CompressionConfig(
 
 ### [`caching`](./reference.md#icechunk.RepositoryConfig.caching)
 
-Icechunk caches metadata files to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
+Icechunk caches files (metadata and chunks) to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
 
 ```python
 config.caching = icechunk.CachingConfig(
