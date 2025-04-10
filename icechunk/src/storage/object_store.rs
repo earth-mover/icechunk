@@ -448,12 +448,12 @@ impl Storage for ObjectStorage {
             .await
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip(self, _settings, bytes))]
     async fn write_chunk(
         &self,
         _settings: &Settings,
         id: ChunkId,
-        bytes: bytes::Bytes,
+        bytes: Bytes,
     ) -> Result<(), StorageError> {
         let path = self.get_chunk_path(&id);
         self.get_client().await.put(&path, bytes.into()).await?;
