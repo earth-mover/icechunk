@@ -1,16 +1,13 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-use std::{collections::HashMap, iter, num::NonZeroU64, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
+use bytes::Bytes;
 use icechunk::{
-    format::{manifest::ChunkPayload, snapshot::ZarrArrayMetadata, ChunkIndices, Path},
-    metadata::{
-        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-        UserAttributes,
-    },
+    Repository, Storage,
+    format::{ChunkIndices, Path, manifest::ChunkPayload, snapshot::ArrayShape},
     repository::VersionInfo,
     session::{Session, SessionError},
     storage::new_in_memory_storage,
-    Repository, Storage,
 };
 use itertools::Itertools;
 
@@ -46,9 +43,10 @@ ds.add_group("/group2".into()).await?;
 "#,
     );
 
-    ds.add_group(Path::root()).await?;
-    ds.add_group("/group1".try_into().unwrap()).await?;
-    ds.add_group("/group2".try_into().unwrap()).await?;
+    let user_data = Bytes::new();
+    ds.add_group(Path::root(), user_data.clone()).await?;
+    ds.add_group("/group1".try_into().unwrap(), user_data.clone()).await?;
+    ds.add_group("/group2".try_into().unwrap(), user_data.clone()).await?;
 
     println!();
     print_nodes(&ds).await?;
@@ -96,56 +94,11 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
 "#,
     );
 
-    let zarr_meta1 = ZarrArrayMetadata {
-        shape: vec![3],
-        data_type: DataType::Int32,
-        chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-        ]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Int32(0),
-        codecs: vec![Codec {
-            name: "mycodec".to_string(),
-            configuration: Some(HashMap::from_iter(iter::once((
-                "foo".to_string(),
-                serde_json::Value::from(42),
-            )))),
-        }],
-        storage_transformers: Some(vec![StorageTransformer {
-            name: "mytransformer".to_string(),
-            configuration: Some(HashMap::from_iter(iter::once((
-                "foo".to_string(),
-                serde_json::Value::from(42),
-            )))),
-        }]),
-        dimension_names: Some(vec![
-            Some("x".to_string()),
-            Some("y".to_string()),
-            Some("t".to_string()),
-        ]),
-    };
+    let shape = ArrayShape::new(vec![(3, 1)]).unwrap();
+    let dimension_names = Some(vec!["x".into()]);
     let array1_path: Path = "/group1/array1".try_into().unwrap();
-    ds.add_array(array1_path.clone(), zarr_meta1).await?;
+    ds.add_array(array1_path.clone(), shape, dimension_names, user_data.clone()).await?;
     println!();
-    print_nodes(&ds).await?;
-
-    println!();
-    println!();
-    println!("## Setting array user attributes");
-    println!(
-        r#"
-```
-ds.set_user_attributes(array1_path.clone(), Some("{{n:42}}".to_string())).await?;
-```
- "#,
-    );
-    ds.set_user_attributes(
-        array1_path.clone(),
-        Some(UserAttributes::try_new(br#"{"n":42}"#).unwrap()),
-    )
-    .await?;
     print_nodes(&ds).await?;
 
     println!("## Committing");
@@ -286,15 +239,9 @@ async fn print_nodes(ds: &Session) -> Result<(), SessionError> {
     let rows = ds
         .list_nodes()
         .await?
+        .map(|n| n.unwrap())
         .sorted_by_key(|n| n.path.clone())
-        .map(|node| {
-            format!(
-                "|{:10?}|{:15}|{:10?}\n",
-                node.node_type(),
-                node.path.to_string(),
-                node.user_attributes,
-            )
-        })
+        .map(|node| format!("|{:10?}|{:15}\n", node.node_type(), node.path.to_string(),))
         .format("");
 
     println!("{}", rows);

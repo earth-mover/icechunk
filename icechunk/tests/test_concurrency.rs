@@ -1,19 +1,16 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
+use chrono::Utc;
 use icechunk::{
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path},
-    metadata::{
-        ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-    },
-    session::{get_chunk, Session},
-    storage::new_in_memory_storage,
     Repository, Storage,
+    format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
+    session::{Session, get_chunk},
+    storage::new_in_memory_storage,
 };
 use pretty_assertions::assert_eq;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::{
     collections::{HashMap, HashSet},
-    num::NonZeroU64,
     sync::Arc,
     time::Duration,
 };
@@ -25,40 +22,60 @@ use tokio::{
 
 use futures::TryStreamExt;
 
+mod common;
+
 const N: usize = 20;
 
 #[tokio::test]
+async fn test_concurrency_in_memory() -> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_concurrency_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_r2_integration_storage(prefix)?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_concurrency_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_aws_integration_storage(prefix)?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
+    let storage: Arc<dyn Storage + Send + Sync> =
+        common::make_tigris_integration_storage(prefix)?;
+    do_test_concurrency(storage).await
+}
+
 /// This test starts concurrent tasks to read, write and list a repository.
 ///
 /// It writes an `NxN` array,  with individual tasks for each 1x1 chunk. Concurrently with that it
 /// starts NxN tasks to read each chunk, these tasks only finish when the chunk was successfully
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
-async fn test_concurrency() -> Result<(), Box<dyn std::error::Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+async fn do_test_concurrency(
+    storage: Arc<dyn Storage + Send + Sync>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::create(None, storage, HashMap::new()).await?;
     let mut ds = repo.writable_session("main").await?;
 
-    ds.add_group(Path::root()).await?;
-    let zarr_meta = ZarrArrayMetadata {
-        shape: vec![N as u64, N as u64],
-        data_type: DataType::Float64,
-        chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(1).expect("Cannot create NonZero"),
-            NonZeroU64::new(1).expect("Cannot create NonZero"),
-        ]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Float64(f64::NAN),
-        codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-        storage_transformers: Some(vec![StorageTransformer {
-            name: "mytransformer".to_string(),
-            configuration: None,
-        }]),
-        dimension_names: Some(vec![Some("x".to_string()), Some("y".to_string())]),
-    };
-
+    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+    let dimension_names = Some(vec!["x".into(), "y".into()]);
+    let user_data = Bytes::new();
     let new_array_path: Path = "/array".try_into().unwrap();
-    ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+    ds.add_array(new_array_path.clone(), shape, dimension_names, user_data).await?;
 
     let ds = Arc::new(RwLock::new(ds));
 
@@ -154,8 +171,7 @@ async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
             expected_indices.insert(ChunkIndices(vec![x, y]));
         }
     }
-    let expected_nodes: HashSet<String> =
-        HashSet::from_iter(vec!["/".to_string(), "/array".to_string()]);
+    let expected_nodes: HashSet<String> = HashSet::from_iter(vec!["/array".to_string()]);
 
     barrier.wait().await;
     loop {
@@ -165,7 +181,7 @@ async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
             .list_nodes()
             .await
             .expect("list_nodes failed")
-            .map(|n| n.path.to_string())
+            .map(|n| n.unwrap().path.to_string())
             .collect::<HashSet<_>>();
         assert_eq!(expected_nodes, nodes);
 

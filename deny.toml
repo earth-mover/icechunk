@@ -3,7 +3,8 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+# only fail for direct unmaintained dependencies, this can only be used with rustc 1.85
+unmaintained = "workspace"
 
 [licenses]
 # List of explicitly allowed licenses

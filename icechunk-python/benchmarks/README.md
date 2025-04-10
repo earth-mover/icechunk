@@ -25,7 +25,6 @@ pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
 ```
 Use `---icechunk-prefix` to add an extra prefix during both setup and running of benchmarks.
 
-
 ### ERA5
 
 `benchmarks/create_era5.py` creates an ERA5 dataset.
@@ -87,6 +86,31 @@ test_time_getsize_prefix[era5-single] (0034_main_3a)     68.8355 (31.10)
 test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
 --------------------------------------------------------------------------
 ```
+
+### Notes
+### Where to run the benchmarks?
+
+- Pass the `--where [local|s3|s3_ob|gcs|tigris]` flag to control where benchmarks are run.
+- `s3_ob` uses the `s3_object_store_storage` constructor.
+- Pass multiple stores with `--where 's3|gcs'`
+
+```sh
+python benchmarks/runner.py --where gcs v0.1.2
+```
+
+By default all benchmarks are run locally:
+1. A temporary directory is used as a staging area.
+2. A new virtual env is created there and the dev version is installed using `pip` and a github URI. *This means that you can only benchmark commits that have been pushed to Github.*
+
+It is possible to run the benchmarks in the cloud using Coiled. You will need to be a member of the Coiled workspaces: `earthmover-devs` (AWS), `earthmover-devs-gcp` (GCS) and `earthmover-devs-azure` (Azure).
+1. We create a new "coiled software environment" with a specific name.
+2. We use `coiled run` targeting a specific machine type, with a specific software env.
+4. The VM stays alive for 10 minutes to allow for quick iteration.
+5. Coiled does not sync stdout until the pytest command is done, for some reason. See the logs on the Coiled platform for quick feedback.
+6. We use the `--sync` flag, so you will need [`mutagen`](https://mutagen.io/documentation/synchronization/) installed on your system. This will sync the benchmark JSON outputs between the VM and your machine.
+Downsides:
+1. At the moment, we can only benchmark released versions of icechunk. We may need a more complicated Docker container strategy in the future to support dev branch benchmarks.
+2. When a new env is created, the first run always fails :/. The second run works though, so just re-run.
 
 ### `runner.py`
 
@@ -172,6 +196,22 @@ pytest-benchmark compare 0019 0020 0021 --group=func,param --sort=name --columns
 Passing `--histogram=compare` will save a boatload of `compare-*.svg` files.
 
 To easily run benchmarks for some named refs use `benchmarks/run_refs.py`
+
+### Comparing across multiple stores
+
+```sh
+python benchmarks/runner.py --skip-setup --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
+```
+
+``` sh
+-------- benchmark 'test_write_simple_1d simple-1d': 3 tests --------
+Name (time in s)                                     Median
+---------------------------------------------------------------------
+test_write_simple_1d[simple-1d] (g/gcs_main_95e)     5.2314 (3.15)
+test_write_simple_1d[simple-1d] (g/s3_main_95ef)     1.6622 (1.0)
+test_write_simple_1d[simple-1d] (g/s3_ob_main_9)     1.6909 (1.02)
+---------------------------------------------------------------------
+```
 
 ## Design decisions / future choices
 

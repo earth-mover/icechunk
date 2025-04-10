@@ -127,7 +127,7 @@ def test_virtual_chunk_containers() -> None:
     container = icechunk.VirtualChunkContainer("custom", "s3://", store_config)
     config.set_virtual_chunk_container(container)
     assert re.match(
-        r"RepositoryConfig\(inline_chunk_threshold_bytes=None, unsafe_overwrite_refs=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None, manifest=.*\)",
+        r"RepositoryConfig\(inline_chunk_threshold_bytes=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None, manifest=.*\)",
         repr(config),
     )
     assert config.virtual_chunk_containers
@@ -158,11 +158,9 @@ def test_can_change_deep_config_values() -> None:
     )
     config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=11,
-        unsafe_overwrite_refs=False,
         compression=icechunk.CompressionConfig(level=0),
     )
     config.inline_chunk_threshold_bytes = 5
-    config.unsafe_overwrite_refs = True
     config.get_partial_values_concurrency = 42
     config.compression = icechunk.CompressionConfig(level=8)
     config.compression.level = 2
@@ -170,6 +168,7 @@ def test_can_change_deep_config_values() -> None:
     config.storage = storage.default_settings()
     assert config.storage.concurrency
     config.storage.concurrency.ideal_concurrent_request_size = 1_000_000
+    config.storage.storage_class = "STANDARD_IA"
     config.manifest = icechunk.ManifestConfig()
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
     config.manifest.preload.preload_if = icechunk.ManifestPreloadCondition.and_conditions(
@@ -180,7 +179,7 @@ def test_can_change_deep_config_values() -> None:
     )
 
     assert re.match(
-        r"RepositoryConfig\(inline_chunk_threshold_bytes=5, unsafe_overwrite_refs=True, get_partial_values_concurrency=42, compression=CompressionConfig\(algorithm=None, level=2\), caching=CachingConfig\(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None\), storage=StorageSettings\(concurrency=StorageConcurrencySettings\(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000\)\), manifest=.*\)",
+        r"RepositoryConfig\(inline_chunk_threshold_bytes=5, get_partial_values_concurrency=42, compression=CompressionConfig\(algorithm=None, level=2\), caching=CachingConfig\(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None\), storage=StorageSettings\(concurrency=StorageConcurrencySettings\(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000\), unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=\"STANDARD_IA\", metadata_storage_class=None, chunks_storage_class=None\), manifest=.*\)",
         repr(config),
     )
     repo = icechunk.Repository.open(

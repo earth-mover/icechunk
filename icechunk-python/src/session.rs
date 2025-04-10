@@ -2,7 +2,7 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
-use icechunk::{session::Session, Store};
+use icechunk::{Store, session::Session};
 use pyo3::{prelude::*, types::PyType};
 use tokio::sync::{Mutex, RwLock};
 

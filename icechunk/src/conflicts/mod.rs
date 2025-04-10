@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::{
     change_set::ChangeSet,
-    format::{transaction_log::TransactionLog, ChunkIndices, NodeId, Path},
+    format::{ChunkIndices, NodeId, Path, transaction_log::TransactionLog},
     session::{Session, SessionResult},
 };
 
@@ -17,11 +17,7 @@ pub enum Conflict {
     NewNodeInInvalidGroup(Path),
     ZarrMetadataDoubleUpdate(Path),
     ZarrMetadataUpdateOfDeletedArray(Path),
-    UserAttributesDoubleUpdate {
-        path: Path,
-        node_id: NodeId,
-    },
-    UserAttributesUpdateOfDeletedNode(Path),
+    ZarrMetadataUpdateOfDeletedGroup(Path),
     ChunkDoubleUpdate {
         path: Path,
         node_id: NodeId,

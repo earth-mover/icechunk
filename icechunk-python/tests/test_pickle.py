@@ -15,7 +15,9 @@ from icechunk import (
 
 
 def create_local_repo(path: str) -> Repository:
-    return Repository.create(storage=local_filesystem_storage(path))
+    repo = Repository.create(storage=local_filesystem_storage(path))
+    repo.set_default_commit_metadata({"author": "test"})
+    return repo
 
 
 @pytest.fixture(scope="function")
@@ -23,6 +25,20 @@ def tmp_repo(tmpdir: Path) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(store_path)
     return repo
+
+
+def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
+    pickled = pickle.dumps(tmp_repo)
+    roundtripped = pickle.loads(pickled)
+    assert tmp_repo.list_branches() == roundtripped.list_branches()
+    assert tmp_repo.default_commit_metadata() == roundtripped.default_commit_metadata()
+    assert tmp_repo.default_commit_metadata() == {"author": "test"}
+
+    storage = tmp_repo.storage
+    assert (
+        repr(storage)
+        == f"ObjectStorage(backend=LocalFileSystemObjectStoreBackend(path={tmpdir}))"
+    )
 
 
 def test_pickle_read_only(tmp_repo: Repository) -> None:
@@ -58,6 +74,7 @@ def test_pickle() -> None:
             storage=s3_storage(
                 endpoint_url="http://localhost:9000",
                 allow_http=True,
+                force_path_style=True,
                 region="us-east-1",
                 bucket="testbucket",
                 prefix=prefix,

@@ -6,7 +6,7 @@ use crate::{
     session::{Session, SessionResult},
 };
 
-use super::{detector::ConflictDetector, Conflict, ConflictResolution, ConflictSolver};
+use super::{Conflict, ConflictResolution, ConflictSolver, detector::ConflictDetector};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionSelection {
@@ -17,7 +17,6 @@ pub enum VersionSelection {
 
 #[derive(Debug, Clone)]
 pub struct BasicConflictSolver {
-    pub on_user_attributes_conflict: VersionSelection,
     pub on_chunk_conflict: VersionSelection,
     pub fail_on_delete_of_updated_array: bool,
     pub fail_on_delete_of_updated_group: bool,
@@ -26,7 +25,6 @@ pub struct BasicConflictSolver {
 impl Default for BasicConflictSolver {
     fn default() -> Self {
         Self {
-            on_user_attributes_conflict: VersionSelection::UseOurs,
             on_chunk_conflict: VersionSelection::UseOurs,
             fail_on_delete_of_updated_array: false,
             fail_on_delete_of_updated_group: false,
@@ -72,32 +70,24 @@ impl BasicConflictSolver {
         conflicts: Vec<Conflict>,
     ) -> SessionResult<ConflictResolution> {
         use Conflict::*;
-        let unsolvable = conflicts.iter().any(
-            |conflict| {
-                matches!(
-                    conflict,
-                    NewNodeConflictsWithExistingNode(_) |
-                    NewNodeInInvalidGroup(_) |
-                    ZarrMetadataDoubleUpdate(_) |
-                    ZarrMetadataUpdateOfDeletedArray(_) |
-                    UserAttributesUpdateOfDeletedNode(_) |
-                    ChunksUpdatedInDeletedArray{..} |
-                    ChunksUpdatedInUpdatedArray{..}
-                ) ||
-                matches!(conflict,
-                    UserAttributesDoubleUpdate{..} if self.on_user_attributes_conflict == VersionSelection::Fail
-                ) ||
-                matches!(conflict,
-                    ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
-                ) ||
-                matches!(conflict,
-                    DeleteOfUpdatedArray{..} if self.fail_on_delete_of_updated_array
-                ) ||
-                matches!(conflict,
-                    DeleteOfUpdatedGroup{..} if self.fail_on_delete_of_updated_group
-                )
-            },
-        );
+        let unsolvable = conflicts.iter().any(|conflict| {
+            matches!(
+                conflict,
+                NewNodeConflictsWithExistingNode(_)
+                    | NewNodeInInvalidGroup(_)
+                    | ZarrMetadataDoubleUpdate(_)
+                    | ZarrMetadataUpdateOfDeletedArray(_)
+                    | ZarrMetadataUpdateOfDeletedGroup(_)
+                    | ChunksUpdatedInDeletedArray { .. }
+                    | ChunksUpdatedInUpdatedArray { .. }
+            ) || matches!(conflict,
+                ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
+            ) || matches!(conflict,
+                DeleteOfUpdatedArray{..} if self.fail_on_delete_of_updated_array
+            ) || matches!(conflict,
+                DeleteOfUpdatedGroup{..} if self.fail_on_delete_of_updated_group
+            )
+        });
 
         if unsolvable {
             return Ok(ConflictResolution::Unsolvable {
@@ -114,27 +104,16 @@ impl BasicConflictSolver {
                         VersionSelection::UseOurs => {
                             // this is a no-op, our change will override the conflicting change
                         }
-                        VersionSelection::UseTheirs => {
-                            current_changes.drop_chunk_changes(&node_id, |coord| chunk_coordinates.contains(coord))
-                        }
+                        VersionSelection::UseTheirs => current_changes
+                            .drop_chunk_changes(&node_id, |coord| {
+                                chunk_coordinates.contains(coord)
+                            }),
                         // we can panic here because we have returned from the function if there
                         // were any unsolvable conflicts
                         #[allow(clippy::panic)]
-                        VersionSelection::Fail => panic!("Bug in conflict resolution: ChunkDoubleUpdate flagged as unrecoverable")
-                    }
-                }
-                UserAttributesDoubleUpdate { node_id, .. } => {
-                    match self.on_user_attributes_conflict {
-                        VersionSelection::UseOurs => {
-                            // this is a no-op, our change will override the conflicting change
-                        }
-                        VersionSelection::UseTheirs => {
-                            current_changes.undo_user_attributes_update(&node_id);
-                        }
-                        // we can panic here because we have returned from the function if there
-                        // were any unsolvable conflicts
-                        #[allow(clippy::panic)]
-                        VersionSelection::Fail => panic!("Bug in conflict resolution: UserAttributesDoubleUpdate flagged as unrecoverable")
+                        VersionSelection::Fail => panic!(
+                            "Bug in conflict resolution: ChunkDoubleUpdate flagged as unrecoverable"
+                        ),
                     }
                 }
                 DeleteOfUpdatedArray { .. } => {

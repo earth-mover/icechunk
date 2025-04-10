@@ -1,0 +1,216 @@
+name: Python Check - Upstream
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  schedule:
+    - cron: "0 0 * * *" # Daily “At 00:00” UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+jobs:
+  build:
+    name: upstream-dev
+    runs-on: ubuntu-latest
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+      - name: Stand up MinIO
+        run: |
+          docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          # target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+
+      - name: setup
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          uv pip install --group upstream
+          uv pip install icechunk --no-deps --find-links dist --force-reinstall
+          uv pip list
+
+      - name: mypy
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          mypy python
+
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
+
+      - name: describe environment
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip list
+
+      - name: pytest
+        id: status
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pytest -n 4 --report-log output-pytest-log.json
+
+      # explicitly save the cache so it gets updated, also do this even if it fails.
+      - name: Save cached hypothesis directory
+        id: save-hypothesis-cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Generate and publish the report
+        if: |
+          failure()
+          && steps.status.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        uses: xarray-contrib/issue-from-pytest-log@v1
+        with:
+          log-path: output-pytest-log.jsonl
+
+
+  xarray-backends:
+    name: xarray-tests-upstream
+    runs-on: ubuntu-latest
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: "icechunk"
+
+      - name: Stand up MinIO
+        working-directory: icechunk
+        run: |
+          docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        working-directory: icechunk
+        run: |
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - uses: actions/checkout@v4
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0 # Fetch all history for all branches and tags.
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk/icechunk-python
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+
+      - name: setup
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          uv pip install icechunk --group upstream --find-links dist
+          uv pip install pytest-mypy-plugins
+          uv pip list
+
+      - name: pytest
+        id: status
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        env:
+          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
+          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+
+      - name: Generate and publish the report
+        if: |
+          failure()
+          && steps.status.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        uses: xarray-contrib/issue-from-pytest-log@v1
+        with:
+          log-path: output-pytest-log.jsonl
+          issue-title: "Nightly Xarray backends tests failed"

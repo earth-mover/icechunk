@@ -2,7 +2,7 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     convert::Infallible,
-    future::{ready, Future},
+    future::{Future, ready},
     ops::Range,
     pin::Pin,
     sync::Arc,
@@ -12,37 +12,37 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{future::Either, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{debug, info, instrument, trace, warn, Instrument};
+use tracing::{Instrument, debug, info, instrument, trace, warn};
 
 use crate::{
+    RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::ChangeSet,
+    change_set::{ArrayData, ChangeSet},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
+        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
+        IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
-            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestRef,
+            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
             VirtualReferenceErrorKind,
         },
         snapshot::{
-            ManifestFileInfo, NodeData, NodeSnapshot, NodeType, Snapshot,
-            SnapshotProperties, UserAttributesSnapshot, ZarrArrayMetadata,
+            ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
+            NodeType, Snapshot, SnapshotProperties,
         },
-        transaction_log::{Diff, TransactionLog},
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
-        IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    metadata::UserAttributes,
-    refs::{fetch_branch_tip, update_branch, RefError, RefErrorKind},
-    repository::{tx_to_diff, RepositoryError, RepositoryErrorKind},
+    refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
+    repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
-    RepositoryConfig, Storage, StorageError,
 };
 
 #[derive(Debug, Error)]
@@ -75,9 +75,7 @@ pub enum SessionErrorKind {
     AlreadyExists { node: NodeSnapshot, message: String },
     #[error("cannot commit, no changes made to the session")]
     NoChangesToCommit,
-    #[error(
-        "invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` "
-    )]
+    #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
     InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
     #[error(
         "snapshot timestamp is invalid: timestamp: `{snapshot_time}`, object store clock: `{object_store_time}` "
@@ -98,7 +96,9 @@ pub enum SessionErrorKind {
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("error in session deserialization")]
     DeserializationError(#[from] rmp_serde::decode::Error),
-    #[error("error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`")]
+    #[error(
+        "error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`"
+    )]
     ConflictingPathNotFound(NodeId),
     #[error(
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
@@ -166,6 +166,7 @@ pub struct Session {
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
+    default_commit_metadata: SnapshotProperties,
 }
 
 impl Session {
@@ -186,9 +187,11 @@ impl Session {
             branch_name: None,
             snapshot_id,
             change_set: ChangeSet::default(),
+            default_commit_metadata: SnapshotProperties::default(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -197,6 +200,7 @@ impl Session {
         virtual_resolver: Arc<VirtualChunkResolver>,
         branch_name: String,
         snapshot_id: SnapshotId,
+        default_commit_metadata: SnapshotProperties,
     ) -> Self {
         Self {
             config,
@@ -207,6 +211,7 @@ impl Session {
             branch_name: Some(branch_name),
             snapshot_id,
             change_set: ChangeSet::default(),
+            default_commit_metadata,
         }
     }
 
@@ -253,7 +258,8 @@ impl Session {
 
     /// Compute an overview of the current session changes
     pub async fn status(&self) -> SessionResult<Diff> {
-        let tx_log = TransactionLog::new(&self.change_set);
+        // it doesn't really matter what Id we give to the tx log, it's not going to be persisted
+        let tx_log = TransactionLog::new(&SnapshotId::random(), &self.change_set);
         let from_session = Self::create_readonly_session(
             self.config().clone(),
             self.storage_settings.as_ref().clone(),
@@ -262,18 +268,24 @@ impl Session {
             Arc::clone(&self.virtual_resolver),
             self.snapshot_id.clone(),
         );
-        tx_to_diff(&tx_log, &from_session, self).await
+        let mut builder = DiffBuilder::default();
+        builder.add_changes(&tx_log);
+        builder.to_diff(&from_session, self).await
     }
 
     /// Add a group to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    #[instrument(skip(self))]
-    pub async fn add_group(&mut self, path: Path) -> SessionResult<()> {
+    #[instrument(skip(self, definition))]
+    pub async fn add_group(
+        &mut self,
+        path: Path,
+        definition: Bytes,
+    ) -> SessionResult<()> {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_group(path.clone(), id);
+                self.change_set.add_group(path.clone(), id, definition);
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -291,9 +303,9 @@ impl Session {
             NodeSnapshot { node_data: NodeData::Group, path: node_path, .. } => {
                 Ok(self.delete_group(node_path).await?)
             }
-            NodeSnapshot { node_data: NodeData::Array(..), path: node_path, .. } => {
-                Ok(self.delete_array(node_path).await?)
-            }
+            NodeSnapshot {
+                node_data: NodeData::Array { .. }, path: node_path, ..
+            } => Ok(self.delete_array(node_path).await?),
         }
     }
     /// Delete a group in the hierarchy
@@ -306,8 +318,8 @@ impl Session {
                 let nodes_iter: Vec<NodeSnapshot> = self
                     .list_nodes()
                     .await?
-                    .filter(|node| node.path.starts_with(&parent.path))
-                    .collect();
+                    .filter_ok(|node| node.path.starts_with(&parent.path))
+                    .try_collect()?;
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
@@ -328,16 +340,22 @@ impl Session {
     /// Add an array to the store.
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    #[instrument(skip(self, metadata))]
+    #[instrument(skip(self, user_data))]
     pub async fn add_array(
         &mut self,
         path: Path,
-        metadata: ZarrArrayMetadata,
+        shape: ArrayShape,
+        dimension_names: Option<Vec<DimensionName>>,
+        user_data: Bytes,
     ) -> SessionResult<()> {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_array(path, id, metadata);
+                self.change_set.add_array(
+                    path,
+                    id,
+                    ArrayData { shape, dimension_names, user_data },
+                );
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -352,15 +370,35 @@ impl Session {
     // Updates an array Zarr metadata
     ///
     /// Calling this only records the operation in memory, doesn't have any consequence on the storage
-    #[instrument(skip(self, metadata))]
+    #[instrument(skip(self, user_data))]
     pub async fn update_array(
         &mut self,
-        path: Path,
-        metadata: ZarrArrayMetadata,
+        path: &Path,
+        shape: ArrayShape,
+        dimension_names: Option<Vec<DimensionName>>,
+        user_data: Bytes,
     ) -> SessionResult<()> {
-        self.get_array(&path)
+        self.get_array(path).await.map(|node| {
+            self.change_set.update_array(
+                &node.id,
+                path,
+                ArrayData { shape, dimension_names, user_data },
+            )
+        })
+    }
+
+    // Updates an group Zarr metadata
+    ///
+    /// Calling this only records the operation in memory, doesn't have any consequence on the storage
+    #[instrument(skip(self, definition))]
+    pub async fn update_group(
+        &mut self,
+        path: &Path,
+        definition: Bytes,
+    ) -> SessionResult<()> {
+        self.get_group(path)
             .await
-            .map(|node| self.change_set.update_array(node.id, metadata))
+            .map(|node| self.change_set.update_group(&node.id, path, definition))
     }
 
     /// Delete an array in the hierarchy
@@ -391,18 +429,6 @@ impl Session {
         Ok(())
     }
 
-    /// Record the write or delete of user attributes to array or group
-    #[instrument(skip(self, atts))]
-    pub async fn set_user_attributes(
-        &mut self,
-        path: Path,
-        atts: Option<UserAttributes>,
-    ) -> SessionResult<()> {
-        let node = self.get_node(&path).await?;
-        self.change_set.update_user_attributes(node.id, atts);
-        Ok(())
-    }
-
     // Record the write, referencing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
@@ -426,8 +452,8 @@ impl Session {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array(zarr_metadata, _) = node.node_data {
-            if zarr_metadata.valid_chunk_coord(&coord) {
+        if let NodeData::Array { shape, .. } = node.node_data {
+            if shape.valid_chunk_coord(&coord) {
                 self.change_set.set_chunk_ref(node.id, coord, data);
                 Ok(())
             } else {
@@ -470,7 +496,7 @@ impl Session {
 
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         match self.get_node(path).await {
-            res @ Ok(NodeSnapshot { node_data: NodeData::Array(..), .. }) => res,
+            res @ Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => res,
             Ok(node @ NodeSnapshot { .. }) => Err(SessionErrorKind::NotAnArray {
                 node,
                 message: "getting an array".to_string(),
@@ -496,7 +522,7 @@ impl Session {
     pub async fn array_chunk_iterator<'a>(
         &'a self,
         path: &Path,
-    ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
+    ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
         node_chunk_iterator(
             &self.asset_manager,
             &self.change_set,
@@ -521,7 +547,7 @@ impl Session {
                 message: "getting chunk reference".to_string(),
             }
             .into()),
-            NodeData::Array(_, manifests) => {
+            NodeData::Array { manifests, .. } => {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
@@ -635,8 +661,11 @@ impl Session {
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
-    ) -> impl FnOnce(Bytes) -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
-    {
+    ) -> impl FnOnce(
+        Bytes,
+    )
+        -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+    + use<> {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         move |data: Bytes| {
@@ -655,8 +684,11 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn clear(&mut self) -> SessionResult<()> {
         // TODO: can this be a delete_group("/") instead?
-        let to_delete: Vec<(NodeType, Path)> =
-            self.list_nodes().await?.map(|node| (node.node_type(), node.path)).collect();
+        let to_delete: Vec<(NodeType, Path)> = self
+            .list_nodes()
+            .await?
+            .map_ok(|node| (node.node_type(), node.path))
+            .try_collect()?;
 
         for (t, p) in to_delete {
             match t {
@@ -697,7 +729,7 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn list_nodes(
         &self,
-    ) -> SessionResult<impl Iterator<Item = NodeSnapshot> + '_> {
+    ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + '_> {
         updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id).await
     }
 
@@ -712,7 +744,8 @@ impl Session {
     pub async fn chunk_coordinates<'a, 'b: 'a>(
         &'a self,
         array_path: &'b Path,
-    ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a> {
+    ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a + use<'a>>
+    {
         let node = self.get_array(array_path).await?;
         let updated_chunks = updated_node_chunks_iterator(
             self.asset_manager.as_ref(),
@@ -778,6 +811,15 @@ impl Session {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
 
+        let default_metadata = self.default_commit_metadata.clone();
+        let properties = properties
+            .map(|p| {
+                let mut merged = default_metadata.clone();
+                merged.extend(p.into_iter());
+                merged
+            })
+            .unwrap_or(default_metadata);
+
         let current = fetch_branch_tip(
             self.storage.as_ref(),
             self.storage_settings.as_ref(),
@@ -788,7 +830,6 @@ impl Session {
         let id = match current {
             Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => {
                 do_commit(
-                    &self.config,
                     self.storage.as_ref(),
                     Arc::clone(&self.asset_manager),
                     self.storage_settings.as_ref(),
@@ -796,7 +837,7 @@ impl Session {
                     &self.snapshot_id,
                     &self.change_set,
                     message,
-                    properties,
+                    Some(properties),
                 )
                 .await
             }
@@ -811,7 +852,6 @@ impl Session {
                     .into())
                 } else {
                     do_commit(
-                        &self.config,
                         self.storage.as_ref(),
                         Arc::clone(&self.asset_manager),
                         self.storage_settings.as_ref(),
@@ -819,7 +859,7 @@ impl Session {
                         &self.snapshot_id,
                         &self.change_set,
                         message,
-                        properties,
+                        Some(properties),
                     )
                     .await
                 }
@@ -925,7 +965,7 @@ impl Session {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
             let ancestry = Arc::clone(&self.asset_manager)
-                .snapshot_ancestry(current_snapshot.id())
+                .snapshot_ancestry(&current_snapshot.id())
                 .await?
                 .map_ok(|meta| meta.id);
             let new_commits =
@@ -989,10 +1029,11 @@ async fn updated_chunk_iterator<'a>(
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
-    let res = nodes.then(move |node| async move {
-        updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node).await
+    let res = nodes.and_then(move |node| async move {
+        Ok(updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node)
+            .await)
     });
-    Ok(res.flatten())
+    Ok(res.try_flatten())
 }
 
 async fn updated_node_chunks_iterator<'a>(
@@ -1023,7 +1064,7 @@ async fn node_chunk_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     path: &Path,
-) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
+) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
     match get_node(asset_manager, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
             verified_node_chunk_iterator(asset_manager, snapshot_id, change_set, node)
@@ -1042,7 +1083,7 @@ async fn verified_node_chunk_iterator<'a>(
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
-        NodeData::Array(_, manifests) => {
+        NodeData::Array { manifests, .. } => {
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
                     .array_chunks_iterator(&node.id, &node.path)
@@ -1082,10 +1123,10 @@ async fn verified_node_chunk_iterator<'a>(
                                     Ok(manifest) => {
                                         let old_chunks = manifest
                                             .iter(node_id_c.clone())
-                                            .filter(move |(coord, _)| {
+                                            .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
-                                            .map(move |(coord, payload)| ChunkInfo {
+                                            .map_ok(move |(coord, payload)| ChunkInfo {
                                                 node: node_id_c2.clone(),
                                                 coord,
                                                 payload,
@@ -1096,7 +1137,8 @@ async fn verified_node_chunk_iterator<'a>(
                                                 node_id_c3, old_chunks,
                                             );
                                         futures::future::Either::Left(
-                                            futures::stream::iter(old_chunks.map(Ok)),
+                                            futures::stream::iter(old_chunks)
+                                                .map_err(|e| e.into()),
                                         )
                                     }
                                     // if we cannot even fetch the manifest, we generate a
@@ -1130,8 +1172,8 @@ pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
             prefix.is_empty()   // if prefix was empty anything matches
                 || rest.is_empty()  // if stripping prefix left empty we have a match
                 || rest.starts_with('/') // next component so we match
-                                         // what we don't include is other matches,
-                                         // we want to catch prefix/foo but not prefix-foo
+            // what we don't include is other matches,
+            // we want to catch prefix/foo but not prefix-foo
         }
     }
 }
@@ -1163,12 +1205,16 @@ async fn updated_existing_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a + use<'a>> {
     let updated_nodes = asset_manager
         .fetch_snapshot(parent_id)
         .await?
         .iter_arc()
-        .filter_map(move |node| change_set.update_existing_node(node));
+        .filter_map_ok(move |node| change_set.update_existing_node(node))
+        .map(|n| match n {
+            Ok(n) => Ok(n),
+            Err(err) => Err(SessionError::from(err)),
+        });
 
     Ok(updated_nodes)
 }
@@ -1179,10 +1225,10 @@ async fn updated_nodes<'a>(
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = NodeSnapshot> + 'a> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a + use<'a>> {
     Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
         .await?
-        .chain(change_set.new_nodes_iterator()))
+        .chain(change_set.new_nodes_iterator().map(Ok)))
 }
 
 async fn get_node(
@@ -1231,25 +1277,31 @@ async fn get_existing_node(
         .into(),
         err => SessionError::from(err),
     })?;
-    let session_atts = change_set
-        .get_user_attributes(&node.id)
-        .cloned()
-        .map(|a| a.map(UserAttributesSnapshot::Inline));
-    let res = NodeSnapshot {
-        user_attributes: session_atts.unwrap_or_else(|| node.user_attributes.clone()),
-        ..node.clone()
-    };
-    if let Some(session_meta) = change_set.get_updated_zarr_metadata(&node.id).cloned() {
-        if let NodeData::Array(_, manifests) = res.node_data {
-            Ok(NodeSnapshot {
-                node_data: NodeData::Array(session_meta, manifests),
-                ..res
-            })
-        } else {
-            Ok(res)
+
+    match node.node_data {
+        NodeData::Array { ref manifests, .. } => {
+            if let Some(new_data) = change_set.get_updated_array(&node.id) {
+                let node_data = NodeData::Array {
+                    shape: new_data.shape.clone(),
+                    dimension_names: new_data.dimension_names.clone(),
+                    manifests: manifests.clone(),
+                };
+                Ok(NodeSnapshot {
+                    user_data: new_data.user_data.clone(),
+                    node_data,
+                    ..node
+                })
+            } else {
+                Ok(node)
+            }
         }
-    } else {
-        Ok(res)
+        NodeData::Group => {
+            if let Some(updated_definition) = change_set.get_updated_group(&node.id) {
+                Ok(NodeSnapshot { user_data: updated_definition.clone(), ..node })
+            } else {
+                Ok(node)
+            }
+        }
     }
 }
 
@@ -1340,8 +1392,8 @@ impl<'a> FlushProcess<'a> {
         node_id: &NodeId,
         node_path: &Path,
     ) -> SessionResult<()> {
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
         let chunks = stream::iter(
             self.change_set
                 .new_array_chunk_iterator(node_id, node_path)
@@ -1358,8 +1410,10 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
 
             self.manifest_refs
                 .entry(node_id.clone())
@@ -1384,8 +1438,8 @@ impl<'a> FlushProcess<'a> {
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
         let updated_chunks =
             aggregate_extents(&mut from, &mut to, updated_chunks, |ci| &ci.coord);
 
@@ -1398,8 +1452,10 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            let new_ref =
-                ManifestRef { object_id: new_manifest.id.clone(), extents: from..to };
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
             self.manifest_refs
                 .entry(node.id.clone())
                 .and_modify(|v| v.push(new_ref.clone()))
@@ -1411,7 +1467,7 @@ impl<'a> FlushProcess<'a> {
     /// Record the previous manifests for an array that was not modified in the session
     fn copy_previous_manifest(&mut self, node: &NodeSnapshot, old_snapshot: &Snapshot) {
         match &node.node_data {
-            NodeData::Array(_, array_refs) => {
+            NodeData::Array { manifests: array_refs, .. } => {
                 self.manifest_files.extend(array_refs.iter().map(|mr| {
                     // It's ok to unwrap here, the snapshot had the node, it has to have the
                     // manifest file info
@@ -1450,7 +1506,9 @@ async fn flush(
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
-    for node in old_snapshot.iter().filter(|node| node.node_type() == NodeType::Array) {
+    for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
+    {
+        let node = node?;
         trace!(path=%node.path, "Flushing node");
         let node_id = &node.id;
 
@@ -1462,13 +1520,13 @@ async fn flush(
         if flush_data.change_set.has_chunk_changes(node_id) {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
-            flush_data.write_manifest_for_existing_node(node).await?;
+            flush_data.write_manifest_for_existing_node(&node).await?;
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
             // FIXME: deal with the case of metadata shrinking an existing array, we should clear
             // extra chunks that no longer fit in the array
-            flush_data.copy_previous_manifest(node, old_snapshot.as_ref());
+            flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
         }
     }
 
@@ -1480,46 +1538,59 @@ async fn flush(
     }
 
     trace!("Building new snapshot");
-    let all_nodes = updated_nodes(
+    // gather and sort nodes:
+    // this is a requirement for Snapshot::from_iter
+    let mut all_nodes: Vec<_> = updated_nodes(
         flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
     )
     .await?
-    .map(|node| {
+    .map_ok(|node| {
         let id = &node.id;
         // TODO: many clones
-        if let NodeData::Array(meta, _) = node.node_data {
+        if let NodeData::Array { shape, dimension_names, .. } = node.node_data {
             NodeSnapshot {
-                node_data: NodeData::Array(
-                    meta.clone(),
-                    flush_data.manifest_refs.get(id).cloned().unwrap_or_default(),
-                ),
+                node_data: NodeData::Array {
+                    shape,
+                    dimension_names,
+                    manifests: flush_data
+                        .manifest_refs
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default(),
+                },
                 ..node
             }
         } else {
             node
         }
-    });
+    })
+    .try_collect()?;
+
+    all_nodes.sort_by(|a, b| a.path.cmp(&b.path));
 
     let new_snapshot = Snapshot::from_iter(
-        old_snapshot.id().clone(),
+        None,
+        Some(old_snapshot.id().clone()),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
-        vec![],
-        all_nodes,
-    );
+        None,
+        all_nodes.into_iter().map(Ok::<_, Infallible>),
+    )?;
 
-    if new_snapshot.flushed_at() <= old_snapshot.flushed_at() {
+    let new_ts = new_snapshot.flushed_at()?;
+    let old_ts = old_snapshot.flushed_at()?;
+    if new_ts <= old_ts {
         tracing::error!(
-            new_timestamp = %new_snapshot.flushed_at(),
-            old_timestamp = %old_snapshot.flushed_at(),
+            new_timestamp = %new_ts,
+            old_timestamp = %old_ts,
             "Snapshot timestamp older than parent, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
-            parent: *old_snapshot.flushed_at(),
-            child: *new_snapshot.flushed_at(),
+            parent: old_ts,
+            child: new_ts,
         }
         .into());
     }
@@ -1530,15 +1601,15 @@ async fn flush(
     let snapshot_timestamp = tokio::spawn(
         async move {
             asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
-            asset_manager.get_snapshot_last_modified(new_snapshot_c.id()).await
+            asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
         }
         .in_current_span(),
     );
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
-    // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(flush_data.change_set);
     let new_snapshot_id = new_snapshot.id();
+    // FIXME: this should execute in a non-blocking context
+    let tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
 
     flush_data
         .asset_manager
@@ -1552,15 +1623,15 @@ async fn flush(
 
     // Fail if there is too much clock difference with the object store
     // This is to prevent issues with snapshot ordering and expiration
-    if (snapshot_timestamp - new_snapshot.flushed_at()).num_seconds().abs() > 600 {
+    if (snapshot_timestamp - new_ts).num_seconds().abs() > 600 {
         tracing::error!(
-            snapshot_timestamp = %new_snapshot.flushed_at(),
+            snapshot_timestamp = %new_ts,
             object_store_timestamp = %snapshot_timestamp,
             "Snapshot timestamp drifted from object store clock, aborting commit"
         );
         return Err(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
-            snapshot_time: *new_snapshot.flushed_at(),
+            snapshot_time: new_ts,
         }
         .into());
     }
@@ -1570,7 +1641,6 @@ async fn flush(
 
 #[allow(clippy::too_many_arguments)]
 async fn do_commit(
-    config: &RepositoryConfig,
     storage: &(dyn Storage + Send + Sync),
     asset_manager: Arc<AssetManager>,
     storage_settings: &storage::Settings,
@@ -1593,7 +1663,6 @@ async fn do_commit(
         branch_name,
         new_snapshot.clone(),
         Some(&parent_snapshot),
-        config.unsafe_overwrite_refs(),
     )
     .await
     {
@@ -1640,15 +1709,15 @@ async fn fetch_manifest(
 ///
 /// Yes, this is horrible.
 fn aggregate_extents<'a, T: std::fmt::Debug, E>(
-    from: &'a mut ChunkIndices,
-    to: &'a mut ChunkIndices,
+    from: &'a mut Vec<u32>,
+    to: &'a mut Vec<u32>,
     it: impl Stream<Item = Result<T, E>> + 'a,
     extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
 ) -> impl Stream<Item = Result<T, E>> + 'a {
     // we initialize the destination with an empty array, because we don't know
     // the dimensions of the array yet. On the first element we will re-initialize
-    from.0 = Vec::new();
-    to.0 = Vec::new();
+    *from = Vec::new();
+    *to = Vec::new();
     it.map_ok(move |t| {
         // these are the coordinates for the chunk
         let idx = extract_index(&t);
@@ -1657,20 +1726,20 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
         // we initialize with the value of the first element
         // this obviously doesn't work for empty streams
         // but we never generate manifests for them
-        if from.0.is_empty() {
-            from.0 = idx.0.clone();
+        if from.is_empty() {
+            *from = idx.0.clone();
             // important to remember that `to` is not inclusive, so we need +1
-            to.0 = idx.0.iter().map(|n| n + 1).collect();
+            *to = idx.0.iter().map(|n| n + 1).collect();
         } else {
             // We need to iterate over coordinates, and update the
             // minimum and maximum for each if needed
             for (coord_idx, value) in idx.0.iter().enumerate() {
-                if let Some(from_current) = from.0.get_mut(coord_idx) {
+                if let Some(from_current) = from.get_mut(coord_idx) {
                     if value < from_current {
                         *from_current = *value
                     }
                 }
-                if let Some(to_current) = to.0.get_mut(coord_idx) {
+                if let Some(to_current) = to.get_mut(coord_idx) {
                     let range_value = value + 1;
                     if range_value > *to_current {
                         *to_current = range_value
@@ -1685,29 +1754,28 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, num::NonZeroU64};
+    use std::{collections::HashMap, error::Error};
 
     use crate::{
+        ObjectStorage, Repository,
         conflicts::{
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        metadata::{
-            ChunkKeyEncoding, ChunkShape, Codec, DataType, FillValue, StorageTransformer,
-        },
-        refs::{fetch_ref, Ref},
+        format::manifest::ManifestExtents,
+        refs::{Ref, fetch_tag},
         repository::VersionInfo,
-        storage::{logging::LoggingStorage, new_in_memory_storage},
+        storage::new_in_memory_storage,
         strategies::{
-            chunk_indices, empty_writable_session, node_paths, zarr_array_metadata,
+            ShapeDim, chunk_indices, empty_writable_session, node_paths, shapes_and_dims,
         },
-        ObjectStorage, Repository,
     };
 
     use super::*;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
+    use storage::logging::LoggingStorage;
     use test_strategy::proptest;
     use tokio::sync::Barrier;
 
@@ -1722,11 +1790,13 @@ mod tests {
         #[strategy(node_paths())] path: Path,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
+        let user_data = Bytes::new();
+
         // getting any path from an empty repository must fail
         prop_assert!(session.get_node(&path).await.is_err());
 
         // adding a new group must succeed
-        prop_assert!(session.add_group(path.clone()).await.is_ok());
+        prop_assert!(session.add_group(path.clone(), user_data.clone()).await.is_ok());
 
         // Getting a group just added must succeed
         let node = session.get_node(&path).await;
@@ -1737,7 +1807,7 @@ mod tests {
 
         // adding an existing group fails
         let matches = matches!(
-            session.add_group(path.clone()).await.unwrap_err(),
+            session.add_group(path.clone(), user_data.clone()).await.unwrap_err(),
             SessionError{kind: SessionErrorKind::AlreadyExists{node, ..},..} if node.path == path
         );
         prop_assert!(matches);
@@ -1752,7 +1822,7 @@ mod tests {
         prop_assert!(session.get_node(&path).await.is_err());
 
         // adding again must succeed
-        prop_assert!(session.add_group(path.clone()).await.is_ok());
+        prop_assert!(session.add_group(path.clone(), user_data.clone()).await.is_ok());
 
         // deleting again must succeed
         prop_assert!(session.delete_group(path.clone()).await.is_ok());
@@ -1761,14 +1831,34 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_array(
         #[strategy(node_paths())] path: Path,
-        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
+        #[strategy(shapes_and_dims(None))] metadata: ShapeDim,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // new array must always succeed
-        prop_assert!(session.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_ok()
+        );
 
         // adding to the same path must fail
-        prop_assert!(session.add_array(path.clone(), metadata.clone()).await.is_err());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_err()
+        );
 
         // first delete must succeed
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
@@ -1777,7 +1867,17 @@ mod tests {
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
 
         // adding again must succeed
-        prop_assert!(session.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_ok()
+        );
 
         // deleting again must succeed
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
@@ -1786,13 +1886,23 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_array_group_clash(
         #[strategy(node_paths())] path: Path,
-        #[strategy(zarr_array_metadata())] metadata: ZarrArrayMetadata,
+        #[strategy(shapes_and_dims(None))] metadata: ShapeDim,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // adding a group at an existing array node must fail
-        prop_assert!(session.add_array(path.clone(), metadata.clone()).await.is_ok());
+        prop_assert!(
+            session
+                .add_array(
+                    path.clone(),
+                    metadata.shape.clone(),
+                    metadata.dimension_names.clone(),
+                    Bytes::new()
+                )
+                .await
+                .is_ok()
+        );
         let matches = matches!(
-            session.add_group(path.clone()).await.unwrap_err(),
+            session.add_group(path.clone(), Bytes::new()).await.unwrap_err(),
             SessionError{kind: SessionErrorKind::AlreadyExists{node, ..},..} if node.path == path
         );
         prop_assert!(matches);
@@ -1805,9 +1915,13 @@ mod tests {
         prop_assert!(session.delete_array(path.clone()).await.is_ok());
 
         // adding an array at an existing group node must fail
-        prop_assert!(session.add_group(path.clone()).await.is_ok());
+        prop_assert!(session.add_group(path.clone(), Bytes::new()).await.is_ok());
         let matches = matches!(
-            session.add_array(path.clone(), metadata.clone()).await.unwrap_err(),
+            session.add_array(path.clone(),
+                metadata.shape.clone(),
+                metadata.dimension_names.clone(),
+                Bytes::new()
+        ).await.unwrap_err(),
             SessionError{kind: SessionErrorKind::AlreadyExists{node, ..},..} if node.path == path
         );
         prop_assert!(matches);
@@ -1824,19 +1938,19 @@ mod tests {
         #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
         indices: Vec<ChunkIndices>,
     ) {
-        let mut from = ChunkIndices(vec![]);
-        let mut to = ChunkIndices(vec![]);
+        let mut from = vec![];
+        let mut to = vec![];
 
-        let expected_from = ChunkIndices(vec![
+        let expected_from = vec![
             indices.iter().map(|i| i.0[0]).min().unwrap(),
             indices.iter().map(|i| i.0[1]).min().unwrap(),
             indices.iter().map(|i| i.0[2]).min().unwrap(),
-        ]);
-        let expected_to = ChunkIndices(vec![
+        ];
+        let expected_to = vec![
             indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
             indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
             indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
-        ]);
+        ];
 
         let _ = aggregate_extents(
             &mut from,
@@ -1849,6 +1963,52 @@ mod tests {
 
         prop_assert_eq!(from, expected_from);
         prop_assert_eq!(to, expected_to);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
+    {
+        let mut repo = create_memory_store_repository().await;
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group(Path::root(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", None).await?;
+
+        // Verify that the first commit has no metadata
+        let ancestry = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = ancestry.try_collect::<Vec<_>>().await?;
+        assert!(snapshot_infos[0].metadata.is_empty());
+
+        // Set some default metadata
+        let mut default_metadata = SnapshotProperties::default();
+        default_metadata.insert("author".to_string(), "John Doe".to_string().into());
+        default_metadata.insert("project".to_string(), "My Project".to_string().into());
+        repo.set_default_commit_metadata(default_metadata.clone());
+
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", None).await?;
+
+        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
+        assert_eq!(snapshot_infos[0].metadata, default_metadata);
+
+        // Check that metadata is merged with users provided metadata taking precedence
+        let mut metadata = SnapshotProperties::default();
+        metadata.insert("author".to_string(), "Jane Doe".to_string().into());
+        metadata.insert("id".to_string(), "ideded".to_string().into());
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
+        let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
+
+        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
+        let mut expected_result = SnapshotProperties::default();
+        expected_result.insert("author".to_string(), "Jane Doe".to_string().into());
+        expected_result.insert("project".to_string(), "My Project".to_string().into());
+        expected_result.insert("id".to_string(), "ideded".to_string().into());
+        assert_eq!(snapshot_infos[0].metadata, expected_result);
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1878,63 +2038,52 @@ mod tests {
         let manifest =
             Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
         let manifest = Arc::new(manifest);
-        let manifest_id = &manifest.id;
+        let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![2, 2, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
+        let shape = ArrayShape::new(vec![(2, 1), (2, 1), (2, 1)]).unwrap();
+        let dimension_names = Some(vec!["x".into(), "y".into(), "t".into()]);
+
         let manifest_ref = ManifestRef {
             object_id: manifest_id.clone(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[1, 1, 2]),
         };
+
+        let group_def = Bytes::from_static(br#"{"some":"group"}"#);
+        let array_def = Bytes::from_static(br#"{"this":"array"}"#);
+
         let array1_path: Path = "/array1".try_into().unwrap();
         let node_id = NodeId::random();
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
                 id: node_id,
-                user_attributes: None,
                 node_data: NodeData::Group,
+                user_data: group_def.clone(),
             },
             NodeSnapshot {
                 path: array1_path.clone(),
                 id: array_id.clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo":1}"#).unwrap(),
-                )),
-                node_data: NodeData::Array(zarr_meta1.clone(), vec![manifest_ref]),
+                node_data: NodeData::Array {
+                    shape: shape.clone(),
+                    dimension_names: dimension_names.clone(),
+                    manifests: vec![manifest_ref.clone()],
+                },
+                user_data: array_def.clone(),
             },
         ];
 
-        let initial = Snapshot::initial();
+        let initial = Snapshot::initial().unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
-            initial.id().clone(),
+            None,
+            Some(initial.id().clone()),
             "message".to_string(),
             None,
             manifests,
-            vec![],
-            nodes.iter().cloned(),
-        ));
+            None,
+            nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
+        )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
         update_branch(
             storage.as_ref(),
@@ -1942,11 +2091,14 @@ mod tests {
             "main",
             snapshot.id().clone(),
             None,
-            true,
         )
         .await?;
-        Repository::store_config(storage.as_ref(), &RepositoryConfig::default(), None)
-            .await?;
+        Repository::store_config(
+            storage.as_ref(),
+            &RepositoryConfig::default(),
+            &storage::VersionInfo::for_creation(),
+        )
+        .await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
@@ -1956,61 +2108,75 @@ mod tests {
         assert_eq!(nodes.get(1).unwrap(), &node);
 
         let group_name = "/tbd-group".to_string();
-        ds.add_group(group_name.clone().try_into().unwrap()).await?;
+        ds.add_group(
+            group_name.clone().try_into().unwrap(),
+            Bytes::copy_from_slice(b"somedef"),
+        )
+        .await?;
         ds.delete_group(group_name.clone().try_into().unwrap()).await?;
         // deleting non-existing is no-op
         assert!(ds.delete_group(group_name.clone().try_into().unwrap()).await.is_ok());
         assert!(ds.get_node(&group_name.try_into().unwrap()).await.is_err());
 
         // add a new array and retrieve its node
-        ds.add_group("/group".try_into().unwrap()).await?;
+        ds.add_group("/group".try_into().unwrap(), Bytes::copy_from_slice(b"somedef2"))
+            .await?;
 
-        let zarr_meta2 = ZarrArrayMetadata {
-            shape: vec![3],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(2).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+        let shape2 = ArrayShape::new(vec![(2, 2)]).unwrap();
+        let dimension_names2 = Some(vec!["t".into()]);
+
+        let array_def2 = Bytes::from_static(br#"{"this":"other array"}"#);
 
         let new_array_path: Path = "/group/array2".to_string().try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
+        ds.add_array(
+            new_array_path.clone(),
+            shape2.clone(),
+            dimension_names2.clone(),
+            array_def2.clone(),
+        )
+        .await?;
 
         ds.delete_array(new_array_path.clone()).await?;
         // Delete a non-existent array is no-op
         assert!(ds.delete_array(new_array_path.clone()).await.is_ok());
         assert!(ds.get_node(&new_array_path.clone()).await.is_err());
 
-        ds.add_array(new_array_path.clone(), zarr_meta2.clone()).await?;
+        ds.add_array(
+            new_array_path.clone(),
+            shape2.clone(),
+            dimension_names2.clone(),
+            array_def2.clone(),
+        )
+        .await?;
 
         let node = ds.get_node(&new_array_path).await;
         assert!(matches!(
             node.ok(),
-            Some(NodeSnapshot {path, user_attributes, node_data,..})
-                if path== new_array_path.clone() && user_attributes.is_none() && node_data == NodeData::Array(zarr_meta2.clone(), vec![])
+            Some(NodeSnapshot {path,node_data, user_data, .. })
+                if path== new_array_path.clone() &&
+                    user_data == array_def2 &&
+                    node_data == NodeData::Array{shape:shape2, dimension_names:dimension_names2, manifests: vec![]}
         ));
 
-        // set user attributes for the new array and retrieve them
-        ds.set_user_attributes(
-            new_array_path.clone(),
-            Some(UserAttributes::try_new(br#"{"n":42}"#).unwrap()),
+        // update the array definition
+        let shape3 = ArrayShape::new(vec![(4, 3)]).unwrap();
+        let dimension_names3 = Some(vec!["tt".into()]);
+
+        let array_def3 = Bytes::from_static(br#"{"this":"yet other array"}"#);
+        ds.update_array(
+            &new_array_path.clone(),
+            shape3.clone(),
+            dimension_names3.clone(),
+            array_def3.clone(),
         )
         .await?;
         let node = ds.get_node(&new_array_path).await;
         assert!(matches!(
             node.ok(),
-            Some(NodeSnapshot {path, user_attributes, node_data, ..})
+            Some(NodeSnapshot {path,node_data, user_data, .. })
                 if path == "/group/array2".try_into().unwrap() &&
-                    user_attributes ==  Some(UserAttributesSnapshot::Inline(
-                        UserAttributes::try_new(br#"{"n":42}"#).unwrap()
-                    )) &&
-                    node_data == NodeData::Array(zarr_meta2.clone(), vec![])
+                    user_data == array_def3 &&
+                    node_data == NodeData::Array { shape:shape3, dimension_names: dimension_names3, manifests: vec![] }
         ));
 
         let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
@@ -2024,30 +2190,21 @@ mod tests {
         let non_chunk = ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
         assert_eq!(non_chunk, None);
 
-        // update old array use attributes and check them
-        ds.set_user_attributes(
-            array1_path.clone(),
-            Some(UserAttributes::try_new(br#"{"updated": true}"#).unwrap()),
+        // update old array zarr metadata and check it
+        let shape3 = ArrayShape::new(vec![(8, 3)]).unwrap();
+        let dimension_names3 = Some(vec!["tt".into()]);
+
+        let array_def3 = Bytes::from_static(br#"{"this":"more arrays"}"#);
+        ds.update_array(
+            &array1_path.clone(),
+            shape3.clone(),
+            dimension_names3.clone(),
+            array_def3.clone(),
         )
         .await?;
-        let node = ds.get_node(&array1_path).await.unwrap();
-        assert_eq!(
-            node.user_attributes,
-            Some(UserAttributesSnapshot::Inline(
-                UserAttributes::try_new(br#"{"updated": true}"#).unwrap()
-            ))
-        );
-
-        // update old array zarr metadata and check it
-        let new_zarr_meta1 = ZarrArrayMetadata { shape: vec![2, 2, 3], ..zarr_meta1 };
-        ds.update_array(array1_path.clone(), new_zarr_meta1).await?;
         let node = ds.get_node(&array1_path).await;
-        if let Ok(NodeSnapshot {
-            node_data: NodeData::Array(ZarrArrayMetadata { shape, .. }, _),
-            ..
-        }) = &node
-        {
-            assert_eq!(shape, &vec![2, 2, 3]);
+        if let Ok(NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. }) = &node {
+            assert_eq!(shape, &shape3);
         } else {
             panic!("Failed to update zarr metadata");
         }
@@ -2069,13 +2226,6 @@ mod tests {
         )
         .await?;
         assert_eq!(chunk, Some(data));
-
-        let path: Path = "/group/array2".try_into().unwrap();
-        let node = ds.get_node(&path).await;
-        assert!(ds.change_set.has_updated_attributes(&node.as_ref().unwrap().id));
-        assert!(ds.delete_array(path.clone()).await.is_ok());
-        assert!(!ds.change_set.has_updated_attributes(&node?.id));
-
         Ok(())
     }
 
@@ -2096,8 +2246,9 @@ mod tests {
         let diff = ds.status().await?;
         assert!(diff.is_empty());
 
+        let user_data = Bytes::copy_from_slice(b"foo");
         // add a new array and retrieve its node
-        ds.add_group(Path::root()).await?;
+        ds.add_group(Path::root(), user_data.clone()).await?;
         let diff = ds.status().await?;
         assert!(!diff.is_empty());
         assert_eq!(diff.new_groups, [Path::root()].into());
@@ -2112,47 +2263,40 @@ mod tests {
         assert_eq!(first_commit, ds.snapshot_id);
         assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot { path, user_attributes, node_data, .. })
-              if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+            Some(NodeSnapshot { path, user_data: actual_user_data, node_data, .. })
+              if path == Path::root() && user_data == actual_user_data && node_data == NodeData::Group
         ));
 
-        ds.add_group("/group".try_into().unwrap()).await?;
+        let user_data2 = Bytes::copy_from_slice(b"bar");
+        ds.add_group("/group".try_into().unwrap(), user_data2.clone()).await?;
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
 
         let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot { path, user_attributes, node_data, .. })
-              if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+            Some(NodeSnapshot { path, user_data: actual_user_data, node_data, .. })
+              if path == Path::root() && user_data==actual_user_data && node_data == NodeData::Group
         ));
 
         assert!(matches!(
             ds.get_node(&"/group".try_into().unwrap()).await.ok(),
-            Some(NodeSnapshot { path, user_attributes, node_data, .. })
-              if path == "/group".try_into().unwrap() && user_attributes.is_none() && node_data == NodeData::Group
+            Some(NodeSnapshot { path, user_data:actual_user_data, node_data, .. })
+              if path == "/group".try_into().unwrap() && user_data2 == actual_user_data && node_data == NodeData::Group
         ));
 
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float16(f32::NEG_INFINITY),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+        let shape = ArrayShape::new([(1, 1), (1, 1), (2, 1)]).unwrap();
+        let dimension_names = Some(vec!["x".into(), "y".into(), "z".into()]);
+        let array_user_data = Bytes::copy_from_slice(b"array");
 
         let new_array_path: Path = "/group/array1".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(
+            new_array_path.clone(),
+            shape.clone(),
+            dimension_names.clone(),
+            array_user_data.clone(),
+        )
+        .await?;
 
         let diff = ds.status().await?;
         assert!(!diff.is_empty());
@@ -2165,7 +2309,13 @@ mod tests {
         let mut ds = repository.writable_session("main").await?;
 
         let new_new_array_path: Path = "/group/array2".try_into().unwrap();
-        ds.add_array(new_new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(
+            new_new_array_path.clone(),
+            shape.clone(),
+            dimension_names.clone(),
+            array_user_data.clone(),
+        )
+        .await?;
 
         assert!(ds.has_uncommitted_changes());
         let changes = ds.discard_changes();
@@ -2182,7 +2332,10 @@ mod tests {
 
         let diff = ds.status().await?;
         assert!(!diff.is_empty());
-        assert_eq!(diff.updated_chunks, [(new_array_path.clone(), 1)].into());
+        assert_eq!(
+            diff.updated_chunks,
+            [(new_array_path.clone(), [ChunkIndices(vec![0, 0, 0])].into())].into()
+        );
 
         let _snapshot_id =
             ds.commit("commit", Some(SnapshotProperties::default())).await?;
@@ -2190,22 +2343,26 @@ mod tests {
         let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
             ds.get_node(&Path::root()).await.ok(),
-            Some(NodeSnapshot { path, user_attributes, node_data, .. })
-              if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+            Some(NodeSnapshot { path, user_data: actual_user_data, node_data, .. })
+              if path == Path::root() && user_data == actual_user_data && node_data == NodeData::Group
         ));
         assert!(matches!(
             ds.get_node(&"/group".try_into().unwrap()).await.ok(),
-            Some(NodeSnapshot { path, user_attributes, node_data, .. })
-              if path == "/group".try_into().unwrap() && user_attributes.is_none() && node_data == NodeData::Group
+            Some(NodeSnapshot { path, user_data: actual_user_data, node_data, .. })
+              if path == "/group".try_into().unwrap()  && user_data2 == actual_user_data &&  node_data == NodeData::Group
         ));
         assert!(matches!(
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
                 path,
-                user_attributes: None,
-                node_data: NodeData::Array(meta, manifests),
+                user_data: actual_user_data,
+                node_data: NodeData::Array{ shape: actual_shape, dimension_names: actual_dim, manifests },
                 ..
-            }) if path == new_array_path && meta == zarr_meta.clone() && manifests.len() == 1
+            }) if path == new_array_path
+                    && actual_user_data == array_user_data
+                    && actual_shape == shape
+                    && actual_dim == dimension_names
+                    && manifests.len() == 1
         ));
         assert_eq!(
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 0])).await?,
@@ -2235,10 +2392,10 @@ mod tests {
         let snap =
             repository.asset_manager().fetch_snapshot(&previous_snapshot_id).await?;
         match &snap.get_node(&new_array_path)?.node_data {
-            NodeData::Array(_, manifests) => {
+            NodeData::Array { manifests, .. } => {
                 assert_eq!(
                     manifests.first().unwrap().extents,
-                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 2])
+                    ManifestExtents::new(&[0, 0, 0], &[1, 1, 2])
                 );
             }
             NodeData::Group => {
@@ -2259,14 +2416,15 @@ mod tests {
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
             .await?;
 
-        let new_meta = ZarrArrayMetadata { shape: vec![1, 1, 1], ..zarr_meta };
+        let new_shape = ArrayShape::new([(1, 1), (1, 1), (1, 1)]).unwrap();
+        let new_dimension_names = Some(vec!["X".into(), "X".into(), "Z".into()]);
+        let new_user_data = Bytes::copy_from_slice(b"new data");
         // we change zarr metadata
-        ds.update_array(new_array_path.clone(), new_meta.clone()).await?;
-
-        // we change user attributes metadata
-        ds.set_user_attributes(
-            new_array_path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":42}"#).unwrap()),
+        ds.update_array(
+            &new_array_path.clone(),
+            new_shape.clone(),
+            new_dimension_names.clone(),
+            new_user_data.clone(),
         )
         .await?;
 
@@ -2274,10 +2432,10 @@ mod tests {
 
         let snap = repository.asset_manager().fetch_snapshot(&snapshot_id).await?;
         match &snap.get_node(&new_array_path)?.node_data {
-            NodeData::Array(_, manifests) => {
+            NodeData::Array { manifests, .. } => {
                 assert_eq!(
                     manifests.first().unwrap().extents,
-                    ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![1, 1, 1])
+                    ManifestExtents::new(&[0, 0, 0], &[1, 1, 1])
                 );
             }
             NodeData::Group => {
@@ -2301,12 +2459,14 @@ mod tests {
             ds.get_node(&new_array_path).await.ok(),
             Some(NodeSnapshot {
                 path,
-                user_attributes: Some(atts),
-                node_data: NodeData::Array(meta, manifests),
+                user_data: actual_user_data,
+                node_data: NodeData::Array{shape: actual_shape, dimension_names: actual_dims,  manifests},
                 ..
-            }) if path == new_array_path && meta == new_meta.clone() &&
+                }) if path == new_array_path &&
+                    actual_user_data == new_user_data &&
                     manifests.len() == 1 &&
-                    atts == UserAttributesSnapshot::Inline(UserAttributes::try_new(br#"{"foo":42}"#).unwrap())
+                    actual_shape == new_shape &&
+                    actual_dims == new_dimension_names
         ));
 
         // since we wrote every asset we should only have one fetch for the initial snapshot
@@ -2345,9 +2505,42 @@ mod tests {
             &diff.new_arrays,
             &[new_array_path.clone()].into() // we never committed array2
         );
-        assert_eq!(&diff.updated_chunks, &[(new_array_path.clone(), 2)].into());
-        assert_eq!(&diff.updated_user_attributes, &[new_array_path.clone()].into());
-        assert_eq!(&diff.updated_zarr_metadata, &[new_array_path.clone()].into());
+        assert_eq!(
+            &diff.updated_chunks,
+            &[(
+                new_array_path.clone(),
+                [ChunkIndices(vec![0, 0, 0]), ChunkIndices(vec![0, 0, 1])].into()
+            )]
+            .into()
+        );
+        assert_eq!(&diff.updated_arrays, &[new_array_path.clone()].into());
+        assert_eq!(&diff.updated_groups, &[].into());
+
+        let diff = repository
+            .diff(
+                &VersionInfo::SnapshotId(first_commit),
+                &VersionInfo::BranchTipRef("main".to_string()),
+            )
+            .await?;
+
+        // Diff should not include the changes in `from`
+        assert!(diff.deleted_groups.is_empty());
+        assert!(diff.deleted_arrays.is_empty());
+        assert_eq!(&diff.new_groups, &["/group".try_into().unwrap()].into());
+        assert_eq!(
+            &diff.new_arrays,
+            &[new_array_path.clone()].into() // we never committed array2
+        );
+        assert_eq!(
+            &diff.updated_chunks,
+            &[(
+                new_array_path.clone(),
+                [ChunkIndices(vec![0, 0, 0]), ChunkIndices(vec![0, 0, 1])].into()
+            )]
+            .into()
+        );
+        assert_eq!(&diff.updated_arrays, &[new_array_path.clone()].into());
+        assert_eq!(&diff.updated_groups, &[].into());
         Ok(())
     }
 
@@ -2355,8 +2548,8 @@ mod tests {
     async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
-        ds.add_group("/1".try_into().unwrap()).await?;
+        ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
         assert_eq!(ds.list_nodes().await?.count(), 1);
         ds.commit("commit", None).await?;
@@ -2374,8 +2567,8 @@ mod tests {
     async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
-        ds.add_group("/1".try_into().unwrap()).await?;
+        ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
@@ -2390,7 +2583,7 @@ mod tests {
     async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
+        ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
@@ -2406,15 +2599,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_children() -> Result<(), Box<dyn Error>> {
+        let def = Bytes::copy_from_slice(b"");
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
+        ds.add_group(Path::root(), def.clone()).await?;
         ds.commit("initialize", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
-        ds.add_group("/a".try_into().unwrap()).await?;
-        ds.add_group("/b".try_into().unwrap()).await?;
-        ds.add_group("/b/bb".try_into().unwrap()).await?;
+        ds.add_group("/a".try_into().unwrap(), def.clone()).await?;
+        ds.add_group("/b".try_into().unwrap(), def.clone()).await?;
+        ds.add_group("/b/bb".try_into().unwrap(), def.clone()).await?;
 
         ds.delete_group("/b".try_into().unwrap()).await?;
         assert!(ds.get_group(&"/b".try_into().unwrap()).await.is_err());
@@ -2435,10 +2629,11 @@ mod tests {
     async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
-        ds.add_group("/a".try_into().unwrap()).await?;
-        ds.add_group("/b".try_into().unwrap()).await?;
-        ds.add_group("/b/bb".try_into().unwrap()).await?;
+        let def = Bytes::copy_from_slice(b"");
+        ds.add_group(Path::root(), def.clone()).await?;
+        ds.add_group("/a".try_into().unwrap(), def.clone()).await?;
+        ds.add_group("/b".try_into().unwrap(), def.clone()).await?;
+        ds.add_group("/b/bb".try_into().unwrap(), def.clone()).await?;
         ds.commit("commit", None).await?;
 
         let mut ds = repository.writable_session("main").await?;
@@ -2453,29 +2648,22 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
+        let def = Bytes::copy_from_slice(b"");
 
         // add a new array and retrieve its node
-        ds.add_group(Path::root()).await?;
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![4, 2, 4],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+        ds.add_group(Path::root(), def.clone()).await?;
+
+        let shape = ArrayShape::new(vec![(4, 2), (2, 1), (4, 2)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
 
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(
+            new_array_path.clone(),
+            shape.clone(),
+            dimension_names.clone(),
+            def.clone(),
+        )
+        .await?;
         // we 3 chunks
         ds.set_chunk_ref(
             new_array_path.clone(),
@@ -2531,11 +2719,9 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         // there should be no manifests yet
-        assert!(!in_mem_storage
-            .all_keys()
-            .await?
-            .iter()
-            .any(|key| key.contains("manifest")));
+        assert!(
+            !in_mem_storage.all_keys().await?.iter().any(|key| key.contains("manifest"))
+        );
 
         // initialization creates one snapshot
         assert_eq!(
@@ -2549,29 +2735,19 @@ mod tests {
         );
 
         let mut ds = repo.writable_session("main").await?;
-        ds.add_group(Path::root()).await?;
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![5, 5],
-            data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float16(f32::NEG_INFINITY),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+        let def = Bytes::copy_from_slice(b"");
 
+        let shape = ArrayShape::new(vec![(5, 2), (5, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+
+        ds.add_group(Path::root(), def.clone()).await?;
         let a1path: Path = "/array1".try_into()?;
         let a2path: Path = "/array2".try_into()?;
 
-        ds.add_array(a1path.clone(), zarr_meta.clone()).await?;
-        ds.add_array(a2path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(a1path.clone(), shape.clone(), dimension_names.clone(), def.clone())
+            .await?;
+        ds.add_array(a2path.clone(), shape.clone(), dimension_names.clone(), def.clone())
+            .await?;
 
         let _ = ds.commit("first commit", None).await?;
 
@@ -2633,7 +2809,7 @@ mod tests {
         );
 
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
-            NodeData::Array(_, manifests) => {
+            NodeData::Array { manifests, .. } => {
                 manifests.first().as_ref().unwrap().object_id.clone()
             }
             NodeData::Group => panic!("must be an array"),
@@ -2661,7 +2837,7 @@ mod tests {
         );
 
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
-            NodeData::Array(_, manifests) => {
+            NodeData::Array { manifests, .. } => {
                 manifests.first().as_ref().unwrap().object_id.clone()
             }
             NodeData::Group => panic!("must be an array"),
@@ -2700,7 +2876,7 @@ mod tests {
         );
 
         let manifest_id = match ds.get_array(&a1path).await?.node_data {
-            NodeData::Array(_, manifests) => {
+            NodeData::Array { manifests, .. } => {
                 manifests.first().as_ref().unwrap().object_id.clone()
             }
             NodeData::Group => panic!("must be an array"),
@@ -2716,7 +2892,7 @@ mod tests {
         let _snap_id = ds.commit("chunk deleted", None).await?;
 
         let manifests = match ds.get_array(&a1path).await?.node_data {
-            NodeData::Array(_, manifests) => manifests,
+            NodeData::Array { manifests, .. } => manifests,
             NodeData::Group => panic!("must be an array"),
         };
         assert!(manifests.is_empty());
@@ -2752,54 +2928,46 @@ mod tests {
         let storage_settings = storage.default_settings();
         let mut ds = repo.writable_session("main").await?;
 
+        let def = Bytes::copy_from_slice(b"");
+
         // add a new array and retrieve its node
-        ds.add_group(Path::root()).await?;
+        ds.add_group(Path::root(), def.clone()).await?;
         let new_snapshot_id = ds.commit("first commit", None).await?;
         assert_eq!(
             new_snapshot_id,
-            fetch_ref(storage.as_ref(), &storage_settings, "main").await?.1.snapshot
+            fetch_branch_tip(storage.as_ref(), &storage_settings, "main").await?.snapshot
         );
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
         repo.create_tag("v1", &new_snapshot_id).await?;
-        let (ref_name, ref_data) =
-            fetch_ref(storage.as_ref(), &storage_settings, "v1").await?;
-        assert_eq!(ref_name, Ref::Tag("v1".to_string()));
+        let ref_data = fetch_tag(storage.as_ref(), &storage_settings, "v1").await?;
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
-                Some(NodeSnapshot { path, user_attributes, node_data, ..})
-                    if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+                Some(NodeSnapshot { node_data, path, ..})
+                    if path == Path::root()  && node_data == NodeData::Group
         ));
 
         let mut ds = repo.writable_session("main").await?;
 
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
-                Some(NodeSnapshot { path, user_attributes, node_data, ..})
-                        if path == Path::root() && user_attributes.is_none() && node_data == NodeData::Group
+                Some(NodeSnapshot { path, node_data, ..})
+                        if path == Path::root()  && node_data == NodeData::Group
         ));
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![1, 1, 2],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: None,
-            }]),
-            dimension_names: Some(vec![Some("t".to_string())]),
-        };
+
+        let shape = ArrayShape::new(vec![(1, 1), (2, 1), (4, 2)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
 
         let new_array_path: Path = "/array1".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(
+            new_array_path.clone(),
+            shape.clone(),
+            dimension_names.clone(),
+            def.clone(),
+        )
+        .await?;
         ds.set_chunk_ref(
             new_array_path.clone(),
             ChunkIndices(vec![0, 0, 0]),
@@ -2807,9 +2975,9 @@ mod tests {
         )
         .await?;
         let new_snapshot_id = ds.commit("second commit", None).await?;
-        let (ref_name, ref_data) =
-            fetch_ref(storage.as_ref(), &storage_settings, Ref::DEFAULT_BRANCH).await?;
-        assert_eq!(ref_name, Ref::Branch("main".to_string()));
+        let ref_data =
+            fetch_branch_tip(storage.as_ref(), &storage_settings, Ref::DEFAULT_BRANCH)
+                .await?;
         assert_eq!(new_snapshot_id, ref_data.snapshot);
 
         let parents = repo
@@ -2835,8 +3003,9 @@ mod tests {
         let mut ds1 = repository.writable_session("main").await?;
         let mut ds2 = repository.writable_session("main").await?;
 
-        ds1.add_group("/a".try_into().unwrap()).await?;
-        ds2.add_group("/b".try_into().unwrap()).await?;
+        let def = Bytes::copy_from_slice(b"");
+        ds1.add_group("/a".try_into().unwrap(), def.clone()).await?;
+        ds2.add_group("/b".try_into().unwrap(), def.clone()).await?;
 
         let barrier = Arc::new(Barrier::new(2));
         let barrier_c = Arc::clone(&barrier);
@@ -2898,24 +3067,12 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
-        ds.add_group(Path::root()).await?;
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![5, 5],
-            data_type: DataType::Float16,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float16(f32::NEG_INFINITY),
-            codecs: vec![Codec { name: "mycodec".to_string(), configuration: None }],
-            storage_transformers: None,
-            dimension_names: None,
-        };
+        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        ds.add_group(Path::root(), Bytes::new()).await?;
 
         let apath: Path = "/array1".try_into()?;
 
-        ds.add_array(apath.clone(), zarr_meta.clone()).await?;
+        ds.add_array(apath.clone(), shape, None, Bytes::new()).await?;
 
         ds.commit("first commit", None).await?;
 
@@ -2924,22 +3081,24 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
 
-        assert!(ds
-            .set_chunk_ref(
+        assert!(
+            ds.set_chunk_ref(
                 apath.clone(),
                 ChunkIndices(vec![0, 0]),
                 Some(ChunkPayload::Inline("hello".into())),
             )
             .await
-            .is_ok());
-        assert!(ds
-            .set_chunk_ref(
+            .is_ok()
+        );
+        assert!(
+            ds.set_chunk_ref(
                 apath.clone(),
                 ChunkIndices(vec![2, 2]),
                 Some(ChunkPayload::Inline("hello".into())),
             )
             .await
-            .is_ok());
+            .is_ok()
+        );
 
         let bad_result = ds
             .set_chunk_ref(
@@ -2970,8 +3129,14 @@ mod tests {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
 
-        ds.add_group("/foo/bar".try_into().unwrap()).await?;
-        ds.add_array("/foo/bar/some-array".try_into().unwrap(), basic_meta()).await?;
+        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::new()).await?;
+        ds.add_array(
+            "/foo/bar/some-array".try_into().unwrap(),
+            basic_shape(),
+            None,
+            Bytes::new(),
+        )
+        .await?;
         ds.commit("create directory", None).await?;
 
         Ok(repository)
@@ -2985,17 +3150,12 @@ mod tests {
         Ok((ds, ds2))
     }
 
-    fn basic_meta() -> ZarrArrayMetadata {
-        ZarrArrayMetadata {
-            shape: vec![5],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        }
+    fn basic_shape() -> ArrayShape {
+        ArrayShape::new(vec![(5, 1)]).unwrap()
+    }
+
+    fn user_data() -> Bytes {
+        Bytes::new()
     }
 
     fn assert_has_conflict(conflict: &Conflict, rebase_result: SessionResult<()>) {
@@ -3015,15 +3175,15 @@ mod tests {
     ///
     /// This session: add array
     /// Previous commit: add group on same path
-    async fn test_conflict_detection_node_conflict_with_existing_node(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_node_conflict_with_existing_node()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
-        ds1.add_group(conflict_path.clone()).await?;
+        ds1.add_group(conflict_path.clone(), user_data()).await?;
         ds1.commit("create group", None).await?;
 
-        ds2.add_array(conflict_path.clone(), basic_meta()).await?;
+        ds2.add_array(conflict_path.clone(), basic_shape(), None, user_data()).await?;
         ds2.commit("create array", None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
@@ -3042,11 +3202,11 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
-        ds1.add_array(conflict_path.clone(), basic_meta()).await?;
+        ds1.add_array(conflict_path.clone(), basic_shape(), None, user_data()).await?;
         ds1.commit("create array", None).await?;
 
         let inner_path: Path = "/foo/bar/conflict/inner".try_into().unwrap();
-        ds2.add_array(inner_path.clone(), basic_meta()).await?;
+        ds2.add_array(inner_path.clone(), basic_shape(), None, user_data()).await?;
         ds2.commit("create inner array", None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::NewNodeInInvalidGroup(conflict_path),
@@ -3060,15 +3220,15 @@ mod tests {
     ///
     /// This session: update array metadata
     /// Previous commit: update array metadata
-    async fn test_conflict_detection_double_zarr_metadata_edit(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_double_zarr_metadata_edit()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.update_array(path.clone(), basic_meta()).await?;
+        ds1.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
         ds1.commit("update array", None).await?;
 
-        ds2.update_array(path.clone(), basic_meta()).await?;
+        ds2.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
         ds2.commit("update array again", None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::ZarrMetadataDoubleUpdate(path),
@@ -3082,15 +3242,15 @@ mod tests {
     ///
     /// This session: delete array
     /// Previous commit: update same array metadata
-    async fn test_conflict_detection_metadata_edit_of_deleted(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_metadata_edit_of_deleted()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.delete_array(path.clone()).await?;
         ds1.commit("delete array", None).await?;
 
-        ds2.update_array(path.clone(), basic_meta()).await?;
+        ds2.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
         ds2.commit("update array again", None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::ZarrMetadataUpdateOfDeletedArray(path),
@@ -3102,99 +3262,15 @@ mod tests {
     #[tokio::test()]
     /// Test conflict detection
     ///
-    /// This session: uptade user attributes
-    /// Previous commit: update user attributes
-    async fn test_conflict_detection_double_user_atts_edit() -> Result<(), Box<dyn Error>>
-    {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
-
-        let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-        )
-        .await?;
-        ds1.commit("update array", None).await?;
-
-        ds2.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-        )
-        .await?;
-        ds2.commit("update array user atts", None).await.unwrap_err();
-        let node_id = ds2.get_array(&path).await?.id;
-        assert_has_conflict(
-            &Conflict::UserAttributesDoubleUpdate { path, node_id },
-            ds2.rebase(&ConflictDetector).await,
-        );
-        Ok(())
-    }
-
-    #[tokio::test()]
-    /// Test conflict detection
-    ///
-    /// This session: uptade user attributes
-    /// Previous commit: delete same array
-    async fn test_conflict_detection_user_atts_edit_of_deleted(
-    ) -> Result<(), Box<dyn Error>> {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
-
-        let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.delete_array(path.clone()).await?;
-        ds1.commit("delete array", None).await?;
-
-        ds2.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-        )
-        .await?;
-        ds2.commit("update array user atts", None).await.unwrap_err();
-        assert_has_conflict(
-            &Conflict::UserAttributesUpdateOfDeletedNode(path),
-            ds2.rebase(&ConflictDetector).await,
-        );
-        Ok(())
-    }
-
-    #[tokio::test()]
-    /// Test conflict detection
-    ///
     /// This session: delete array
     /// Previous commit: update same array metadata
-    async fn test_conflict_detection_delete_when_array_metadata_updated(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_delete_when_array_metadata_updated()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.update_array(path.clone(), basic_meta()).await?;
+        ds1.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
         ds1.commit("update array", None).await?;
-
-        let node = ds2.get_node(&path).await.unwrap();
-        ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", None).await.unwrap_err();
-        assert_has_conflict(
-            &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
-            ds2.rebase(&ConflictDetector).await,
-        );
-        Ok(())
-    }
-
-    #[tokio::test()]
-    /// Test conflict detection
-    ///
-    /// This session: delete array
-    /// Previous commit: update same array user attributes
-    async fn test_conflict_detection_delete_when_array_user_atts_updated(
-    ) -> Result<(), Box<dyn Error>> {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
-
-        let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-        )
-        .await?;
-        ds1.commit("update user attributes", None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
@@ -3211,8 +3287,8 @@ mod tests {
     ///
     /// This session: delete array
     /// Previous commit: update same array chunks
-    async fn test_conflict_detection_delete_when_chunks_updated(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_delete_when_chunks_updated()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
@@ -3239,16 +3315,12 @@ mod tests {
     ///
     /// This session: delete group
     /// Previous commit: update same group user attributes
-    async fn test_conflict_detection_delete_when_group_user_atts_updated(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_detection_delete_when_group_user_data_updated()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar".try_into().unwrap();
-        ds1.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"foo":"bar"}"#).unwrap()),
-        )
-        .await?;
+        ds1.update_group(&path, Bytes::new()).await?;
         ds1.commit("update user attributes", None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
@@ -3267,20 +3339,10 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
 
-        ds.add_group("/".try_into().unwrap()).await?;
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![5],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
+        ds.add_group("/".try_into().unwrap(), user_data()).await?;
 
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(new_array_path.clone(), basic_shape(), None, user_data()).await?;
         ds.commit("create array", None).await?;
 
         // one writer sets chunks
@@ -3339,20 +3401,9 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
 
-        ds.add_group("/".try_into().unwrap()).await?;
-        let zarr_meta = ZarrArrayMetadata {
-            shape: vec![5],
-            data_type: DataType::Int32,
-            chunk_shape: ChunkShape(vec![NonZeroU64::new(1).unwrap()]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Int32(0),
-            codecs: vec![],
-            storage_transformers: None,
-            dimension_names: None,
-        };
-
+        ds.add_group("/".try_into().unwrap(), user_data()).await?;
         let new_array_path: Path = "/array".try_into().unwrap();
-        ds.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+        ds.add_array(new_array_path.clone(), basic_shape(), None, user_data()).await?;
         let _array_created_snap = ds.commit("create array", None).await?;
 
         let mut ds1 = repo.writable_session("main").await?;
@@ -3372,7 +3423,7 @@ mod tests {
         .await?;
 
         let new_array_2_path: Path = "/array_2".try_into().unwrap();
-        ds1.add_array(new_array_2_path.clone(), zarr_meta.clone()).await?;
+        ds1.add_array(new_array_2_path.clone(), basic_shape(), None, user_data()).await?;
         ds1.set_chunk_ref(
             new_array_2_path.clone(),
             ChunkIndices(vec![0]),
@@ -3436,220 +3487,128 @@ mod tests {
             "main",
             conflicting_snap.clone(),
             Some(&current_snap),
-            false,
         )
         .await?;
-
-        // TODO: We can't create writable sessions from arbitrary snapshots anymore so not sure what to do about this?
-        // let's try to create a new commit, that conflicts with the previous one and writes
-        // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
-        // let mut repo2 =
-        //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
-        // repo2
-        //     .set_chunk_ref(
-        //         new_array_path.clone(),
-        //         ChunkIndices(vec![1]),
-        //         Some(ChunkPayload::Inline("overridden".into())),
-        //     )
-        //     .await?;
-
-        // if let Err(SessionError::Conflict { .. }) =
-        //     repo2.commit("main", "write one chunk with repo2", None).await
-        // {
-        //     let solver = BasicConflictSolver {
-        //         on_chunk_conflict: VersionSelection::Fail,
-        //         ..BasicConflictSolver::default()
-        //     };
-
-        //     let res = repo2.rebase(&solver, "main").await;
-        //     assert!(matches!(
-        //     res,
-        //     Err(SessionError::RebaseFailed { snapshot, conflicts, })
-        //         if snapshot == conflicting_snap &&
-        //         conflicts.len() == 1 &&
-        //         matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
-        //                     if path == &new_array_path && chunk_coordinates == &[ChunkIndices(vec![1])].into())
-        //         ));
-        // } else {
-        //     panic!("Bad test, it should conflict")
-        // }
-
-        // // reset the branch to what repo1 wrote
-        // let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
-        // update_branch(
-        //     storage.as_ref(),
-        //     "main",
-        //     conflicting_snap.clone(),
-        //     Some(&current_snap),
-        //     false,
-        // )
-        // .await?;
-
-        // // let's try to create a new commit, that conflicts with the previous one and writes
-        // // to the same chunk, recovering with "UseOurs" policy
-        // let mut repo2 =
-        //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
-        // repo2
-        //     .set_chunk_ref(
-        //         new_array_path.clone(),
-        //         ChunkIndices(vec![1]),
-        //         Some(ChunkPayload::Inline("overridden".into())),
-        //     )
-        //     .await?;
-        // if let Err(SessionError::Conflict { .. }) =
-        //     repo2.commit("main", "write one chunk with repo2", None).await
-        // {
-        //     let solver = BasicConflictSolver {
-        //         on_chunk_conflict: VersionSelection::UseOurs,
-        //         ..Default::default()
-        //     };
-
-        //     repo2.rebase(&solver, "main").await?;
-        //     repo2.commit("main", "after conflict", None).await?;
-        //     let data =
-        //         repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
-        //     assert_eq!(data, Some(ChunkPayload::Inline("overridden".into())));
-        //     let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
-        //     assert_eq!(commits[0].message, "after conflict");
-        //     assert_eq!(commits[1].message, "write two chunks with repo 1");
-        // } else {
-        //     panic!("Bad test, it should conflict")
-        // }
-
-        // // reset the branch to what repo1 wrote
-        // let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
-        // update_branch(
-        //     storage.as_ref(),
-        //     "main",
-        //     conflicting_snap.clone(),
-        //     Some(&current_snap),
-        //     false,
-        // )
-        // .await?;
-
-        // // let's try to create a new commit, that conflicts with the previous one and writes
-        // // to the same chunk, recovering with "UseTheirs" policy
-        // let mut repo2 =
-        //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
-        // repo2
-        //     .set_chunk_ref(
-        //         new_array_path.clone(),
-        //         ChunkIndices(vec![1]),
-        //         Some(ChunkPayload::Inline("overridden".into())),
-        //     )
-        //     .await?;
-        // if let Err(SessionError::Conflict { .. }) =
-        //     repo2.commit("main", "write one chunk with repo2", None).await
-        // {
-        //     let solver = BasicConflictSolver {
-        //         on_chunk_conflict: VersionSelection::UseTheirs,
-        //         ..Default::default()
-        //     };
-
-        //     repo2.rebase(&solver, "main").await?;
-        //     repo2.commit("main", "after conflict", None).await?;
-        //     let data =
-        //         repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
-        //     assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
-        //     let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
-        //     assert_eq!(commits[0].message, "after conflict");
-        //     assert_eq!(commits[1].message, "write two chunks with repo 1");
-        // } else {
-        //     panic!("Bad test, it should conflict")
-        // }
-
         Ok(())
     }
 
-    #[tokio::test]
-    /// Test conflict resolution with rebase
-    ///
-    /// Two sessions write user attributes to the same array
-    /// We attempt to recover using [`VersionSelection::UseOurs`] policy
-    async fn test_conflict_resolution_double_user_atts_edit_with_ours(
-    ) -> Result<(), Box<dyn Error>> {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+    // TODO: We can't create writable sessions from arbitrary snapshots anymore so not sure what to do about this?
+    // let's try to create a new commit, that conflicts with the previous one and writes
+    // to the same chunk, recovering with "Fail" policy (so it shouldn't recover)
+    // let mut repo2 =
+    //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+    // repo2
+    //     .set_chunk_ref(
+    //         new_array_path.clone(),
+    //         ChunkIndices(vec![1]),
+    //         Some(ChunkPayload::Inline("overridden".into())),
+    //     )
+    //     .await?;
 
-        let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
-        )
-        .await?;
-        ds1.commit("update array", None).await?;
+    // if let Err(SessionError::Conflict { .. }) =
+    //     repo2.commit("main", "write one chunk with repo2", None).await
+    // {
+    //     let solver = BasicConflictSolver {
+    //         on_chunk_conflict: VersionSelection::Fail,
+    //         ..BasicConflictSolver::default()
+    //     };
 
-        ds2.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
-        )
-        .await?;
-        ds2.commit("update array user atts", None).await.unwrap_err();
+    //     let res = repo2.rebase(&solver, "main").await;
+    //     assert!(matches!(
+    //     res,
+    //     Err(SessionError::RebaseFailed { snapshot, conflicts, })
+    //         if snapshot == conflicting_snap &&
+    //         conflicts.len() == 1 &&
+    //         matches!(conflicts[0], Conflict::ChunkDoubleUpdate { ref path, ref chunk_coordinates, .. }
+    //                     if path == &new_array_path && chunk_coordinates == &[ChunkIndices(vec![1])].into())
+    //         ));
+    // } else {
+    //     panic!("Bad test, it should conflict")
+    // }
 
-        let solver = BasicConflictSolver {
-            on_user_attributes_conflict: VersionSelection::UseOurs,
-            ..Default::default()
-        };
+    // // reset the branch to what repo1 wrote
+    // let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+    // update_branch(
+    //     storage.as_ref(),
+    //     "main",
+    //     conflicting_snap.clone(),
+    //     Some(&current_snap),
+    //     false,
+    // )
+    // .await?;
 
-        ds2.rebase(&solver).await?;
-        ds2.commit("after conflict", None).await?;
+    // // let's try to create a new commit, that conflicts with the previous one and writes
+    // // to the same chunk, recovering with "UseOurs" policy
+    // let mut repo2 =
+    //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+    // repo2
+    //     .set_chunk_ref(
+    //         new_array_path.clone(),
+    //         ChunkIndices(vec![1]),
+    //         Some(ChunkPayload::Inline("overridden".into())),
+    //     )
+    //     .await?;
+    // if let Err(SessionError::Conflict { .. }) =
+    //     repo2.commit("main", "write one chunk with repo2", None).await
+    // {
+    //     let solver = BasicConflictSolver {
+    //         on_chunk_conflict: VersionSelection::UseOurs,
+    //         ..Default::default()
+    //     };
 
-        let atts = ds2.get_node(&path).await.unwrap().user_attributes.unwrap();
-        assert_eq!(
-            atts,
-            UserAttributesSnapshot::Inline(
-                UserAttributes::try_new(br#"{"repo":2}"#).unwrap()
-            )
-        );
-        Ok(())
-    }
+    //     repo2.rebase(&solver, "main").await?;
+    //     repo2.commit("main", "after conflict", None).await?;
+    //     let data =
+    //         repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+    //     assert_eq!(data, Some(ChunkPayload::Inline("overridden".into())));
+    //     let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+    //     assert_eq!(commits[0].message, "after conflict");
+    //     assert_eq!(commits[1].message, "write two chunks with repo 1");
+    // } else {
+    //     panic!("Bad test, it should conflict")
+    // }
 
-    #[tokio::test]
-    /// Test conflict resolution with rebase
-    ///
-    /// Two sessions write user attributes to the same array
-    /// We attempt to recover using [`VersionSelection::UseTheirs`] policy
-    async fn test_conflict_resolution_double_user_atts_edit_with_theirs(
-    ) -> Result<(), Box<dyn Error>> {
-        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+    // // reset the branch to what repo1 wrote
+    // let current_snap = fetch_branch_tip(storage.as_ref(), "main").await?.snapshot;
+    // update_branch(
+    //     storage.as_ref(),
+    //     "main",
+    //     conflicting_snap.clone(),
+    //     Some(&current_snap),
+    //     false,
+    // )
+    // .await?;
 
-        let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
-        )
-        .await?;
-        ds1.commit("update array", None).await?;
+    // // let's try to create a new commit, that conflicts with the previous one and writes
+    // // to the same chunk, recovering with "UseTheirs" policy
+    // let mut repo2 =
+    //     Repository::update(Arc::clone(&storage), array_created_snap.clone()).build();
+    // repo2
+    //     .set_chunk_ref(
+    //         new_array_path.clone(),
+    //         ChunkIndices(vec![1]),
+    //         Some(ChunkPayload::Inline("overridden".into())),
+    //     )
+    //     .await?;
+    // if let Err(SessionError::Conflict { .. }) =
+    //     repo2.commit("main", "write one chunk with repo2", None).await
+    // {
+    //     let solver = BasicConflictSolver {
+    //         on_chunk_conflict: VersionSelection::UseTheirs,
+    //         ..Default::default()
+    //     };
 
-        // we made one extra random change to the repo, because we'll undo the user attributes
-        // update and we cannot commit an empty change
-        ds2.add_group("/baz".try_into().unwrap()).await?;
-
-        ds2.set_user_attributes(
-            path.clone(),
-            Some(UserAttributes::try_new(br#"{"repo":2}"#).unwrap()),
-        )
-        .await?;
-        ds2.commit("update array user atts", None).await.unwrap_err();
-
-        let solver = BasicConflictSolver {
-            on_user_attributes_conflict: VersionSelection::UseTheirs,
-            ..Default::default()
-        };
-
-        ds2.rebase(&solver).await?;
-        ds2.commit("after conflict", None).await?;
-
-        let atts = ds2.get_node(&path).await.unwrap().user_attributes.unwrap();
-        assert_eq!(
-            atts,
-            UserAttributesSnapshot::Inline(
-                UserAttributes::try_new(br#"{"repo":1}"#).unwrap()
-            )
-        );
-
-        ds2.get_node(&"/baz".try_into().unwrap()).await?;
-        Ok(())
-    }
+    //     repo2.rebase(&solver, "main").await?;
+    //     repo2.commit("main", "after conflict", None).await?;
+    //     let data =
+    //         repo2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![1])).await?;
+    //     assert_eq!(data, Some(ChunkPayload::Inline("hello1".into())));
+    //     let commits = repo2.ancestry().await?.try_collect::<Vec<_>>().await?;
+    //     assert_eq!(commits[0].message, "after conflict");
+    //     assert_eq!(commits[1].message, "write two chunks with repo 1");
+    // } else {
+    //     panic!("Bad test, it should conflict")
+    // }
 
     #[tokio::test]
     /// Test conflict resolution with rebase
@@ -3657,12 +3616,12 @@ mod tests {
     /// One session deletes an array, the other updates its metadata.
     /// We attempt to recover using the default [`BasicConflictSolver`]
     /// Array should still be deleted
-    async fn test_conflict_resolution_delete_of_updated_array(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_resolution_delete_of_updated_array()
+    -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.update_array(path.clone(), basic_meta()).await?;
+        ds1.update_array(&path, basic_shape(), None, user_data()).await?;
         ds1.commit("update array", None).await?;
 
         ds2.delete_array(path.clone()).await?;
@@ -3685,8 +3644,8 @@ mod tests {
     /// Verify we can rebase over multiple commits if they are all fast-forwardable.
     /// We have multiple commits with chunk writes, and then a session has to rebase
     /// writing to the same chunks.
-    async fn test_conflict_resolution_success_through_multiple_commits(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_resolution_success_through_multiple_commits()
+    -> Result<(), Box<dyn Error>> {
         let repo = get_repo_for_conflict().await?;
         let mut ds2 = repo.writable_session("main").await?;
 
@@ -3733,20 +3692,21 @@ mod tests {
     /// Rebase over multiple commits with partial failure
     ///
     /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
-    async fn test_conflict_resolution_failure_in_multiple_commits(
-    ) -> Result<(), Box<dyn Error>> {
+    async fn test_conflict_resolution_failure_in_multiple_commits()
+    -> Result<(), Box<dyn Error>> {
         let repo = get_repo_for_conflict().await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         let mut ds2 = repo.writable_session("main").await?;
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
-        ds1.set_user_attributes(
+        ds1.set_chunk_ref(
             path.clone(),
-            Some(UserAttributes::try_new(br#"{"repo":1}"#).unwrap()),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline("repo 1".into())),
         )
         .await?;
-        let non_conflicting_snap = ds1.commit("update user atts", None).await?;
+        let non_conflicting_snap = ds1.commit("updated non-conflict chunk", None).await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         ds1.set_chunk_ref(
@@ -3793,14 +3753,15 @@ mod tests {
 
     #[cfg(test)]
     mod state_machine_test {
-        use crate::format::snapshot::NodeData;
         use crate::format::Path;
+        use crate::format::snapshot::NodeData;
+        use bytes::Bytes;
         use futures::Future;
         use proptest::prelude::*;
         use proptest::sample;
         use proptest::strategy::{BoxedStrategy, Just};
         use proptest_state_machine::{
-            prop_state_machine, ReferenceStateMachine, StateMachineTest,
+            ReferenceStateMachine, StateMachineTest, prop_state_machine,
         };
         use std::collections::HashMap;
         use std::fmt::Debug;
@@ -3808,17 +3769,18 @@ mod tests {
 
         use proptest::test_runner::Config;
 
-        use super::create_memory_store_repository;
+        use super::ArrayShape;
+        use super::DimensionName;
         use super::Session;
-        use super::ZarrArrayMetadata;
-        use super::{node_paths, zarr_array_metadata};
+        use super::create_memory_store_repository;
+        use super::{node_paths, shapes_and_dims};
 
         #[derive(Clone, Debug)]
         enum RepositoryTransition {
-            AddArray(Path, ZarrArrayMetadata),
-            UpdateArray(Path, ZarrArrayMetadata),
+            AddArray(Path, ArrayShape, Option<Vec<DimensionName>>, Bytes),
+            UpdateArray(Path, ArrayShape, Option<Vec<DimensionName>>, Bytes),
             DeleteArray(Option<Path>),
-            AddGroup(Path),
+            AddGroup(Path, Bytes),
             DeleteGroup(Option<Path>),
         }
 
@@ -3827,8 +3789,8 @@ mod tests {
 
         #[derive(Clone, Default, Debug)]
         struct RepositoryModel {
-            arrays: HashMap<Path, ZarrArrayMetadata>,
-            groups: Vec<Path>,
+            arrays: HashMap<Path, (ArrayShape, Option<Vec<DimensionName>>, Bytes)>,
+            groups: HashMap<Path, Bytes>,
         }
 
         impl ReferenceStateMachine for RepositoryStateMachine {
@@ -3859,7 +3821,7 @@ mod tests {
 
                 let delete_groups = {
                     if !state.groups.is_empty() {
-                        sample::select(state.groups.clone())
+                        sample::select(state.groups.keys().cloned().collect::<Vec<_>>())
                             .prop_map(|p| RepositoryTransition::DeleteGroup(Some(p)))
                             .boxed()
                     } else {
@@ -3868,12 +3830,38 @@ mod tests {
                 };
 
                 prop_oneof![
-                    (node_paths(), zarr_array_metadata())
-                        .prop_map(|(a, b)| RepositoryTransition::AddArray(a, b)),
-                    (node_paths(), zarr_array_metadata())
-                        .prop_map(|(a, b)| RepositoryTransition::UpdateArray(a, b)),
+                    (
+                        node_paths(),
+                        shapes_and_dims(None),
+                        proptest::collection::vec(any::<u8>(), 0..=100)
+                    )
+                        .prop_map(|(a, shape, user_data)| {
+                            RepositoryTransition::AddArray(
+                                a,
+                                shape.shape,
+                                shape.dimension_names,
+                                Bytes::copy_from_slice(user_data.as_slice()),
+                            )
+                        }),
+                    (
+                        node_paths(),
+                        shapes_and_dims(None),
+                        proptest::collection::vec(any::<u8>(), 0..=100)
+                    )
+                        .prop_map(|(a, shape, user_data)| {
+                            RepositoryTransition::UpdateArray(
+                                a,
+                                shape.shape,
+                                shape.dimension_names,
+                                Bytes::copy_from_slice(user_data.as_slice()),
+                            )
+                        }),
                     delete_arrays,
-                    node_paths().prop_map(RepositoryTransition::AddGroup),
+                    (node_paths(), proptest::collection::vec(any::<u8>(), 0..=100))
+                        .prop_map(|(p, ud)| RepositoryTransition::AddGroup(
+                            p,
+                            Bytes::copy_from_slice(ud.as_slice())
+                        )),
                     delete_groups,
                 ]
                 .boxed()
@@ -3885,14 +3873,20 @@ mod tests {
             ) -> Self::State {
                 match transition {
                     // Array ops
-                    RepositoryTransition::AddArray(path, metadata) => {
-                        let res = state.arrays.insert(path.clone(), metadata.clone());
+                    RepositoryTransition::AddArray(path, shape, dims, ud) => {
+                        let res = state.arrays.insert(
+                            path.clone(),
+                            (shape.clone(), dims.clone(), ud.clone()),
+                        );
                         assert!(res.is_none());
                     }
-                    RepositoryTransition::UpdateArray(path, metadata) => {
+                    RepositoryTransition::UpdateArray(path, shape, dims, ud) => {
                         state
                             .arrays
-                            .insert(path.clone(), metadata.clone())
+                            .insert(
+                                path.clone(),
+                                (shape.clone(), dims.clone(), ud.clone()),
+                            )
                             .expect("(postcondition) insertion failed");
                     }
                     RepositoryTransition::DeleteArray(path) => {
@@ -3904,17 +3898,13 @@ mod tests {
                     }
 
                     // Group ops
-                    RepositoryTransition::AddGroup(path) => {
-                        state.groups.push(path.clone());
+                    RepositoryTransition::AddGroup(path, ud) => {
+                        state.groups.insert(path.clone(), ud.clone());
                         // TODO: postcondition
                     }
                     RepositoryTransition::DeleteGroup(Some(path)) => {
-                        let index =
-                            state.groups.iter().position(|x| x == path).expect(
-                                "Attempting to delete a non-existent path: {path}",
-                            );
-                        state.groups.swap_remove(index);
-                        state.groups.retain(|group| !group.starts_with(path));
+                        state.groups.remove(path);
+                        state.groups.retain(|group, _| !group.starts_with(path));
                         state.arrays.retain(|array, _| !array.starts_with(path));
                     }
                     _ => panic!(),
@@ -3924,15 +3914,17 @@ mod tests {
 
             fn preconditions(state: &Self::State, transition: &Self::Transition) -> bool {
                 match transition {
-                    RepositoryTransition::AddArray(path, _) => {
-                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    RepositoryTransition::AddArray(path, _, _, _) => {
+                        !state.arrays.contains_key(path)
+                            && !state.groups.contains_key(path)
                     }
-                    RepositoryTransition::UpdateArray(path, _) => {
+                    RepositoryTransition::UpdateArray(path, _, _, _) => {
                         state.arrays.contains_key(path)
                     }
                     RepositoryTransition::DeleteArray(path) => path.is_some(),
-                    RepositoryTransition::AddGroup(path) => {
-                        !state.arrays.contains_key(path) && !state.groups.contains(path)
+                    RepositoryTransition::AddGroup(path, _) => {
+                        !state.arrays.contains_key(path)
+                            && !state.groups.contains_key(path)
                     }
                     RepositoryTransition::DeleteGroup(p) => p.is_some(),
                 }
@@ -3981,17 +3973,17 @@ mod tests {
                 let runtime = &state.runtime;
                 let repository = &mut state.session;
                 match transition {
-                    RepositoryTransition::AddArray(path, metadata) => {
-                        runtime.unwrap(repository.add_array(path, metadata))
+                    RepositoryTransition::AddArray(path, shape, dims, ud) => {
+                        runtime.unwrap(repository.add_array(path, shape, dims, ud))
                     }
-                    RepositoryTransition::UpdateArray(path, metadata) => {
-                        runtime.unwrap(repository.update_array(path, metadata))
+                    RepositoryTransition::UpdateArray(path, shape, dims, ud) => {
+                        runtime.unwrap(repository.update_array(&path, shape, dims, ud))
                     }
                     RepositoryTransition::DeleteArray(Some(path)) => {
                         runtime.unwrap(repository.delete_array(path))
                     }
-                    RepositoryTransition::AddGroup(path) => {
-                        runtime.unwrap(repository.add_group(path))
+                    RepositoryTransition::AddGroup(path, ud) => {
+                        runtime.unwrap(repository.add_group(path, ud))
                     }
                     RepositoryTransition::DeleteGroup(Some(path)) => {
                         runtime.unwrap(repository.delete_group(path))
@@ -4006,23 +3998,28 @@ mod tests {
                 ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) {
                 let runtime = &state.runtime;
-                for (path, metadata) in ref_state.arrays.iter() {
+                for (path, (shape, dims, ud)) in ref_state.arrays.iter() {
                     let node = runtime.unwrap(state.session.get_array(path));
                     let actual_metadata = match node.node_data {
-                        NodeData::Array(metadata, _) => Ok(metadata),
+                        NodeData::Array { shape, dimension_names, .. } => {
+                            Ok((shape, dimension_names))
+                        }
                         _ => Err("foo"),
                     }
                     .unwrap();
-                    assert_eq!(metadata, &actual_metadata);
+                    assert_eq!(shape, &actual_metadata.0);
+                    assert_eq!(dims, &actual_metadata.1);
+                    assert_eq!(ud, &node.user_data);
                 }
 
-                for path in ref_state.groups.iter() {
+                for (path, ud) in ref_state.groups.iter() {
                     let node = runtime.unwrap(state.session.get_group(path));
                     match node.node_data {
                         NodeData::Group => Ok(()),
                         _ => Err("foo"),
                     }
                     .unwrap();
+                    assert_eq!(&node.user_data, ud)
                 }
             }
         }

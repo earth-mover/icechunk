@@ -12,8 +12,8 @@ use aws_sdk_s3::{
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
-    stream::{BoxStream, FuturesOrdered},
     Stream, StreamExt, TryStreamExt,
+    stream::{BoxStream, FuturesOrdered},
 };
 use itertools::Itertools;
 use s3::S3Storage;
@@ -27,10 +27,11 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
+use tracing::instrument;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -71,10 +72,11 @@ pub enum StorageErrorKind {
     S3StreamError(#[from] ByteStreamError),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
-    #[error("unknown storage error: {0}")]
+    #[error("storage configuration error: {0}")]
+    R2ConfigurationError(String),
+    #[error("storage error: {0}")]
     Other(String),
 }
-
 pub type StorageError = ICError<StorageErrorKind>;
 
 // it would be great to define this impl in error.rs, but it conflicts with the blanket
@@ -94,6 +96,7 @@ pub type StorageResult<A> = Result<A, StorageError>;
 pub struct ListInfo<Id> {
     pub id: Id,
     pub created_at: DateTime<Utc>,
+    pub size_bytes: u64,
 }
 
 const SNAPSHOT_PREFIX: &str = "snapshots/";
@@ -104,7 +107,38 @@ const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
 
-pub type ETag = String;
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
+pub struct ETag(pub String);
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct Generation(pub String);
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct VersionInfo {
+    pub etag: Option<ETag>,
+    pub generation: Option<Generation>,
+}
+
+impl VersionInfo {
+    pub fn for_creation() -> Self {
+        Self { etag: None, generation: None }
+    }
+
+    pub fn from_etag_only(etag: String) -> Self {
+        Self { etag: Some(ETag(etag)), generation: None }
+    }
+
+    pub fn is_create(&self) -> bool {
+        self.etag.is_none() && self.generation.is_none()
+    }
+
+    pub fn etag(&self) -> Option<&String> {
+        self.etag.as_ref().map(|e| &e.0)
+    }
+
+    pub fn generation(&self) -> Option<&String> {
+        self.generation.as_ref().map(|e| &e.0)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
@@ -143,6 +177,15 @@ impl ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: Option<ConcurrencySettings>,
+    pub unsafe_use_conditional_update: Option<bool>,
+    pub unsafe_use_conditional_create: Option<bool>,
+    pub unsafe_use_metadata: Option<bool>,
+    #[serde(default)]
+    pub storage_class: Option<String>,
+    #[serde(default)]
+    pub metadata_storage_class: Option<String>,
+    #[serde(default)]
+    pub chunks_storage_class: Option<String>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -154,6 +197,26 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
     }
 
+    pub fn unsafe_use_conditional_create(&self) -> bool {
+        self.unsafe_use_conditional_create.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_conditional_update(&self) -> bool {
+        self.unsafe_use_conditional_update.unwrap_or(true)
+    }
+
+    pub fn unsafe_use_metadata(&self) -> bool {
+        self.unsafe_use_metadata.unwrap_or(true)
+    }
+
+    pub fn metadata_storage_class(&self) -> Option<&String> {
+        self.metadata_storage_class.as_ref().or(self.storage_class.as_ref())
+    }
+
+    pub fn chunks_storage_class(&self) -> Option<&String> {
+        self.chunks_storage_class.as_ref().or(self.storage_class.as_ref())
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             concurrency: match (&self.concurrency, other.concurrency) {
@@ -161,6 +224,57 @@ impl Settings {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            unsafe_use_conditional_create: match (
+                &self.unsafe_use_conditional_create,
+                other.unsafe_use_conditional_create,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_conditional_update: match (
+                &self.unsafe_use_conditional_update,
+                other.unsafe_use_conditional_update,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            unsafe_use_metadata: match (
+                &self.unsafe_use_metadata,
+                other.unsafe_use_metadata,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            storage_class: match (&self.storage_class, other.storage_class) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            metadata_storage_class: match (
+                &self.metadata_storage_class,
+                other.metadata_storage_class,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            chunks_storage_class: match (
+                &self.chunks_storage_class,
+                other.chunks_storage_class,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }
@@ -197,19 +311,19 @@ impl Reader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchConfigResult {
-    Found { bytes: Bytes, etag: ETag },
+    Found { bytes: Bytes, version: VersionInfo },
     NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateConfigResult {
-    Updated { new_etag: ETag },
+    Updated { new_version: VersionInfo },
     NotOnLatestVersion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetRefResult {
-    Found { bytes: Bytes },
+    Found { bytes: Bytes, version: VersionInfo },
     NotFound,
 }
 
@@ -219,23 +333,39 @@ pub enum WriteRefResult {
     WontOverwrite,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeleteObjectsResult {
+    pub deleted_objects: u64,
+    pub deleted_bytes: u64,
+}
+
+impl DeleteObjectsResult {
+    pub fn merge(&mut self, other: &Self) {
+        self.deleted_objects += other.deleted_objects;
+        self.deleted_bytes += other.deleted_bytes;
+    }
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
-pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
+pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     fn default_settings(&self) -> Settings {
         Default::default()
     }
+
+    fn can_write(&self) -> bool;
+
     async fn fetch_config(&self, settings: &Settings)
-        -> StorageResult<FetchConfigResult>;
+    -> StorageResult<FetchConfigResult>;
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
-        etag: Option<&str>,
+        previous_version: &VersionInfo,
     ) -> StorageResult<UpdateConfigResult>;
     async fn fetch_snapshot(
         &self,
@@ -304,17 +434,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         ref_key: &str,
     ) -> StorageResult<GetRefResult>;
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn ref_versions(
-        &self,
-        settings: &Settings,
-        ref_name: &str,
-    ) -> StorageResult<BoxStream<StorageResult<String>>>;
     async fn write_ref(
         &self,
         settings: &Settings,
         ref_key: &str,
-        overwrite_refs: bool,
         bytes: Bytes,
+        previous_version: &VersionInfo,
     ) -> StorageResult<WriteRefResult>;
 
     async fn list_objects<'a>(
@@ -323,13 +448,39 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    async fn delete_batch(
+        &self,
+        prefix: &str,
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult>;
+
     /// Delete a stream of objects, by their id string representations
+    /// Input stream includes sizes to get as result the total number of bytes deleted
+    #[instrument(skip(self, _settings, ids))]
     async fn delete_objects(
         &self,
-        settings: &Settings,
+        _settings: &Settings,
         prefix: &str,
-        ids: BoxStream<'_, String>,
-    ) -> StorageResult<usize>;
+        ids: BoxStream<'_, (String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let res = Arc::new(Mutex::new(DeleteObjectsResult::default()));
+        ids.chunks(1_000)
+            // FIXME: configurable concurrency
+            .for_each_concurrent(10, |batch| {
+                let res = Arc::clone(&res);
+                async move {
+                    // FIXME: handle error instead of skipping
+                    let new_deletes =
+                        self.delete_batch(prefix, batch).await.unwrap_or_default();
+                    #[allow(clippy::expect_used)]
+                    res.lock().expect("Bug in delete objects").merge(&new_deletes);
+                }
+            })
+            .await;
+        #[allow(clippy::expect_used)]
+        let res = res.lock().expect("Bug in delete objects");
+        Ok(res.clone())
+    }
 
     async fn get_snapshot_last_modified(
         &self,
@@ -337,7 +488,13 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn root_is_clean(&self) -> StorageResult<bool>;
+    async fn root_is_clean(&self) -> StorageResult<bool> {
+        match self.list_objects(&Settings::default(), "").await?.next().await {
+            None => Ok(true),
+            Some(Ok(_)) => Ok(false),
+            Some(Err(err)) => Err(err),
+        }
+    }
 
     async fn list_chunks(
         &self,
@@ -370,12 +527,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_chunks(
         &self,
         settings: &Settings,
-        chunks: BoxStream<'_, ChunkId>,
-    ) -> StorageResult<usize> {
+        chunks: BoxStream<'_, (ChunkId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             CHUNK_PREFIX,
-            chunks.map(|id| id.to_string()).boxed(),
+            chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -383,12 +540,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_manifests(
         &self,
         settings: &Settings,
-        manifests: BoxStream<'_, ManifestId>,
-    ) -> StorageResult<usize> {
+        manifests: BoxStream<'_, (ManifestId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             MANIFEST_PREFIX,
-            manifests.map(|id| id.to_string()).boxed(),
+            manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -396,12 +553,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_snapshots(
         &self,
         settings: &Settings,
-        snapshots: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
+        snapshots: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             SNAPSHOT_PREFIX,
-            snapshots.map(|id| id.to_string()).boxed(),
+            snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -409,12 +566,12 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
     async fn delete_transaction_logs(
         &self,
         settings: &Settings,
-        transaction_logs: BoxStream<'_, SnapshotId>,
-    ) -> StorageResult<usize> {
+        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
         self.delete_objects(
             settings,
             TRANSACTION_PREFIX,
-            transaction_logs.map(|id| id.to_string()).boxed(),
+            transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
         )
         .await
     }
@@ -423,8 +580,9 @@ pub trait Storage: fmt::Debug + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         refs: BoxStream<'_, String>,
-    ) -> StorageResult<usize> {
-        self.delete_objects(settings, REF_PREFIX, refs).await
+    ) -> StorageResult<u64> {
+        let refs = refs.map(|s| (s, 0)).boxed();
+        Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
     }
 
     async fn get_object_range_buf(
@@ -490,17 +648,23 @@ where
 {
     let id = Id::try_from(item.id.as_str()).ok()?;
     let created_at = item.created_at;
-    Some(ListInfo { created_at, id })
+    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
 }
 
 fn translate_list_infos<'a, Id>(
     s: impl Stream<Item = StorageResult<ListInfo<String>>> + Send + 'a,
 ) -> BoxStream<'a, StorageResult<ListInfo<Id>>>
 where
-    Id: for<'b> TryFrom<&'b str> + Send + 'a,
+    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
 {
-    // FIXME: flag error, don't skip
-    s.try_filter_map(|info| async move { Ok(convert_list_item(info)) }).boxed()
+    s.try_filter_map(|info| async move {
+        let info = convert_list_item(info);
+        if info.is_none() {
+            tracing::error!(list_info=?info, "Error processing list item metadata");
+        }
+        Ok(info)
+    })
+    .boxed()
 }
 
 /// Split an object request into multiple byte range requests
@@ -517,7 +681,7 @@ pub fn split_in_multiple_requests(
     range: &Range<u64>,
     ideal_req_size: u64,
     max_requests: u16,
-) -> impl Iterator<Item = Range<u64>> {
+) -> impl Iterator<Item = Range<u64>> + use<> {
     let size = max(0, range.end - range.start);
     // we do a ceiling division, rounding always up
     let num_parts = size.div_ceil(ideal_req_size);
@@ -545,11 +709,69 @@ pub fn new_s3_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
+    if let Some(endpoint) = &config.endpoint_url {
+        if endpoint.contains("fly.storage.tigris.dev") {
+            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        }
+    }
+
     let st = S3Storage::new(
         config,
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_r2_storage(
+    config: S3Options,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    account_id: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let (bucket, prefix) = match (bucket, prefix) {
+        (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
+        (None, Some(prefix)) => match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
+            None => (prefix, None),
+        },
+        (Some(bucket), None) => (bucket, None),
+        (None, None) => {
+            return Err(StorageErrorKind::R2ConfigurationError(
+                "Either bucket or prefix must be provided.".to_string(),
+            )
+            .into());
+        }
+    };
+
+    if config.endpoint_url.is_none() && account_id.is_none() {
+        return Err(StorageErrorKind::R2ConfigurationError(
+            "Either endpoint_url or account_id must be provided.".to_string(),
+        )
+        .into());
+    }
+
+    let config = S3Options {
+        region: config.region.or(Some("auto".to_string())),
+        endpoint_url: config
+            .endpoint_url
+            .or(account_id.map(|x| format!("https://{0}.r2.cloudflarestorage.com", x))),
+        force_path_style: true,
+        ..config
+    };
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
     )?;
     Ok(Arc::new(st))
 }
@@ -559,6 +781,7 @@ pub fn new_tigris_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
+    use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = S3Options {
         endpoint_url: Some(
@@ -566,11 +789,30 @@ pub fn new_tigris_storage(
         ),
         ..config
     };
+    let mut extra_write_headers = Vec::with_capacity(1);
+    let mut extra_read_headers = Vec::with_capacity(2);
+
+    if !use_weak_consistency {
+        // TODO: Tigris will need more than this to offer good eventually consistent behavior
+        // For example: we should use no-cache for branches and config file
+        if let Some(region) = config.region.as_ref() {
+            extra_write_headers.push(("X-Tigris-Region".to_string(), region.clone()));
+            extra_read_headers.push(("X-Tigris-Region".to_string(), region.clone()));
+            extra_read_headers
+                .push(("Cache-Control".to_string(), "no-cache".to_string()));
+        } else {
+            return Err(StorageErrorKind::Other("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()).into());
+        }
+    }
+
     let st = S3Storage::new(
         config,
         bucket,
         prefix,
         credentials.unwrap_or(S3Credentials::FromEnv),
+        !use_weak_consistency, // notice eventually consistent storage can't do writes
+        extra_read_headers,
+        extra_write_headers,
     )?;
     Ok(Arc::new(st))
 }
@@ -585,6 +827,22 @@ pub async fn new_local_filesystem_storage(
 ) -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_local_filesystem(path).await?;
     Ok(Arc::new(st))
+}
+
+pub async fn new_s3_object_store_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage>> {
+    if let Some(endpoint) = &config.endpoint_url {
+        if endpoint.contains("fly.storage.tigris.dev") {
+            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        }
+    }
+    let storage =
+        ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
+    Ok(Arc::new(storage))
 }
 
 pub async fn new_azure_blob_storage(
@@ -627,10 +885,27 @@ pub async fn new_gcs_storage(
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
-    use std::collections::HashSet;
+    use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
     use super::*;
     use proptest::prelude::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_is_clean() {
+        let repo_dir = TempDir::new().unwrap();
+        let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
+        assert!(s.root_is_clean().await.unwrap());
+
+        let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
+        write!(file, "hello").unwrap();
+        assert!(!s.root_is_clean().await.unwrap());
+
+        let inside_existing =
+            PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
+        let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
+        assert!(s.root_is_clean().await.unwrap());
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig {

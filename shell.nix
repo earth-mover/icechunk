@@ -1,7 +1,7 @@
 let
   # Pinned nixpkgs, deterministic. Last updated to nixos-unstable as of: 2024-12-10
   pkgs = import (fetchTarball
-    "https://github.com/NixOS/nixpkgs/archive/5df43628fdf08d642be8ba5b3625a6c70731c19c.tar.gz")
+    "https://github.com/NixOS/nixpkgs/archive/8c1f3147639f009f09d2bfffc64bcf8485bf3fd2.tar.gz")
     { };
 
   # Rolling updates, not deterministic.
@@ -25,6 +25,7 @@ in pkgs.mkShell.override {
     taplo # toml lsp server
 
     awscli2
+    google-cloud-sdk
     just # script launcher with a make flavor
     alejandra # nix code formatter
     markdownlint-cli2
@@ -33,10 +34,6 @@ in pkgs.mkShell.override {
 
   shellHook = ''
     export PYTHONPATH=".:$PYTHONPATH"
-
-    export AWS_ACCESS_KEY_ID=minio123
-    export AWS_SECRET_ACCESS_KEY=minio123
-    export AWS_DEFAULT_REGION=us-east-1
     export RUSTFLAGS="-W unreachable-pub -W bare-trait-objects"
   '';
 }

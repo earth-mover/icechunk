@@ -1,0 +1,52 @@
+include "object_ids.fbs";
+
+namespace gen;
+
+table ChunkIndices {
+  coords: [uint32] (required);
+}
+
+table ArrayUpdatedChunks {
+  // the node id of the array to which the chunks belong to
+  node_id: ObjectId8 (required);
+
+  // the coordinates of all the chunks modified in this transaction for this array
+  // sorted in ascending lexicographical order
+  chunks: [ChunkIndices] (required);
+}
+
+table TransactionLog {
+  // id of the transaction log file,
+  // it will be the same as the corresponding snapshot
+  id: ObjectId12 (required);
+
+  // node ids of the groups created in this transaction
+  // sorted in ascending order
+  new_groups: [ObjectId8] (required);
+
+  // node ids of the arrays created in this transaction
+  // sorted in ascending order
+  new_arrays: [ObjectId8] (required);
+
+  // node ids of the groups deleted in this transaction
+  // sorted in ascending order
+  deleted_groups: [ObjectId8] (required);
+
+  // node ids of the arrays deleted in this transaction
+  // sorted in ascending order
+  deleted_arrays: [ObjectId8] (required);
+
+  // node ids of the groups that had user definitions modified in this transaction
+  // sorted in ascending order
+  updated_arrays: [ObjectId8] (required);
+
+  // node ids of the arrays that had user definitions modified in this transaction
+  // sorted in ascending order
+  updated_groups: [ObjectId8] (required);
+
+  // chunk ref changes made in this transaction
+  // sorted in ascending order of the node_id of the ArrayUpdatedChunks
+  updated_chunks: [ArrayUpdatedChunks] (required);
+}
+
+root_type TransactionLog;

@@ -1,50 +1,25 @@
 #![allow(clippy::unwrap_used)]
+use chrono::Utc;
 use pretty_assertions::assert_eq;
-use std::{collections::HashMap, num::NonZeroU64, ops::Range, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{snapshot::ZarrArrayMetadata, ByteRange, ChunkIndices, Path, SnapshotId},
-    metadata::{ChunkKeyEncoding, ChunkShape, DataType, FillValue},
-    repository::VersionInfo,
-    session::{get_chunk, Session},
-    storage::new_s3_storage,
     Repository, Storage,
+    format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
+    repository::VersionInfo,
+    session::{Session, get_chunk},
 };
 use tokio::task::JoinSet;
 
+mod common;
+
 const SIZE: usize = 10;
-
-#[allow(clippy::expect_used)]
-async fn mk_storage(
-    prefix: &str,
-) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error + Send + Sync>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            allow_http: true,
-            anonymous: false,
-        },
-        "testbucket".to_string(),
-        Some(prefix.to_string()),
-        Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
-            session_token: None,
-            expires_after: None,
-        })),
-    )
-    .expect("Creating minio storage failed");
-
-    Ok(storage)
-}
 
 async fn mk_repo(
     storage: Arc<dyn Storage + Send + Sync>,
     init: bool,
-) -> Result<Repository, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Repository, Box<dyn std::error::Error>> {
     if init {
         Ok(Repository::create(None, storage, HashMap::new()).await?)
     } else {
@@ -80,7 +55,7 @@ async fn write_chunks(
     Ok(ds)
 }
 
-async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error>> {
     for x in 0..(SIZE / 2) as u32 {
         for y in 0..(SIZE / 2) as u32 {
             let bytes = get_chunk(
@@ -104,7 +79,40 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error + Send + Sy
 }
 
 #[tokio::test]
-#[allow(clippy::unwrap_used)]
+async fn test_distributed_writes_in_minio() -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(|prefix| async {
+        common::make_minio_integration_storage(prefix)
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_distributed_writes_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(|prefix| async {
+        common::make_aws_integration_storage(prefix)
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_distributed_writes_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(|prefix| async {
+        common::make_r2_integration_storage(prefix)
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs credentials from env"]
+async fn test_distributed_writes_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(|prefix| async {
+        common::make_tigris_integration_storage(prefix)
+    })
+    .await
+}
+
 /// This test does a distributed write from 4 different [`Repository`] instances, and then commits.
 ///
 /// - We create a repo, and write an empty array to it.
@@ -113,33 +121,29 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error + Send + Sy
 /// - We do concurrent writes from the 4 repo instances
 /// - When done, we do a distributed commit using a random repo
 /// - The changes from the other repos are serialized via [`ChangeSet::export_to_bytes`]
-async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+async fn do_test_distributed_writes<F, Fut>(
+    mk_storage: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<
+        Output = Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>>,
+    >,
 {
-    let prefix = format!("test_distributed_writes_{}", SnapshotId::random());
-    let storage1 = mk_storage(prefix.as_str()).await?;
-    let storage2 = mk_storage(prefix.as_str()).await?;
-    let storage3 = mk_storage(prefix.as_str()).await?;
-    let storage4 = mk_storage(prefix.as_str()).await?;
+    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+    let storage1 = mk_storage(prefix.clone()).await?;
+    let storage2 = mk_storage(prefix.clone()).await?;
+    let storage3 = mk_storage(prefix.clone()).await?;
+    let storage4 = mk_storage(prefix.clone()).await?;
     let repo1 = mk_repo(storage1, true).await?;
 
     let mut ds1 = repo1.writable_session("main").await?;
 
-    let zarr_meta = ZarrArrayMetadata {
-        shape: vec![SIZE as u64, SIZE as u64],
-        data_type: DataType::Float64,
-        chunk_shape: ChunkShape(vec![
-            NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(1).unwrap(),
-        ]),
-        chunk_key_encoding: ChunkKeyEncoding::Slash,
-        fill_value: FillValue::Float64(f64::NAN),
-        codecs: vec![],
-        storage_transformers: None,
-        dimension_names: None,
-    };
+    let shape = ArrayShape::new(vec![(SIZE as u64, 1), (SIZE as u64, 1)]).unwrap();
+    let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();
-    ds1.add_array(new_array_path.clone(), zarr_meta.clone()).await?;
+    ds1.add_array(new_array_path.clone(), shape, None, user_data).await?;
     ds1.commit("create array", None).await?;
 
     let repo2 = mk_repo(storage2, false).await?;
@@ -193,7 +197,7 @@ async fn test_distributed_writes() -> Result<(), Box<dyn std::error::Error + Sen
     verify(ds1).await?;
 
     // To be safe, we create a new instance of the storage and repo, and verify again
-    let storage = mk_storage(prefix.as_str()).await?;
+    let storage = mk_storage(prefix).await?;
     let repo = mk_repo(storage, false).await?;
     let ds =
         repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;

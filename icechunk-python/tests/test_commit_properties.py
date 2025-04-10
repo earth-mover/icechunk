@@ -27,7 +27,7 @@ def test_property_types() -> None:
     }
     snapshot_id = session.commit("some commit", props)
 
-    info = repo.ancestry(branch="main")[0]
+    info = next(iter(repo.ancestry(branch="main")))
     assert info.message == "some commit"
     assert info.id == snapshot_id
     assert info.parent_id == parent_id

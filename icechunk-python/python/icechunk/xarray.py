@@ -6,15 +6,17 @@ from typing import Any, Literal, overload
 import numpy as np
 from packaging.version import Version
 
+import dask.array as da
 import xarray as xr
 import zarr
 from icechunk import IcechunkStore, Session
-from icechunk.dask import stateful_store_reduce
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
+
+__all__ = ["to_icechunk"]
 
 Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
@@ -69,7 +71,7 @@ class LazyArrayWriter(ArrayWriter):
 
 
 @dataclass
-class XarrayDatasetWriter:
+class _XarrayDatasetWriter:
     """
     Write Xarray Datasets to a group in an Icechunk store.
 
@@ -177,15 +179,20 @@ class XarrayDatasetWriter:
         )  # type: ignore[no-untyped-call]
 
         # Now we tree-reduce all changesets
-        merged_session = stateful_store_reduce(
-            stored_arrays,
-            prefix="ice-changeset",
-            chunk=extract_session,
-            aggregate=merge_sessions,
-            split_every=split_every,
-            compute=True,
-            **chunkmanager_store_kwargs,
-        )
+        merged_sessions = [
+            da.reduction(  # type: ignore[no-untyped-call]
+                arr,
+                name="ice-changeset",
+                chunk=extract_session,
+                aggregate=merge_sessions,
+                split_every=split_every,
+                concatenate=False,
+                dtype=object,
+            )
+            for arr in stored_arrays
+        ]
+        computed = da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
+        merged_session = merge_sessions(*computed)
         self.store.session.merge(merged_session)
 
 
@@ -282,13 +289,13 @@ def to_icechunk(
         should be written in a separate single call to ``to_icechunk()``.
       - Dimensions cannot be included in both ``region`` and
         ``append_dim`` at the same time. To create empty arrays to fill
-        in with ``region``, use the `XarrayDatasetWriter` directly.
+        in with ``region``, use the `_XarrayDatasetWriter` directly.
     """
 
-    as_dataset = make_dataset(obj)
+    as_dataset = _make_dataset(obj)
     with session.allow_pickling():
         store = session.store
-        writer = XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
+        writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
         writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -301,10 +308,10 @@ def to_icechunk(
 
 
 @overload
-def make_dataset(obj: DataArray) -> Dataset: ...
+def _make_dataset(obj: DataArray) -> Dataset: ...
 @overload
-def make_dataset(obj: Dataset) -> Dataset: ...
-def make_dataset(obj: DataArray | Dataset) -> Dataset:
+def _make_dataset(obj: Dataset) -> Dataset: ...
+def _make_dataset(obj: DataArray | Dataset) -> Dataset:
     """Copied from DataArray.to_zarr"""
     DATAARRAY_NAME = "__xarray_dataarray_name__"
     DATAARRAY_VARIABLE = "__xarray_dataarray_variable__"

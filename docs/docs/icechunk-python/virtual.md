@@ -2,29 +2,24 @@
 
 While Icechunk works wonderfully with native chunks managed by Zarr, there is lots of archival data out there in other formats already. To interoperate with such data, Icechunk supports "Virtual" chunks, where any number of chunks in a given dataset may reference external data in existing archival formats, such as netCDF, HDF, GRIB, or TIFF. Virtual chunks are loaded directly from the original source without copying or modifying the original achival data files. This enables Icechunk to manage large datasets from existing data without needing that data to be in Zarr format already.
 
-!!! warning
+!!! note
 
-    While virtual references are fully supported in Icechunk, creating virtual datasets currently relies on using experimental or pre-release versions of open source tools. For full instructions on how to install the required tools and their current statuses [see the tracking issue on Github](https://github.com/earth-mover/icechunk/issues/197).
-    With time, these experimental features will make their way into the released packages.
+    The concept of a "virtual Zarr dataset" originates from the [Kerchunk](https://fsspec.github.io/kerchunk/) project, which preceded and inspired [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/). Like `VirtualiZarr`, the `kerchunk` package provides functionality to scan metadata of existing data files and combine these references into larger virtual datasets, but unlike `VirtualiZarr` the `Kerchunk` package currently has no facility for writing to `Icechunk` stores. If you previously were interested in "Kerchunking" your data, you can now achieve a similar result by using `VirtualiZarr` to create virtual datasets and write them to `icechunk`.
 
-To create virtual Icechunk datasets with Python, the community utilizes the [kerchunk](https://fsspec.github.io/kerchunk/) and [VirtualiZarr](https://virtualizarr.readthedocs.io/en/latest/) packages.
+`VirtualiZarr` lets users ingest existing data files into virtual datasets using various different tools under the hood, including `kerchunk`, `xarray`, `zarr`, and now `icechunk`. It does so by creating virtual references to existing data that can be combined and manipulated to create larger virtual datasets using `xarray`. These datasets can then be exported to `kerchunk` reference format or to an `Icechunk` repository, without ever copying or moving the existing data files.
 
-`kerchunk` allows scanning the metadata of existing data files to extract virtual references. It also provides methods to combine these references into [larger virtual datasets](https://fsspec.github.io/kerchunk/tutorial.html#combine-multiple-kerchunked-datasets-into-a-single-logical-aggregate-dataset), which can be exported to it's [reference format](https://fsspec.github.io/kerchunk/spec.html).
+!!! note
 
-`VirtualiZarr` lets users ingest existing data files into virtual datasets using various different tools under the hood, including `kerchunk`, `xarray`, `zarr`, and now `icechunk`. It does so by creating virtual references to existing data that can be combined and manipulated to create larger virtual datasets using `xarray`. These datasets can then be exported to `kerchunk` reference format or to an `Icechunk` store, without ever copying or moving the existing data files.
+    [Currently only `s3` compatible storage and `local` storage are supported for virtual references](#virtual-reference-storage-support). Support for other storage types like [`gcs`](https://github.com/earth-mover/icechunk/issues/524), [`azure`](https://github.com/earth-mover/icechunk/issues/602), and [`https`](https://github.com/earth-mover/icechunk/issues/526) are on the roadmap.
 
 ## Creating a virtual dataset with VirtualiZarr
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
-!!! note
-
-    At this point you should have followed the instructions [here](https://github.com/earth-mover/icechunk/issues/197) to install the necessary experimental dependencies.
-
-Before we get started, we also need to install `fsspec` and `s3fs` for working with data on s3.
+Before we get started, we need to install `virtualizarr`, and `icechunk`. We also need to install `fsspec` and `s3fs` for working with data on s3.
 
 ```shell
-pip install fsspec s3fs
+pip install virtualizarr icechunk fsspec s3fs
 ```
 
 First, we need to find all of the files we are interested in, we will do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
@@ -83,43 +78,30 @@ virtual_ds = xr.concat(
 #    err      (time, zlev, lat, lon) int16 64MB ManifestArray<shape=(31, 1, 72...
 ```
 
-We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk repo to write this dataset to.
+We have a virtual dataset with 31 timestamps! One hint that this worked correctly is that the readout shows the variables and coordinates as [`ManifestArray`](https://virtualizarr.readthedocs.io/en/latest/usage.html#manifestarray-class) instances, the representation that `VirtualiZarr` uses for virtual arrays. Let's create an Icechunk repo to write this dataset to in the `oisst` directory on our local filesystem.
 
 !!! note
 
-    You will need to modify the `StorageConfig` bucket name and method to a bucket you have access to. There are multiple options for configuring S3 access: `s3_from_config`, `s3_from_env` and `s3_anonymous`. For more configuration options, see the [configuration page](./configuration.md).
-
-!!! note
-
-    Take note of the `virtual_ref_config` passed into the `RepositoryConfig` when creating the store. This allows the icechunk store to have the necessary credentials to access the referenced netCDF data on s3 at read time. For more configuration options, see the [configuration page](./configuration.md).
+    Take note of the [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) passed into the [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) when creating the store. We specify the storage configuration necessary to access the anonymous S3 bucket that holds the OISST netCDF files, along with credentials that match. This creates a mapping between the `s3` virtual chunk container and the credentials passed for the `s3` namespace. For more configuration options, see the [configuration page](./configuration.md).
 
 ```python
-from icechunk import Repository, StorageConfig, RepositoryConfig, VirtualRefConfig
+import icechunk
 
-storage = StorageConfig.s3_from_config(
-    bucket='YOUR_BUCKET_HERE',
-    prefix='icechunk/oisst',
-    region='us-east-1',
-    credentials=S3Credentials(
-        access_key_id="REPLACE_ME",
-        secret_access_key="REPLACE_ME",
-        session_token="REPLACE_ME"
-    )
+storage = icechunk.local_filesystem(
+    prefix='oisst',
 )
 
-repo = Repository.create(
-    storage=storage,
-    config=RepositoryConfig(
-        virtual_ref_config=VirtualRefConfig.s3_anonymous(region='us-east-1'),
-    )
-)
+config = icechunk.RepositoryConfig.default()
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3", "s3://", icechunk.s3_store(region="us-east-1")))
+credentials = icechunk.containers_credentials(s3=icechunk.s3_credentials(anonymous=True))
+repo = icechunk.Repository.create(storage, config, credentials)
 ```
 
 With the repo created, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
 session = repo.writable_session("main")
-virtual_ds.virtualize.to_icechunk(session.store())
+virtual_ds.virtualize.to_icechunk(session.store)
 ```
 
 The refs are written so lets save our progress by committing to the store.
@@ -209,4 +191,9 @@ No extra configuration is necessary for local filesystem references.
 
 ### Virtual Reference File Format Support
 
-Currently, Icechunk supports `HDF5` and `netcdf4` files for use in virtual references. See the [tracking issue](https://github.com/earth-mover/icechunk/issues/197) for more info.
+Currently, Icechunk supports `HDF5`, `netcdf4`, and `netcdf3` files for use in virtual references with `VirtualiZarr`. Support for other filetypes is under development in the VirtualiZarr project. Below are some relevant issues:
+
+- [meta issue for file format support](https://github.com/zarr-developers/VirtualiZarr/issues/218)
+- [Support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
+- [Support for GRIB2 files with datatree](https://github.com/zarr-developers/VirtualiZarr/issues/11)
+- [Support for TIFF files](https://github.com/zarr-developers/VirtualiZarr/issues/291)

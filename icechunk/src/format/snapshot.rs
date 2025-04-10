@@ -1,74 +1,51 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    ops::Bound,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use err_into::ErrorInto;
+use flatbuffers::{FlatBufferBuilder, VerifierOptions};
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::metadata::{
-    ArrayShape, ChunkKeyEncoding, ChunkShape, Codec, DataType, DimensionNames, FillValue,
-    StorageTransformer, UserAttributes,
-};
-
 use super::{
-    manifest::{Manifest, ManifestRef},
-    AttributesId, ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, ManifestId,
-    NodeId, Path, SnapshotId, TableOffset,
+    AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
+    IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
+    flatbuffers::generated,
+    manifest::{Manifest, ManifestExtents, ManifestRef},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UserAttributesRef {
-    pub object_id: AttributesId,
-    pub location: TableOffset,
+pub struct DimensionShape {
+    dim_length: u64,
+    chunk_length: u64,
+}
+
+impl DimensionShape {
+    pub fn new(array_length: u64, chunk_length: NonZeroU64) -> Self {
+        Self { dim_length: array_length, chunk_length: chunk_length.get() }
+    }
+    pub fn array_length(&self) -> u64 {
+        self.dim_length
+    }
+    pub fn chunk_length(&self) -> u64 {
+        self.chunk_length
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UserAttributesSnapshot {
-    Inline(UserAttributes),
-    Ref(UserAttributesRef),
-}
+pub struct ArrayShape(Vec<DimensionShape>);
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub enum NodeType {
-    Group,
-    Array,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ZarrArrayMetadata {
-    pub shape: ArrayShape,
-    pub data_type: DataType,
-    pub chunk_shape: ChunkShape,
-    pub chunk_key_encoding: ChunkKeyEncoding,
-    pub fill_value: FillValue,
-    pub codecs: Vec<Codec>,
-    pub storage_transformers: Option<Vec<StorageTransformer>>,
-    pub dimension_names: Option<DimensionNames>,
-}
-
-impl ZarrArrayMetadata {
-    /// Returns an iterator over the maximum permitted chunk indices for the array.
-    ///
-    /// This function calculates the maximum chunk indices based on the shape of the array
-    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
-    /// this will always result in proper indices at the boundaries.
-    ///
-    /// # Returns
-    ///
-    /// A ChunkIndices type containing the max chunk index for each dimension.
-    fn max_chunk_indices_permitted(&self) -> ChunkIndices {
-        debug_assert_eq!(self.shape.len(), self.chunk_shape.0.len());
-
-        ChunkIndices(
-            self.shape
-                .iter()
-                .zip(self.chunk_shape.0.iter())
-                .map(|(s, cs)| if *s == 0 { 0 } else { ((s - 1) / cs.get()) as u32 })
-                .collect(),
-        )
+impl ArrayShape {
+    pub fn new<I>(it: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = (u64, u64)>,
+    {
+        let v = it.into_iter().map(|(al, cl)| {
+            let cl = NonZeroU64::new(cl)?;
+            Some(DimensionShape::new(al, cl))
+        });
+        v.collect::<Option<Vec<_>>>().map(Self)
     }
 
     /// Validates the provided chunk coordinates for the array.
@@ -87,27 +64,75 @@ impl ZarrArrayMetadata {
     ///
     /// Returns false if the chunk coordinates are invalid.
     pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> bool {
-        debug_assert_eq!(self.shape.len(), coord.0.len());
-
         coord
             .0
             .iter()
-            .zip(self.max_chunk_indices_permitted().0)
+            .zip(self.max_chunk_indices_permitted())
             .all(|(index, index_permitted)| *index <= index_permitted)
+    }
+
+    /// Returns an iterator over the maximum permitted chunk indices for the array.
+    ///
+    /// This function calculates the maximum chunk indices based on the shape of the array
+    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
+    /// this will always result in proper indices at the boundaries.
+    fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.iter().map(|dim_shape| {
+            if dim_shape.chunk_length == 0 || dim_shape.dim_length == 0 {
+                0
+            } else {
+                ((dim_shape.dim_length - 1) / dim_shape.chunk_length) as u32
+            }
+        })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DimensionName {
+    NotSpecified,
+    Name(String),
+}
+
+impl From<Option<&str>> for DimensionName {
+    fn from(value: Option<&str>) -> Self {
+        match value {
+            Some(s) => s.into(),
+            None => DimensionName::NotSpecified,
+        }
+    }
+}
+
+impl From<&str> for DimensionName {
+    fn from(value: &str) -> Self {
+        if value.is_empty() {
+            DimensionName::NotSpecified
+        } else {
+            DimensionName::Name(value.to_string())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeData {
-    Array(ZarrArrayMetadata, Vec<ManifestRef>),
+    Array {
+        shape: ArrayShape,
+        dimension_names: Option<Vec<DimensionName>>,
+        manifests: Vec<ManifestRef>,
+    },
     Group,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum NodeType {
+    Group,
+    Array,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeSnapshot {
     pub id: NodeId,
     pub path: Path,
-    pub user_attributes: Option<UserAttributesSnapshot>,
+    pub user_data: Bytes,
     pub node_data: NodeData,
 }
 
@@ -115,41 +140,136 @@ impl NodeSnapshot {
     pub fn node_type(&self) -> NodeType {
         match &self.node_data {
             NodeData::Group => NodeType::Group,
-            NodeData::Array(_, _) => NodeType::Array,
+            NodeData::Array { .. } => NodeType::Array,
         }
     }
 }
 
-pub type SnapshotProperties = HashMap<String, Value>;
+impl From<&generated::ObjectId8> for NodeId {
+    fn from(value: &generated::ObjectId8) -> Self {
+        NodeId::new(value.0)
+    }
+}
+
+impl From<&generated::ObjectId12> for ManifestId {
+    fn from(value: &generated::ObjectId12) -> Self {
+        ManifestId::new(value.0)
+    }
+}
+
+impl From<&generated::ObjectId12> for AttributesId {
+    fn from(value: &generated::ObjectId12) -> Self {
+        AttributesId::new(value.0)
+    }
+}
+
+impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
+    fn from(value: generated::ManifestRef<'a>) -> Self {
+        let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
+        let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
+        let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
+        ManifestRef { object_id: value.object_id().into(), extents }
+    }
+}
+
+impl From<&generated::DimensionShape> for DimensionShape {
+    fn from(value: &generated::DimensionShape) -> Self {
+        DimensionShape {
+            dim_length: value.array_length(),
+            chunk_length: value.chunk_length(),
+        }
+    }
+}
+
+impl<'a> From<generated::ArrayNodeData<'a>> for NodeData {
+    fn from(value: generated::ArrayNodeData<'a>) -> Self {
+        let dimension_names = value
+            .dimension_names()
+            .map(|dn| dn.iter().map(|name| name.name().into()).collect());
+        let shape = ArrayShape(value.shape().iter().map(|dim| dim.into()).collect());
+        let manifests = value.manifests().iter().map(|m| m.into()).collect();
+        Self::Array { shape, dimension_names, manifests }
+    }
+}
+
+impl<'a> From<generated::GroupNodeData<'a>> for NodeData {
+    fn from(_: generated::GroupNodeData<'a>) -> Self {
+        Self::Group
+    }
+}
+
+impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: generated::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
+        #[allow(clippy::expect_used, clippy::panic)]
+        let node_data: NodeData = match value.node_data_type() {
+            generated::NodeData::Array => {
+                value.node_data_as_array().expect("Bug in flatbuffers library").into()
+            }
+            generated::NodeData::Group => {
+                value.node_data_as_group().expect("Bug in flatbuffers library").into()
+            }
+            x => panic!("Invalid node data type in flatbuffers file {:?}", x),
+        };
+        let res = NodeSnapshot {
+            id: value.id().into(),
+            path: value.path().to_string().try_into()?,
+            node_data,
+            user_data: Bytes::copy_from_slice(value.user_data().bytes()),
+        };
+        Ok(res)
+    }
+}
+
+impl From<&generated::ManifestFileInfo> for ManifestFileInfo {
+    fn from(value: &generated::ManifestFileInfo) -> Self {
+        Self {
+            id: value.id().into(),
+            size_bytes: value.size_bytes(),
+            num_chunk_refs: value.num_chunk_refs(),
+        }
+    }
+}
+
+pub type SnapshotProperties = BTreeMap<String, Value>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
     pub size_bytes: u64,
-    pub num_rows: u32,
+    pub num_chunk_refs: u32,
 }
 
 impl ManifestFileInfo {
     pub fn new(manifest: &Manifest, size_bytes: u64) -> Self {
-        Self { id: manifest.id.clone(), num_rows: manifest.len() as u32, size_bytes }
+        Self {
+            id: manifest.id().clone(),
+            num_chunk_refs: manifest.len() as u32,
+            size_bytes,
+        }
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct AttributeFileInfo {
-    pub id: AttributesId,
+#[derive(PartialEq)]
+pub struct Snapshot {
+    buffer: Vec<u8>,
 }
 
-#[derive(Debug, PartialEq)]
-pub struct Snapshot {
-    id: SnapshotId,
-    parent_id: Option<SnapshotId>,
-    flushed_at: DateTime<Utc>,
-    message: String,
-    metadata: SnapshotProperties,
-    manifest_files: HashMap<ManifestId, ManifestFileInfo>,
-    attribute_files: Vec<AttributeFileInfo>,
-    nodes: BTreeMap<Path, NodeSnapshot>,
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let nodes =
+            self.iter().map(|n| n.map(|n| n.path.to_string())).collect::<Vec<_>>();
+        f.debug_struct("Snapshot")
+            .field("id", &self.id())
+            .field("parent_id", &self.parent_id())
+            .field("flushed_at", &self.flushed_at())
+            .field("nodes", &nodes)
+            .field("manifests", &self.manifest_files().collect::<Vec<_>>())
+            .field("message", &self.message())
+            .field("metadata", &self.metadata())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,175 +279,230 @@ pub struct SnapshotInfo {
     pub flushed_at: DateTime<chrono::Utc>,
     pub message: String,
     pub metadata: SnapshotProperties,
+    pub manifests: Vec<ManifestFileInfo>,
 }
 
-impl From<&Snapshot> for SnapshotInfo {
-    fn from(value: &Snapshot) -> Self {
-        Self {
+impl TryFrom<&Snapshot> for SnapshotInfo {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: &Snapshot) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: value.id().clone(),
             parent_id: value.parent_id().clone(),
-            flushed_at: *value.flushed_at(),
+            flushed_at: value.flushed_at()?,
             message: value.message().to_string(),
-            metadata: value.metadata().clone(),
-        }
+            metadata: value.metadata()?.clone(),
+            manifests: value.manifest_files().collect(),
+        })
     }
 }
 
 impl SnapshotInfo {
     pub fn is_initial(&self) -> bool {
-        // FIXME: add check for known initial id
         self.parent_id.is_none()
     }
 }
 
+static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
+    max_depth: 64,
+    max_tables: 500_000,
+    max_apparent_size: 1 << 31, // taken from the default
+    ignore_missing_null_terminator: true,
+};
+
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
 
-    fn new(
-        parent_id: Option<SnapshotId>,
-        message: String,
-        metadata: Option<SnapshotProperties>,
-        nodes: BTreeMap<Path, NodeSnapshot>,
-        manifest_files: Vec<ManifestFileInfo>,
-        attribute_files: Vec<AttributeFileInfo>,
-    ) -> Self {
-        let metadata = metadata.unwrap_or_default();
-        let flushed_at = Utc::now();
-        Self {
-            id: SnapshotId::random(),
-            parent_id,
-            flushed_at,
-            message,
-            manifest_files: manifest_files
-                .into_iter()
-                .map(|fi| (fi.id.clone(), fi))
-                .collect(),
-            attribute_files,
-            metadata,
-            nodes,
-        }
+    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
+        let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
+            &ROOT_OPTIONS,
+            buffer.as_slice(),
+        )?;
+        Ok(Snapshot { buffer })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_fields(
-        id: SnapshotId,
-        parent_id: Option<SnapshotId>,
-        flushed_at: DateTime<Utc>,
-        message: String,
-        metadata: SnapshotProperties,
-        manifest_files: HashMap<ManifestId, ManifestFileInfo>,
-        attribute_files: Vec<AttributeFileInfo>,
-        nodes: BTreeMap<Path, NodeSnapshot>,
-    ) -> Self {
-        Self {
-            id,
-            parent_id,
-            flushed_at,
-            message,
-            metadata,
-            manifest_files,
-            attribute_files,
-            nodes,
-        }
+    pub fn bytes(&self) -> &[u8] {
+        self.buffer.as_slice()
     }
 
-    pub fn from_iter<T: IntoIterator<Item = NodeSnapshot>>(
-        parent_id: SnapshotId,
+    pub fn from_iter<E, I>(
+        id: Option<SnapshotId>,
+        parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
-        manifest_files: Vec<ManifestFileInfo>,
-        attribute_files: Vec<AttributeFileInfo>,
-        iter: T,
-    ) -> Self {
-        let nodes = iter.into_iter().map(|node| (node.path.clone(), node)).collect();
+        mut manifest_files: Vec<ManifestFileInfo>,
+        flushed_at: Option<DateTime<Utc>>,
+        sorted_iter: I,
+    ) -> IcechunkResult<Self>
+    where
+        IcechunkFormatError: From<E>,
+        I: IntoIterator<Item = Result<NodeSnapshot, E>>,
+    {
+        // TODO: what's a good capacity?
+        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
 
-        Self::new(
-            Some(parent_id),
-            message,
-            properties,
-            nodes,
-            manifest_files,
-            attribute_files,
-        )
+        manifest_files.sort_by(|a, b| a.id.cmp(&b.id));
+        let manifest_files = manifest_files
+            .iter()
+            .map(|mfi| {
+                let id = generated::ObjectId12::new(&mfi.id.0);
+                generated::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_chunk_refs)
+            })
+            .collect::<Vec<_>>();
+        let manifest_files = builder.create_vector(&manifest_files);
+
+        let metadata_items: Vec<_> = properties
+            .unwrap_or_default()
+            .iter()
+            .map(|(k, v)| {
+                let name = builder.create_shared_string(k.as_str());
+                let serialized = rmp_serde::to_vec(v)?;
+                let value = builder.create_vector(serialized.as_slice());
+                Ok::<_, IcechunkFormatError>(generated::MetadataItem::create(
+                    &mut builder,
+                    &generated::MetadataItemArgs { name: Some(name), value: Some(value) },
+                ))
+            })
+            .try_collect()?;
+        let metadata_items = builder.create_vector(metadata_items.as_slice());
+
+        let message = builder.create_string(&message);
+        let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
+        let flushed_at = flushed_at.unwrap_or_else(Utc::now).timestamp_micros() as u64;
+        let id = generated::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
+
+        let nodes: Vec<_> = sorted_iter
+            .into_iter()
+            .map(|node| node.err_into().and_then(|node| mk_node(&mut builder, &node)))
+            .try_collect()?;
+        let nodes = builder.create_vector(&nodes);
+
+        let snap = generated::Snapshot::create(
+            &mut builder,
+            &generated::SnapshotArgs {
+                id: Some(&id),
+                parent_id: parent_id.as_ref(),
+                nodes: Some(nodes),
+                flushed_at,
+                message: Some(message),
+                metadata: Some(metadata_items),
+                manifest_files: Some(manifest_files),
+            },
+        );
+
+        builder.finish(snap, Some("Ichk"));
+        let (mut buffer, offset) = builder.collapse();
+        buffer.drain(0..offset);
+        buffer.shrink_to_fit();
+        Ok(Snapshot { buffer })
     }
 
-    pub fn initial() -> Self {
+    pub fn initial() -> IcechunkResult<Self> {
         let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
-        Self::new(
+        let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
+        Self::from_iter(
+            None,
             None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
-            Default::default(),
-            Default::default(),
+            None,
+            nodes,
         )
     }
 
-    pub fn id(&self) -> &SnapshotId {
-        &self.id
+    fn root(&self) -> generated::Snapshot {
+        // without the unsafe version this is too slow
+        // if we try to keep the root in the Manifest struct, we would need a lifetime
+        unsafe { flatbuffers::root_unchecked::<generated::Snapshot>(&self.buffer) }
     }
 
-    pub fn parent_id(&self) -> &Option<SnapshotId> {
-        &self.parent_id
+    pub fn id(&self) -> SnapshotId {
+        SnapshotId::new(self.root().id().0)
     }
 
-    pub fn metadata(&self) -> &SnapshotProperties {
-        &self.metadata
+    pub fn parent_id(&self) -> Option<SnapshotId> {
+        self.root().parent_id().map(|pid| SnapshotId::new(pid.0))
     }
 
-    pub fn flushed_at(&self) -> &DateTime<Utc> {
-        &self.flushed_at
+    pub fn metadata(&self) -> IcechunkResult<SnapshotProperties> {
+        self.root()
+            .metadata()
+            .iter()
+            .map(|item| {
+                let key = item.name().to_string();
+                let value = rmp_serde::from_slice(item.value().bytes())?;
+                Ok((key, value))
+            })
+            .try_collect()
     }
 
-    pub fn message(&self) -> &String {
-        &self.message
+    pub fn flushed_at(&self) -> IcechunkResult<DateTime<Utc>> {
+        let ts = self.root().flushed_at();
+        let ts: i64 = ts.try_into().map_err(|_| {
+            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
+        })?;
+        DateTime::from_timestamp_micros(ts)
+            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp.into())
     }
 
-    pub fn nodes(&self) -> &BTreeMap<Path, NodeSnapshot> {
-        &self.nodes
+    pub fn message(&self) -> String {
+        self.root().message().to_string()
     }
 
-    pub fn get_manifest_file(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
-        self.manifest_files.get(id)
+    pub fn get_manifest_file(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
+        self.root().manifest_files().iter().find(|mf| mf.id().0 == id.0.as_slice()).map(
+            |mf| ManifestFileInfo {
+                id: ManifestId::new(mf.id().0),
+                size_bytes: mf.size_bytes(),
+                num_chunk_refs: mf.num_chunk_refs(),
+            },
+        )
     }
 
-    pub fn manifest_files(&self) -> &HashMap<ManifestId, ManifestFileInfo> {
-        &self.manifest_files
-    }
-    pub fn attribute_files(&self) -> &Vec<AttributeFileInfo> {
-        &self.attribute_files
+    pub fn manifest_files(&self) -> impl Iterator<Item = ManifestFileInfo> + '_ {
+        self.root().manifest_files().iter().map(|mf| mf.into())
     }
 
-    /// Cretase a new `Snapshot` with all the same data as `self` but a different parent
-    pub fn adopt(&self, parent: &Snapshot) -> Self {
-        Self {
-            id: self.id.clone(),
-            parent_id: Some(parent.id().clone()),
-            flushed_at: *self.flushed_at(),
-            message: self.message().clone(),
-            metadata: self.metadata().clone(),
-            manifest_files: self.manifest_files().clone(),
-            attribute_files: self.attribute_files().clone(),
-            nodes: self.nodes.clone(),
-        }
+    /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
+    pub fn adopt(&self, new_child: &Snapshot) -> IcechunkResult<Self> {
+        // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
+        // create a whole new buffer and write to it in full
+
+        Snapshot::from_iter(
+            Some(new_child.id()),
+            Some(self.id()),
+            new_child.message().clone(),
+            Some(new_child.metadata()?.clone()),
+            new_child.manifest_files().collect(),
+            Some(new_child.flushed_at()?),
+            new_child.iter(),
+        )
     }
 
-    pub fn get_node(&self, path: &Path) -> IcechunkResult<&NodeSnapshot> {
-        self.nodes
-            .get(path)
-            .ok_or(IcechunkFormatErrorKind::NodeNotFound { path: path.clone() }.into())
+    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
+        let res = self
+            .root()
+            .nodes()
+            .lookup_by_key(path.to_string().as_str(), |node, path| node.path().cmp(path))
+            .ok_or(IcechunkFormatError::from(IcechunkFormatErrorKind::NodeNotFound {
+                path: path.clone(),
+            }))?;
+        res.try_into()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &NodeSnapshot> + '_ {
-        self.nodes.values()
+    pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + '_ {
+        self.root().nodes().iter().map(|node| node.try_into().err_into())
     }
 
-    pub fn iter_arc(self: Arc<Self>) -> impl Iterator<Item = NodeSnapshot> {
-        NodeIterator { table: self, last_key: None }
+    pub fn iter_arc(
+        self: Arc<Self>,
+    ) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> {
+        NodeIterator { snapshot: self, last_index: 0 }
     }
 
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.root().nodes().len()
     }
 
     #[must_use]
@@ -335,45 +510,136 @@ impl Snapshot {
         self.len() == 0
     }
 
-    pub fn manifest_info(&self, id: &ManifestId) -> Option<&ManifestFileInfo> {
-        self.manifest_files.get(id)
+    pub fn manifest_info(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
+        self.root()
+            .manifest_files()
+            .iter()
+            .find(|mi| mi.id().0 == id.0)
+            .map(|man| man.into())
     }
 }
 
-// We need this complex dance because Rust makes it really hard to put together an object and a
-// reference to it (in the iterator) in a single self-referential struct
 struct NodeIterator {
-    table: Arc<Snapshot>,
-    last_key: Option<Path>,
+    snapshot: Arc<Snapshot>,
+    last_index: usize,
 }
 
 impl Iterator for NodeIterator {
-    type Item = NodeSnapshot;
+    type Item = IcechunkResult<NodeSnapshot>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &self.last_key {
-            None => {
-                if let Some((k, v)) = self.table.nodes.first_key_value() {
-                    self.last_key = Some(k.clone());
-                    Some(v.clone())
-                } else {
-                    None
-                }
-            }
-            Some(last_key) => {
-                if let Some((k, v)) = self
-                    .table
-                    .nodes
-                    .range::<Path, _>((Bound::Excluded(last_key), Bound::Unbounded))
-                    .next()
-                {
-                    self.last_key = Some(k.clone());
-                    Some(v.clone())
-                } else {
-                    None
-                }
-            }
+        let nodes = self.snapshot.root().nodes();
+        if self.last_index < nodes.len() {
+            let res = Some(nodes.get(self.last_index).try_into().err_into());
+            self.last_index += 1;
+            res
+        } else {
+            None
         }
+    }
+}
+
+fn mk_node<'bldr>(
+    builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+    node: &NodeSnapshot,
+) -> IcechunkResult<flatbuffers::WIPOffset<generated::NodeSnapshot<'bldr>>> {
+    let id = generated::ObjectId8::new(&node.id.0);
+    let path = builder.create_string(node.path.to_string().as_str());
+    let (node_data_type, node_data) = mk_node_data(builder, &node.node_data)?;
+    let user_data = Some(builder.create_vector(&node.user_data));
+    Ok(generated::NodeSnapshot::create(
+        builder,
+        &generated::NodeSnapshotArgs {
+            id: Some(&id),
+            path: Some(path),
+            node_data_type,
+            node_data,
+            user_data,
+        },
+    ))
+}
+
+fn mk_node_data(
+    builder: &mut FlatBufferBuilder<'_>,
+    node_data: &NodeData,
+) -> IcechunkResult<(
+    generated::NodeData,
+    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+)> {
+    match node_data {
+        NodeData::Array { manifests, dimension_names, shape } => {
+            let manifests = manifests
+                .iter()
+                .map(|manref| {
+                    let object_id = generated::ObjectId12::new(&manref.object_id.0);
+                    let extents = manref
+                        .extents
+                        .iter()
+                        .map(|range| {
+                            generated::ChunkIndexRange::new(range.start, range.end)
+                        })
+                        .collect::<Vec<_>>();
+                    let extents = builder.create_vector(&extents);
+                    generated::ManifestRef::create(
+                        builder,
+                        &generated::ManifestRefArgs {
+                            object_id: Some(&object_id),
+                            extents: Some(extents),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let manifests = builder.create_vector(manifests.as_slice());
+            let dimensions = dimension_names.as_ref().map(|dn| {
+                let names = dn
+                    .iter()
+                    .map(|n| match n {
+                        DimensionName::Name(s) => {
+                            let n = builder.create_shared_string(s.as_str());
+                            generated::DimensionName::create(
+                                builder,
+                                &generated::DimensionNameArgs { name: Some(n) },
+                            )
+                        }
+                        DimensionName::NotSpecified => generated::DimensionName::create(
+                            builder,
+                            &generated::DimensionNameArgs { name: None },
+                        ),
+                    })
+                    .collect::<Vec<_>>();
+                builder.create_vector(names.as_slice())
+            });
+            let shape = shape
+                .0
+                .iter()
+                .map(|ds| generated::DimensionShape::new(ds.dim_length, ds.chunk_length))
+                .collect::<Vec<_>>();
+            let shape = builder.create_vector(shape.as_slice());
+            Ok((
+                generated::NodeData::Array,
+                Some(
+                    generated::ArrayNodeData::create(
+                        builder,
+                        &generated::ArrayNodeDataArgs {
+                            manifests: Some(manifests),
+                            shape: Some(shape),
+                            dimension_names: dimensions,
+                        },
+                    )
+                    .as_union_value(),
+                ),
+            ))
+        }
+        NodeData::Group => Ok((
+            generated::NodeData::Group,
+            Some(
+                generated::GroupNodeData::create(
+                    builder,
+                    &generated::GroupNodeDataArgs {},
+                )
+                .as_union_value(),
+            ),
+        )),
     }
 }
 
@@ -384,138 +650,113 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::{
-        collections::HashMap,
-        iter::{self},
-        num::NonZeroU64,
-    };
+    use std::iter::{self};
 
     #[test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![10u64, 20, 30],
-            data_type: DataType::Float32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(3).unwrap(),
-                NonZeroU64::new(2).unwrap(),
-                NonZeroU64::new(1).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float32(0f32),
+        let shape1 = ArrayShape::new(vec![(10u64, 3), (20, 2), (30, 1)]).unwrap();
+        let dim_names1 = Some(vec!["x".into(), "y".into(), "t".into()]);
 
-            codecs: vec![Codec {
-                name: "mycodec".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }],
-            storage_transformers: Some(vec![StorageTransformer {
-                name: "mytransformer".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }]),
-            dimension_names: Some(vec![
-                Some("x".to_string()),
-                Some("y".to_string()),
-                Some("t".to_string()),
-            ]),
-        };
-        let zarr_meta2 = ZarrArrayMetadata {
-            storage_transformers: None,
-            data_type: DataType::Int32,
-            dimension_names: Some(vec![None, None, Some("t".to_string())]),
-            fill_value: FillValue::Int32(0i32),
-            ..zarr_meta1.clone()
-        };
-        let zarr_meta3 =
-            ZarrArrayMetadata { dimension_names: None, ..zarr_meta2.clone() };
+        let shape2 = shape1.clone();
+        let dim_names2 = Some(vec![
+            DimensionName::NotSpecified,
+            DimensionName::NotSpecified,
+            "t".into(),
+        ]);
+
+        let shape3 = shape1.clone();
+        let dim_names3 = None;
+
         let man_ref1 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[100, 100, 100]),
         };
         let man_ref2 = ManifestRef {
             object_id: ObjectId::random(),
-            extents: ChunkIndices(vec![0, 0, 0])..ChunkIndices(vec![100, 100, 100]),
+            extents: ManifestExtents::new(&[0, 0, 0], &[100, 100, 100]),
         };
 
-        let oid = ObjectId::random();
         let node_ids = iter::repeat_with(NodeId::random).take(7).collect::<Vec<_>>();
+        // nodes must be sorted by path
         let nodes = vec![
             NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/a".try_into().unwrap(),
                 id: node_ids[1].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
+            },
+            NodeSnapshot {
+                path: "/array2".try_into().unwrap(),
+                id: node_ids[5].clone(),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape2.clone(),
+                    dimension_names: dim_names2.clone(),
+                    manifests: vec![],
+                },
             },
             NodeSnapshot {
                 path: "/b".try_into().unwrap(),
                 id: node_ids[2].clone(),
-                user_attributes: None,
-                node_data: NodeData::Group,
-            },
-            NodeSnapshot {
-                path: "/b/c".try_into().unwrap(),
-                id: node_ids[3].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
-                )),
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
             NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
-                    object_id: oid.clone(),
-                    location: 42,
-                })),
-                node_data: NodeData::Array(
-                    zarr_meta1.clone(),
-                    vec![man_ref1.clone(), man_ref2.clone()],
-                ),
-            },
-            NodeSnapshot {
-                path: "/array2".try_into().unwrap(),
-                id: node_ids[5].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+                user_data: Bytes::copy_from_slice(b"hello"),
+                node_data: NodeData::Array {
+                    shape: shape1.clone(),
+                    dimension_names: dim_names1.clone(),
+                    manifests: vec![man_ref1.clone(), man_ref2.clone()],
+                },
             },
             NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape3.clone(),
+                    dimension_names: dim_names3.clone(),
+                    manifests: vec![],
+                },
+            },
+            NodeSnapshot {
+                path: "/b/c".try_into().unwrap(),
+                id: node_ids[3].clone(),
+                user_data: Bytes::copy_from_slice(b"bye"),
+                node_data: NodeData::Group,
             },
         ];
-        let initial = Snapshot::initial();
+        let initial = Snapshot::initial().unwrap();
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
                 size_bytes: 1_000_000,
-                num_rows: 100_000,
+                num_chunk_refs: 100_000,
             },
             ManifestFileInfo {
                 id: man_ref2.object_id.clone(),
                 size_bytes: 1_000_000,
-                num_rows: 100_000,
+                num_chunk_refs: 100_000,
             },
         ];
         let st = Snapshot::from_iter(
-            initial.id.clone(),
+            None,
+            Some(initial.id().clone()),
             String::default(),
             Default::default(),
             manifests,
-            vec![],
-            nodes,
-        );
+            None,
+            nodes.into_iter().map(Ok::<NodeSnapshot, Infallible>),
+        )
+        .unwrap();
 
         assert!(matches!(
             st.get_node(&"/nonexistent".try_into().unwrap()),
@@ -530,56 +771,63 @@ mod tests {
         let node = st.get_node(&"/b/c".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Inline(
-                    UserAttributes::try_new(br#"{"foo": "some inline"}"#).unwrap(),
-                )),
+                user_data: Bytes::copy_from_slice(b"bye"),
                 node_data: NodeData::Group,
             },
         );
         let node = st.get_node(&Path::root()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
-                user_attributes: None,
+                user_data: Bytes::new(),
                 node_data: NodeData::Group,
             },
         );
         let node = st.get_node(&"/b/array1".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
-                user_attributes: Some(UserAttributesSnapshot::Ref(UserAttributesRef {
-                    object_id: oid,
-                    location: 42,
-                })),
-                node_data: NodeData::Array(zarr_meta1.clone(), vec![man_ref1, man_ref2]),
+                user_data: Bytes::copy_from_slice(b"hello"),
+                node_data: NodeData::Array {
+                    shape: shape1.clone(),
+                    dimension_names: dim_names1.clone(),
+                    manifests: vec![man_ref1, man_ref2]
+                },
             },
         );
         let node = st.get_node(&"/array2".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta2.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape2.clone(),
+                    dimension_names: dim_names2.clone(),
+                    manifests: vec![]
+                },
             },
         );
         let node = st.get_node(&"/b/array3".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            &NodeSnapshot {
+            NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
-                user_attributes: None,
-                node_data: NodeData::Array(zarr_meta3.clone(), vec![]),
+                user_data: Bytes::new(),
+                node_data: NodeData::Array {
+                    shape: shape3.clone(),
+                    dimension_names: dim_names3.clone(),
+                    manifests: vec![]
+                },
             },
         );
         Ok(())
@@ -587,45 +835,17 @@ mod tests {
 
     #[test]
     fn test_valid_chunk_coord() {
-        let zarr_meta1 = ZarrArrayMetadata {
-            shape: vec![10000, 10001, 9999],
-            data_type: DataType::Float32,
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-            ]),
-            chunk_key_encoding: ChunkKeyEncoding::Slash,
-            fill_value: FillValue::Float32(0f32),
-
-            codecs: vec![Codec {
-                name: "mycodec".to_string(),
-                configuration: Some(HashMap::from_iter(iter::once((
-                    "foo".to_string(),
-                    serde_json::Value::from(42),
-                )))),
-            }],
-            storage_transformers: None,
-            dimension_names: None,
-        };
-
-        let zarr_meta2 = ZarrArrayMetadata {
-            shape: vec![0, 0, 0],
-            chunk_shape: ChunkShape(vec![
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-                NonZeroU64::new(1000).unwrap(),
-            ]),
-            ..zarr_meta1.clone()
-        };
-
+        let shape1 =
+            ArrayShape::new(vec![(10_000, 1_000), (10_001, 1_000), (9_999, 1_000)])
+                .unwrap();
+        let shape2 = ArrayShape::new(vec![(0, 1_000), (0, 1_000), (0, 1_000)]).unwrap();
         let coord1 = ChunkIndices(vec![9, 10, 9]);
         let coord2 = ChunkIndices(vec![10, 11, 10]);
         let coord3 = ChunkIndices(vec![0, 0, 0]);
 
-        assert!(zarr_meta1.valid_chunk_coord(&coord1));
-        assert!(!zarr_meta1.valid_chunk_coord(&coord2));
+        assert!(shape1.valid_chunk_coord(&coord1));
+        assert!(!shape1.valid_chunk_coord(&coord2));
 
-        assert!(zarr_meta2.valid_chunk_coord(&coord3));
+        assert!(shape2.valid_chunk_coord(&coord3));
     }
 }

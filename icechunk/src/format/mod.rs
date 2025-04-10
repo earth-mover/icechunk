@@ -7,19 +7,35 @@ use std::{
     ops::Range,
 };
 
+use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
+use flatbuffers::generated;
 use format_constants::FileTypeBin;
-use itertools::Itertools;
-use rand::{rng, Rng};
+use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
+use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, TryFromInto};
+use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
 use typed_path::Utf8UnixPathBuf;
 
-use crate::{error::ICError, metadata::DataType, private};
+use crate::{error::ICError, private};
 
 pub mod attributes;
 pub mod manifest;
+
+#[allow(
+    dead_code,
+    unused_imports,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::needless_lifetimes,
+    clippy::extra_unused_lifetimes,
+    clippy::missing_safety_doc,
+    clippy::derivable_impls
+)]
+#[path = "./flatbuffers/all_generated.rs"]
+pub mod flatbuffers;
+
 pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;
@@ -91,7 +107,7 @@ impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
 
 impl<const SIZE: usize, T: FileTypeTag> fmt::Debug for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02x}", self.0.iter().format(""))
+        write!(f, "{}", String::from(self))
     }
 }
 
@@ -149,6 +165,12 @@ pub struct ChunkIndices(pub Vec<u32>);
 
 pub type ChunkOffset = u64;
 pub type ChunkLength = u64;
+
+impl<'a> From<generated::ChunkIndices<'a>> for ChunkIndices {
+    fn from(value: generated::ChunkIndices<'a>) -> Self {
+        ChunkIndices(value.coords().iter().collect())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ByteRange {
@@ -213,13 +235,11 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
 
 pub type TableOffset = u32;
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum IcechunkFormatErrorKind {
-    #[error("error decoding fill_value from array. Found size: {found_size}, target size: {target_size}, type: {target_type}")]
-    FillValueDecodeError { found_size: usize, target_size: usize, target_type: DataType },
-    #[error("error decoding fill_value from json. Type: {data_type}, value: {value}")]
-    FillValueParse { data_type: DataType, value: serde_json::Value },
+    #[error(transparent)]
+    VirtualReferenceError(VirtualReferenceErrorKind),
     #[error("node not found at `{path:?}`")]
     NodeNotFound { path: Path },
     #[error("chunk coordinates not found `{coords:?}`")]
@@ -234,6 +254,18 @@ pub enum IcechunkFormatErrorKind {
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
     InvalidCompressionAlgorithm, // TODO: add more info
+    #[error("Invalid Icechunk metadata file")]
+    InvalidFlatBuffer(#[from] InvalidFlatbuffer),
+    #[error("error during metadata file deserialization")]
+    DeserializationError(#[from] rmp_serde::decode::Error),
+    #[error("error during metadata file serialization")]
+    SerializationError(#[from] rmp_serde::encode::Error),
+    #[error("I/O error")]
+    IO(#[from] std::io::Error),
+    #[error("path error")]
+    Path(#[from] PathError),
+    #[error("invalid timestamp in file")]
+    InvalidTimestamp,
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -246,6 +278,21 @@ where
 {
     fn from(value: E) -> Self {
         Self::new(value.into())
+    }
+}
+
+impl From<VirtualReferenceError> for IcechunkFormatError {
+    fn from(value: VirtualReferenceError) -> Self {
+        Self::with_context(
+            IcechunkFormatErrorKind::VirtualReferenceError(value.kind),
+            value.context,
+        )
+    }
+}
+
+impl From<Infallible> for IcechunkFormatErrorKind {
+    fn from(value: Infallible) -> Self {
+        match value {}
     }
 }
 

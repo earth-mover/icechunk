@@ -2,6 +2,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
     S3StaticCredentials,
@@ -45,9 +46,15 @@ def s3_store(
     allow_http: bool = False,
     anonymous: bool = False,
     s3_compatible: bool = False,
+    force_path_style: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return (
         ObjectStoreConfig.S3Compatible(options)
         if s3_compatible
@@ -69,6 +76,7 @@ def s3_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    force_path_style: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -98,7 +106,10 @@ def s3_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    force_path_style: bool
+        Whether to force using path-style addressing for buckets
     """
+
     credentials = s3_credentials(
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,
@@ -108,8 +119,51 @@ def s3_storage(
         from_env=from_env,
         get_credentials=get_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
     return Storage.new_s3(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        credentials=credentials,
+    )
+
+
+def s3_object_store_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    region: str | None = None,
+    endpoint_url: str | None = None,
+    allow_http: bool = False,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    anonymous: bool | None = None,
+    from_env: bool | None = None,
+    force_path_style: bool = False,
+) -> Storage:
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        anonymous=anonymous,
+        from_env=from_env,
+        get_credentials=None,
+    )
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        force_path_style=force_path_style,
+    )
+    return Storage.new_s3_object_store(
         config=options,
         bucket=bucket,
         prefix=prefix,
@@ -123,6 +177,7 @@ def tigris_storage(
     prefix: str | None,
     region: str | None = None,
     endpoint_url: str | None = None,
+    use_weak_consistency: bool = False,
     allow_http: bool = False,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
@@ -144,6 +199,10 @@ def tigris_storage(
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
         Optional endpoint where the object store serves data, example: http://localhost:9000
+    use_weak_consistency: bool
+        If set to True it will return a Storage instance that is read only, and can read from the
+        the closest Tigris region. Behavior is undefined if objects haven't propagated to the region yet.
+        This option is for experts only.
     allow_http: bool
         If the object store can be accessed using http protocol instead of https
     access_key_id: str | None
@@ -175,6 +234,75 @@ def tigris_storage(
         config=options,
         bucket=bucket,
         prefix=prefix,
+        use_weak_consistency=use_weak_consistency,
+        credentials=credentials,
+    )
+
+
+def r2_storage(
+    *,
+    bucket: str | None = None,
+    prefix: str | None = None,
+    account_id: str | None = None,
+    endpoint_url: str | None = None,
+    region: str | None = None,
+    allow_http: bool = False,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    anonymous: bool | None = None,
+    from_env: bool | None = None,
+    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in Tigris object store.
+
+    Parameters
+    ----------
+    bucket: str | None
+        The bucket name
+    prefix: str | None
+        The prefix within the bucket that is the root directory of the repository
+    account_id: str | None
+        Cloudflare account ID. When provided, a default endpoint URL is constructed as
+        `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. If not provided, `endpoint_url`
+        must be provided instead.
+    endpoint_url: str | None
+        Endpoint where the object store serves data, example: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
+    region: str | None
+        The region to use in the object store, if `None` the default region 'auto' will be used
+    allow_http: bool
+        If the object store can be accessed using http protocol instead of https
+    access_key_id: str | None
+        S3 credential access key
+    secret_access_key: str | None
+        S3 credential secret access key
+    session_token: str | None
+        Optional S3 credential session token
+    expires_after: datetime | None
+        Optional expiration for the object store credentials
+    anonymous: bool | None
+        If set to True requests to the object store will not be signed
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    get_credentials: Callable[[], S3StaticCredentials] | None
+        Use this function to get and refresh object store credentials
+    """
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        anonymous=anonymous,
+        from_env=from_env,
+        get_credentials=get_credentials,
+    )
+    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    return Storage.new_r2(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        account_id=account_id,
         credentials=credentials,
     )
 
@@ -186,8 +314,10 @@ def gcs_storage(
     service_account_file: str | None = None,
     service_account_key: str | None = None,
     application_credentials: str | None = None,
+    bearer_token: str | None = None,
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
+    get_credentials: Callable[[], GcsBearerCredential] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Google Cloud Storage object store.
 
@@ -199,12 +329,18 @@ def gcs_storage(
         The prefix within the bucket that is the root directory of the repository
     from_env: bool | None
         Fetch credentials from the operative system environment
+    bearer_token: str | None
+        The bearer token to use for the object store
+    get_credentials: Callable[[], GcsBearerCredential] | None
+        Use this function to get and refresh object store credentials
     """
     credentials = gcs_credentials(
         service_account_file=service_account_file,
         service_account_key=service_account_key,
         application_credentials=application_credentials,
+        bearer_token=bearer_token,
         from_env=from_env,
+        get_credentials=get_credentials,
     )
     return Storage.new_gcs(
         bucket=bucket,

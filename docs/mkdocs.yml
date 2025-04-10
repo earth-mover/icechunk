@@ -7,6 +7,7 @@ repo_url: https://github.com/earth-mover/icechunk
 repo_name: earth-mover/icechunk
 copyright: Earthmover PBC # @see overrides/partials/footer.html
 
+strict: true
 site_dir: ./.site
 
 extra_css:
@@ -53,9 +54,9 @@ theme:
     - navigation.footer
     - navigation.tabs
     - navigation.tabs.sticky
+    - navigation.top
     #- navigation.expand
     - toc.follow
-    - navigation.top
     - announce.dismiss
     - content.code.copy
     - content.code.annotate
@@ -135,17 +136,28 @@ plugins:
         python:
           options:
             docstring_style: numpy
+            docstring_section_style: "table"
+            filters: "public"
+            separate_signature: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_root_heading: true
+            summary: true
           paths: [../icechunk-python/python]
-
   - mkdocs-jupyter:
       include_source: True
-      #include:
+      # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
+  - markdown-exec
+      #  - "icechunk-python/docs/**/*.ipynb"
+      #  - "icechunk-python/docs/docs/icechunk-python/*.ipynb"
       #  - "icechunk-python/notebooks/*.ipynb"
       #  - "icechunk-python/examples/*.py"
 
 markdown_extensions:
   - admonition
   - tables
+  - toc:
+      toc_depth: 2
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences:
@@ -165,6 +177,8 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: "#"
 
 nav:
   - Home: index.md
@@ -179,14 +193,15 @@ nav:
     - Parallel Writes: icechunk-python/parallel.md
     - Dask: icechunk-python/dask.md
     - Version Control: icechunk-python/version-control.md
+    - Expiring Data: icechunk-python/expiration.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md
     - Cheatsheets:
       - Icechunk for Git Users: icechunk-python/cheatsheets/git-users.md
 #    - Examples:
 #      - ... | flat | icechunk-python/examples/*.py
-#    - Notebooks:
-#      - ... | flat | icechunk-python/notebooks/*.ipynb
+    # - Notebooks:
+    #   - ... | flat | icechunk-python/notebooks/*.ipynb
   - Icechunk Rust: icechunk-rust.md
   - Contributing: contributing.md
   - Sample Datasets: sample-datasets.md

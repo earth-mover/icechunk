@@ -19,7 +19,7 @@ license = "Apache-2.0"
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
-dependencies = ["zarr>=3"]
+dependencies = ["zarr>=3,!=3.0.3"]
 
 [project.optional-dependencies]
 test = [
@@ -44,9 +44,35 @@ benchmark = [
   "pytest-benchmark[histogram]",
   "pytest-xdist",
   "s3fs",
+  "gcsfs",
   "h5netcdf",
   "pooch",
   "tqdm",
+  "humanize",
+  "platformdirs",
+]
+
+[dependency-groups]
+upstream = [
+  "boto3",
+  "coverage",
+  "mypy",
+  "pytest",
+  "pytest-cov",
+  "pytest-asyncio",
+  "pytest-xdist",
+  "pytest-reportlog",
+  "ruff",
+  "hypothesis",
+  "pandas-stubs",
+  "boto3-stubs[s3]",
+  "termcolor",
+  # "object-store-python @ git+https://github.com/roeap/object-store-python.git", # doesn't work with uv
+  "object-store-python",
+  "dask @ git+https://github.com/dask/dask.git",
+  "distributed @ git+https://github.com/dask/distributed.git",
+  "xarray @ git+https://github.com/pydata/xarray.git",
+  "zarr @ git+https://github.com/zarr-developers/zarr.git",
 ]
 
 [tool.maturin]
@@ -59,7 +85,7 @@ exclude = ["README.md"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
-testpaths = ["tests"]
+testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
@@ -128,3 +154,6 @@ known-first-party = ["dask", "distributed", "icechunk", "xarray", "zarr"]
 [tool.ruff.lint.flake8-tidy-imports]
 # Disallow all relative imports.
 ban-relative-imports = "all"
+
+[project.scripts]
+icechunk = "icechunk._icechunk_python:cli_entrypoint"

@@ -73,13 +73,10 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     )
     ```
 
-#### AWS Limitations
-
-- Icechunk is currently incompatible with [S3 Express One Zone](https://aws.amazon.com/s3/storage-classes/express-one-zone/). See [this issue](https://github.com/earth-mover/icechunk/issues/667) for more discussion.
-
 #### Tigris
 
-[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
+[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
+
 ```python
 icechunk.tigris_storage(
     bucket="icechunk-test",
@@ -89,9 +86,32 @@ icechunk.tigris_storage(
 )
 ```
 
-There are a few things to be aware of when using Tigris:
-- Tigris is a globally distributed object store by default. The caveat is that Tigris does not currently support the full consistency guarantees when the store is distributed across multiple regions. For now, to get all the consistency guarantees Icechunk offers, you will need to setup your Tigris bucket as restricted to a single region. This can be done by setting the region in the Tigris bucket settings:
-![tigris bucket settings](../assets/storage/tigris-region-set.png)
+Even is Tigris is API-compatible with S3, this function is needed because Tigris implements a different form of consistency. If instead you use `s3_storage` with the Tigris endpoint, Icechunk won't be able to achieve all its consistency guarantees.
+
+#### Cloudflare R2
+
+Icechunk can use Cloudflare R2's S3-compatible API. You will need to:
+1. provide either the account ID or set the [endpoint URL](https://developers.cloudflare.com/r2/api/s3/api/) specific to your bucket: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`;
+2. [create an API token](https://developers.cloudflare.com/r2/api/s3/tokens/) to generate a secret access key and access key ID; and
+
+```python
+icechunk.r2_storage(
+    bucket="bucket-name",
+    prefix="icechunk-test/quickstart-demo-1",
+    access_key_id='my-access-key',
+    secret_access_key='my-secret-key',
+    account_id='my-account-id',
+)
+```
+
+For buckets with public access,
+```python
+icechunk.r2_storage(
+    prefix="icechunk-test/quickstart-demo-1",
+    endpoint_url="https://public-url,
+)
+```
+
 
 #### Minio
 
@@ -109,6 +129,7 @@ icechunk.s3_storage(
     secret_access_key='minio123',
     endpoint_url='http://localhost:9000',
     allow_http=True,
+    force_path_style=True,
 ```
 
 A few things to note:
@@ -165,15 +186,27 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Application Default Credentials"
 
-        With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
 
-        ```python
-        icechunk.gcs_storage(
-            bucket="icechunk-test",
-            prefix="quickstart-demo-1",
-            application_credentials="/path/to/application-credentials.json"
-        )
-        ```
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        application_credentials="/path/to/application-credentials.json"
+    )
+    ```
+
+=== "Bearer Token"
+
+    With this option, you provide a bearer token to use for the object store. This is useful for short lived workflows where expiration is not relevant or when the bearer token will not expire [See the API](./reference.md#icechunk.gcs_storage)
+
+    ```python
+    icechunk.gcs_storage(
+        bucket="icechunk-test",
+        prefix="quickstart-demo-1",
+        bearer_token="my-bearer-token"
+    )
+    ```
 
 === "Refreshable Credentials"
 

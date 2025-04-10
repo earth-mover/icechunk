@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     storage,
-    virtual_chunks::{mk_default_containers, ContainerName, VirtualChunkContainer},
+    virtual_chunks::{ContainerName, VirtualChunkContainer, mk_default_containers},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,6 +22,27 @@ pub struct S3Options {
     pub endpoint_url: Option<String>,
     pub anonymous: bool,
     pub allow_http: bool,
+    // field was added in v0.2.6
+    #[serde(default = "default_force_path_style")]
+    pub force_path_style: bool,
+}
+
+fn default_force_path_style() -> bool {
+    false
+}
+
+impl fmt::Display for S3Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={}, force_path_style={})",
+            self.region.as_deref().unwrap_or("None"),
+            self.endpoint_url.as_deref().unwrap_or("None"),
+            self.anonymous,
+            self.allow_http,
+            self.force_path_style,
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -55,7 +76,7 @@ impl CompressionConfig {
     }
 
     pub fn level(&self) -> u8 {
-        self.level.unwrap_or(1)
+        self.level.unwrap_or(3)
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -205,11 +226,6 @@ impl ManifestConfig {
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
     pub inline_chunk_threshold_bytes: Option<u16>,
-    /// Unsafely overwrite refs on write. This is not recommended, users should only use it at their
-    /// own risk in object stores for which we don't support write-object-if-not-exists. There is
-    /// the possibility of race conditions if this variable is set to true and there are concurrent
-    /// commit attempts.
-    pub unsafe_overwrite_refs: Option<bool>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
     pub get_partial_values_concurrency: Option<u16>,
@@ -235,9 +251,6 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
         self.inline_chunk_threshold_bytes.unwrap_or(512)
-    }
-    pub fn unsafe_overwrite_refs(&self) -> bool {
-        self.unsafe_overwrite_refs.unwrap_or(false)
     }
     pub fn get_partial_values_concurrency(&self) -> u16 {
         self.get_partial_values_concurrency.unwrap_or(10)
@@ -268,9 +281,6 @@ impl RepositoryConfig {
             inline_chunk_threshold_bytes: other
                 .inline_chunk_threshold_bytes
                 .or(self.inline_chunk_threshold_bytes),
-            unsafe_overwrite_refs: other
-                .unsafe_overwrite_refs
-                .or(self.unsafe_overwrite_refs),
             get_partial_values_concurrency: other
                 .get_partial_values_concurrency
                 .or(self.get_partial_values_concurrency),
@@ -389,6 +399,7 @@ pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
     ServiceAccountKey(String),
     ApplicationCredentials(PathBuf),
+    BearerToken(GcsBearerCredential),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -399,9 +410,9 @@ pub struct GcsBearerCredential {
     pub expires_after: Option<DateTime<Utc>>,
 }
 
-impl From<GcsBearerCredential> for GcpCredential {
-    fn from(value: GcsBearerCredential) -> Self {
-        GcpCredential { bearer: value.bearer }
+impl From<&GcsBearerCredential> for GcpCredential {
+    fn from(value: &GcsBearerCredential) -> Self {
+        GcpCredential { bearer: value.bearer.clone() }
     }
 }
 
@@ -417,6 +428,7 @@ pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
 pub enum GcsCredentials {
     #[default]
     FromEnv,
+    Anonymous,
     Static(GcsStaticCredentials),
     Refreshable(Arc<dyn GcsCredentialsFetcher>),
 }

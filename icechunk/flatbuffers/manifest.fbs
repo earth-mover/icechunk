@@ -1,0 +1,56 @@
+include "object_ids.fbs";
+
+namespace gen;
+
+// We don't use unions and datastructures for the different types of refs
+// If we do that, the manifest grows in size a lot, because of the extra
+// offsets needed. This makes the code more complex because we need to
+// interpret the different fields to know what type of ref we have
+
+table ChunkRef {
+  // the coordinates of this chunk ref, in the same order as in the array definition
+  index: [uint32] (required);
+
+  // if this is an inline chunk ref, the data for the chunk will be put here unmodified
+  inline: [uint8];
+
+  // if this is a virtual or native chunk ref, offset and length allow to fetch
+  // the chunk from inside a larger object
+  offset: uint64 = 0;
+  length: uint64 = 0;
+
+  // only native chunk refs will have this field, and it points to a file
+  // in the repository's object store
+  chunk_id: ObjectId12;
+
+  // only virtual chunk refs will have the following fields
+  // location is the absolute url to the object where the chunk is stored
+  location: string;
+
+  // only 0 or 1 of the following fields will be present and only for virtual chunk refs
+  // the etag assigned by the object store
+  checksum_etag: string;
+  // time, in seconds since the unix epoch, when the object containing the chunk
+  // was last modified
+  checksum_last_modified: uint32 = 0;
+}
+
+table ArrayManifest {
+  // the id of the node the chunk refs belong to
+  node_id: ObjectId8 (required);
+
+  // one element per chunk reference in the array
+  // this array is sorted in ascending order of the index in the ChunkRef
+  refs: [ChunkRef] (required);
+}
+
+table Manifest {
+  // the manifest id
+  id: ObjectId12 (required);
+
+  // one element for each array that has chunk refs in this manifest
+  // this array is sorted in ascending order of the node_id of the ArrayManifest
+  arrays: [ArrayManifest] (required);
+}
+
+root_type Manifest;
