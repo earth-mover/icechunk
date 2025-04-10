@@ -201,7 +201,7 @@ impl S3Storage {
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_client(&self) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
@@ -323,7 +323,7 @@ impl Storage for S3Storage {
         self.can_write
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip_all)]
     async fn fetch_config(
         &self,
         _settings: &Settings,
@@ -586,7 +586,7 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip_all)]
     async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
         let mut paginator = self

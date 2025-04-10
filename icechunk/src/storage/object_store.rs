@@ -134,7 +134,7 @@ impl ObjectStorage {
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_client(&self) -> &Arc<dyn ObjectStore> {
         self.client
             .get_or_init(|| async {
@@ -283,12 +283,12 @@ impl Storage for ObjectStorage {
         true
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     fn default_settings(&self) -> Settings {
         self.backend.default_settings()
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip_all)]
     async fn fetch_config(
         &self,
         _settings: &Settings,
@@ -550,6 +550,7 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
+    #[instrument(skip(self, batch))]
     async fn delete_batch(
         &self,
         prefix: &str,
