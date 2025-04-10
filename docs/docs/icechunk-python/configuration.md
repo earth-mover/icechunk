@@ -53,7 +53,7 @@ config.caching = icechunk.CachingConfig(
 
 ### [`storage`](./reference.md#icechunk.RepositoryConfig.storage)
 
-This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings. Currently, the only setting available is the concurrency settings with [`StorageConcurrencySettings`](./reference.md#icechunk.StorageConcurrencySettings).
+This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings.
 
 ```python
 config.storage = icechunk.StorageSettings(
@@ -61,6 +61,9 @@ config.storage = icechunk.StorageSettings(
         max_concurrent_requests_for_object=10,
         ideal_concurrent_request_size=1e6,
     ),
+    storage_class="STANDARD",
+    metadata_storage_class="STANDARD_IA",
+    chunks_storage_class="STANDARD_IA",
 )
 ```
 
