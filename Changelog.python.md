@@ -1,5 +1,15 @@
 # Changelog
 
+## Python Icechunk Library 0.2.13
+
+### Features
+
+- Object's storage class can now be configured for S3-compatible repos
+
+### Performance
+
+- Fix a performance regression in writes to GCS and local file storage
+
 ## Python Icechunk Library 0.2.12
 
 ### Features
