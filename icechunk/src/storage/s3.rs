@@ -281,6 +281,7 @@ impl S3Storage {
         key: &str,
         content_type: Option<impl Into<String>>,
         metadata: I,
+        storage_class: Option<&String>,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
         let mut b =
@@ -297,6 +298,12 @@ impl S3Storage {
                 b = b.metadata(k, v);
             }
         }
+
+        if let Some(klass) = storage_class {
+            let klass = klass.as_str().into();
+            b = b.storage_class(klass);
+        }
+
         b.body(bytes.into()).send().await?;
         Ok(())
     }
@@ -382,6 +389,10 @@ impl Storage for S3Storage {
 
         if settings.unsafe_use_metadata() {
             req = req.content_type("application/yaml")
+        }
+
+        if let Some(klass) = settings.metadata_storage_class() {
+            req = req.storage_class(klass.as_str().into())
         }
 
         match (
@@ -495,7 +506,15 @@ impl Storage for S3Storage {
         bytes: Bytes,
     ) -> StorageResult<()> {
         let key = self.get_snapshot_path(&id)?;
-        self.put_object(settings, key.as_str(), None::<String>, metadata, bytes).await
+        self.put_object(
+            settings,
+            key.as_str(),
+            None::<String>,
+            metadata,
+            settings.metadata_storage_class(),
+            bytes,
+        )
+        .await
     }
 
     #[instrument(skip(self, settings, metadata, bytes))]
@@ -512,6 +531,7 @@ impl Storage for S3Storage {
             key.as_str(),
             None::<String>,
             metadata.into_iter(),
+            settings.metadata_storage_class(),
             bytes,
         )
         .await
@@ -531,6 +551,7 @@ impl Storage for S3Storage {
             key.as_str(),
             None::<String>,
             metadata.into_iter(),
+            settings.metadata_storage_class(),
             bytes,
         )
         .await
@@ -546,7 +567,15 @@ impl Storage for S3Storage {
         let key = self.get_chunk_path(&id)?;
         //FIXME: use multipart upload
         let metadata: [(String, String); 0] = [];
-        self.put_object(settings, key.as_str(), None::<String>, metadata, bytes).await
+        self.put_object(
+            settings,
+            key.as_str(),
+            None::<String>,
+            metadata,
+            settings.chunks_storage_class(),
+            bytes,
+        )
+        .await
     }
 
     #[instrument(skip(self, _settings))]
@@ -642,6 +671,10 @@ impl Storage for S3Storage {
                 builder = builder.if_match(etag);
             }
             (_, _, _) => {}
+        }
+
+        if let Some(klass) = settings.metadata_storage_class() {
+            builder = builder.storage_class(klass.as_str().into())
         }
 
         let res = builder.body(bytes.into()).send().await;

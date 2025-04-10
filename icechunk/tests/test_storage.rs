@@ -17,7 +17,7 @@ use icechunk::{
     },
     storage::{
         self, ETag, FetchConfigResult, Generation, StorageResult, UpdateConfigResult,
-        VersionInfo, new_in_memory_storage, new_s3_storage,
+        VersionInfo, new_in_memory_storage, new_s3_storage, s3::mk_client,
     },
 };
 use object_store::azure::AzureConfigKey;
@@ -102,11 +102,12 @@ where
     F: Fn(&'static str, Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-    let prefix = format!("{:?}", ChunkId::random());
+    let prefix = common::get_random_prefix("with_storage");
     let s1 = mk_s3_storage(prefix.as_str()).await?;
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().await.unwrap();
-    let s3 = mk_s3_object_store_storage(format!("{prefix}2").as_str()).await?;
+    let s3 =
+        mk_s3_object_store_storage(format!("{prefix}_object_store").as_str()).await?;
     let s4 = mk_azure_blob_storage(prefix.as_str()).await?;
     let dir = tempdir().expect("cannot create temp dir");
     let s5 = new_local_filesystem_storage(dir.path())
@@ -560,5 +561,114 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::unwrap_used)]
+pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
+    if env::var("AWS_BUCKET").is_err() {
+        return Ok(());
+    }
+    let prefix = common::get_random_prefix("test_storage_classes");
+    let st = common::make_aws_integration_storage(prefix.clone())?;
+    let client = mk_client(
+        &common::get_aws_integration_options()?,
+        common::get_aws_integration_credentials()?,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+
+    // we write 2 chunks in IA and one in standard, in ascending order of id
+    st.write_chunk(
+        &storage::Settings {
+            chunks_storage_class: Some("STANDARD_IA".to_string()),
+            ..storage::Settings::default()
+        },
+        ChunkId::new([0; 12]),
+        Bytes::new(),
+    )
+    .await?;
+    st.write_chunk(
+        &storage::Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            ..storage::Settings::default()
+        },
+        ChunkId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+        Bytes::new(),
+    )
+    .await?;
+    st.write_chunk(
+        &storage::Settings::default(),
+        ChunkId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
+        Bytes::new(),
+    )
+    .await?;
+    let out = client
+        .list_objects_v2()
+        .bucket(common::get_aws_integration_bucket()?)
+        .prefix(format!("{}/chunks", prefix))
+        .into_paginator()
+        .send()
+        .collect::<Vec<_>>()
+        .await
+        .pop()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        out.contents()
+            .iter()
+            .map(|o| o.storage_class().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["STANDARD_IA", "STANDARD_IA", "STANDARD"]
+    );
+
+    st.write_manifest(
+        &storage::Settings {
+            metadata_storage_class: Some("STANDARD_IA".to_string()),
+            ..storage::Settings::default()
+        },
+        ManifestId::new([0; 12]),
+        Vec::new(),
+        Bytes::new(),
+    )
+    .await?;
+    st.write_manifest(
+        &storage::Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            ..storage::Settings::default()
+        },
+        ManifestId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+        Vec::new(),
+        Bytes::new(),
+    )
+    .await?;
+    st.write_manifest(
+        &storage::Settings::default(),
+        ManifestId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
+        Vec::new(),
+        Bytes::new(),
+    )
+    .await?;
+    let out = client
+        .list_objects_v2()
+        .bucket(common::get_aws_integration_bucket()?)
+        .prefix(format!("{}/chunks", prefix))
+        .into_paginator()
+        .send()
+        .collect::<Vec<_>>()
+        .await
+        .pop()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        out.contents()
+            .iter()
+            .map(|o| o.storage_class().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["STANDARD_IA", "STANDARD_IA", "STANDARD"]
+    );
+
     Ok(())
 }

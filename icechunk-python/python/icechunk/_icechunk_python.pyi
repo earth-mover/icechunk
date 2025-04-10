@@ -594,6 +594,9 @@ class StorageSettings:
         unsafe_use_conditional_create: bool | None = None,
         unsafe_use_conditional_update: bool | None = None,
         unsafe_use_metadata: bool | None = None,
+        storage_class: str | None = None,
+        metadata_storage_class: str | None = None,
+        chunks_storage_class: str | None = None,
     ) -> None:
         """
         Create a new `StorageSettings` object
@@ -617,6 +620,22 @@ class StorageSettings:
             Don't write metadata fields in Icechunk files.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+
+        storage_class: str | None
+            Store all objects using this object store storage class
+            If None the object store default will be used.
+            Currently not supported in GCS.
+            Example: STANDARD_IA
+
+        metadata_storage_class: str | None
+            Store metadata objects using this object store storage class.
+            Currently not supported in GCS.
+            Defaults to storage_class.
+
+        chunks_storage_class: str | None
+            Store chunk objects using this object store storage class.
+            Currently not supported in GCS.
+            Defaults to storage_class.
         """
         ...
     @property
@@ -641,6 +660,18 @@ class StorageSettings:
     @property
     def unsafe_use_metadata(self) -> bool | None:
         """True if Icechunk will write object metadata in the object store"""
+        ...
+    @property
+    def storage_class(self) -> str | None:
+        """All objects in object store will use this storage class or the default if None"""
+        ...
+    @property
+    def metadata_storage_class(self) -> str | None:
+        """Metadata objects in object store will use this storage class or self.storage_class if None"""
+        ...
+    @property
+    def chunks_storage_class(self) -> str | None:
+        """Chunk objects in object store will use this storage class or self.storage_class if None"""
         ...
 
 class RepositoryConfig:

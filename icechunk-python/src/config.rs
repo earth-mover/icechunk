@@ -114,6 +114,10 @@ fn format_bool(b: bool) -> &'static str {
     }
 }
 
+fn format_str(s: &str) -> String {
+    format!(r#""{}""#, s)
+}
+
 pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
     format!(
         "datetime.datetime({y},{month},{d},{h},{min},{sec},{micro}, tzinfo=datetime.timezone.utc)",
@@ -712,6 +716,12 @@ pub struct PyStorageSettings {
     pub unsafe_use_conditional_create: Option<bool>,
     #[pyo3(get, set)]
     pub unsafe_use_metadata: Option<bool>,
+    #[pyo3(get, set)]
+    pub storage_class: Option<String>,
+    #[pyo3(get, set)]
+    pub metadata_storage_class: Option<String>,
+    #[pyo3(get, set)]
+    pub chunks_storage_class: Option<String>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
@@ -725,6 +735,9 @@ impl From<storage::Settings> for PyStorageSettings {
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
+            storage_class: value.storage_class,
+            metadata_storage_class: value.metadata_storage_class,
+            chunks_storage_class: value.chunks_storage_class,
         })
     }
 }
@@ -736,6 +749,9 @@ impl From<&PyStorageSettings> for storage::Settings {
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
+            storage_class: value.storage_class.clone(),
+            metadata_storage_class: value.metadata_storage_class.clone(),
+            chunks_storage_class: value.chunks_storage_class.clone(),
         })
     }
 }
@@ -752,19 +768,25 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None))]
+    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None))]
     #[new]
     pub fn new(
         concurrency: Option<Py<PyStorageConcurrencySettings>>,
         unsafe_use_conditional_create: Option<bool>,
         unsafe_use_conditional_update: Option<bool>,
         unsafe_use_metadata: Option<bool>,
+        storage_class: Option<String>,
+        metadata_storage_class: Option<String>,
+        chunks_storage_class: Option<String>,
     ) -> Self {
         Self {
             concurrency,
             unsafe_use_conditional_create,
             unsafe_use_metadata,
             unsafe_use_conditional_update,
+            storage_class,
+            metadata_storage_class,
+            chunks_storage_class,
         }
     }
 
@@ -778,11 +800,20 @@ impl PyStorageSettings {
         };
 
         format!(
-            r#"StorageSettings(concurrency={conc}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me})"#,
+            r#"StorageSettings(concurrency={conc}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
             conc = inner,
             cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
             up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
-            me = format_option(self.unsafe_use_metadata.map(format_bool))
+            me = format_option(self.unsafe_use_metadata.map(format_bool)),
+            sc = format_option(
+                self.storage_class.as_ref().map(|s| format_str(s.as_str()))
+            ),
+            msc = format_option(
+                self.metadata_storage_class.as_ref().map(|s| format_str(s.as_str()))
+            ),
+            csc = format_option(
+                self.chunks_storage_class.as_ref().map(|s| format_str(s.as_str()))
+            ),
         )
     }
 }

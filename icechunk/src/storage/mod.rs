@@ -180,6 +180,12 @@ pub struct Settings {
     pub unsafe_use_conditional_update: Option<bool>,
     pub unsafe_use_conditional_create: Option<bool>,
     pub unsafe_use_metadata: Option<bool>,
+    #[serde(default)]
+    pub storage_class: Option<String>,
+    #[serde(default)]
+    pub metadata_storage_class: Option<String>,
+    #[serde(default)]
+    pub chunks_storage_class: Option<String>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -201,6 +207,14 @@ impl Settings {
 
     pub fn unsafe_use_metadata(&self) -> bool {
         self.unsafe_use_metadata.unwrap_or(true)
+    }
+
+    pub fn metadata_storage_class(&self) -> Option<&String> {
+        self.metadata_storage_class.as_ref().or(self.storage_class.as_ref())
+    }
+
+    pub fn chunks_storage_class(&self) -> Option<&String> {
+        self.chunks_storage_class.as_ref().or(self.storage_class.as_ref())
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -236,6 +250,30 @@ impl Settings {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            storage_class: match (&self.storage_class, other.storage_class) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            metadata_storage_class: match (
+                &self.metadata_storage_class,
+                other.metadata_storage_class,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            chunks_storage_class: match (
+                &self.chunks_storage_class,
+                other.chunks_storage_class,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
                 (Some(_), Some(theirs)) => Some(theirs),
             },
         }
