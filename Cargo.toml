@@ -16,3 +16,8 @@ allow-branch = ["main"]
 sign-commit = true
 sign-tag = true
 push = false
+
+
+[profile.perf]
+inherits = "release"
+debug = 1
