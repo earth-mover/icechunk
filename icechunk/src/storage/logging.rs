@@ -37,6 +37,11 @@ impl LoggingStorage {
     pub fn fetch_operations(&self) -> Vec<(String, String)> {
         self.fetch_log.lock().expect("poison lock").clone()
     }
+
+    #[allow(clippy::expect_used)] // this implementation is intended for tests only
+    pub fn clear(&self) {
+        self.fetch_log.lock().expect("poison lock").clear();
+    }
 }
 
 impl fmt::Display for LoggingStorage {
