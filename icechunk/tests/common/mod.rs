@@ -131,5 +131,6 @@ pub(crate) fn make_aws_integration_storage(
 }
 
 pub(crate) fn get_random_prefix(base: &str) -> String {
-    format!("{}_{}", base, Utc::now().timestamp_micros())
+    let suffix: u64 = rand::random();
+    format!("{}_{}_{}", base, Utc::now().timestamp_micros(), suffix)
 }
