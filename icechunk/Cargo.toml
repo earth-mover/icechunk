@@ -61,6 +61,7 @@ dialoguer = { version = "0.11.0", optional = true }
 dirs = { version = "6.0.0", optional = true }
 assert_fs = { version = "1.1.2", optional = true }
 flatbuffers = "25.2.10"
+console-subscriber = "0.4.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
@@ -71,7 +72,7 @@ tempfile = "3.19.1"
 workspace = true
 
 [features]
-logs = ["dep:tracing-subscriber"]
+logs = ["dep:tracing-subscriber", "tokio/tracing"]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "dep:assert_fs"]
 
 [[bin]]
