@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use std::{env, sync::Arc};
 
+use chrono::Utc;
 use icechunk::{
     Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
@@ -86,29 +87,50 @@ pub(crate) fn make_r2_integration_storage(
     Ok(storage)
 }
 
-pub(crate) fn make_aws_integration_storage(
-    prefix: String,
-) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+pub(crate) fn get_aws_integration_bucket() -> Result<String, Box<dyn std::error::Error>> {
+    Ok(env::var("AWS_BUCKET")?)
+}
+
+pub(crate) fn get_aws_integration_region() -> Result<String, Box<dyn std::error::Error>> {
+    Ok(env::var("AWS_REGION")?)
+}
+
+pub(crate) fn get_aws_integration_credentials()
+-> Result<S3Credentials, Box<dyn std::error::Error>> {
     let credentials = S3Credentials::Static(S3StaticCredentials {
         access_key_id: env::var("AWS_ACCESS_KEY_ID")?,
         secret_access_key: env::var("AWS_SECRET_ACCESS_KEY")?,
         session_token: None,
         expires_after: None,
     });
-    let bucket = env::var("AWS_BUCKET")?;
-    let region = env::var("AWS_REGION")?;
+    Ok(credentials)
+}
 
+pub(crate) fn get_aws_integration_options()
+-> Result<S3Options, Box<dyn std::error::Error>> {
+    let res = S3Options {
+        region: Some(get_aws_integration_region()?),
+        endpoint_url: None,
+        anonymous: false,
+        allow_http: false,
+        force_path_style: false,
+    };
+    Ok(res)
+}
+
+pub(crate) fn make_aws_integration_storage(
+    prefix: String,
+) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options {
-            region: Some(region),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-        },
-        bucket,
+        get_aws_integration_options()?,
+        get_aws_integration_bucket()?,
         Some(prefix),
-        Some(credentials),
+        Some(get_aws_integration_credentials()?),
     )?;
     Ok(storage)
+}
+
+pub(crate) fn get_random_prefix(base: &str) -> String {
+    let suffix: u64 = rand::random();
+    format!("{}_{}_{}", base, Utc::now().timestamp_micros(), suffix)
 }

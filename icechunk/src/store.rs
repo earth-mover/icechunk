@@ -158,14 +158,14 @@ impl Store {
         Self { session, get_partial_values_concurrency }
     }
 
-    #[instrument(skip(bytes))]
+    #[instrument(skip_all)]
     pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
         let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
         let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
@@ -176,7 +176,7 @@ impl Store {
         Arc::clone(&self.session)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub async fn read_only(&self) -> bool {
         self.session.read().await.read_only()
     }
@@ -186,7 +186,7 @@ impl Store {
         Ok(self.list_dir(prefix).await?.next().await.is_none())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub async fn clear(&self) -> StoreResult<()> {
         let mut repo = self.session.write().await;
         Ok(repo.clear().await?)
@@ -207,7 +207,7 @@ impl Store {
     ///
     /// Currently this function is using concurrency but not parallelism. To limit the number of
     /// concurrent tasks use the Store config value `get_partial_values_concurrency`.
-    #[instrument(skip(self, key_ranges))]
+    #[instrument(skip_all)]
     pub async fn get_partial_values(
         &self,
         key_ranges: impl IntoIterator<Item = (String, ByteRange)>,
@@ -266,12 +266,12 @@ impl Store {
         exists(key, guard.deref()).await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub fn supports_writes(&self) -> StoreResult<bool> {
         Ok(true)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub fn supports_deletes(&self) -> StoreResult<bool> {
         Ok(true)
     }
