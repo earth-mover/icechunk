@@ -180,7 +180,6 @@ impl ManifestSplitCondition {
     }
 }
 
-// FIXME: isn't this really another condition?
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum ManifestSplitDimCondition {
     Axis(usize),
@@ -190,17 +189,24 @@ pub enum ManifestSplitDimCondition {
     Any,
 }
 
-type DimConditions = Vec<(ManifestSplitDimCondition, u32)>;
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct ManifestSplitDim {
+    pub condition: ManifestSplitDimCondition,
+    pub num_chunks: u32,
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct ManifestSplittingConfig {
     // need to preserve insertion order of conditions, so hashmap doesn't work
-    pub split_sizes: Option<Vec<(ManifestSplitCondition, DimConditions)>>,
+    pub split_sizes: Option<Vec<(ManifestSplitCondition, Vec<ManifestSplitDim>)>>,
 }
 
 impl Default for ManifestSplittingConfig {
     fn default() -> Self {
-        let inner = vec![(ManifestSplitDimCondition::Any, u32::MAX)];
+        let inner = vec![ManifestSplitDim {
+            condition: ManifestSplitDimCondition::Any,
+            num_chunks: u32::MAX,
+        }];
         let new = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
             inner,
@@ -213,7 +219,10 @@ impl ManifestSplittingConfig {
     pub fn with_size(split_size: u32) -> Self {
         let split_sizes = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-            vec![(ManifestSplitDimCondition::Any, split_size)],
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: split_size,
+            }],
         )];
         ManifestSplittingConfig { split_sizes: Some(split_sizes) }
     }

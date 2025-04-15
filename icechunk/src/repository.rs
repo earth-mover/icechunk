@@ -943,7 +943,8 @@ mod tests {
         Repository, Storage,
         config::{
             CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplitCondition,
-            ManifestSplitDimCondition, ManifestSplittingConfig, RepositoryConfig,
+            ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
+            RepositoryConfig,
         },
         format::{
             ByteRange, ChunkIndices,
@@ -1359,15 +1360,24 @@ mod tests {
         let split_sizes = vec![
             (
                 ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ManifestSplitDimCondition::DimensionName("t".to_string()), 12)],
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: 12,
+                }],
             ),
             (
                 ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ManifestSplitDimCondition::Axis(2), 2)],
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Axis(2),
+                    num_chunks: 2,
+                }],
             ),
             (
                 ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ManifestSplitDimCondition::Any, 9)],
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Any,
+                    num_chunks: 9,
+                }],
             ),
         ];
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
@@ -1394,9 +1404,18 @@ mod tests {
         let split_sizes = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
             vec![
-                (ManifestSplitDimCondition::DimensionName("t".to_string()), 12),
-                (ManifestSplitDimCondition::Axis(2), 2),
-                (ManifestSplitDimCondition::Any, 9),
+                ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: 12,
+                },
+                ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Axis(2),
+                    num_chunks: 2,
+                },
+                ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Any,
+                    num_chunks: 9,
+                },
             ],
         )];
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };

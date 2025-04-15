@@ -10,9 +10,9 @@ manifest:
     split_sizes:
     - - !name_matches
         regex: split_*
-      - - - !Axis 0
-          - 1
-        - - !DimensionName longitude
-          - 1
-        - - Any
-          - 3
+      - - condition: !Axis 0
+          num_chunks: 1
+        - condition: !DimensionName longitude
+          num_chunks: 1
+        - condition: Any
+          num_chunks: 3

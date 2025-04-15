@@ -9,8 +9,8 @@ use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
     config::{
-        ManifestConfig, ManifestSplitCondition, ManifestSplitDimCondition,
-        ManifestSplittingConfig,
+        ManifestConfig, ManifestSplitCondition, ManifestSplitDim,
+        ManifestSplitDimCondition, ManifestSplittingConfig,
     },
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
@@ -69,7 +69,10 @@ pub async fn do_test_gc(
     let manifest_split_size = 10;
     let split_sizes = Some(vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-        vec![(ManifestSplitDimCondition::Any, manifest_split_size)],
+        vec![ManifestSplitDim {
+            condition: ManifestSplitDimCondition::Any,
+            num_chunks: manifest_split_size,
+        }],
     )]);
     let man_config = ManifestConfig {
         splitting: Some(ManifestSplittingConfig { split_sizes }),

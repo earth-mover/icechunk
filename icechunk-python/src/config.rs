@@ -18,8 +18,8 @@ use icechunk::{
         CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
         GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
         ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
-        ManifestSplitDimCondition, ManifestSplittingConfig, S3Credentials,
-        S3CredentialsFetcher, S3Options, S3StaticCredentials,
+        ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
+        S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -1159,7 +1159,14 @@ impl From<ManifestSplittingConfig> for PyManifestSplittingConfig {
             split_sizes: value.split_sizes.map(|c| {
                 c.into_iter()
                     .map(|(x, v)| {
-                        (x.into(), v.into_iter().map(|(s, u)| (s.into(), u)).collect())
+                        (
+                            x.into(),
+                            v.into_iter()
+                                .map(|split_dim| {
+                                    (split_dim.condition.into(), split_dim.num_chunks)
+                                })
+                                .collect(),
+                        )
                     })
                     .collect()
             }),
@@ -1173,7 +1180,15 @@ impl From<&PyManifestSplittingConfig> for ManifestSplittingConfig {
             split_sizes: value.split_sizes.as_ref().map(|c| {
                 c.iter()
                     .map(|(x, v)| {
-                        (x.into(), v.iter().map(|(s, u)| (s.into(), *u)).collect())
+                        (
+                            x.into(),
+                            v.iter()
+                                .map(|(cond, size)| ManifestSplitDim {
+                                    condition: cond.into(),
+                                    num_chunks: *size,
+                                })
+                                .collect(),
+                        )
                     })
                     .collect()
             }),

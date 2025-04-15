@@ -24,7 +24,7 @@ use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
-    config::{ManifestSplitDimCondition, ManifestSplittingConfig},
+    config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     format::{
@@ -742,7 +742,7 @@ impl Session {
         if manifests.is_empty() {
             // no chunks have been written, and the requested coords was not
             // in the changeset, return None to Zarr.
-            return Ok(None)
+            return Ok(None);
         }
         let splits = ManifestSplits::from_extents(
             manifests.iter().map(|m| m.extents.clone()).collect(),
@@ -1647,7 +1647,11 @@ impl ManifestSplittingConfig {
                             if already_matched.contains(&axis) {
                                 continue;
                             }
-                            for (dim_condition, split_size) in dim_specs.iter() {
+                            for ManifestSplitDim {
+                                condition: dim_condition,
+                                num_chunks: split_size,
+                            } in dim_specs.iter()
+                            {
                                 if dim_condition.matches(axis, dimname.clone().into()) {
                                     edges[axis] = (0..=num_chunks[axis])
                                         .step_by(*split_size as usize)

@@ -393,5 +393,5 @@ if __name__ == "__main__":
 
     # we import here so it works when the script is ran by pytest
 
-    asyncio.run(write_a_test_repo())
+    # asyncio.run(write_a_test_repo())
     asyncio.run(write_a_split_repo())
