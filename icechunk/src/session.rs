@@ -1407,7 +1407,7 @@ pub fn construct_valid_byte_range(
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct SplitManifest {
     from: Vec<u32>,
     to: Vec<u32>,
@@ -1421,7 +1421,7 @@ impl SplitManifest {
             debug_assert!(self.chunks.is_empty());
             // important to remember that `to` is not inclusive, so we need +1
             let mut coord = chunk.coord.0.clone();
-            self.to.extend(coord.iter().cloned().map(|n| n + 1));
+            self.to.extend(coord.iter().map(|n| *n + 1));
             self.from.append(&mut coord);
         } else {
             for (existing, coord) in self.from.iter_mut().zip(chunk.coord.0.iter()) {
@@ -1468,7 +1468,7 @@ impl<'a> FlushProcess<'a> {
         }
     }
 
-    async fn write_manifest_from_iterator(
+    async fn write_manifests_from_iterator(
         &mut self,
         node_id: &NodeId,
         chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
@@ -1530,7 +1530,7 @@ impl<'a> FlushProcess<'a> {
         let chunks = stream::iter(
             self.change_set.new_array_chunk_iterator(node_id, node_path).map(Ok),
         );
-        self.write_manifest_from_iterator(node_id, chunks, splits).await
+        self.write_manifests_from_iterator(node_id, chunks, splits).await
     }
 
     /// Write a manifest for a node that was modified in this session
@@ -1551,7 +1551,7 @@ impl<'a> FlushProcess<'a> {
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
 
-        self.write_manifest_from_iterator(&node.id, updated_chunks, splits).await
+        self.write_manifests_from_iterator(&node.id, updated_chunks, splits).await
     }
 
     /// Record the previous manifests for an array that was not modified in the session
@@ -1608,7 +1608,7 @@ impl ManifestSplittingConfig {
             .into()),
             NodeData::Array { shape, dimension_names, .. } => {
                 let ndim = shape.len();
-                let num_chunks = shape.num_chunks();
+                let num_chunks = shape.num_chunks().collect::<Vec<_>>();
                 let mut edges: Vec<Vec<u32>> =
                     (0..ndim).map(|axis| vec![0, num_chunks[axis]]).collect();
 
@@ -1885,64 +1885,6 @@ async fn fetch_manifest(
     Ok(asset_manager.fetch_manifest(manifest_id, manifest_info.size_bytes).await?)
 }
 
-/// Map the iterator to accumulate the extents of the chunks traversed
-///
-/// As we are processing chunks to create a manifest, we need to keep track
-/// of the extents of the manifests. This means, for each coordinate, we need
-/// to record its minimum and maximum values.
-///
-/// This very ugly code does that, without having to traverse the iterator twice.
-/// It adapts the stream using [`StreamExt::map_ok`] and keeps a running min/max
-/// for each coordinate.
-///
-/// When the iterator is fully traversed, the min and max values will be
-/// available in `from` and `to` arguments.
-///
-/// Yes, this is horrible.
-#[allow(dead_code)]
-fn aggregate_extents<'a, T: std::fmt::Debug, E>(
-    from: &'a mut Vec<u32>,
-    to: &'a mut Vec<u32>,
-    it: impl Stream<Item = Result<T, E>> + 'a,
-    extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
-) -> impl Stream<Item = Result<T, E>> + 'a {
-    // we initialize the destination with an empty array, because we don't know
-    // the dimensions of the array yet. On the first element we will re-initialize
-    *from = Vec::new();
-    *to = Vec::new();
-    it.map_ok(move |t| {
-        // these are the coordinates for the chunk
-        let idx = extract_index(&t);
-
-        // we need to initialize the mins/maxes the first time
-        // we initialize with the value of the first element
-        // this obviously doesn't work for empty streams
-        // but we never generate manifests for them
-        if from.is_empty() {
-            *from = idx.0.clone();
-            // important to remember that `to` is not inclusive, so we need +1
-            *to = idx.0.iter().map(|n| n + 1).collect();
-        } else {
-            // We need to iterate over coordinates, and update the
-            // minimum and maximum for each if needed
-            for (coord_idx, value) in idx.0.iter().enumerate() {
-                if let Some(from_current) = from.get_mut(coord_idx) {
-                    if value < from_current {
-                        *from_current = *value
-                    }
-                }
-                if let Some(to_current) = to.get_mut(coord_idx) {
-                    let range_value = value + 1;
-                    if range_value > *to_current {
-                        *to_current = range_value
-                    }
-                }
-            }
-        }
-        t
-    })
-}
-
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1958,9 +1900,7 @@ mod tests {
         refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
-        strategies::{
-            ShapeDim, chunk_indices, empty_writable_session, node_paths, shapes_and_dims,
-        },
+        strategies::{ShapeDim, empty_writable_session, node_paths, shapes_and_dims},
     };
 
     use super::*;
@@ -2123,38 +2063,6 @@ mod tests {
         );
         prop_assert!(matches);
         prop_assert!(session.delete_group(path.clone()).await.is_ok());
-    }
-
-    #[proptest(async = "tokio")]
-    async fn test_aggregate_extents(
-        #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
-        indices: Vec<ChunkIndices>,
-    ) {
-        let mut from = vec![];
-        let mut to = vec![];
-
-        let expected_from = vec![
-            indices.iter().map(|i| i.0[0]).min().unwrap(),
-            indices.iter().map(|i| i.0[1]).min().unwrap(),
-            indices.iter().map(|i| i.0[2]).min().unwrap(),
-        ];
-        let expected_to = vec![
-            indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
-            indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
-            indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
-        ];
-
-        let _ = aggregate_extents(
-            &mut from,
-            &mut to,
-            stream::iter(indices.into_iter().map(Ok::<ChunkIndices, Infallible>)),
-            |idx| idx,
-        )
-        .count()
-        .await;
-
-        prop_assert_eq!(from, expected_from);
-        prop_assert_eq!(to, expected_to);
     }
 
     #[tokio::test]

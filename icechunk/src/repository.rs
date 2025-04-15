@@ -1158,7 +1158,7 @@ mod tests {
         storage: Option<Arc<dyn Storage + Send + Sync>>,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
-            storage.or(Some(new_in_memory_storage().await?)).expect("foo");
+            storage.unwrap_or(new_in_memory_storage().await?);
         let storage = Arc::clone(&backend);
 
         let man_config = ManifestConfig {
@@ -1323,6 +1323,8 @@ mod tests {
                 )
                 .await?
         }
+        // We are counting total manifests in the `assert_manifest_count` helper function
+        // So we keep a running count of the total and update that at each step.
         total_manifests += dim_size.div_ceil(split_size) as usize;
         session.commit("full overwrite", None).await?;
         assert_manifest_count(&storage, total_manifests).await;

@@ -46,8 +46,8 @@ impl ArrayShape {
         self.0.is_empty()
     }
 
-    pub fn num_chunks(&self) -> Vec<u32> {
-        self.max_chunk_indices_permitted().map(|x| x + 1).collect()
+    pub fn num_chunks(&self) -> impl Iterator<Item = u32> {
+        self.max_chunk_indices_permitted().map(|x| x + 1)
     }
 
     pub fn new<I>(it: I) -> Option<Self>

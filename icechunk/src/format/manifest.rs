@@ -4,7 +4,7 @@ use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::{Itertools, multiunzip, repeat_n};
+use itertools::{Itertools, multiunzip};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -61,10 +61,6 @@ impl ManifestSplits {
     /// Used at read-time
     pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
         Self(extents)
-    }
-
-    pub fn default(ndim: usize) -> Self {
-        Self(vec![ManifestExtents(repeat_n(0..u32::MAX, ndim).collect())])
     }
 
     pub fn is_empty(&self) -> bool {
